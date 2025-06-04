@@ -1,0 +1,40 @@
+[project]
+name = "sims-hybrid-algs"
+version = "0.1.0"
+description = "SIMS Hybrid Algorithms"
+authors = [
+    { name = "Vladyslav Hlushchenko", email = "hl.vladyslav@gmail.com" }
+]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "python-dotenv==1.1.0",
+    "pandas==2.2.3",
+    "sims-core==0.1.0",
+    "seaborn==0.13.2",
+    "scikit-posthocs>=0.11.4",
+    "geopandas>=1.0.1",
+    "matplotlib>=3.10.3",
+    "scipy>=1.15.3",
+    "numpy>=2.2.6",
+]
+
+[project.optional-dependencies]
+dev = ["ruff==0.11.12"]
+
+[project.scripts]
+sims = "sims_cli:main"
+
+[tool.uv.workspace]
+members = [
+    "sims-core",
+    "sims-solvers"
+]
+
+[tool.uv.sources]
+sims-core = { workspace = true }
+sims-solvers = { workspace = true }
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
