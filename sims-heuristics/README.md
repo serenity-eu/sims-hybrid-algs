@@ -1,0 +1,1 @@
+# Metaheuristics to solve Satellite Image Mosaic Selection (SIMS) problem

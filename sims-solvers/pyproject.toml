@@ -1,0 +1,34 @@
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+[project]
+name = "sims-solvers"
+version = "0.1.0"
+description = "Solvers for Satelite Image Mozaic Selection problem"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "contextily==1.6.2",
+    "dataclasses-json==0.6.7",
+    "filelock==3.18.0",
+    "geojson==3.2.0",
+    "geopandas==1.0.1",
+    "gurobipy==12.0.2",
+    "numpy==2.2.6",
+    "ortools==9.12.4544",
+    "pymoo==0.6.1.5",
+    "shapely==2.1.1",
+    "minizinc[dzn]==0.10.0",
+]
+
+[project.scripts]
+sims_solvers = "sims_solvers.main:main"
+
+[tool.pdm.build]
+source-includes = ["sims_solvers/"]
+
+[tool.pdm.build.wheel-data]
+data = [
+    { path = "sims_solvers/mzn_models/*.mzn", relative-to = "sims_solvers/" },
+]
