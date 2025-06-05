@@ -1,0 +1,6 @@
+{
+    "solver_type": "gurobi",
+    "front_strategy": "aneja-nair",
+    "timeout_s": 120,
+    "ratio_step": 10
+}

@@ -20,7 +20,7 @@ uv sync
 source .venv/bin/activate
 ```
 
-You also need to build binary executable for Pareto Local Search from sims-heuristics Rust project. If you don't have Rust toolchain installed already, use following instruction for installation.
+You also need to build binary executable for Pareto Local Search from `sims-heuristics` Rust project. If you don't have Rust toolchain installed already, use [this instruction](http://rust-lang.org/tools/install) for installation.
 
 Run following command to build PLS:
 
@@ -30,14 +30,14 @@ cargo build --release pls
 cp target/release/pls .
 ```
 
-You can also build PLS binary with Docker using following script
+Alternatively, you can build PLS binary with Docker using following script
 
 ```bash
 cd sims-heuristics
 ./build-docker.sh
 ```
 
-After PLS executable is built, store it in `PLS_PATH` environment variable
+After PLS executable is built, store path to it in `PLS_PATH` environment variable
 
 ```bash
 export PLS_PATH=$PWD/sims-heuristics/pls
@@ -48,7 +48,7 @@ export PLS_PATH=$PWD/sims-heuristics/pls
 
 ### Solving
 
-> **Note:**  
+> [!IMPORTANT]
 > This algorithm utilizes the **Gurobi** solver for optimization.  
 > Ensure that the Gurobi license is already installed and properly configured on your machine before running this code.
 
