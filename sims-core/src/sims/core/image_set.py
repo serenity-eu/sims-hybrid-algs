@@ -14,6 +14,7 @@ logger = logging.getLogger("image_set")
 
 @dataclass
 class PreprocessedData:
+    aoi_gdf: GeoDataFrame
     up42_image_ids: list[str] | None
     covering_images_gdf: GeoDataFrame
     clipped_images_gs: GeoSeries
