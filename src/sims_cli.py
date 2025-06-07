@@ -5,6 +5,7 @@ import csv
 import datetime
 import json
 import logging
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -99,15 +100,21 @@ def solutions_to_geo_data(
     return result_gdfs
 
 
-def prepare_experiments(experiments_dir: Path | None = None, aois_dir: Path | None = None, satellite_images_dir: Path | None = None):
+_ANY_IMAGES_COUNT = 0
+
+def prepare_experiments(experiments_dir: Path | None = None, satellite_data_dir: Path | None = None):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     # Use default results directory if not provided
     experiments_dir = experiments_dir or RESULTS_DIR / f"real_experiment_{timestamp}"
     experiments_dir.mkdir(parents=True, exist_ok=True)
 
     INPUT_DATA_DIR = TEST_DATA_DIR / "new_1.5x_reduced"
-    aoi_dir = aois_dir or INPUT_DATA_DIR / "aois"
-    preselected_images_dir = satellite_images_dir or INPUT_DATA_DIR / "preselected_images"
+    if satellite_data_dir is not None:
+        aoi_dir = satellite_data_dir / "aois"
+        preselected_images_dir = satellite_data_dir / "images"
+    else:
+        aoi_dir = INPUT_DATA_DIR / "aois"
+        preselected_images_dir = INPUT_DATA_DIR / "preselected_images"
 
     found_aois = list(aoi_dir.glob("*.geojson"))
 
@@ -125,11 +132,11 @@ def prepare_experiments(experiments_dir: Path | None = None, aois_dir: Path | No
             return
 
         for preselected_images_path in preselected_images_dir.glob(f"{aoi_path.stem}*.geojson"):
-            experiment_name = preselected_images_path.stem[: -len("_image_set")]
+            experiment_name = preselected_images_path.stem[: -len("_images")]
 
             experiment_dir = experiments_dir / experiment_name
             log.info(f"Preparing experiment {experiment_name} under path: {experiment_dir}")
-            experiment.prepare(aoi_path, 0, experiment_dir, preselected_images_path)
+            experiment.prepare(aoi_path, _ANY_IMAGES_COUNT, experiment_dir, preselected_images_path)
 
 
 def solve_experiments(
@@ -139,6 +146,7 @@ def solve_experiments(
     iter_count: int = 1,
     instance_regex: str | None = None,
     skip_solved: bool | None = False,
+    results_dir: Path | None = None,
 ):
     solver_config = SolverConfig(
         solver_type=modified_solver_config.solver_type or SolverType.GUROBI,
@@ -157,6 +165,25 @@ def solve_experiments(
         log.info(f'Selected instances matching regex "{instance_regex}": {experiment_dirs}')
     else:
         experiment_dirs = [experiment_dir for experiment_dir in experiments_dir.iterdir()]
+
+    if results_dir is not None:
+        results_dir.mkdir(parents=True, exist_ok=True)
+        result_dirs = [
+            results_dir / experiment_dir.name for experiment_dir in experiment_dirs
+        ]
+        for experiment_dir, result_dir in zip(experiment_dirs, result_dirs):
+            if result_dir.exists():
+                log.error("Result directory already exists. Remove it before continue.")
+                sys.exit(1)
+
+            shutil.copytree(experiment_dir, result_dir)
+            # Remove old solver results directories
+            for subdir in result_dir.iterdir():
+                if subdir.is_dir() and subdir.name.startswith("solver_results_"):
+                    shutil.rmtree(subdir)
+        
+        experiment_dirs = result_dirs
+
 
     for experiment_idx, experiment_dir in enumerate(experiment_dirs):
         if not experiment_dir.is_dir():
@@ -1006,6 +1033,7 @@ def solve_command(args):
         iter_count=iter_count,
         instance_regex=args.instance_regex,
         skip_solved=True,
+        results_dir=Path(args.results_dir).resolve() if args.results_dir is not None else None,
     )
 
 
@@ -1109,6 +1137,11 @@ def main():
         type=str,
         help="Path to directory where processed results should be stored",
         required=True,
+    )
+    solve_parser.add_argument(
+        "--results-dir",
+        type=str,
+        help="Path to directory where results should be stored",
     )
     solve_parser.add_argument("--timeout-s", type=int, help="Timeout in seconds for the solver")
     solve_parser.add_argument(
