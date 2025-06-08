@@ -26,6 +26,7 @@ class PreprocessedData:
         Save the preprocessed data to the specified output directory.
         :param output_dir: The directory to save the data to.
         """
+        self.aoi_gdf.to_file(f"{output_dir}/aoi.geojson", driver="GeoJSON")
         output_dir.mkdir(parents=True, exist_ok=True)
         if self.up42_image_ids is not None:
             (output_dir / "up42_image_ids.json").write_text(json.dumps(self.up42_image_ids))
@@ -41,6 +42,7 @@ class PreprocessedData:
         :param output_dir: The directory to load the data from.
         :return: A PreprocessedData object containing the loaded data.
         """
+        aoi_gdf = GeoDataFrame.from_file(f"{output_dir}/aoi.geojson")
         up42_image_id_path = output_dir / "up42_image_ids.json"
         if up42_image_id_path.exists():
             up42_image_ids = json.loads(up42_image_id_path.read_text())
@@ -51,7 +53,12 @@ class PreprocessedData:
         fragments_gs = GeoSeries.from_file(f"{output_dir}/fragments.geojson")
         images_to_fragments_mapping = ast.literal_eval((output_dir / "images_to_fragments_map.txt").read_text())
         return PreprocessedData(
-            up42_image_ids, covering_images_gdf, clipped_images_gs, fragments_gs, images_to_fragments_mapping
+            aoi_gdf=aoi_gdf,
+            up42_image_ids=up42_image_ids,
+            covering_images_gdf=covering_images_gdf,
+            clipped_images_gs=clipped_images_gs,
+            fragments_gs=fragments_gs,
+            images_to_fragments_mapping=images_to_fragments_mapping
         )
     
     def validate(self, aoi_gdf: GeoDataFrame, projected_crs: str) -> bool:
@@ -214,5 +221,10 @@ def preprocess(image_set_gdf: GeoDataFrame, aoi_gdf: GeoDataFrame, projected_crs
     fragments_gs = projected_fragments_gs.to_crs(image_set_gdf.crs)
 
     return PreprocessedData(
-        up42_image_ids, covering_images_gdf, clipped_images_gs, fragments_gs, images_to_fragments_mapping
+        aoi_gdf=aoi_gdf,
+        up42_image_ids=up42_image_ids,
+        covering_images_gdf=covering_images_gdf,
+        clipped_images_gs=clipped_images_gs,
+        fragments_gs=fragments_gs,
+        images_to_fragments_mapping=images_to_fragments_mapping
     )

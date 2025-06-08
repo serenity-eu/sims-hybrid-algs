@@ -167,25 +167,27 @@ def solve_experiments(
         experiment_dirs = [experiment_dir for experiment_dir in experiments_dir.iterdir()]
 
     if results_dir is not None:
+        if results_dir.exists():
+            log.error("Results directory already exists. Remove it before continuing.")
+            sys.exit(1)
+
         results_dir.mkdir(parents=True, exist_ok=True)
         result_dirs = [
             results_dir / experiment_dir.name for experiment_dir in experiment_dirs
         ]
-        for experiment_dir, result_dir in zip(experiment_dirs, result_dirs):
-            if result_dir.exists():
-                log.error("Result directory already exists. Remove it before continue.")
-                sys.exit(1)
-
-            shutil.copytree(experiment_dir, result_dir)
+    else:
+        result_dirs = [
+            None for _ in experiment_dirs
+        ]
+        for experiment_dir in experiment_dirs:
             # Remove old solver results directories
-            for subdir in result_dir.iterdir():
-                if subdir.is_dir() and subdir.name.startswith("solver_results_"):
-                    shutil.rmtree(subdir)
-        
-        experiment_dirs = result_dirs
+            if not skip_solved:
+                for subdir in experiment_dir.iterdir():
+                    if subdir.is_dir() and subdir.name.startswith("solver_results_"):
+                        shutil.rmtree(subdir)
 
 
-    for experiment_idx, experiment_dir in enumerate(experiment_dirs):
+    for experiment_idx, (experiment_dir, result_dir) in enumerate(zip(experiment_dirs, result_dirs)):
         if not experiment_dir.is_dir():
             continue
         log.info(
@@ -194,7 +196,7 @@ def solve_experiments(
         try:
             experiment.solve(
                 experiment_dir=experiment_dir,
-                result_dir=experiment_dir,
+                result_dir=result_dir,
                 solver_config=solver_config,
                 dry_run=dry_run,
                 iter_count=iter_count,
@@ -563,9 +565,11 @@ def _generate_pareto_front_plots_sns(
 
 def generate_plots(
     experiments_dir: Path,
+    results_dir: Path,
     output_dir: Path,
     instance_regex: str | None = None,
     experiments_dir2: Path | None = None,
+    results_dir2: Path | None = None,
 ):
     comparing = experiments_dir2 is not None
 
@@ -576,6 +580,12 @@ def generate_plots(
             for experiment_dir in experiments_dir.glob(instance_regex)
             if experiment_dir.is_dir()
         ]
+        if results_dir is not None:
+            results_dir = [
+                result_dir
+                for result_dir in results_dir.glob(instance_regex)
+                if result_dir.is_dir()
+            ]
         log.info(f'Selected instances matching regex "{instance_regex}": {experiment_dirs}')
         if comparing:
             experiment_dirs2 = [
@@ -583,21 +593,36 @@ def generate_plots(
                 for experiment_dir in experiments_dir2.glob(instance_regex)
                 if experiment_dir.is_dir()
             ]
-            log.info(f'Selected instances matching regex "{instance_regex}": {experiment_dirs2}')
+            if results_dir2 is not None:
+                results_dir2 = [
+                    result_dir
+                    for result_dir in results_dir2.glob(instance_regex)
+                    if result_dir.is_dir()
+                ]
     else:
         experiment_dirs = list(experiments_dir.iterdir())
+        if results_dir is not None:
+            result_dirs = list(results_dir.iterdir())
+        else:
+            result_dirs = [None for _ in experiment_dirs]
         if comparing:
             experiment_dirs2 = list(experiments_dir2.iterdir())
+            if results_dir2 is not None:
+                results_dir2 = list(results_dir2.iterdir())
+            else:
+                results_dir2 = [None for _ in experiment_dirs2]
 
     # Generate plots
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    for dir_num, experiment_dir in enumerate(experiment_dirs):
+    for dir_num, (experiment_dir, result_dir) in enumerate(zip(experiment_dirs, result_dirs)):
         # Parse experiment results
         try:
             experiment = Experiment.from_dir(experiment_dir)
+            if result_dir is None:
+                result_dir = next(experiment_dir.glob("solver_results_*"))
             experiment_results_series = experiment.parse_results_series(
-                experiment_dir, 10, recompute_hypervolumes=False
+                result_dir, 10, recompute_hypervolumes=False
             )
             experiment_results = experiment_results_series[0]
             if experiment_results.has_no_solutions():
@@ -1008,19 +1033,15 @@ def print_latex_table(experiments_dir: Path, output_dir: Path, instance_regex: s
 def prepare_command(args):
     if args.experiments_dir is not None:
         experiments_dir = Path(args.experiments_dir).resolve()
-    if args.aois_dir is not None:
-        aois_dir = Path(args.aois_dir).resolve()
-    if args.satellite_images_dir is not None:
-        satellite_images_dir = Path(args.satellite_images_dir).resolve()
+    if args.satellite_data_dir is not None:
+        satellite_data_dir = Path(args.satellite_data_dir).resolve()
     prepare_experiments(
         experiments_dir=experiments_dir,
-        aois_dir=aois_dir,
-        satellite_images_dir=satellite_images_dir,
+        satellite_data_dir=satellite_data_dir
     )
 
 
 def solve_command(args):
-    iter_count = args.iter_count or 1
     solve_experiments(
         experiments_dir=Path(args.experiments_dir).resolve(),
         modified_solver_config=SolverConfig(
@@ -1030,7 +1051,7 @@ def solve_command(args):
             ratio_step=args.ratio_step,
         ),
         dry_run=args.dry_run,
-        iter_count=iter_count,
+        iter_count=args.iter_count,
         instance_regex=args.instance_regex,
         skip_solved=True,
         results_dir=Path(args.results_dir).resolve() if args.results_dir is not None else None,
@@ -1056,14 +1077,27 @@ def plots_command(args):
     if len(args.experiments_dir) > 2:
         log.error("Too many experiments directories provided. Only one or two are allowed.")
         sys.exit(1)
+    
+    if args.results_dir is not None and len(args.results_dir) != len(args.experiments_dir):
+        log.error("Number of results directories must match number of experiments directories.")
+        sys.exit(1)
+    
+    results_dir = Path(args.results_dir[0]).resolve() if args.results_dir else None
+    
+    if len(args.experiments_dir) > 1:
+        experiments_dir2 = Path(args.experiments_dir[1]).resolve()
+        results_dir2 = Path(args.results_dir[1]).resolve() if args.results_dir else None
+    else:
+        experiments_dir2 = None
+        results_dir2 = None
 
     generate_plots(
         experiments_dir=Path(args.experiments_dir[0]).resolve(),
+        results_dir=results_dir,
         output_dir=Path(args.output_dir).resolve(),
         instance_regex=args.instance_regex,
-        experiments_dir2=Path(args.experiments_dir[1]).resolve()
-        if len(args.experiments_dir) == 2
-        else None,
+        experiments_dir2=experiments_dir2
+        results_dir2=results_dir2,
     )
 
 
@@ -1121,13 +1155,13 @@ def main():
     prepare_parser = subparsers.add_parser("prepare")
     prepare_parser.add_argument(
         "--experiments-dir",
-        type=str,
+        type=Path,
         help="Path where folder with experiments should be created",
     )
     prepare_parser.add_argument(
-        "--experiment-name",
-        type=str,
-        help="Name of the experiment to be created",
+        "--satellite-data-dir",
+        type=Path,
+        help="Path to directory with satellite data. If not provided, default data will be used",
     )
     prepare_parser.set_defaults(func=prepare_command)
 
@@ -1156,7 +1190,7 @@ def main():
     solve_parser.add_argument(
         "--dry-run", action="store_true", help="Do not run the solver, only show what would be done"
     )
-    solve_parser.add_argument("--iter-count", type=int, help="Number of iterations for the solver")
+    solve_parser.add_argument("--iter-count", type=int, help="Number of iterations for the solver", default=1)
     solve_parser.add_argument(
         "--instance-regex", type=str, help="Regex to filter instances to solve"
     )
@@ -1194,9 +1228,15 @@ def main():
     plots_parser.add_argument(
         "--experiments-dir",
         type=str,
-        help="Path to directory with experiments. Pass to directories to generate comparison plots",
+        help="Path to directory with experiments. Provide two directories to generate comparison plots",
         required=True,
         nargs="+",
+    )
+    plots_parser.add_argument(
+        "--results-dir",
+        type=str,
+        help="Path to directory where experiment results are stored. Count has to match with --experiments-dir. If not provided, will be taken from experiments directory",
+        nargs="+"
     )
     plots_parser.add_argument(
         "--output-dir",

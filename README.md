@@ -55,13 +55,13 @@ export PLS_PATH=$PWD/sims-heuristics/pls
 After installation, you can run the hybrid solver with Anytime Aneja Nair method as follows:
 
 ```bash
-sims solve --experiments-dir ./publication-experiments --timeout-s 120 --front-strategy aneja-nair --results-dir ./aneja-nair-results
+sims solve --experiments-dir ./publication-data/experiments --timeout-s 120 --front-strategy aneja-nair --results-dir ./publication-data/new-results/aneja-nair
 ```
 
 You can run the hybrid solver with GPBA-A method as follows:
 
 ```bash
-sims solve --experiments-dir ./publication-experiments  --timeout-s 120 --front-strategy augmecon-coverage  --results-dir ./gpba-a-results
+sims solve --experiments-dir ./publication-data/experiments  --timeout-s 120 --front-strategy augmecon-coverage  --results-dir ./publication-data/new-results/gpba-a
 ```
 
 For more options and help:
@@ -75,5 +75,5 @@ sims solve --help
 To regenerate SIMS problem instances from original satellite data, run following command
 
 ```bash
-sims prepare --aois-dir ./test_data/aois --satellite-images-dir ./test_data/satellite-images --experiments-dir ./new-experiments
+sims prepare --satellite-data-dir ./publication-data/satellite-data --experiments-dir ./publication-data/new-experiments
 ```
