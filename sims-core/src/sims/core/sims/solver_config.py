@@ -28,7 +28,7 @@ class SolverType(StrEnum):
 class FrontStrategy(StrEnum):
     GAVANELLI = "gavanelli"
     SAUGMECON = "saugmecon"
-    GBPA_A = "augmecon-coverage"
+    GPBA_A = "gpba-a"
     ANEJA_NAIR = "aneja-nair"
     NON_APLICABLE = "None"
 
@@ -38,7 +38,7 @@ class FrontStrategy(StrEnum):
                 return "Gavanelli"
             case FrontStrategy.SAUGMECON:
                 return "SAUGMECON"
-            case FrontStrategy.GBPA_A:
+            case FrontStrategy.GPBA_A:
                 return "GBPA-A"
             case FrontStrategy.ANEJA_NAIR:
                 return "Aneja-Nair"

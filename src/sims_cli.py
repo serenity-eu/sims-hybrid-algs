@@ -150,7 +150,7 @@ def solve_experiments(
 ):
     solver_config = SolverConfig(
         solver_type=modified_solver_config.solver_type or SolverType.GUROBI,
-        front_strategy=modified_solver_config.front_strategy or FrontStrategy.GBPA_A,
+        front_strategy=modified_solver_config.front_strategy or FrontStrategy.GPBA_A,
         timeout_s=modified_solver_config.timeout_s or 600,
         ratio_step=modified_solver_config.ratio_step or 20,
     )
@@ -568,10 +568,9 @@ def generate_plots(
     results_dir: Path,
     output_dir: Path,
     instance_regex: str | None = None,
-    experiments_dir2: Path | None = None,
     results_dir2: Path | None = None,
 ):
-    comparing = experiments_dir2 is not None
+    comparing = results_dir2 is not None
 
     experiment_dirs = None
     if instance_regex is not None:
@@ -588,11 +587,6 @@ def generate_plots(
             ]
         log.info(f'Selected instances matching regex "{instance_regex}": {experiment_dirs}')
         if comparing:
-            experiment_dirs2 = [
-                experiment_dir
-                for experiment_dir in experiments_dir2.glob(instance_regex)
-                if experiment_dir.is_dir()
-            ]
             if results_dir2 is not None:
                 results_dir2 = [
                     result_dir
@@ -606,16 +600,15 @@ def generate_plots(
         else:
             result_dirs = [None for _ in experiment_dirs]
         if comparing:
-            experiment_dirs2 = list(experiments_dir2.iterdir())
             if results_dir2 is not None:
-                results_dir2 = list(results_dir2.iterdir())
+                result_dirs2 = list(results_dir2.iterdir())
             else:
-                results_dir2 = [None for _ in experiment_dirs2]
+                result_dirs2 = [None for _ in experiment_dirs]
 
     # Generate plots
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    for dir_num, (experiment_dir, result_dir) in enumerate(zip(experiment_dirs, result_dirs)):
+    for dir_num, (experiment_dir, result_dir, result_dir2) in enumerate(zip(experiment_dirs, result_dirs, result_dirs2)):
         # Parse experiment results
         try:
             experiment = Experiment.from_dir(experiment_dir)
@@ -635,14 +628,12 @@ def generate_plots(
         # Parse second experiment if present:
         if comparing:
             try:
-                experiment_dir2 = experiment_dirs2[dir_num]
-                experiment2 = Experiment.from_dir(experiment_dir2)
-                experiment_results_series2 = experiment2.parse_results_series(
-                    experiment_dir2, 10, recompute_hypervolumes=False
+                experiment_results_series2 = experiment.parse_results_series(
+                    result_dir2, 10, recompute_hypervolumes=False
                 )
                 experiment_results2 = experiment_results_series2[0]
                 if experiment_results2.has_no_solutions():
-                    log.warning(f"Experiment2 {experiment_dir2.name} has no solutions. Skipping.")
+                    log.warning(f"Experiment result2 {results_dir2.name} has no solutions. Skipping.")
                     continue
 
                 max_objectives = experiment_results.get_max_objectives()
@@ -1074,29 +1065,18 @@ def reports_command(args):
 
 
 def plots_command(args):
-    if len(args.experiments_dir) > 2:
-        log.error("Too many experiments directories provided. Only one or two are allowed.")
-        sys.exit(1)
+    results_dir = Path(args.results_dir[0]).resolve() if args.results_dir is not None else None
     
-    if args.results_dir is not None and len(args.results_dir) != len(args.experiments_dir):
-        log.error("Number of results directories must match number of experiments directories.")
-        sys.exit(1)
-    
-    results_dir = Path(args.results_dir[0]).resolve() if args.results_dir else None
-    
-    if len(args.experiments_dir) > 1:
-        experiments_dir2 = Path(args.experiments_dir[1]).resolve()
-        results_dir2 = Path(args.results_dir[1]).resolve() if args.results_dir else None
+    if len(args.results_dir) > 1:
+        results_dir2 = Path(args.results_dir[1]).resolve() if args.results_dir is not None else None
     else:
-        experiments_dir2 = None
         results_dir2 = None
 
     generate_plots(
-        experiments_dir=Path(args.experiments_dir[0]).resolve(),
+        experiments_dir=Path(args.experiments_dir).resolve(),
         results_dir=results_dir,
         output_dir=Path(args.output_dir).resolve(),
         instance_regex=args.instance_regex,
-        experiments_dir2=experiments_dir2
         results_dir2=results_dir2,
     )
 
@@ -1228,14 +1208,13 @@ def main():
     plots_parser.add_argument(
         "--experiments-dir",
         type=str,
-        help="Path to directory with experiments. Provide two directories to generate comparison plots",
+        help="Path to directory with experiments.",
         required=True,
-        nargs="+",
     )
     plots_parser.add_argument(
         "--results-dir",
         type=str,
-        help="Path to directory where experiment results are stored. Count has to match with --experiments-dir. If not provided, will be taken from experiments directory",
+        help="Path to directory where experiment results are stored. Provide two directories for comparison plot. If not provided, will be taken from experiments directory",
         nargs="+"
     )
     plots_parser.add_argument(
