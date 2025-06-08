@@ -1,7 +1,9 @@
+from importlib import resources
 import logging
 import subprocess
 from pathlib import Path
 from subprocess import PIPE, STDOUT, CompletedProcess, Popen
+import sys
 
 import sims_solvers
 from sims_solvers import Config, MZN_MODEL_PATH

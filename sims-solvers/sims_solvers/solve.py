@@ -13,7 +13,9 @@ from .main import (
     write_statistics,
 )
 
-MZN_MODEL_PATH = resources.as_file(resources.files(mzn_models) / "mozaic_cloud2.mzn")
+MZN_MODEL_PATH = None
+with resources.as_file(resources.files(mzn_models) / "mosaic_cloud2.mzn") as mzn_model_path:
+    MZN_MODEL_PATH = mzn_model_path
 
 def solve_milp(config: Config):
     """Solve the SIMS problem using Mixed Integer Linear Programming (MILP) solver."""

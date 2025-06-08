@@ -57,9 +57,7 @@ class SimsProblem:
             frozenset(sorted(image_fragments))
             for image_fragments in preprocessed_data.images_to_fragments_mapping
         ]
-        print("Number of images:", len(images))
         costs = preprocessed_data.covering_images_gdf["cost"].tolist()  # type: ignore # geopandas is poorly typed
-        print("Number of costs:", len(costs))
         areas_m2 = preprocessed_data.fragments_gs.geometry.to_crs({"proj": "cea"}).area.to_list()
         resolution = preprocessed_data.covering_images_gdf["resolution"].tolist()  # type: ignore # geopandas is poorly typed
         cloud_coverages = preprocessed_data.covering_images_gdf["cloud_coverage"].tolist()  # type: ignore # geopandas is poorly typed
@@ -269,6 +267,7 @@ class SimsDiscreteProblem:
 class ProblemInstance:
     name: str
     problem: SimsDiscreteProblem
+    path: Path | None = None
 
     def to_json(self, include_definition=False) -> dict:
         return self.to_dict(include_definition)
@@ -283,8 +282,8 @@ class ProblemInstance:
     @staticmethod
     def from_dzn(input_path: Path) -> ProblemInstance:
         problem = SimsDiscreteProblem.from_dzn(input_path)
-        name = Path(input_path).stem
-        return ProblemInstance(name, problem)
+        name = input_path.stem
+        return ProblemInstance(name, problem, input_path)
 
     def to_dzn(self, output_path: Path):
         self.problem.to_dzn(output_path)

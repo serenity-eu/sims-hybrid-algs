@@ -561,20 +561,15 @@ class Experiment:
 
     def solve(
         self,
-        result_dir: Path,
+        solver_results_dir: Path,
         solver_config: SolverConfig,
         dry_run: bool = False,
         iter_count: int = 1,
     ):
-        solver_results_dir = (
-            result_dir
-            / f"solver_results_{solver_config.solver_type}_{solver_config.front_strategy}_{solver_config.timeout_s}sec"
-        )
         solver_results_dir.mkdir(parents=True, exist_ok=True)
         solver_config.to_json(solver_results_dir / "solver_config.json")
 
-        problem_path = result_dir / f"{self._problem_instance.name}.dzn"
-        self._problem_instance.to_dzn(problem_path)
+        problem_path = self._problem_instance.path
 
         ratios = [(ratio, 100 - ratio) for ratio in range(100, -1, -solver_config.ratio_step)]
 
@@ -749,7 +744,7 @@ class Experiment:
 
     def parse_results_series(
         self,
-        experiment_dir: Path,
+        result_dir: Path,
         iter_count: int,
         solver_config: SolverConfig | None = None,
         recompute_hypervolumes: bool = True,
@@ -758,16 +753,10 @@ class Experiment:
             warnings.warn(
                 "Solver config is not provided, parsing results for first solver results dir."
             )
-            solver_results_dir_name = next(experiment_dir.glob("solver_results*"))
-            solver_config = SolverConfig.from_json(
-                experiment_dir / solver_results_dir_name / "solver_config.json"
-            )
-        else:
-            solver_results_dir_name = _get_solver_results_dir_name(solver_config)
+            solver_config = SolverConfig.from_json(result_dir / "solver_config.json")
 
-        solver_results_dir = experiment_dir / solver_results_dir_name
         return self._parse_results_series_from_dir(
-            solver_results_dir, iter_count, solver_config, recompute_hypervolumes
+            result_dir, iter_count, solver_config, recompute_hypervolumes
         )
 
 
@@ -887,11 +876,16 @@ def prepare(
     )
 
 
-def solve(experiment_dir: Path, result_dir: Path, solver_config: SolverConfig, dry_run: bool = False, iter_count: int = 1, skip_solved: bool = False):
+def solve(experiment_dir: Path, solver_config: SolverConfig, result_dir: Path | None = None, dry_run: bool = False, iter_count: int = 1, skip_solved: bool = False):
+    if result_dir is None:
+        result_dir = experiment_dir / _get_solver_results_dir_name(solver_config)
+
+    result_dir.mkdir(parents=True, exist_ok=True)
+
     _change_log_handler(result_dir / "solve.log")
 
     experiment = Experiment.from_dir(experiment_dir)
-    if skip_solved and experiment.is_solved(experiment_dir, solver_config):
+    if skip_solved and experiment.is_solved(result_dir, solver_config):
         log.info(f"Experiment {experiment_dir.name} is already solved, skipping.")
         return
     experiment.solve(result_dir, solver_config, dry_run=dry_run, iter_count=iter_count)
