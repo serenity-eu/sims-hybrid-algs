@@ -1,6 +1,6 @@
 {
     "solver_type": "gurobi",
-    "front_strategy": "augmecon-coverage",
+    "front_strategy": "gpba-a",
     "timeout_s": 120,
     "ratio_step": 10
 }

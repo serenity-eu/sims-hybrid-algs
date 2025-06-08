@@ -61,7 +61,7 @@ sims solve --experiments-dir ./publication-data/experiments --timeout-s 120 --fr
 You can run the hybrid solver with GPBA-A method as follows:
 
 ```bash
-sims solve --experiments-dir ./publication-data/experiments  --timeout-s 120 --front-strategy augmecon-coverage  --results-dir ./publication-data/new-results/gpba-a
+sims solve --experiments-dir ./publication-data/experiments  --timeout-s 120 --front-strategy gpba-a  --results-dir ./publication-data/new-results/gpba-a
 ```
 
 For more options and help:
@@ -76,4 +76,12 @@ To regenerate SIMS problem instances from original satellite data, run following
 
 ```bash
 sims prepare --satellite-data-dir ./publication-data/satellite-data --experiments-dir ./publication-data/new-experiments
+```
+
+### Generating plots from experiment results
+
+To generate plots for experiments results, run following command
+
+```bash
+sims plots --experiments-dir ./publication-data/experiments/ --results-dir ./publication-data/results/gpba-a ./publication-data/results/aneja-nair/ --output-dir ./publication-data/new-plots/
 ```

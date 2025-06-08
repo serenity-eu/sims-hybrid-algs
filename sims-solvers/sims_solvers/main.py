@@ -310,7 +310,7 @@ def set_front_strategy(config, solver):
         return Gavanelli(solver, Timer(config.solver_timeout_sec))
     elif config.front_strategy == "gavanelli-opt":
         return Gavanelli(solver, Timer(config.solver_timeout_sec), optimize=True)
-    elif config.front_strategy == "augmecon-coverage":
+    elif config.front_strategy == "gpba-a":
         return CoverageGridPoint(solver, Timer(config.solver_timeout_sec))
     elif config.front_strategy == "aneja-nair":
         return AnejaNair(solver, Timer(config.solver_timeout_sec))
