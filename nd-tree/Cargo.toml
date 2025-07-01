@@ -1,0 +1,57 @@
+[package]
+name = "nd-tree"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "nd_tree"
+path = "src/lib.rs"
+
+[[bin]]
+name = "nd-tree"
+path = "src/main.rs"
+
+[[bench]]
+name = "nd_tree_pareto"
+harness = false
+path = "benches/nd_tree_pareto.rs"
+
+[[bench]]
+name = "pareto_front_comparison"
+harness = false
+path = "benches/pareto_front_comparison.rs"
+
+# Performance-optimized profiles
+[profile.release]
+opt-level = 3              # Maximum optimization
+lto = "fat"                # Link-time optimization across all crates
+codegen-units = 1          # Single codegen unit for better optimization
+panic = "abort"            # Smaller binary, faster execution
+strip = true               # Strip debug symbols
+overflow-checks = false    # Disable integer overflow checks for speed
+
+[profile.bench]
+inherits = "release"       # Use release optimizations for benchmarks
+debug = true               # Keep debug info for profiling
+strip = false              # Keep symbols for benchmark analysis
+
+# Optimize dependencies aggressively for native CPU
+# (Native CPU targeting configured in .cargo/config.toml)
+[profile.release.package."*"]
+opt-level = 3
+codegen-units = 1
+
+[profile.bench.package."*"]
+opt-level = 3
+codegen-units = 1
+
+[dependencies]
+arrayvec = "0.7.6"
+plotters = "0.3.7"
+slotmap = "1.0.7"
+tracing = "0.1.41"
+pareto = { path = "../pareto" }
+
+[dev-dependencies]
+criterion = { version = "0.6.0", features = ["html_reports"] }
+rand = "0.9.1"

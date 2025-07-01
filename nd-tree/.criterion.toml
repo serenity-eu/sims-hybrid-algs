@@ -1,0 +1,20 @@
+[output]
+format = "pretty"
+verbosity = "normal"
+
+[sampling]
+sample_size = 100           # Default sample size (overridden for high-dimensional benchmarks)
+measurement_time = 5        # 5 seconds measurement time
+warm_up_time = 3           # 3 seconds warm-up
+nresamples = 100000        # Bootstrap resamples for statistics
+
+[plotting]
+enable = true
+
+[analysis]
+significance_level = 0.05   # 95% confidence
+confidence_level = 0.95     # 95% confidence level
+noise_threshold = 0.01     # 1% noise threshold
+
+[html]
+criterion_home = "target/criterion"
