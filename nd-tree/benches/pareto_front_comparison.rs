@@ -1,11 +1,18 @@
+#![feature(adt_const_params)]
+#![feature(linked_list_cursors)]
+#![feature(linked_list_retain)]
+
 use criterion::{
-    criterion_group, criterion_main, AxisScale, BenchmarkId, Criterion, PlotConfiguration,
-    Throughput,
+    criterion_group, criterion_main, BenchmarkId, Criterion, PlotConfiguration, Throughput,
 };
 use nd_tree::nd_tree::Solution; // Import the native Solution type
-use nd_tree::{LinkedListParetoFront, NdTreeParetoFront, VecParetoFront};
 use pareto::{HasObjectives, MoSolution, ParetoFront};
 use rand::prelude::*;
+
+mod fronts;
+use fronts::linkedlist_pareto_front::LinkedListParetoFront;
+use fronts::nd_tree_pareto_front::NdTreeParetoFront;
+use fronts::vec_pareto_front::VecParetoFront;
 
 /// Test solution for benchmarking Vec and LinkedList implementations
 #[derive(Debug, Clone, PartialEq)]
@@ -61,7 +68,7 @@ fn generate_pareto_solutions<const D: usize>(
     while solutions.len() < n {
         let mut objectives = [0u64; D];
         for obj in objectives.iter_mut() {
-            *obj = rng.random_range(0..=v_max);
+            *obj = rng.gen_range(0..=v_max);
         }
 
         let sum: f64 = objectives
@@ -92,7 +99,7 @@ fn generate_nd_tree_solutions<const D: usize>(n: usize, v_max: u64, eps: f64) ->
     while solutions.len() < n {
         let mut objectives = [0u64; D];
         for obj in objectives.iter_mut() {
-            *obj = rng.random_range(0..=v_max);
+            *obj = rng.gen_range(0..=v_max);
         }
 
         let sum: f64 = objectives
@@ -116,7 +123,7 @@ fn generate_random_solutions<const D: usize>(n: usize, v_max: u64) -> Vec<BenchS
     for i in 0..n {
         let mut objectives = [0u64; D];
         for obj in objectives.iter_mut() {
-            *obj = rng.random_range(0..=v_max);
+            *obj = rng.gen_range(0..=v_max);
         }
         solutions.push(BenchSolution {
             objectives,
@@ -135,7 +142,7 @@ fn generate_random_nd_tree_solutions<const D: usize>(n: usize, v_max: u64) -> Ve
     for _i in 0..n {
         let mut objectives = [0u64; D];
         for obj in objectives.iter_mut() {
-            *obj = rng.random_range(0..=v_max);
+            *obj = rng.gen_range(0..=v_max);
         }
         solutions.push(Solution { objectives });
     }
@@ -179,7 +186,7 @@ fn bench_insertion_2d(c: &mut Criterion) {
             &nd_tree_solutions,
             |b, solutions| {
                 b.iter(|| {
-                    let mut pf = NdTreeParetoFront::<32, 2, 4>::new("bench");
+                    let mut pf = NdTreeParetoFront::<Solution<2>, 32, 2, 4>::new("bench");
                     for solution in solutions {
                         pf.try_insert(solution);
                     }
@@ -250,7 +257,7 @@ fn bench_insertion_3d(c: &mut Criterion) {
             &nd_tree_solutions,
             |b, solutions| {
                 b.iter(|| {
-                    let mut pf = NdTreeParetoFront::<32, 3, 4>::new("bench");
+                    let mut pf = NdTreeParetoFront::<Solution<3>, 32, 3, 4>::new("bench");
                     for solution in solutions {
                         pf.try_insert(solution);
                     }
@@ -322,7 +329,7 @@ fn bench_insertion_4d(c: &mut Criterion) {
             &nd_tree_solutions,
             |b, solutions| {
                 b.iter(|| {
-                    let mut pf = NdTreeParetoFront::<32, 4, 4>::new("bench");
+                    let mut pf = NdTreeParetoFront::<Solution<4>, 32, 4, 4>::new("bench");
                     for solution in solutions {
                         pf.try_insert(solution);
                     }
@@ -394,7 +401,7 @@ fn bench_insertion_5d(c: &mut Criterion) {
             &nd_tree_solutions,
             |b, solutions| {
                 b.iter(|| {
-                    let mut pf = NdTreeParetoFront::<32, 5, 4>::new("bench");
+                    let mut pf = NdTreeParetoFront::<Solution<5>, 32, 5, 4>::new("bench");
                     for solution in solutions {
                         pf.try_insert(solution);
                     }
@@ -461,7 +468,7 @@ fn bench_data_patterns_2d(c: &mut Criterion) {
             &nd_tree_solutions,
             |b, solutions| {
                 b.iter(|| {
-                    let mut pf = NdTreeParetoFront::<32, 2, 4>::new("bench");
+                    let mut pf = NdTreeParetoFront::<Solution<2>, 32, 2, 4>::new("bench");
                     for solution in solutions {
                         pf.try_insert(solution);
                     }
@@ -513,7 +520,7 @@ fn bench_iteration(c: &mut Criterion) {
     let nd_tree_solutions = generate_nd_tree_solutions::<2>(size, VMAX, 0.25);
 
     // Pre-build the Pareto fronts
-    let mut ndtree_pf = NdTreeParetoFront::<32, 2, 4>::new("bench");
+    let mut ndtree_pf = NdTreeParetoFront::<Solution<2>, 32, 2, 4>::new("bench");
     let mut vec_pf = VecParetoFront::<BenchSolution<2>, 2>::new("bench");
     let mut linkedlist_pf = LinkedListParetoFront::<BenchSolution<2>, 2>::new("bench");
 
@@ -618,7 +625,7 @@ fn bench_direct_comparison(c: &mut Criterion) {
     // All three methods with same input size for direct comparison
     group.bench_function("ndtree_2d", |b| {
         b.iter(|| {
-            let mut pf = NdTreeParetoFront::<32, 2, 4>::new("bench");
+            let mut pf = NdTreeParetoFront::<Solution<2>, 32, 2, 4>::new("bench");
             for solution in &nd_tree_solutions {
                 pf.try_insert(solution);
             }
@@ -669,7 +676,7 @@ fn bench_comprehensive_comparison(c: &mut Criterion) {
             &nd_tree_solutions,
             |b, solutions| {
                 b.iter(|| {
-                    let mut pf = NdTreeParetoFront::<32, 2, 4>::new("bench");
+                    let mut pf = NdTreeParetoFront::<Solution<2>, 32, 2, 4>::new("bench");
                     for solution in solutions {
                         pf.try_insert(solution);
                     }
@@ -706,6 +713,183 @@ fn bench_comprehensive_comparison(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark for ND-Tree Pareto Front in 2D
+fn bench_nd_tree_pareto_front_2d(c: &mut Criterion) {
+    let plot_config = PlotConfiguration::default();
+    let mut group = c.benchmark_group("ParetoFront_2D_NDTree");
+    group.plot_config(plot_config);
+
+    for &size in &DIM_2D_SIZES {
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(BenchmarkId::new("NDTree", size), &size, |b, &s| {
+            let solutions = generate_nd_tree_solutions::<2>(s, VMAX, 0.1);
+            b.iter(|| {
+                let mut pf = NdTreeParetoFront::<Solution<2>, 32, 2, 4>::new("bench");
+                for sol in &solutions {
+                    pf.try_insert(sol);
+                }
+            });
+        });
+    }
+    group.finish();
+}
+
+/// Benchmark for ND-Tree Pareto Front in 3D
+fn bench_nd_tree_pareto_front_3d(c: &mut Criterion) {
+    let plot_config = PlotConfiguration::default();
+    let mut group = c.benchmark_group("ParetoFront_3D_NDTree");
+    group.plot_config(plot_config);
+
+    for &size in &DIM_3D_SIZES {
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(BenchmarkId::new("NDTree", size), &size, |b, &s| {
+            let solutions = generate_nd_tree_solutions::<3>(s, VMAX, 0.1);
+            b.iter(|| {
+                let mut pf = NdTreeParetoFront::<Solution<3>, 32, 3, 4>::new("bench");
+                for sol in &solutions {
+                    pf.try_insert(sol);
+                }
+            });
+        });
+    }
+    group.finish();
+}
+
+/// Benchmark for ND-Tree Pareto Front in 4D
+fn bench_nd_tree_pareto_front_4d(c: &mut Criterion) {
+    let plot_config = PlotConfiguration::default();
+    let mut group = c.benchmark_group("ParetoFront_4D_NDTree");
+    group.plot_config(plot_config);
+
+    for &size in &DIM_4D_SIZES {
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(BenchmarkId::new("NDTree", size), &size, |b, &s| {
+            let solutions = generate_nd_tree_solutions::<4>(s, VMAX, 0.1);
+            b.iter(|| {
+                let mut pf = NdTreeParetoFront::<Solution<4>, 32, 4, 4>::new("bench");
+                for sol in &solutions {
+                    pf.try_insert(sol);
+                }
+            });
+        });
+    }
+    group.finish();
+}
+
+/// Benchmark for ND-Tree Pareto Front in 5D
+fn bench_nd_tree_pareto_front_5d(c: &mut Criterion) {
+    let plot_config = PlotConfiguration::default();
+    let mut group = c.benchmark_group("ParetoFront_5D_NDTree");
+    group.plot_config(plot_config);
+
+    for &size in &DIM_5D_SIZES {
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(BenchmarkId::new("NDTree", size), &size, |b, &s| {
+            let solutions = generate_nd_tree_solutions::<5>(s, VMAX, 0.1);
+            b.iter(|| {
+                let mut pf = NdTreeParetoFront::<Solution<5>, 32, 5, 4>::new("bench");
+                for sol in &solutions {
+                    pf.try_insert(sol);
+                }
+            });
+        });
+    }
+    group.finish();
+}
+
+/// Benchmark for Vec Pareto Front in 2D
+fn bench_vec_pareto_front_2d(c: &mut Criterion) {
+    let plot_config = PlotConfiguration::default();
+    let mut group = c.benchmark_group("ParetoFront_2D_Vec");
+    group.plot_config(plot_config);
+
+    for &size in &DIM_2D_SIZES {
+        group.throughput(Throughput::Elements(size as u64));
+        group.bench_with_input(BenchmarkId::new("Vec", size), &size, |b, &s| {
+            let solutions = generate_pareto_solutions::<2>(s, VMAX, 0.1);
+            b.iter(|| {
+                let mut pf = VecParetoFront::<BenchSolution<2>, 2>::new("bench");
+                for sol in &solutions {
+                    pf.try_insert(sol);
+                }
+            });
+        });
+    }
+    group.finish();
+}
+
+/// Compare implementations: Vec, LinkedList, and ND-Tree
+fn compare_implementations(c: &mut Criterion) {
+    let mut group = c.benchmark_group("ImplementationComparison");
+    let solutions = generate_pareto_solutions::<2>(SMALL_N, VMAX, 0.1);
+    let nd_solutions = generate_nd_tree_solutions::<2>(SMALL_N, VMAX, 0.1);
+
+    group.bench_function("VecParetoFront", |b| {
+        b.iter(|| {
+            let mut vec_pf = VecParetoFront::<BenchSolution<2>, 2>::new("bench");
+            for sol in &solutions {
+                vec_pf.try_insert(sol);
+            }
+        })
+    });
+
+    group.bench_function("LinkedListParetoFront", |b| {
+        b.iter(|| {
+            let mut list_pf = LinkedListParetoFront::<BenchSolution<2>, 2>::new("bench");
+            for sol in &solutions {
+                list_pf.try_insert(sol);
+            }
+        })
+    });
+
+    group.bench_function("NdTreeParetoFront", |b| {
+        b.iter(|| {
+            let mut ndtree_pf = NdTreeParetoFront::<Solution<2>, 32, 2, 4>::new("bench");
+            for sol in &nd_solutions {
+                ndtree_pf.try_insert(sol);
+            }
+        })
+    });
+
+    group.finish();
+}
+
+/// Benchmark insertion strategies: TryInsert vs InsertUnchecked
+fn bench_insertion_strategies(c: &mut Criterion) {
+    let mut group = c.benchmark_group("InsertionStrategies");
+    let solutions = generate_pareto_solutions::<2>(MEDIUM_N, VMAX, 0.1);
+    let nd_solutions = generate_nd_tree_solutions::<2>(MEDIUM_N, VMAX, 0.1);
+
+    group.bench_function("Vec_TryInsert", |b| {
+        b.iter(|| {
+            let mut pf = VecParetoFront::<BenchSolution<2>, 2>::new("bench");
+            for sol in &solutions {
+                pf.try_insert(sol);
+            }
+        })
+    });
+
+    group.bench_function("Vec_InsertUnchecked", |b| {
+        b.iter(|| {
+            let mut pf = VecParetoFront::<BenchSolution<2>, 2>::new("bench");
+            for sol in &solutions {
+                pf.insert_unchecked(sol);
+            }
+        })
+    });
+
+    group.bench_function("NDTree_TryInsert", |b| {
+        b.iter(|| {
+            let mut pf = NdTreeParetoFront::<Solution<2>, 32, 2, 4>::new("bench");
+            for sol in &nd_solutions {
+                pf.try_insert(sol);
+            }
+        })
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_insertion_2d,
@@ -716,6 +900,13 @@ criterion_group!(
     bench_iteration,
     bench_vec_vs_linkedlist,
     bench_direct_comparison,
-    bench_comprehensive_comparison
+    bench_comprehensive_comparison,
+    bench_nd_tree_pareto_front_2d,
+    bench_nd_tree_pareto_front_3d,
+    bench_nd_tree_pareto_front_4d,
+    bench_nd_tree_pareto_front_5d,
+    bench_vec_pareto_front_2d,
+    compare_implementations,
+    bench_insertion_strategies
 );
 criterion_main!(benches);
