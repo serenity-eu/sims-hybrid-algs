@@ -7,10 +7,6 @@ edition = "2021"
 name = "nd_tree"
 path = "src/lib.rs"
 
-[[bin]]
-name = "nd-tree"
-path = "src/main.rs"
-
 [[bench]]
 name = "nd_tree_pareto"
 harness = false
@@ -51,7 +47,8 @@ plotters = "0.3.7"
 slotmap = "1.0.7"
 tracing = "0.1.41"
 pareto = { path = "../pareto" }
+rand = "0.8.5"
 
 [dev-dependencies]
-criterion = { version = "0.6.0", features = ["html_reports"] }
-rand = "0.9.1"
+criterion = { version = "0.5.1", features = ["html_reports"] }
+proptest = "1.2.0"
