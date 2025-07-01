@@ -1,0 +1,28 @@
+[build]
+# Target the native CPU architecture for maximum performance
+# This enables ALL available CPU features for 13th Gen Intel i7-13620H
+rustflags = [
+    "-C", "target-cpu=native",      # Use all available CPU features (MOST IMPORTANT)
+    "-C", "opt-level=3",            # Maximum optimization (redundant with profile but explicit)
+]
+
+# Optional: Use faster linker if available
+# Uncomment if lld is installed: sudo apt install lld
+# [target.x86_64-unknown-linux-gnu]
+# rustflags = [
+#     "-C", "link-arg=-fuse-ld=lld",  # Use LLD linker (faster linking)
+#     "-C", "target-cpu=native",      # NATIVE CPU TARGETING
+# ]
+
+# Alternative mold linker (even faster if available)
+# Uncomment if mold is installed: sudo apt install mold
+# [target.x86_64-unknown-linux-gnu]
+# linker = "clang"
+# rustflags = [
+#     "-C", "link-arg=-fuse-ld=mold",
+#     "-C", "target-cpu=native",        # NATIVE CPU TARGETING
+#     "-C", "target-feature=+avx2",
+#     "-C", "target-feature=+fma", 
+#     "-C", "target-feature=+bmi2",
+#     "-C", "opt-level=3",
+# ]
