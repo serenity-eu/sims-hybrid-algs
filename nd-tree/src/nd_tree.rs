@@ -83,6 +83,7 @@ where
 }
 
 /// The whole tree, storing nodes in an arena Vec and pointing to root by index.
+#[derive(Clone)]
 pub struct NDTree<T, const N: usize, const D: usize, const C: usize>
 where
     T: HasObjectives<D> + MoSolution<D> + Clone,
