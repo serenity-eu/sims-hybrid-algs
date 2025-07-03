@@ -1,4 +1,8 @@
-#![allow(dead_code)] // The tests are conditionally compiled
+#![expect(
+    clippy::linkedlist,
+    reason = "Using LinkedList for Pareto front as a reference implementation"
+)]
+#![allow(dead_code)]
 
 use pareto::{HasObjectives, MoSolution, ParetoFront};
 use std::collections::LinkedList;
@@ -19,32 +23,20 @@ impl<T, const D: usize> Default for LinkedListParetoFront<T, D> {
 
 impl<T, const D: usize> LinkedListParetoFront<T, D> {
     /// Creates a new, empty `LinkedListParetoFront`
-    pub fn new(name: &'static str) -> Self {
+    pub const fn new(name: &'static str) -> Self {
         Self {
             name,
             solutions: LinkedList::new(),
         }
     }
 
-    pub fn with_name(mut self, name: &'static str) -> Self {
+    pub const fn with_name(mut self, name: &'static str) -> Self {
         self.name = name;
         self
     }
-
-    /// Create from existing solutions (useful for testing)
-    pub fn from_solutions(name: &'static str, solutions: Vec<T>) -> Self
-    where
-        T: HasObjectives<D> + MoSolution<D> + Clone + Debug,
-    {
-        let mut pf = Self::new(name);
-        for solution in solutions {
-            pf.insert_unchecked(&solution);
-        }
-        pf
-    }
 }
 
-impl<'a, T, const D: usize> ParetoFront<'a, T> for LinkedListParetoFront<T, D>
+impl<T, const D: usize> ParetoFront<'_, T> for LinkedListParetoFront<T, D>
 where
     T: HasObjectives<D> + MoSolution<D> + Clone + Debug,
 {
@@ -120,50 +112,6 @@ where
     }
 }
 
-impl<T, const D: usize> LinkedListParetoFront<T, D>
-where
-    T: HasObjectives<D> + MoSolution<D> + Clone + Debug,
-{
-    /// Check if the Pareto front satisfies all invariants
-    pub fn validate_pareto_invariants(&self) -> Result<(), String> {
-        let solutions_vec: Vec<_> = self.solutions.iter().collect();
-        for (i, sol1) in solutions_vec.iter().enumerate() {
-            for (j, sol2) in solutions_vec.iter().enumerate() {
-                if i != j && sol1.dominates(sol2.objectives()) {
-                    return Err(format!(
-                        "Solution at index {} dominates solution at index {}: {:?} dominates {:?}",
-                        i,
-                        j,
-                        sol1.objectives(),
-                        sol2.objectives()
-                    ));
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Get all solutions as a Vec (for testing purposes)
-    pub fn solutions(&self) -> Vec<&T> {
-        self.solutions.iter().collect()
-    }
-
-    /// Clear all solutions
-    pub fn clear(&mut self) {
-        self.solutions.clear();
-    }
-
-    /// Get a reference to the underlying LinkedList
-    pub fn solutions_list(&self) -> &LinkedList<T> {
-        &self.solutions
-    }
-
-    /// Get a mutable reference to the underlying LinkedList
-    pub fn solutions_list_mut(&mut self) -> &mut LinkedList<T> {
-        &mut self.solutions
-    }
-}
-
 impl<T, const D: usize> IntoIterator for LinkedListParetoFront<T, D>
 where
     T: HasObjectives<D> + MoSolution<D> + Clone + Debug,
@@ -188,6 +136,7 @@ mod tests {
     }
 
     impl<const D: usize> TestSolution<D> {
+        #[must_use]
         fn new(objectives: [u64; D]) -> Self {
             Self { objectives, id: 0 }
         }

@@ -1,5 +1,4 @@
-#![allow(dead_code)] // The tests are conditionally compiled
-
+#![allow(dead_code)]
 use pareto::{HasObjectives, MoSolution, ParetoFront};
 
 /// Vec-based Pareto front implementation for reference and testing
@@ -16,28 +15,16 @@ impl<T, const D: usize> Default for VecParetoFront<T, D> {
 }
 
 impl<T, const D: usize> VecParetoFront<T, D> {
-    pub fn new(name: &'static str) -> Self {
+    pub const fn new(name: &'static str) -> Self {
         Self {
             name,
             solutions: Vec::new(),
         }
     }
 
-    pub fn with_name(mut self, name: &'static str) -> Self {
+    pub const fn with_name(mut self, name: &'static str) -> Self {
         self.name = name;
         self
-    }
-
-    /// Create from existing solutions (useful for testing)
-    pub fn from_solutions(name: &'static str, solutions: Vec<T>) -> Self
-    where
-        T: HasObjectives<D> + MoSolution<D> + Clone + std::fmt::Debug,
-    {
-        let mut pf = Self::new(name);
-        for solution in solutions {
-            pf.insert_unchecked(&solution);
-        }
-        pf
     }
 }
 
@@ -113,44 +100,6 @@ where
 
     fn is_empty(&self) -> bool {
         self.solutions.is_empty()
-    }
-}
-
-impl<T, const D: usize> VecParetoFront<T, D>
-where
-    T: HasObjectives<D> + MoSolution<D> + Clone + std::fmt::Debug,
-{
-    /// Check if the Pareto front satisfies all invariants
-    pub fn validate_pareto_invariants(&self) -> Result<(), String> {
-        for (i, sol1) in self.solutions.iter().enumerate() {
-            for (j, sol2) in self.solutions.iter().enumerate() {
-                if i != j && sol1.dominates(sol2.objectives()) {
-                    return Err(format!(
-                        "Solution at index {} dominates solution at index {}: {:?} dominates {:?}",
-                        i,
-                        j,
-                        sol1.objectives(),
-                        sol2.objectives()
-                    ));
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Get all solutions as a Vec (for testing purposes)
-    pub fn solutions(&self) -> &Vec<T> {
-        &self.solutions
-    }
-
-    /// Clear all solutions
-    pub fn clear(&mut self) {
-        self.solutions.clear();
-    }
-
-    /// Get a mutable reference to solutions (for advanced operations)
-    pub fn solutions_mut(&mut self) -> &mut Vec<T> {
-        &mut self.solutions
     }
 }
 

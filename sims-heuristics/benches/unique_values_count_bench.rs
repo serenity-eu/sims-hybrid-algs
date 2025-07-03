@@ -20,12 +20,12 @@ fn criterion_benchmark(c: &mut Criterion) {
     for &size in &sizes {
         let vec: Vec<u32> = (0..size).map(|_| rng.gen()).collect();
 
-        c.bench_function(&format!("sort_dedup_{}", size), |b| {
-            b.iter(|| unique_count_sort_dedup(black_box(&mut vec.clone())))
+        c.bench_function(&format!("sort_dedup_{size}"), |b| {
+            b.iter(|| unique_count_sort_dedup(black_box(&mut vec.clone())));
         });
 
-        c.bench_function(&format!("hashset_{}", size), |b| {
-            b.iter(|| unique_count_hashset(black_box(&vec)))
+        c.bench_function(&format!("hashset_{size}"), |b| {
+            b.iter(|| unique_count_hashset(black_box(&vec)));
         });
     }
 }

@@ -1,3 +1,5 @@
+use crate::explored_solutions_data::ExploredSolutionsData;
+
 #[cfg(feature = "plotting")]
 pub fn draw_solutions_plot<const D: usize>(solutions_data: &ExploredSolutionsData<D>) {
     let rainbow_colormap = DerivedColorMap::new(&[RED, ORANGE, YELLOW, GREEN, BLUE, PURPLE]);
@@ -39,15 +41,18 @@ pub fn draw_solutions_plot<const D: usize>(solutions_data: &ExploredSolutionsDat
     //     .unwrap();
 
     chart_ctx
-        .draw_series(solutions_data.non_dominated().into_iter().map(
-            |solution_point| {
-                Circle::new(
-                    (solution_point.objectives[0], solution_point.objectives[1]),
-                    6,
-                    &GREEN, // rainbow_colormap.get_color(iteration as f32 / num_iterations as f32),
-                )
-            },
-        ))
+        .draw_series(
+            solutions_data
+                .non_dominated()
+                .into_iter()
+                .map(|solution_point| {
+                    Circle::new(
+                        (solution_point.objectives[0], solution_point.objectives[1]),
+                        6,
+                        &GREEN, // rainbow_colormap.get_color(iteration as f32 / num_iterations as f32),
+                    )
+                }),
+        )
         .unwrap();
 
     chart_ctx
@@ -55,7 +60,13 @@ pub fn draw_solutions_plot<const D: usize>(solutions_data: &ExploredSolutionsDat
             solutions_data
                 .initial_solutions()
                 .into_iter()
-                .map(|solution_point| TriangleMarker::new((solution_point.objectives[0], solution_point.objectives[1]), 6, &BLUE)),
+                .map(|solution_point| {
+                    TriangleMarker::new(
+                        (solution_point.objectives[0], solution_point.objectives[1]),
+                        6,
+                        &BLUE,
+                    )
+                }),
         )
         .unwrap();
 }

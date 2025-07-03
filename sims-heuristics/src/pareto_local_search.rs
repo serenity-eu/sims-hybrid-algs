@@ -50,13 +50,14 @@ where
 {
     pub fn new(
         problem: &'a Problem<D>,
-        initial_population: S,
+        initial_population: &S,
         neighborhood_size_range: RangeInclusive<u32>,
         is_deterministic: bool,
     ) -> Self {
         let mut population = S::new("population".to_string());
+        // TODO: Hardcoded for 2 objectives, should be generalized
         let mut explored_solutions =
-            ExploredSolutionsData::<D>::new(problem.max_objectives[0], if D >= 2 { problem.max_objectives[1] } else { 0 });
+            ExploredSolutionsData::<D>::new(problem.max_objectives[0], problem.max_objectives[1]);
         initial_population.iter().for_each(|solution| {
             if population.try_add(solution) {
                 explored_solutions.register(0, solution, Duration::from_secs(0));
@@ -91,9 +92,9 @@ where
         // let mut pareto_snapshot_time = Instant::now();
 
         let mut auxiliary_population = S::new("auxiliary".to_string());
-        // for solution in self.population.iter() {
-        //     debug_assert!(solution.is_valid(self.problem));
-        // }
+        for solution in self.population.iter() {
+            debug_assert!(solution.is_valid(self.problem));
+        }
 
         // We peform replace to be able to consume self.population which is behind mutable &self
         let population = replace(&mut self.population, S::new("population".to_string()));
@@ -124,6 +125,7 @@ where
                     continue;
                 }
 
+                #[expect(clippy::if_not_else, reason = "Align with pseudo-code in paper")]
                 if !neighbor.is_weakly_dominated(&solution) {
                     if self.approximated_pareto_set.try_add(&neighbor) {
                         debug!("Neighbor nr {neighbor_index} was added to approximated pareto set. Approximated pareto set size: {}", self.approximated_pareto_set.len());
@@ -159,7 +161,7 @@ where
             }
 
             self.explored_solutions
-                .update_explored_neighborhood_size(&solution, self.neigborhood_structure)
+                .update_explored_neighborhood_size(&solution, self.neigborhood_structure);
         }
         let auxiliary_removed_count = auxiliary_added_count - auxiliary_population.len();
         let pareto_removed_count =
@@ -185,26 +187,26 @@ where
             info!("Start again with smallest neighborhood structure.");
             self.neigborhood_structure = *self.neighborhood_size_range.start();
             return StepStatus::NewPopulation;
-        } else {
-            info!("Increasing neighborhood structure.");
-            self.neigborhood_structure += 1;
-            if self
-                .neighborhood_size_range
-                .contains(&self.neigborhood_structure)
-            {
-                info!("Use solutions from approximated pareto set which are not already Pareto local optimum");
-                for solution in self.approximated_pareto_set.iter().filter(|&solution| {
-                    self.explored_solutions.explored_neighborhood_size(solution)
-                        < self.neigborhood_structure
-                }) {
-                    self.population.force_add(solution);
-                }
-            } else {
-                info!("Reached maximum neighborhood structure.");
-                return StepStatus::AllNeighborhoodStructuresExplored;
-            }
-            return StepStatus::IncreasedNeighborhoodStructure;
         }
+
+        info!("Increasing neighborhood structure.");
+        self.neigborhood_structure += 1;
+        if self
+            .neighborhood_size_range
+            .contains(&self.neigborhood_structure)
+        {
+            info!("Use solutions from approximated pareto set which are not already Pareto local optimum");
+            for solution in self.approximated_pareto_set.iter().filter(|&solution| {
+                self.explored_solutions.explored_neighborhood_size(solution)
+                    < self.neigborhood_structure
+            }) {
+                self.population.force_add(solution);
+            }
+        } else {
+            info!("Reached maximum neighborhood structure.");
+            return StepStatus::AllNeighborhoodStructuresExplored;
+        }
+        return StepStatus::IncreasedNeighborhoodStructure;
     }
 
     pub fn run(&mut self, max_iterations: usize, max_duration: Duration) -> S {

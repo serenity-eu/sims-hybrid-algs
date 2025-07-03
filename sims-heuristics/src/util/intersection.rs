@@ -36,7 +36,7 @@ where
     I: Iterator,
 {
     fn new(iter1: I, iter2: I) -> Self {
-        Intersection {
+        Self {
             iter1: iter1.peekable(),
             iter2: iter2.peekable(),
         }

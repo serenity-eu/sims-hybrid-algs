@@ -21,7 +21,7 @@ where
     type IntoIter = btree_set::IntoIter<T>;
 
     fn new(name: String) -> Self {
-        BTreeSolutionSet {
+        Self {
             name,
             btree_set: BTreeSet::new(),
         }
@@ -77,9 +77,8 @@ where
         {
             self.btree_set.insert(solution.clone());
             return true;
-        } else {
-            return false;
         }
+        return false;
     }
 
     fn try_add(&mut self, solution: &T) -> bool {
@@ -124,7 +123,7 @@ where
     }
 
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
-        BTreeSolutionSet {
+        Self {
             name: "unnamed".to_string(),
             btree_set: iter.into_iter().collect(),
         }

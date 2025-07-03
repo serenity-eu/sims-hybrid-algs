@@ -58,6 +58,12 @@ fn parse_vec(input_str: &str) -> Vec<u64> {
         .collect::<Vec<_>>()
 }
 
+/// Parses a set of vectors from a string representation.
+///
+/// # Panics
+///
+/// This function will panic if the input string is malformed or if any value cannot be parsed as a `usize`.
+#[must_use]
 pub fn parse_set_of_vecs(input_str: &str) -> Vec<Vec<usize>> {
     // Initialize empty vector of vectors
     let mut result: Vec<Vec<usize>> = Vec::new();
@@ -88,15 +94,24 @@ pub fn parse_set_of_vecs(input_str: &str) -> Vec<Vec<usize>> {
 }
 
 impl SIMSProblemInstanceRaw {
+    /// Constructs a `SIMSProblemInstanceRaw` from a `MiniZinc` data file.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if the file cannot be read, or if the file name, file stem,
+    /// or any expected data is missing or malformed.
     pub fn from_minizinc_datafile<P: AsRef<Path>>(model_path: P) -> Self {
-        let mut sims_problem = SIMSProblemInstanceRaw::default();
-        sims_problem.name = model_path
+        let name = model_path
             .as_ref()
             .file_stem()
             .unwrap()
             .to_str()
             .unwrap()
             .to_string();
+        let mut sims_problem = Self {
+            name,
+            ..Default::default()
+        };
         let model_str = std::fs::read_to_string(model_path).expect("Failed to read model file");
 
         for line in model_str.lines() {
@@ -154,16 +169,18 @@ pub struct Image {
 }
 
 impl Image {
-    pub fn new(index: usize, cost: u64, parts: Vec<usize>, clear_parts: Vec<usize>) -> Self {
-        Image {
+    #[must_use]
+    pub const fn new(index: usize, cost: u64, parts: Vec<usize>, clear_parts: Vec<usize>) -> Self {
+        Self {
             index,
-            cost,
-            clear_parts,
             parts,
+            clear_parts,
+            cost,
         }
     }
 
-    pub fn cost(&self) -> u64 {
+    #[must_use]
+    pub const fn cost(&self) -> u64 {
         self.cost
     }
 }
@@ -198,6 +215,7 @@ impl PartialEq for ComparableImage {
     }
 }
 
+#[expect(clippy::non_canonical_partial_ord_impl, reason = "Compare only by key")]
 impl PartialOrd for ComparableImage {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.key.partial_cmp(&other.key)
@@ -224,19 +242,25 @@ pub struct Problem<const D: usize> {
 }
 
 impl<const D: usize> Problem<D> {
+    /// Constructs a `Problem` from a raw SIMS problem instance.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `D` is not 2, as only 2D objectives are currently supported.
+    #[must_use]
     pub fn from_raw(mut raw: SIMSProblemInstanceRaw) -> Self {
         // Normalize all indices to be zero-based
         raw.images.iter_mut().for_each(|image| {
-            image.iter_mut().for_each(|index| {
+            for index in image.iter_mut() {
                 *index -= 1;
-            });
-            image.sort();
+            }
+            image.sort_unstable();
         });
         raw.clouds.iter_mut().for_each(|image| {
-            image.iter_mut().for_each(|index| {
+            for index in image.iter_mut() {
                 *index -= 1;
-            });
-            image.sort();
+            }
+            image.sort_unstable();
         });
 
         // Create universe
@@ -245,9 +269,9 @@ impl<const D: usize> Problem<D> {
             .iter()
             .enumerate()
             .for_each(|(image_index, image)| {
-                image.iter().for_each(|&element_index| {
+                for &element_index in image {
                     universe[element_index].images.push(image_index);
-                })
+                }
             });
         raw.areas
             .iter()
@@ -294,7 +318,7 @@ impl<const D: usize> Problem<D> {
         max_objectives[0] = max_cost;
         max_objectives[1] = max_cloudy_area;
 
-        Problem {
+        Self {
             instance_name: raw.name,
             universe,
             images,
@@ -306,15 +330,17 @@ impl<const D: usize> Problem<D> {
     /// Load problem instance from minizinc data file
     pub fn from_minizinc_datafile<P: AsRef<Path>>(model_path: &P) -> Self {
         let raw = SIMSProblemInstanceRaw::from_minizinc_datafile(model_path);
-        Problem::from_raw(raw)
+        Self::from_raw(raw)
     }
 
     /// Get total cost of all images
+    #[must_use]
     pub fn total_cost(&self) -> u64 {
         self.images.iter().map(|image| image.cost).sum()
     }
 
     /// Get total area of all elements
+    #[must_use]
     pub fn total_area(&self) -> u64 {
         self.universe.iter().map(|element| element.area).sum()
     }
@@ -322,7 +348,7 @@ impl<const D: usize> Problem<D> {
 
 impl Default for Problem<2> {
     fn default() -> Self {
-        Problem {
+        Self {
             instance_name: String::new(),
             universe: Vec::new(),
             images: Vec::new(),

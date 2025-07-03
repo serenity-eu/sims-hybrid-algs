@@ -6,7 +6,7 @@ use rand::SeedableRng;
 use rand::{seq::IteratorRandom, Rng};
 use std::{collections::BinaryHeap, fmt::Debug, hash::Hash, vec};
 
-use crate::objectives::objectives_utils;
+use crate::objectives;
 use crate::problem::{ComparableImage, ImageObjectiveDeltas, Problem, ScaledObjectiveDeltas};
 use crate::residual_problem::ResidualProblem;
 use crate::residual_solution::ResidualSolution;
@@ -33,8 +33,6 @@ pub trait SIMSSolutionTrait<const D: usize>: HasObjectives<D> + MoSolution<D> {
 
 pub struct SIMSSolution {
     selected_images: Vec<usize>,
-    #[allow(dead_code)]
-    images_per_element: Vec<Vec<usize>>,
 }
 
 impl Debug for SIMSSolution {
@@ -98,9 +96,8 @@ impl Iterator for UnselectedImagesIter<'_> {
 }
 
 impl<const D: usize> HasObjectives<D> for EncodedSolution<D> {
-    fn objectives(&self) -> &[u64; D] {
-        // Convert Objectives<D> to &[u64; D]
-        unsafe { std::mem::transmute(&self.objectives) }
+    fn objectives(&self) -> &pareto::Objectives<D> {
+        &self.objectives
     }
 }
 
@@ -149,7 +146,7 @@ impl<const D: usize> SIMSSolutionTrait<D> for EncodedSolution<D> {
                 });
         }
 
-        let mut sims_solution = EncodedSolution {
+        let mut sims_solution = Self {
             selected_images,
             objectives: [0; D],
             clear_parts_counts,
@@ -160,7 +157,7 @@ impl<const D: usize> SIMSSolutionTrait<D> for EncodedSolution<D> {
     }
 
     fn random(problem: &Problem<D>) -> Self {
-        return EncodedSolution::random_with_seed(problem, rand::thread_rng().gen());
+        return Self::random_with_seed(problem, rand::thread_rng().gen());
     }
 
     fn is_dominated(&self, other: &Self) -> bool {
@@ -182,21 +179,26 @@ impl<const D: usize> SIMSSolutionTrait<D> for EncodedSolution<D> {
 }
 
 impl<const D: usize> EncodedSolution<D> {
-    pub fn from_selected_images(selected_images_vec: Vec<usize>, problem: &Problem<D>) -> Self {
+    /// Creates an `EncodedSolution` from a list of selected image indices.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `D` is not equal to 2, as only `D = 2` is currently supported.
+    #[must_use]
+    pub fn from_selected_images(selected_images_vec: &[usize], problem: &Problem<D>) -> Self {
         let mut objectives = [0; D];
-        if D >= 2 {
-            objectives[1] = problem.total_area();
-        }
-        let mut solution = EncodedSolution {
+        assert!(D == 2, "EncodedSolution only supports D = 2 for now");
+        objectives[1] = problem.total_area();
+        let mut solution = Self {
             selected_images: vec![false; problem.images.len()],
             objectives,
             clear_parts_counts: vec![0; problem.universe.len()],
             element_coverage: vec![0; problem.universe.len()],
         };
 
-        selected_images_vec.iter().for_each(|&image_index| {
+        for &image_index in selected_images_vec {
             solution.add_image(image_index, problem);
-        });
+        }
         solution
     }
 
@@ -213,6 +215,7 @@ impl<const D: usize> EncodedSolution<D> {
     }
 
     /// Compute area covered by clouds
+    #[must_use]
     pub fn cloudy_area(&self, problem: &Problem<D>) -> u64 {
         let mut clear_elements = vec![false; problem.universe.len()];
         self.selected_images().for_each(|image_index| {
@@ -226,11 +229,11 @@ impl<const D: usize> EncodedSolution<D> {
         let cloudy_area = clear_elements
             .iter()
             .enumerate()
-            .filter_map(|(element_index, is_clear)| {
-                if !is_clear {
-                    Some(problem.universe[element_index].area)
-                } else {
+            .filter_map(|(element_index, &is_clear)| {
+                if is_clear {
                     None
+                } else {
+                    Some(problem.universe[element_index].area)
                 }
             })
             .sum();
@@ -238,6 +241,7 @@ impl<const D: usize> EncodedSolution<D> {
     }
 
     /// Compute total cost
+    #[must_use]
     pub fn total_cost(&self, problem: &Problem<D>) -> u64 {
         self.selected_images()
             .map(|image_index| problem.images[image_index].cost())
@@ -245,11 +249,13 @@ impl<const D: usize> EncodedSolution<D> {
     }
 
     /// Scalarizing function using weighted sum, for solution quality comparison
+    #[must_use]
     pub fn scalarizing_fn(&self, weights: &[f32; D], _max_values: pareto::Objectives<D>) -> f32 {
-        return objectives_utils::weighted_sum(&self.objectives, weights);
+        return objectives::weighted_sum(&self.objectives, weights);
     }
 
     /// Check if solution is valid
+    #[must_use]
     pub fn is_valid(&self, problem: &Problem<D>) -> bool {
         let mut covered_elements = vec![false; problem.universe.len()];
         self.selected_images().for_each(|image_index| {
@@ -306,6 +312,7 @@ impl<const D: usize> EncodedSolution<D> {
     }
 
     /// Check if objective values are correct
+    #[must_use]
     pub fn are_objectives_valid(&self, problem: &Problem<D>) -> bool {
         let first_objective_is_valid = self.objectives[0] == self.total_cost(problem);
         if !first_objective_is_valid {
@@ -329,7 +336,8 @@ impl<const D: usize> EncodedSolution<D> {
     }
 
     /// Returns iterator over indices of selected images of solution
-    pub fn selected_images(&self) -> SelectedImagesIter {
+    #[must_use]
+    pub const fn selected_images(&self) -> SelectedImagesIter<'_> {
         SelectedImagesIter {
             images: &self.selected_images,
             index: 0,
@@ -337,7 +345,7 @@ impl<const D: usize> EncodedSolution<D> {
     }
 
     /// Returns iterator over indices of unselected images of solution
-    fn unselected_images(&self) -> UnselectedImagesIter {
+    const fn unselected_images(&self) -> UnselectedImagesIter<'_> {
         UnselectedImagesIter {
             images: &self.selected_images,
             index: 0,
@@ -359,7 +367,7 @@ impl<const D: usize> EncodedSolution<D> {
         if D >= 2 {
             deltas[1] = cloudy_area_delta;
         }
-        objectives_utils::apply_delta(&mut self.objectives, &deltas);
+        objectives::apply_delta(&mut self.objectives, &deltas);
         problem.images[i].parts.iter().for_each(|&part| {
             self.element_coverage[part] -= 1;
         });
@@ -381,7 +389,7 @@ impl<const D: usize> EncodedSolution<D> {
     pub fn add_image(&mut self, i: usize, problem: &Problem<D>) {
         let cost_delta = self.cost_delta(i, problem);
         let cloudy_area_delta = self.cloudy_area_delta(i, problem);
-        objectives_utils::apply_delta_2d(&mut self.objectives, (cost_delta, cloudy_area_delta));
+        objectives::apply_delta_2d(&mut self.objectives, (cost_delta, cloudy_area_delta));
         problem.images[i].parts.iter().for_each(|&part| {
             self.element_coverage[part] += 1;
         });
@@ -395,6 +403,7 @@ impl<const D: usize> EncodedSolution<D> {
     }
 
     /// Check whether image at index i can be replaced by another image(s)
+    #[must_use]
     pub fn is_replaceable(&self, i: usize, problem: &Problem<D>) -> bool {
         // For each part of the image, check if there is another image that covers the part
         self.unselected_images()
@@ -402,11 +411,13 @@ impl<const D: usize> EncodedSolution<D> {
     }
 
     /// Generate random weights for objectives
+    #[must_use]
     pub fn generate_weights(&self) -> (f32, f32) {
-        return objectives_utils::generate_weights_2d();
+        return objectives::generate_weights_2d();
     }
 
     /// Create residual problem, composed of removed images, candidates to be added, and images covering the rest of the uncovered elements.
+    #[must_use]
     pub fn create_residual_problem<'a>(
         &'a self,
         mut removal_candidates_indices: Vec<usize>,
@@ -416,11 +427,9 @@ impl<const D: usize> EncodedSolution<D> {
         let mut unmodified_solution = self.clone();
 
         // Remove images
-        removal_candidates_indices
-            .iter()
-            .for_each(|&removed_image_index| {
-                unmodified_solution.remove_image(removed_image_index, problem);
-            });
+        for &removed_image_index in &removal_candidates_indices {
+            unmodified_solution.remove_image(removed_image_index, problem);
+        }
 
         // Get list of uncovered elements
         let uncovered_elements_indices = unmodified_solution
@@ -521,6 +530,7 @@ impl<const D: usize> EncodedSolution<D> {
     }
 
     /// Get indices of the best replacement image(s) which is not selected yet, returns None when image cannot be replaced
+    #[must_use]
     pub fn best_unselected_images(
         &self,
         uncovered_elements: &[usize],
@@ -572,25 +582,29 @@ impl<const D: usize> EncodedSolution<D> {
 
         if comparable_unselected_images.is_empty() {
             return None;
-        } else {
-            let best_unselected_images = if comparable_unselected_images.len() > 9 {
-                comparable_unselected_images
-                    .select_nth_unstable_by_key(9, |comparable_image| comparable_image.key)
-                    .0
-                    .iter()
-                    .map(|comparable_image| comparable_image.index)
-                    .collect::<Vec<usize>>()
-            } else {
-                comparable_unselected_images
-                    .into_iter()
-                    .map(|comparable_image| comparable_image.index)
-                    .collect::<Vec<usize>>()
-            };
-            return Some(best_unselected_images);
         }
+        let best_unselected_images = if comparable_unselected_images.len() > 9 {
+            comparable_unselected_images
+                .select_nth_unstable_by_key(9, |comparable_image| comparable_image.key)
+                .0
+                .iter()
+                .map(|comparable_image| comparable_image.index)
+                .collect::<Vec<usize>>()
+        } else {
+            comparable_unselected_images
+                .into_iter()
+                .map(|comparable_image| comparable_image.index)
+                .collect::<Vec<usize>>()
+        };
+        return Some(best_unselected_images);
     }
 
-    pub fn worst_selected_images(&self, problem: &Problem<D>, is_deterministic: bool) -> Vec<usize> {
+    #[must_use]
+    pub fn worst_selected_images(
+        &self,
+        problem: &Problem<D>,
+        is_deterministic: bool,
+    ) -> Vec<usize> {
         let weights: (f32, f32) = if is_deterministic {
             (0.5, 0.5)
         } else {
@@ -623,34 +637,20 @@ impl<const D: usize> EncodedSolution<D> {
         return worst_selected_images;
     }
 
-    pub fn as_sims_solution(&self, problem: &Problem<D>) -> SIMSSolution {
+    #[must_use]
+    pub fn as_sims_solution(&self) -> SIMSSolution {
         let selected_images = self
             .selected_images
             .iter()
             .enumerate()
             .filter_map(|(index, &selected)| if selected { Some(index) } else { None })
             .collect::<Vec<usize>>();
-        let images_per_element = problem
-            .universe
-            .iter()
-            .map(|element| {
-                element
-                    .images
-                    .iter()
-                    .filter(|&image_index| self.selected_images[*image_index])
-                    .copied()
-                    .collect::<Vec<usize>>()
-            })
-            .collect::<Vec<Vec<usize>>>();
-        SIMSSolution {
-            selected_images,
-            images_per_element,
-        }
+        SIMSSolution { selected_images }
     }
 
     pub fn merge_residual_solution(
         &mut self,
-        residual_solution: ResidualSolution<D>,
+        residual_solution: &ResidualSolution<D>,
         residual_problem: &ResidualProblem<D>,
         problem: &Problem<D>,
     ) {
@@ -692,27 +692,26 @@ impl<const D: usize> EncodedSolution<D> {
     fn cost_delta(&self, image_index: usize, problem: &Problem<D>) -> i64 {
         if self.selected_images[image_index] {
             return -(problem.images[image_index].cost() as i64);
-        } else {
-            return problem.images[image_index].cost() as i64;
         }
+        return problem.images[image_index].cost() as i64;
     }
 
     /// Explore neighborhood of size k
+    #[must_use]
     pub fn neighborhood(
         &self,
         k: u32,
         problem: &Problem<D>,
         timer: &Timer,
         is_deterministic: bool,
-    ) -> Vec<EncodedSolution<D>> {
+    ) -> Vec<Self> {
         let removal_candidates_lists: Vec<Vec<usize>> = if k == 1 {
             self.selected_images()
                 .filter_map(|selected_image| {
                     if self.is_replaceable(selected_image, problem) {
                         return Some(vec![selected_image]);
-                    } else {
-                        return None;
                     }
+                    return None;
                 })
                 .collect()
         } else {
@@ -722,7 +721,7 @@ impl<const D: usize> EncodedSolution<D> {
                 .collect()
         };
 
-        let mut residual_solutions: Vec<EncodedSolution<D>> = Vec::new();
+        let mut residual_solutions: Vec<Self> = Vec::new();
 
         for removal_candidates in removal_candidates_lists {
             if let Some(mut residual_problem) =
@@ -742,7 +741,10 @@ impl<const D: usize> EncodedSolution<D> {
 
 /// Implement non-dominance relation for solutions (where a < b iff a dominates b)
 /// Note: We minimize both objectives, so the smaller objective the better
-#[expect(clippy::non_canonical_partial_ord_impl, reason="Compare only first objective")]
+#[expect(
+    clippy::non_canonical_partial_ord_impl,
+    reason = "Compare only first objective"
+)]
 impl<const D: usize> PartialOrd for EncodedSolution<D> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.objectives[0].partial_cmp(&other.objectives[0])
@@ -769,6 +771,10 @@ impl<const D: usize> Hash for EncodedSolution<D> {
 }
 
 // Implement Debug for SIMSEncodedSolution by converting it to SIMSSolution
+#[expect(
+    clippy::missing_fields_in_debug,
+    reason = "Custom Debug impl only shows relevant fields for readability"
+)]
 impl<const D: usize> Debug for EncodedSolution<D> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let selected_images = &self

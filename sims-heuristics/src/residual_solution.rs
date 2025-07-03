@@ -1,7 +1,4 @@
-use crate::{
-    problem::Problem, residual_problem::ResidualProblem,
-    solution::SIMSSolutionTrait,
-};
+use crate::{problem::Problem, residual_problem::ResidualProblem, solution::SIMSSolutionTrait};
 use pareto::{HasObjectives, MoSolution};
 use std::fmt::Debug;
 
@@ -26,7 +23,10 @@ impl<const D: usize> Debug for ResidualSolution<D> {
     }
 }
 
-#[expect(clippy::non_canonical_partial_ord_impl, reason = "Compare only first objective")]
+#[expect(
+    clippy::non_canonical_partial_ord_impl,
+    reason = "Compare only first objective"
+)]
 impl<const D: usize> PartialOrd for ResidualSolution<D> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.objectives[0].partial_cmp(&other.objectives[0])
@@ -40,9 +40,8 @@ impl<const D: usize> Ord for ResidualSolution<D> {
 }
 
 impl<const D: usize> HasObjectives<D> for ResidualSolution<D> {
-    fn objectives(&self) -> &[u64; D] {
-        // Convert Objectives(u64, u64) to &[u64; 2]
-        unsafe { std::mem::transmute(&self.objectives) }
+    fn objectives(&self) -> &pareto::Objectives<D> {
+        &self.objectives
     }
 }
 
@@ -77,11 +76,12 @@ impl<const D: usize> SIMSSolutionTrait<D> for ResidualSolution<D> {
 }
 
 impl<const D: usize> ResidualSolution<D> {
+    #[must_use]
     pub fn from_selected_images(
         selected_images: Vec<usize>,
         residual_problem: &ResidualProblem<D>,
     ) -> Self {
-        let mut solution = ResidualSolution {
+        let mut solution = Self {
             selected_images,
             objectives: [0; D],
         };
@@ -111,7 +111,7 @@ impl<const D: usize> ResidualSolution<D> {
                 .iter()
                 .for_each(|&clear_part| {
                     clear_parts[clear_part] = true;
-                })
+                });
         });
 
         // We compute cloudy area as sum of areas of all elements that are not clear
@@ -120,23 +120,18 @@ impl<const D: usize> ResidualSolution<D> {
             .iter()
             .zip(clear_parts.iter())
             .filter_map(
-                |(element, is_clear)| {
-                    if !is_clear {
-                        Some(element.area)
-                    } else {
+                |(element, &is_clear)| {
+                    if is_clear {
                         None
+                    } else {
+                        Some(element.area)
                     }
                 },
             )
             .sum();
 
-        // Set objectives based on D
-        if D >= 1 {
-            self.objectives[0] = cost;
-        }
-        if D >= 2 {
-            self.objectives[1] = cloudy_area;
-        }
-        // For D > 2, additional objectives would need to be defined
+        assert!(D == 2, "ResidualSolution only supports D = 2 for now");
+        self.objectives[0] = cost;
+        self.objectives[1] = cloudy_area;
     }
 }
