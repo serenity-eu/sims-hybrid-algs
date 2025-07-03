@@ -25,7 +25,7 @@ where
     type IntoIter = std::vec::IntoIter<T>;
 
     fn new(name: String) -> Self {
-        NdTreeSolutionSet {
+        Self {
             name,
             nd_tree: NDTree::new(),
             solutions: Vec::new(),
@@ -148,7 +148,7 @@ where
             nd_tree.update(nd_solution);
         }
 
-        NdTreeSolutionSet {
+        Self {
             name: "unnamed".to_string(),
             nd_tree,
             solutions,

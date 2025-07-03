@@ -35,7 +35,7 @@ where
     I: Iterator,
 {
     fn new(iter1: I, iter2: I) -> Self {
-        Difference {
+        Self {
             iter1: iter1.peekable(),
             iter2: iter2.peekable(),
         }
@@ -60,7 +60,7 @@ mod tests {
         let iter2: Vec<i32> = vec![];
 
         let diff = Difference::new(iter1.into_iter(), iter2.into_iter());
-        assert_eq!(diff.collect::<Vec<i32>>(), vec![]);
+        assert_eq!(diff.collect::<Vec<i32>>(), Vec::<i32>::new());
     }
 
     #[test]
@@ -87,6 +87,6 @@ mod tests {
         let iter2 = vec![1, 2, 3];
 
         let diff = Difference::new(iter1.into_iter(), iter2.into_iter());
-        assert_eq!(diff.collect::<Vec<i32>>(), vec![]);
+        assert_eq!(diff.collect::<Vec<i32>>(), Vec::<i32>::new());
     }
 }

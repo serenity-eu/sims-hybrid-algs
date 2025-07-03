@@ -8,8 +8,8 @@ fn generate_solutions<const D: usize>(n: usize, v_max: u64) -> Vec<Solution<D>> 
     let mut solutions = Vec::with_capacity(n);
     for _ in 0..n {
         let mut objectives = [0u64; D];
-        for i in 0..D {
-            objectives[i] = rng.gen_range(0..v_max);
+        for obj in &mut objectives {
+            *obj = rng.gen_range(0..v_max);
         }
         solutions.push(Solution { objectives });
     }

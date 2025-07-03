@@ -22,7 +22,7 @@ where
     type IntoIter = std::vec::IntoIter<T>;
 
     fn new(name: String) -> Self {
-        VecSolutionSet {
+        Self {
             name,
             last_added_position: 0,
             vec_set: Vec::new(),
@@ -131,7 +131,7 @@ where
     }
 
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
-        VecSolutionSet {
+        Self {
             name: "unnamed".to_string(),
             vec_set: iter.into_iter().collect(),
             last_added_position: 0,

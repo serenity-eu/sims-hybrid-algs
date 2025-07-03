@@ -27,6 +27,7 @@ pub struct ResidualProblem<'a, const D: usize> {
 }
 
 impl<'a, const D: usize> ResidualProblem<'a, D> {
+    #[must_use]
     pub fn new(
         unmodified_solution: EncodedSolution<D>,
         removal_candidates_original_indices: Vec<usize>,
@@ -43,12 +44,11 @@ impl<'a, const D: usize> ResidualProblem<'a, D> {
         debug!("######## base: {:?} ########", unmodified_solution);
         debug!("######################################################");
 
-        let uncovered_elements_map: HashMap<usize, usize> = HashMap::from_iter(
-            uncovered_elements_indices
-                .iter()
-                .enumerate()
-                .map(|(i, &x)| (x, i)),
-        );
+        let uncovered_elements_map: HashMap<usize, usize> = uncovered_elements_indices
+            .iter()
+            .enumerate()
+            .map(|(i, &x)| (x, i))
+            .collect::<HashMap<_, _>>();
 
         let all_images: Vec<Image> = removal_candidates_original_indices
             .clone()
@@ -72,12 +72,11 @@ impl<'a, const D: usize> ResidualProblem<'a, D> {
             })
             .collect();
 
-        let all_images_map: HashMap<usize, usize> = HashMap::from_iter(
-            all_images
-                .iter()
-                .enumerate()
-                .map(|(i, image)| (image.index, i)),
-        );
+        let all_images_map: HashMap<usize, usize> = all_images
+            .iter()
+            .enumerate()
+            .map(|(i, image)| (image.index, i))
+            .collect::<HashMap<_, _>>();
 
         let removal_candidates_indices: Vec<usize> = removal_candidates_original_indices
             .into_iter()
@@ -102,7 +101,7 @@ impl<'a, const D: usize> ResidualProblem<'a, D> {
             .for_each(|(image_index, image)| {
                 image.parts.iter().for_each(|&part| {
                     uncovered_elements[part].images.push(image_index);
-                })
+                });
             });
 
         ResidualProblem {
@@ -115,7 +114,7 @@ impl<'a, const D: usize> ResidualProblem<'a, D> {
         }
     }
 
-    pub fn solve_with_backtracing(&mut self) -> MergedSolutionIter<D> {
+    pub fn solve_with_backtracing(&mut self) -> MergedSolutionIter<'_, D> {
         let mut non_dominated_residual_set: BTreeSolutionSet<ResidualSolution<D>, D> =
             BTreeSolutionSet::new("residual".to_string());
 
@@ -260,7 +259,7 @@ impl<'a, const D: usize> ResidualProblem<'a, D> {
     }
     */
 
-    pub fn solve(&mut self) -> MergedSolutionIter<D> {
+    pub fn solve(&mut self) -> MergedSolutionIter<'_, D> {
         let mut non_dominated_residual_set: BTreeSolutionSet<ResidualSolution<D>, D> =
             BTreeSolutionSet::new("residual".to_string());
 
@@ -280,21 +279,22 @@ impl<'a, const D: usize> ResidualProblem<'a, D> {
             }
 
             let mut covered_elements = vec![false; self.uncovered_elements.len()];
-            image_combination.iter().for_each(|&image_index| {
+            for &image_index in &image_combination {
                 self.all_images[*image_index]
                     .parts
                     .iter()
                     .for_each(|&part| {
                         covered_elements[part] = true;
-                    })
-            });
+                    });
+            }
 
             if !covered_elements.iter().all(|&is_covered| is_covered) {
                 continue;
             }
 
             let selected_images: Vec<usize> = image_combination.iter().copied().copied().collect();
-            let residual_solution = ResidualSolution::<D>::from_selected_images(selected_images, self);
+            let residual_solution =
+                ResidualSolution::<D>::from_selected_images(selected_images, self);
             let was_added = non_dominated_residual_set.try_add(&residual_solution);
             trace!("#####################################################");
             trace!(
@@ -341,7 +341,7 @@ impl<const D: usize> Iterator for MergedSolutionIter<'_, D> {
         let residual_solution = self.solutions_iter.pop()?;
         let mut new_solution = self.unmodified_solution.clone();
         new_solution.merge_residual_solution(
-            residual_solution,
+            &residual_solution,
             self.residual_problem,
             self.problem,
         );

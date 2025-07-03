@@ -12,6 +12,7 @@ pub trait SolutionSet<'a, T: SIMSSolutionTrait<D>, const D: usize> {
     fn new(name: String) -> Self;
 
     /// Set name
+    #[must_use]
     fn with_name(self, name: String) -> Self;
 
     /// Create a set of given size of random solutions
@@ -35,7 +36,7 @@ pub trait SolutionSet<'a, T: SIMSSolutionTrait<D>, const D: usize> {
     /// Try add new solution to the set, return true if it there was no solution in the set that dominated it and it was added
     fn try_add(&mut self, solution: &T) -> bool;
 
-    /// Forcefuly add solution to the set, for use only with collect from another SolutionSet
+    /// Forcefuly add solution to the set, for use only with collect from another `SolutionSet`
     fn force_add(&mut self, solution: &T);
 
     /// Replace given solution with updated solution

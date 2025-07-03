@@ -1,6 +1,10 @@
 #![feature(adt_const_params)]
 #![feature(linked_list_cursors)]
 #![feature(linked_list_retain)]
+#![expect(
+    clippy::cast_precision_loss,
+    reason = "Legacy code style, extensive refactor needed"
+)]
 
 use criterion::{
     criterion_group, criterion_main, BenchmarkId, Criterion, PlotConfiguration, Throughput,
@@ -14,7 +18,7 @@ use fronts::linkedlist_pareto_front::LinkedListParetoFront;
 use fronts::nd_tree_pareto_front::NdTreeParetoFront;
 use fronts::vec_pareto_front::VecParetoFront;
 
-/// Test solution for benchmarking Vec and LinkedList implementations
+/// Test solution for benchmarking Vec and `LinkedList` implementations
 #[derive(Debug, Clone, PartialEq)]
 struct BenchSolution<const D: usize> {
     objectives: [u64; D],
@@ -67,7 +71,7 @@ fn generate_pareto_solutions<const D: usize>(
 
     while solutions.len() < n {
         let mut objectives = [0u64; D];
-        for obj in objectives.iter_mut() {
+        for obj in &mut objectives {
             *obj = rng.gen_range(0..=v_max);
         }
 
@@ -98,7 +102,7 @@ fn generate_nd_tree_solutions<const D: usize>(n: usize, v_max: u64, eps: f64) ->
 
     while solutions.len() < n {
         let mut objectives = [0u64; D];
-        for obj in objectives.iter_mut() {
+        for obj in &mut objectives {
             *obj = rng.gen_range(0..=v_max);
         }
 
@@ -122,7 +126,7 @@ fn generate_random_solutions<const D: usize>(n: usize, v_max: u64) -> Vec<BenchS
 
     for i in 0..n {
         let mut objectives = [0u64; D];
-        for obj in objectives.iter_mut() {
+        for obj in &mut objectives {
             *obj = rng.gen_range(0..=v_max);
         }
         solutions.push(BenchSolution {
@@ -141,7 +145,7 @@ fn generate_random_nd_tree_solutions<const D: usize>(n: usize, v_max: u64) -> Ve
 
     for _i in 0..n {
         let mut objectives = [0u64; D];
-        for obj in objectives.iter_mut() {
+        for obj in &mut objectives {
             *obj = rng.gen_range(0..=v_max);
         }
         solutions.push(Solution { objectives });
@@ -233,15 +237,10 @@ fn bench_insertion_3d(c: &mut Criterion) {
     for size in DIM_3D_SIZES {
         // Adjust measurement time based on specific size requirements from benchmark analysis
         let measurement_time = match size {
-            1000 => std::time::Duration::from_secs(5),
-            2000 => std::time::Duration::from_secs(8),
             3000 => std::time::Duration::from_secs(8),
             4000 => std::time::Duration::from_secs(9),
-            5000 => std::time::Duration::from_secs(10),
-            6000 => std::time::Duration::from_secs(10),
-            7000 => std::time::Duration::from_secs(14),
-            8000 => std::time::Duration::from_secs(14),
-            9000 => std::time::Duration::from_secs(19),
+            5000 | 6000 => std::time::Duration::from_secs(10),
+            7000 | 8000 => std::time::Duration::from_secs(14),
             10000 => std::time::Duration::from_secs(24),
             _ => std::time::Duration::from_secs(5),
         };
@@ -305,13 +304,9 @@ fn bench_insertion_4d(c: &mut Criterion) {
     for size in DIM_4D_SIZES {
         // Adjust measurement time based on specific size requirements from benchmark analysis (50 samples)
         let measurement_time = match size {
-            1000 => std::time::Duration::from_secs(5),
-            2000 => std::time::Duration::from_secs(8),
-            3000 => std::time::Duration::from_secs(8),
-            4000 => std::time::Duration::from_secs(18),
+            2000 | 3000 => std::time::Duration::from_secs(18),
             5000 => std::time::Duration::from_secs(20),
-            6000 => std::time::Duration::from_secs(25),
-            7000 => std::time::Duration::from_secs(25),
+            6000 | 7000 => std::time::Duration::from_secs(25),
             8000 => std::time::Duration::from_secs(29),
             9000 => std::time::Duration::from_secs(36),
             10000 => std::time::Duration::from_secs(70),
@@ -377,8 +372,7 @@ fn bench_insertion_5d(c: &mut Criterion) {
     for size in DIM_5D_SIZES {
         // Adjust measurement time based on specific size requirements from benchmark analysis (30 samples)
         let measurement_time = match size {
-            1000 => std::time::Duration::from_secs(6),
-            2000 => std::time::Duration::from_secs(6),
+            1000 | 2000 => std::time::Duration::from_secs(6),
             3000 => std::time::Duration::from_secs(7),
             4000 => std::time::Duration::from_secs(8),
             5000 => std::time::Duration::from_secs(10),
@@ -464,7 +458,7 @@ fn bench_data_patterns_2d(c: &mut Criterion) {
 
         // Benchmark ND-Tree
         group.bench_with_input(
-            BenchmarkId::new(format!("ndtree_{}", dataset_name), size),
+            BenchmarkId::new(format!("ndtree_{dataset_name}"), size),
             &nd_tree_solutions,
             |b, solutions| {
                 b.iter(|| {
@@ -479,7 +473,7 @@ fn bench_data_patterns_2d(c: &mut Criterion) {
 
         // Benchmark Vec-based
         group.bench_with_input(
-            BenchmarkId::new(format!("vec_{}", dataset_name), size),
+            BenchmarkId::new(format!("vec_{dataset_name}"), size),
             &solutions,
             |b, solutions| {
                 b.iter(|| {
@@ -494,7 +488,7 @@ fn bench_data_patterns_2d(c: &mut Criterion) {
 
         // Benchmark LinkedList-based
         group.bench_with_input(
-            BenchmarkId::new(format!("linkedlist_{}", dataset_name), size),
+            BenchmarkId::new(format!("linkedlist_{dataset_name}"), size),
             &solutions,
             |b, solutions| {
                 b.iter(|| {
@@ -818,7 +812,7 @@ fn bench_vec_pareto_front_2d(c: &mut Criterion) {
     group.finish();
 }
 
-/// Compare implementations: Vec, LinkedList, and ND-Tree
+/// Compare implementations: Vec, `LinkedList`, and ND-Tree
 fn compare_implementations(c: &mut Criterion) {
     let mut group = c.benchmark_group("ImplementationComparison");
     let solutions = generate_pareto_solutions::<2>(SMALL_N, VMAX, 0.1);
@@ -830,7 +824,7 @@ fn compare_implementations(c: &mut Criterion) {
             for sol in &solutions {
                 vec_pf.try_insert(sol);
             }
-        })
+        });
     });
 
     group.bench_function("LinkedListParetoFront", |b| {
@@ -839,7 +833,7 @@ fn compare_implementations(c: &mut Criterion) {
             for sol in &solutions {
                 list_pf.try_insert(sol);
             }
-        })
+        });
     });
 
     group.bench_function("NdTreeParetoFront", |b| {
@@ -848,13 +842,13 @@ fn compare_implementations(c: &mut Criterion) {
             for sol in &nd_solutions {
                 ndtree_pf.try_insert(sol);
             }
-        })
+        });
     });
 
     group.finish();
 }
 
-/// Benchmark insertion strategies: TryInsert vs InsertUnchecked
+/// Benchmark insertion strategies: `TryInsert` vs `InsertUnchecked`
 fn bench_insertion_strategies(c: &mut Criterion) {
     let mut group = c.benchmark_group("InsertionStrategies");
     let solutions = generate_pareto_solutions::<2>(MEDIUM_N, VMAX, 0.1);
@@ -866,7 +860,7 @@ fn bench_insertion_strategies(c: &mut Criterion) {
             for sol in &solutions {
                 pf.try_insert(sol);
             }
-        })
+        });
     });
 
     group.bench_function("Vec_InsertUnchecked", |b| {
@@ -875,7 +869,7 @@ fn bench_insertion_strategies(c: &mut Criterion) {
             for sol in &solutions {
                 pf.insert_unchecked(sol);
             }
-        })
+        });
     });
 
     group.bench_function("NDTree_TryInsert", |b| {
@@ -884,7 +878,7 @@ fn bench_insertion_strategies(c: &mut Criterion) {
             for sol in &nd_solutions {
                 pf.try_insert(sol);
             }
-        })
+        });
     });
 
     group.finish();

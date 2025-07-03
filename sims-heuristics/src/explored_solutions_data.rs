@@ -6,6 +6,7 @@ use std::{
 };
 
 use log::{trace, warn};
+use pareto::Objectives;
 
 use crate::solution::EncodedSolution;
 
@@ -20,7 +21,7 @@ pub struct SolutionFingerprint<const D: usize> {
 #[derive(Debug, Eq, Clone, Copy)]
 pub struct SolutionPoint<const D: usize> {
     pub iteration: usize,
-    pub objectives: [i32; D],
+    pub objectives: Objectives<D>,
 }
 
 impl<const D: usize> PartialEq for SolutionPoint<D> {
@@ -35,6 +36,10 @@ impl<const D: usize> Ord for SolutionPoint<D> {
     }
 }
 
+#[expect(
+    clippy::non_canonical_partial_ord_impl,
+    reason = "Use array comparison for objectives"
+)]
 impl<const D: usize> PartialOrd for SolutionPoint<D> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.objectives.cmp(&other.objectives))
@@ -43,13 +48,9 @@ impl<const D: usize> PartialOrd for SolutionPoint<D> {
 
 impl<const D: usize> From<&SolutionFingerprint<D>> for SolutionPoint<D> {
     fn from(solution: &SolutionFingerprint<D>) -> Self {
-        let mut objectives = [0; D];
-        for i in 0..D {
-            objectives[i] = solution.objectives[i] as i32;
-        }
-        SolutionPoint {
+        Self {
             iteration: solution.iteration as usize,
-            objectives,
+            objectives: solution.objectives,
         }
     }
 }
@@ -69,7 +70,8 @@ pub struct ParetoFrontSnapshot {
 }
 
 impl ParetoFrontSnapshot {
-    pub fn new(iteration: usize, timestamp: Duration, solutions: Vec<Vec<usize>>) -> Self {
+    #[must_use]
+    pub const fn new(iteration: usize, timestamp: Duration, solutions: Vec<Vec<usize>>) -> Self {
         Self {
             iteration,
             timestamp,
@@ -79,6 +81,7 @@ impl ParetoFrontSnapshot {
 }
 
 impl<const D: usize> ExploredSolutionsData<D> {
+    #[must_use]
     pub fn new(max_cost: u64, max_cloudy_area: u64) -> Self {
         Self {
             solutions: HashMap::new(),
@@ -89,11 +92,12 @@ impl<const D: usize> ExploredSolutionsData<D> {
         }
     }
 
+    #[must_use]
     pub fn get_solution_fingerprint(
         &self,
         solution: &EncodedSolution<D>,
     ) -> Option<&SolutionFingerprint<D>> {
-        let hash = ExploredSolutionsData::hash(solution);
+        let hash = Self::hash(solution);
         self.solutions.get(&hash)
     }
 
@@ -104,7 +108,7 @@ impl<const D: usize> ExploredSolutionsData<D> {
     }
 
     pub fn register(&mut self, iteration: usize, solution: &EncodedSolution<D>, time: Duration) {
-        let hash = ExploredSolutionsData::hash(solution);
+        let hash = Self::hash(solution);
 
         if let Entry::Vacant(e) = self.solutions.entry(hash) {
             let new_entry = SolutionFingerprint {
@@ -120,12 +124,17 @@ impl<const D: usize> ExploredSolutionsData<D> {
         }
     }
 
+    /// Updates the explored neighborhood size for a registered solution.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the solution is not registered in the explored solutions set.
     pub fn update_explored_neighborhood_size(
         &mut self,
         solution: &EncodedSolution<D>,
         explored_neighborhood_size: u32,
     ) {
-        let hash = ExploredSolutionsData::hash(solution);
+        let hash = Self::hash(solution);
         let entry = self
             .solutions
             .get_mut(&hash)
@@ -133,20 +142,27 @@ impl<const D: usize> ExploredSolutionsData<D> {
         entry.explored_neighborhood_size = explored_neighborhood_size as u8;
     }
 
+    /// Returns the explored neighborhood size for a registered solution.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the solution is not registered in the explored solutions set.
     pub fn explored_neighborhood_size(&mut self, solution: &EncodedSolution<D>) -> u32 {
-        let hash = ExploredSolutionsData::hash(solution);
+        let hash = Self::hash(solution);
         let entry = self
             .solutions
             .get(&hash)
             .expect("solution is not registered");
-        entry.explored_neighborhood_size as u32
+        u32::from(entry.explored_neighborhood_size)
     }
 
+    #[must_use]
     pub fn is_registered(&self, solution: &EncodedSolution<D>) -> bool {
-        let hash = ExploredSolutionsData::hash(solution);
+        let hash = Self::hash(solution);
         self.solutions.contains_key(&hash)
     }
 
+    #[must_use]
     pub fn initial_solutions(&self) -> Vec<SolutionPoint<D>> {
         let initial_solutions: Vec<SolutionPoint<D>> = self
             .solutions
@@ -168,6 +184,7 @@ impl<const D: usize> ExploredSolutionsData<D> {
         solutions
     }
 
+    #[must_use]
     pub fn non_dominated(&self) -> Vec<SolutionPoint<D>> {
         let mut non_dominated_solutions: Vec<SolutionPoint<D>> = Vec::new();
         let mut solutions = self.solutions();

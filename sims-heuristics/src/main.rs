@@ -34,7 +34,7 @@ const INITIAL_POPULATION_SIZE: usize = 100;
 const MAX_ITERATIONS: usize = 50000;
 const MAX_DURATION: &str = "240s";
 const NEIGHBORHOOD_SIZE_RANGE: RangeInclusive<u32> = 1..=6;
-const TEST_SEED: u64 = 12345_67890;
+const TEST_SEED: u64 = 1_234_567_890;
 const NUM_OBJECTIVES: usize = 2;
 
 #[derive(Parser)]
@@ -100,15 +100,15 @@ fn main() {
 
     let output_dir = args.output.parent().unwrap();
     if !output_dir.exists() {
-        eprintln!("Output directory does not exist: {:?}", output_dir);
+        eprintln!("Output directory does not exist: {}", output_dir.display());
         std::process::exit(1);
     }
 
     if let Some(initial_population_path) = &args.initial_population {
         if !initial_population_path.exists() {
             eprintln!(
-                "Initial population file does not exist: {:?}",
-                initial_population_path
+                "Initial population file does not exist: {}",
+                initial_population_path.display()
             );
             std::process::exit(1);
         }
@@ -170,7 +170,7 @@ fn main() {
 
     let mut pareto_local_search = ParetoLocalSearch::new(
         &sims_problem_instance,
-        initial_solution_set,
+        &initial_solution_set,
         NEIGHBORHOOD_SIZE_RANGE,
         args.is_deterministic,
     );
@@ -179,7 +179,8 @@ fn main() {
     #[cfg(feature = "plotting")]
     plotting::draw_solutions_plot(&pareto_local_search.explored_solutions);
 
-    let final_solutions: Vec<EncodedSolution<NUM_OBJECTIVES>> = final_solution_set.into_iter().collect();
+    let final_solutions: Vec<EncodedSolution<NUM_OBJECTIVES>> =
+        final_solution_set.into_iter().collect();
 
     let non_dominated_points = pareto_local_search.explored_solutions.non_dominated();
     debug_assert_eq!(final_solutions.len(), non_dominated_points.len());

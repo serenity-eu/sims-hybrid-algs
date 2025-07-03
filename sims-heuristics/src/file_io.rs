@@ -2,7 +2,6 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
-    time::Duration,
 };
 
 use chrono::Local;
@@ -14,11 +13,14 @@ use pls::{
     solution::EncodedSolution,
 };
 
-pub fn solution_list_from_csv<const D: usize>(path: &PathBuf, probem_instance: &Problem<D>) -> Vec<EncodedSolution<D>> {
+pub fn solution_list_from_csv<const D: usize>(
+    path: &Path,
+    probem_instance: &Problem<D>,
+) -> Vec<EncodedSolution<D>> {
     let mut reader = ReaderBuilder::new()
         .delimiter(b';')
-        .from_path(path.clone())
-        .unwrap_or_else(|_| panic!("Failed to open CSV file {:?}", path));
+        .from_path(path)
+        .unwrap_or_else(|_| panic!("Failed to open CSV file {}", path.display()));
     let solutions_pareto_front_record_index = reader
         .headers()
         .unwrap()
@@ -33,7 +35,7 @@ pub fn solution_list_from_csv<const D: usize>(path: &PathBuf, probem_instance: &
     return selected_images_vecs
         .into_iter()
         .map(|selected_images| {
-            EncodedSolution::from_selected_images(selected_images, probem_instance)
+            EncodedSolution::from_selected_images(&selected_images, probem_instance)
         })
         .collect();
 }
@@ -62,16 +64,19 @@ pub fn append_solutions_to_csv<const D: usize>(
 
     let pareto_front_str = solutions
         .iter()
-        .map(|solution| format!("[{}, {}]", solution.objectives[0], solution.objectives[1]))
+        .map(|solution| {
+            let objectives_str = solution.objectives.iter().join(", ");
+            format!("[{objectives_str}]")
+        })
         .join(", ");
-    let pareto_front = format!("{{{}}}", pareto_front_str);
+    let pareto_front = format!("{{{pareto_front_str}}}");
     let pareto_solutions_time_list = format!("[{}]", solution_time_s.iter().join(", "));
 
     let solutions_pareto_front_str = solutions
         .iter()
         .map(|solution| format!("[{}]", solution.selected_images().join(", ")))
         .join(", ");
-    let solutions_pareto_front = format!("{{{}}}", solutions_pareto_front_str);
+    let solutions_pareto_front = format!("{{{solutions_pareto_front_str}}}");
 
     // Dummy values
     let front_strategy = "None".to_string();
@@ -111,45 +116,20 @@ pub fn append_solutions_to_csv<const D: usize>(
     let path = Path::new(&path);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
-            .unwrap_or_else(|_| panic!("Failed to create directories for {:?}", path));
+            .unwrap_or_else(|_| panic!("Failed to create directories for {}", path.display()));
     }
 
     let file = OpenOptions::new()
         .append(true)
         .create(true) // Create the file if it does not exist
         .open(path)
-        .unwrap_or_else(|_| panic!("Failed to open CSV file {:?}", path));
+        .unwrap_or_else(|_| panic!("Failed to open CSV file {}", path.display()));
 
     let mut writer = WriterBuilder::new().delimiter(b';').from_writer(file);
     writer
         .write_record(record)
         .expect("Failed to write CSV record");
     writer.flush().expect("Failed to flush CSV writer");
-}
-
-pub fn dump_invalid_initial_solutions<const D: usize>(
-    invalid_solutions: Vec<EncodedSolution<D>>,
-    instance_path: &Path,
-    output_path: &Path,
-    timeout: Duration,
-) {
-    let invalid_solutions_report = invalid_solutions
-        .into_iter()
-        .map(|solution| format!("Invalid solution: {:?}", solution))
-        .join("\n");
-
-    let instance_name = instance_path.file_stem().unwrap().to_str().unwrap();
-    let output_dir = output_path.parent().unwrap();
-
-    fs::write(
-        output_dir.join(format!(
-            "invalid_solutions_{}_timeout_{}.txt",
-            instance_name,
-            timeout.as_secs()
-        )),
-        invalid_solutions_report,
-    )
-    .expect("Failed to write invalid solutions report");
 }
 
 pub fn dump_pareto_front_snapshots(

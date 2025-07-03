@@ -5,13 +5,14 @@ use std::{array, marker::PhantomData, vec};
 use pareto::{Dominance, HasObjectives, MoSolution, Objectives};
 
 /// A solution in D-dimensional objective space.
-#[derive(Clone, std::fmt::Debug, PartialEq)]
+#[derive(Clone, std::fmt::Debug, PartialEq, Eq)]
 pub struct Solution<const D: usize> {
     pub objectives: Objectives<D>,
 }
 
 impl<const D: usize> Solution<D> {
-    pub fn new(objectives: Objectives<D>) -> Self {
+    #[must_use]
+    pub const fn new(objectives: Objectives<D>) -> Self {
         Self { objectives }
     }
 }
@@ -56,7 +57,7 @@ where
         let mut solutions = ArrayVec::new();
         solutions.push(solution);
 
-        Node::Leaf {
+        Self::Leaf {
             solutions,
             ideal: objectives,
             middle: objectives,
@@ -67,17 +68,17 @@ where
     /// Component‑wise update of ideal/nadir from one more solution.
     pub fn update_bounds(&mut self, sol: &T) {
         match self {
-            Node::Leaf { ideal, nadir, .. } | Node::Internal { ideal, nadir, .. } => {
+            Self::Leaf { ideal, nadir, .. } | Self::Internal { ideal, nadir, .. } => {
                 *ideal = array::from_fn(|i| ideal[i].min(sol.objectives()[i]));
                 *nadir = array::from_fn(|i| nadir[i].max(sol.objectives()[i]));
             }
         }
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         match self {
-            Node::Leaf { solutions, .. } => solutions.is_empty(),
-            Node::Internal { children, .. } => children.is_empty(),
+            Self::Leaf { solutions, .. } => solutions.is_empty(),
+            Self::Internal { children, .. } => children.is_empty(),
         }
     }
 }
@@ -98,8 +99,9 @@ where
     T: HasObjectives<D> + MoSolution<D> + Clone,
 {
     /// Create an empty tree
+    #[must_use]
     pub fn new() -> Self {
-        NDTree {
+        Self {
             arena: SlotMap::new(),
             root: None,
             _phantom: PhantomData,
@@ -110,7 +112,9 @@ where
     /// Returns true if the solution was added, false otherwise.
     pub fn update(&mut self, new_solution: T) -> bool {
         if let Some(root_key) = self.root {
-            if self.update_node(root_key, &new_solution) != Dominance::IsDominatedBy {
+            if self.update_node(root_key, &new_solution) == Dominance::IsDominatedBy {
+                false
+            } else {
                 if self.arena[root_key].is_empty() {
                     // If the root node is empty after update, deallocate it
                     self.deallocate_root();
@@ -118,8 +122,6 @@ where
                 // If the solution is not dominated, we can insert it
                 self.insert(new_solution);
                 true
-            } else {
-                false
             }
         } else {
             self.insert(new_solution);
@@ -165,7 +167,7 @@ where
         let mut stack = vec![node_key];
         while let Some(node_key) = stack.pop() {
             if let Node::Internal { children, .. } = &self.arena[node_key] {
-                for &child_key in children.iter() {
+                for &child_key in children {
                     stack.push(child_key);
                 }
             }
@@ -290,7 +292,7 @@ where
                 // 2a) if the leaf is full, split it *first*, then re‑insert here:
                 if solutions.is_full() {
                     self.split(node_key);
-                    self.insert_into(node_key, new_solution)
+                    self.insert_into(node_key, new_solution);
                 } else {
                     // 2b) otherwise safe to push
                     solutions.push(new_solution);
@@ -298,7 +300,7 @@ where
             }
             Node::Internal { .. } => {
                 let closest_child_key = self.closest_child(node_key, &new_solution);
-                self.insert_into(closest_child_key, new_solution)
+                self.insert_into(closest_child_key, new_solution);
             }
         }
     }
@@ -402,14 +404,17 @@ where
         };
     }
 
+    #[must_use]
     pub fn iter(&self) -> NDTreeSolutionIterator<'_, T, N, D, C> {
         NDTreeSolutionIterator::new(self)
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.iter().count()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -424,7 +429,7 @@ where
     }
 }
 
-/// Consuming iterator for NDTree, yielding owned Solutions
+/// Consuming iterator for `NDTree`, yielding owned Solutions
 pub struct NDTreeSolutionIntoIterator<T, const N: usize, const D: usize, const C: usize>
 where
     T: HasObjectives<D> + MoSolution<D> + Clone,
@@ -438,12 +443,9 @@ impl<T, const N: usize, const D: usize, const C: usize> NDTreeSolutionIntoIterat
 where
     T: HasObjectives<D> + MoSolution<D> + Clone,
 {
+    #[must_use]
     pub fn new(tree: NDTree<T, N, D, C>) -> Self {
-        let stack = if let Some(root_key) = tree.root {
-            vec![root_key]
-        } else {
-            vec![]
-        };
+        let stack = tree.root.map_or_else(Vec::new, |root_key| vec![root_key]);
 
         Self {
             stack,
@@ -477,7 +479,6 @@ where
                 Node::Leaf { solutions, .. } => {
                     if !solutions.is_empty() {
                         self.next_solution_loc = Some((idx, 0));
-                        continue;
                     }
                 }
                 Node::Internal { children, .. } => {
@@ -502,7 +503,7 @@ where
     }
 }
 
-/// Depth-First Search-like iterator for NDTree
+/// Depth-First Search-like iterator for `NDTree`
 pub struct NDTreeSolutionIterator<'a, T, const N: usize, const D: usize, const C: usize>
 where
     T: HasObjectives<D> + MoSolution<D> + Clone,
@@ -517,6 +518,7 @@ impl<'a, T, const N: usize, const D: usize, const C: usize> NDTreeSolutionIterat
 where
     T: HasObjectives<D> + MoSolution<D> + Clone,
 {
+    #[must_use]
     pub fn new(tree: &'a NDTree<T, N, D, C>) -> Self {
         Self {
             leaf_iterator: NDTreeNodeIterator::new(tree),
@@ -566,7 +568,7 @@ where
     }
 }
 
-/// Generator for pre-order traversal of NDTree nodes (yields node references)
+/// Generator for pre-order traversal of `NDTree` nodes (yields node references)
 pub struct NDTreeNodeIterator<'a, T, const N: usize, const D: usize, const C: usize>
 where
     T: HasObjectives<D> + MoSolution<D> + Clone,
@@ -580,12 +582,9 @@ impl<'a, T, const N: usize, const D: usize, const C: usize> NDTreeNodeIterator<'
 where
     T: HasObjectives<D> + MoSolution<D> + Clone,
 {
+    #[must_use]
     pub fn new(tree: &'a NDTree<T, N, D, C>) -> Self {
-        let stack = if let Some(root_key) = tree.root {
-            vec![root_key]
-        } else {
-            vec![]
-        };
+        let stack = tree.root.map_or_else(Vec::new, |root_key| vec![root_key]);
 
         Self {
             stack,
@@ -651,11 +650,7 @@ where
                         nadir
                     )?;
                     for (i, solution) in solutions.iter().enumerate() {
-                        writeln!(
-                            f,
-                            "{}{}    Solution {}: {:?}",
-                            prefix, new_prefix, i, solution
-                        )?;
+                        writeln!(f, "{prefix}{new_prefix}    Solution {i}: {solution:?}")?;
                     }
                 }
                 Node::Internal {
@@ -666,15 +661,14 @@ where
                 } => {
                     writeln!(
                         f,
-                        "{}{}Internal (ideal: {:?}, nadir: {:?})",
-                        prefix, connector, ideal, nadir
+                        "{prefix}{connector}Internal (ideal: {ideal:?}, nadir: {nadir:?})"
                     )?;
                     for (i, &child_key) in children.iter().enumerate() {
                         write_node(
                             f,
                             tree,
                             child_key,
-                            &format!("{}{}", prefix, new_prefix),
+                            &format!("{prefix}{new_prefix}"),
                             i == children.len() - 1,
                         )?;
                     }
@@ -698,7 +692,7 @@ where
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Node::Leaf {
+            Self::Leaf {
                 solutions,
                 ideal,
                 middle,
@@ -710,7 +704,7 @@ where
                 .field("middle", &middle)
                 .field("nadir", &nadir)
                 .finish(),
-            Node::Internal {
+            Self::Internal {
                 children,
                 ideal,
                 middle,
@@ -759,16 +753,16 @@ mod tests {
         assert_eq!(sol1.objectives, sol2.objectives);
 
         // Test Debug formatting
-        let debug_str = format!("{:?}", sol1);
+        let debug_str = format!("{sol1:?}");
         assert!(debug_str.contains("Solution"));
-        assert!(debug_str.contains("1"));
-        assert!(debug_str.contains("2"));
+        assert!(debug_str.contains('1'));
+        assert!(debug_str.contains('2'));
     }
 
     #[test]
     fn test_node_new_leaf_with_solution() {
         let sol = sol2d(5, 10);
-        let leaf: Node<TestSolution2D, 4, 2, 2> = Node::new_leaf_with_solution(sol.clone());
+        let leaf: Node<TestSolution2D, 4, 2, 2> = Node::new_leaf_with_solution(sol);
 
         match leaf {
             Node::Leaf {
@@ -783,7 +777,7 @@ mod tests {
                 assert_eq!(middle, [5, 10]);
                 assert_eq!(nadir, [5, 10]);
             }
-            _ => panic!("Expected leaf node"),
+            Node::Internal { .. } => panic!("Expected leaf node"),
         }
     }
 
@@ -800,7 +794,7 @@ mod tests {
                 assert_eq!(ideal, [3, 10]); // min of each dimension
                 assert_eq!(nadir, [5, 15]); // max of each dimension
             }
-            _ => panic!("Expected leaf node"),
+            Node::Internal { .. } => panic!("Expected leaf node"),
         }
     }
 
@@ -809,7 +803,7 @@ mod tests {
         let mut tree: TestTree2D = NDTree::new();
         let sol = sol2d(10, 20);
 
-        tree.insert(sol.clone());
+        tree.insert(sol);
 
         match &tree.arena[tree.root.expect("Root should exist")] {
             Node::Leaf {
@@ -823,7 +817,7 @@ mod tests {
                 assert_eq!(*ideal, [10, 20]);
                 assert_eq!(*nadir, [10, 20]);
             }
-            _ => panic!("Root should be a leaf after inserting one solution"),
+            Node::Internal { .. } => panic!("Root should be a leaf after inserting one solution"),
         }
     }
 
@@ -847,7 +841,7 @@ mod tests {
                 assert_eq!(*ideal, [1, 1]); // min of each dimension
                 assert_eq!(*nadir, [4, 3]); // max of each dimension
             }
-            _ => panic!("Root should still be a leaf"),
+            Node::Internal { .. } => panic!("Root should still be a leaf"),
         }
     }
 
@@ -869,7 +863,7 @@ mod tests {
             Node::Internal { children, .. } => {
                 assert!(!children.is_empty()); // Should have children
             }
-            _ => panic!("Root should be internal after split"),
+            Node::Leaf { .. } => panic!("Root should be internal after split"),
         }
 
         // Tree should have more than 1 node now
@@ -879,8 +873,8 @@ mod tests {
     #[test]
     fn test_ndtree_iterator_empty() {
         let tree: TestTree2D = NDTree::new();
-        let solutions: Vec<_> = tree.iter().collect();
-        assert_eq!(solutions.len(), 0);
+
+        assert_eq!(tree.iter().count(), 0);
     }
 
     #[test]
@@ -954,7 +948,7 @@ mod tests {
         let mut tree: TestTree2D = NDTree::new();
         tree.insert(sol2d(1, 2));
 
-        let debug_str = format!("{:?}", tree);
+        let debug_str = format!("{tree:?}");
         assert!(debug_str.contains("ND-Tree"));
         assert!(debug_str.contains("Leaf"));
     }
@@ -983,8 +977,7 @@ mod tests {
             tree.insert(sol.clone());
         }
 
-        let solutions: Vec<_> = tree.iter().collect();
-        assert_eq!(solutions.len(), 3); // All should be stored
+        assert_eq!(tree.iter().count(), 3); // All should be stored
     }
 
     #[test]
@@ -993,8 +986,7 @@ mod tests {
         tree.insert(sol2d(u64::MIN, u64::MAX));
         tree.insert(sol2d(u64::MAX, u64::MIN));
 
-        let solutions: Vec<_> = tree.iter().collect();
-        assert_eq!(solutions.len(), 2);
+        assert_eq!(tree.iter().count(), 2);
     }
 
     #[test]

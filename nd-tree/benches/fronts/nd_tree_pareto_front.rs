@@ -22,15 +22,13 @@ where
     type IntoIter = NDTreeSolutionIntoIterator<T, N, D, C>;
 
     fn new(_name: &'static str) -> Self {
-        NdTreeParetoFront {
+        Self {
             nd_tree: NDTree::new(),
         }
     }
 
     fn with_name(self, _name: &'static str) -> Self {
-        NdTreeParetoFront {
-            nd_tree: self.nd_tree,
-        }
+        self
     }
 
     fn iter(&self) -> Self::Iter<'_> {
@@ -49,7 +47,7 @@ where
     }
 
     fn insert_unchecked(&mut self, solution: &T) {
-        self.nd_tree.update_unchecked(solution.clone())
+        self.nd_tree.update_unchecked(solution.clone());
     }
 
     fn replace_if_exists(&mut self, solution: T) {
