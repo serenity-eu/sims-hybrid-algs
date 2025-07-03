@@ -104,14 +104,14 @@ fn main() {
         std::process::exit(1);
     }
 
-    if let Some(initial_population_path) = &args.initial_population {
-        if !initial_population_path.exists() {
-            eprintln!(
-                "Initial population file does not exist: {}",
-                initial_population_path.display()
-            );
-            std::process::exit(1);
-        }
+    if let Some(initial_population_path) = &args.initial_population
+        && !initial_population_path.exists()
+    {
+        eprintln!(
+            "Initial population file does not exist: {}",
+            initial_population_path.display()
+        );
+        std::process::exit(1);
     }
 
     debug!(
