@@ -47,8 +47,14 @@ plotters = "0.3.7"
 slotmap = "1.0.7"
 tracing = "0.1.41"
 pareto = { path = "../pareto" }
-rand = "0.8.5"
+rand = "0.9.1"
 
 [dev-dependencies]
-criterion = { version = "0.5.1", features = ["html_reports"] }
-proptest = "1.2.0"
+criterion = { version = "0.6.0", features = ["html_reports"] }
+proptest = "1.7.0"
+
+[lints.clippy]
+# Enable all pedantic and nursery lints with priority
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
