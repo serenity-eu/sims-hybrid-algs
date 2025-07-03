@@ -514,7 +514,8 @@ impl<const D: usize> EncodedSolution<D> {
         let cost_range = max_cost - min_cost;
         let cloudy_area_range = max_cloudy_area - min_cloudy_area;
 
-        let scaled_objective_deltas = raw_comparable_images
+        
+        raw_comparable_images
             .iter()
             .map(|objective_deltas| {
                 let scaled_obj0 = (objective_deltas.deltas.0 - min_cost) as f32 / cost_range as f32;
@@ -525,8 +526,7 @@ impl<const D: usize> EncodedSolution<D> {
                     scaled_objectives: (scaled_obj0, scaled_obj1),
                 }
             })
-            .collect();
-        scaled_objective_deltas
+            .collect()
     }
 
     /// Get indices of the best replacement image(s) which is not selected yet, returns None when image cannot be replaced
