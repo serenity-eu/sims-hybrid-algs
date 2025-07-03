@@ -72,7 +72,7 @@ fn generate_pareto_solutions<const D: usize>(
     while solutions.len() < n {
         let mut objectives = [0u64; D];
         for obj in &mut objectives {
-            *obj = rng.gen_range(0..=v_max);
+            *obj = rng.random_range(0..=v_max);
         }
 
         let sum: f64 = objectives
@@ -103,7 +103,7 @@ fn generate_nd_tree_solutions<const D: usize>(n: usize, v_max: u64, eps: f64) ->
     while solutions.len() < n {
         let mut objectives = [0u64; D];
         for obj in &mut objectives {
-            *obj = rng.gen_range(0..=v_max);
+            *obj = rng.random_range(0..=v_max);
         }
 
         let sum: f64 = objectives
@@ -127,7 +127,7 @@ fn generate_random_solutions<const D: usize>(n: usize, v_max: u64) -> Vec<BenchS
     for i in 0..n {
         let mut objectives = [0u64; D];
         for obj in &mut objectives {
-            *obj = rng.gen_range(0..=v_max);
+            *obj = rng.random_range(0..=v_max);
         }
         solutions.push(BenchSolution {
             objectives,
@@ -146,7 +146,7 @@ fn generate_random_nd_tree_solutions<const D: usize>(n: usize, v_max: u64) -> Ve
     for _i in 0..n {
         let mut objectives = [0u64; D];
         for obj in &mut objectives {
-            *obj = rng.gen_range(0..=v_max);
+            *obj = rng.random_range(0..=v_max);
         }
         solutions.push(Solution { objectives });
     }
