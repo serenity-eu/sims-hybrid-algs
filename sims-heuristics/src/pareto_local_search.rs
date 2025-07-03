@@ -9,17 +9,17 @@ use log::{debug, error, info};
 use crate::{
     explored_solutions_data::ExploredSolutionsData,
     problem::Problem,
-    solution::{EncodedSolution, MOSolution},
+    solution::{EncodedSolution, SIMSSolutionTrait},
     solution_set::SolutionSet,
     timer::Timer,
 };
 
-pub struct ParetoLocalSearch<'a, S>
+pub struct ParetoLocalSearch<'a, S, const D: usize>
 where
-    S: SolutionSet<'a, EncodedSolution> + Clone,
+    S: SolutionSet<'a, EncodedSolution<D>, D> + Clone,
 {
     /// Reference to problem instance
-    problem: &'a Problem,
+    problem: &'a Problem<D>,
     /// Current population
     population: S,
     /// Approximation of Pareto set
@@ -31,7 +31,7 @@ where
     /// Range of possible neighborhood sizes
     pub neighborhood_size_range: RangeInclusive<u32>,
     /// Explored solutions objectives
-    pub explored_solutions: ExploredSolutionsData,
+    pub explored_solutions: ExploredSolutionsData<D>,
 }
 
 #[derive(Eq, PartialEq)]
@@ -44,19 +44,19 @@ pub enum StepStatus {
     AllNeighborhoodStructuresExplored,
 }
 
-impl<'a, S> ParetoLocalSearch<'a, S>
+impl<'a, S, const D: usize> ParetoLocalSearch<'a, S, D>
 where
-    S: SolutionSet<'a, EncodedSolution> + Clone,
+    S: SolutionSet<'a, EncodedSolution<D>, D> + Clone,
 {
     pub fn new(
-        problem: &'a Problem,
+        problem: &'a Problem<D>,
         initial_population: S,
         neighborhood_size_range: RangeInclusive<u32>,
         is_deterministic: bool,
     ) -> Self {
         let mut population = S::new("population".to_string());
         let mut explored_solutions =
-            ExploredSolutionsData::new(problem.max_objectives.0, problem.max_objectives.1);
+            ExploredSolutionsData::<D>::new(problem.max_objectives[0], if D >= 2 { problem.max_objectives[1] } else { 0 });
         initial_population.iter().for_each(|solution| {
             if population.try_add(solution) {
                 explored_solutions.register(0, solution, Duration::from_secs(0));
@@ -104,7 +104,7 @@ where
             debug!("######## {:?} ########", solution);
             debug!("######################################################");
 
-            let neighbors: Vec<EncodedSolution> = solution.neighborhood(
+            let neighbors: Vec<EncodedSolution<D>> = solution.neighborhood(
                 self.neigborhood_structure,
                 self.problem,
                 timer,

@@ -1,16 +1,35 @@
 use itertools::Itertools;
 use itertools::MinMaxResult::{MinMax, NoElements, OneElement};
 use log::{error, trace};
+use pareto::{HasObjectives, MoSolution};
 use rand::SeedableRng;
 use rand::{seq::IteratorRandom, Rng};
 use std::{collections::BinaryHeap, fmt::Debug, hash::Hash, vec};
 
-use crate::objectives::Objectives;
+use crate::objectives::objectives_utils;
 use crate::problem::{ComparableImage, ImageObjectiveDeltas, Problem, ScaledObjectiveDeltas};
 use crate::residual_problem::ResidualProblem;
 use crate::residual_solution::ResidualSolution;
 use crate::timer::Timer;
 use crate::util::IntersectionIterator;
+
+/// Trait that combines pareto functionality with SIMS-specific solution methods
+pub trait SIMSSolutionTrait<const D: usize>: HasObjectives<D> + MoSolution<D> {
+    /// Generate a random feasible solution
+    fn random(problem: &Problem<D>) -> Self;
+
+    /// Generate a random feasible solution with a specific seed
+    fn random_with_seed(problem: &Problem<D>, seed: u64) -> Self;
+
+    /// Check if this solution is dominated by another
+    fn is_dominated(&self, other: &Self) -> bool;
+
+    /// Check if this solution is weakly dominated by another
+    fn is_weakly_dominated(&self, other: &Self) -> bool;
+
+    /// Get the objectives as a tuple (for compatibility)
+    fn objectives_tuple(&self) -> pareto::Objectives<D>;
+}
 
 pub struct SIMSSolution {
     selected_images: Vec<usize>,
@@ -28,18 +47,10 @@ impl Debug for SIMSSolution {
     }
 }
 
-pub trait MOSolution {
-    fn objectives(&self) -> Objectives;
-    fn random(problem: &Problem) -> Self;
-    fn random_with_seed(problem: &Problem, seed: u64) -> Self;
-    fn is_dominated(&self, other: &Self) -> bool;
-    fn is_weakly_dominated(&self, other: &Self) -> bool;
-}
-
 #[derive(Clone, Eq)]
-pub struct EncodedSolution {
+pub struct EncodedSolution<const D: usize> {
     selected_images: Vec<bool>,
-    pub objectives: Objectives,
+    pub objectives: pareto::Objectives<D>,
     pub clear_parts_counts: Vec<usize>,
     pub element_coverage: Vec<usize>,
 }
@@ -86,9 +97,18 @@ impl Iterator for UnselectedImagesIter<'_> {
     }
 }
 
-impl MOSolution for EncodedSolution {
+impl<const D: usize> HasObjectives<D> for EncodedSolution<D> {
+    fn objectives(&self) -> &[u64; D] {
+        // Convert Objectives<D> to &[u64; D]
+        unsafe { std::mem::transmute(&self.objectives) }
+    }
+}
+
+impl<const D: usize> MoSolution<D> for EncodedSolution<D> {}
+
+impl<const D: usize> SIMSSolutionTrait<D> for EncodedSolution<D> {
     /// Generate a random feasible solution (choose element randomly, then choose image randomly from those that contain the element iff it is not already covered by another image)
-    fn random_with_seed(problem: &Problem, seed: u64) -> Self {
+    fn random_with_seed(problem: &Problem<D>, seed: u64) -> Self {
         let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
         let mut selected_images = vec![false; problem.images.len()];
         let mut covered_elements = vec![false; problem.universe.len()];
@@ -131,7 +151,7 @@ impl MOSolution for EncodedSolution {
 
         let mut sims_solution = EncodedSolution {
             selected_images,
-            objectives: Objectives(0, 0),
+            objectives: [0; D],
             clear_parts_counts,
             element_coverage: part_coverage_counts,
         };
@@ -139,7 +159,7 @@ impl MOSolution for EncodedSolution {
         sims_solution
     }
 
-    fn random(problem: &Problem) -> Self {
+    fn random(problem: &Problem<D>) -> Self {
         return EncodedSolution::random_with_seed(problem, rand::thread_rng().gen());
     }
 
@@ -156,16 +176,20 @@ impl MOSolution for EncodedSolution {
             || (dominance_relation == Some(std::cmp::Ordering::Equal));
     }
 
-    fn objectives(&self) -> Objectives {
+    fn objectives_tuple(&self) -> pareto::Objectives<D> {
         self.objectives
     }
 }
 
-impl EncodedSolution {
-    pub fn from_selected_images(selected_images_vec: Vec<usize>, problem: &Problem) -> Self {
+impl<const D: usize> EncodedSolution<D> {
+    pub fn from_selected_images(selected_images_vec: Vec<usize>, problem: &Problem<D>) -> Self {
+        let mut objectives = [0; D];
+        if D >= 2 {
+            objectives[1] = problem.total_area();
+        }
         let mut solution = EncodedSolution {
             selected_images: vec![false; problem.images.len()],
-            objectives: Objectives(0, problem.total_area()),
+            objectives,
             clear_parts_counts: vec![0; problem.universe.len()],
             element_coverage: vec![0; problem.universe.len()],
         };
@@ -177,12 +201,19 @@ impl EncodedSolution {
     }
 
     /// Compute the objectives of the solution
-    fn compute_objectives(&mut self, problem: &Problem) {
-        self.objectives = Objectives(self.total_cost(problem), self.cloudy_area(problem));
+    fn compute_objectives(&mut self, problem: &Problem<D>) {
+        let mut objectives = [0; D];
+        if D >= 1 {
+            objectives[0] = self.total_cost(problem);
+        }
+        if D >= 2 {
+            objectives[1] = self.cloudy_area(problem);
+        }
+        self.objectives = objectives;
     }
 
     /// Compute area covered by clouds
-    pub fn cloudy_area(&self, problem: &Problem) -> u64 {
+    pub fn cloudy_area(&self, problem: &Problem<D>) -> u64 {
         let mut clear_elements = vec![false; problem.universe.len()];
         self.selected_images().for_each(|image_index| {
             problem.images[image_index]
@@ -207,19 +238,19 @@ impl EncodedSolution {
     }
 
     /// Compute total cost
-    pub fn total_cost(&self, problem: &Problem) -> u64 {
+    pub fn total_cost(&self, problem: &Problem<D>) -> u64 {
         self.selected_images()
             .map(|image_index| problem.images[image_index].cost())
             .sum()
     }
 
     /// Scalarizing function using weighted sum, for solution quality comparison
-    pub fn scalarizing_fn(&self, weights: (f32, f32), max_values: Objectives) -> f32 {
-        return self.objectives.weighted_sum(weights, max_values);
+    pub fn scalarizing_fn(&self, weights: &[f32; D], _max_values: pareto::Objectives<D>) -> f32 {
+        return objectives_utils::weighted_sum(&self.objectives, weights);
     }
 
     /// Check if solution is valid
-    pub fn is_valid(&self, problem: &Problem) -> bool {
+    pub fn is_valid(&self, problem: &Problem<D>) -> bool {
         let mut covered_elements = vec![false; problem.universe.len()];
         self.selected_images().for_each(|image_index| {
             problem.images[image_index].parts.iter().for_each(|&part| {
@@ -275,22 +306,22 @@ impl EncodedSolution {
     }
 
     /// Check if objective values are correct
-    pub fn are_objectives_valid(&self, problem: &Problem) -> bool {
-        let first_objective_is_valid = self.objectives.0 == self.total_cost(problem);
+    pub fn are_objectives_valid(&self, problem: &Problem<D>) -> bool {
+        let first_objective_is_valid = self.objectives[0] == self.total_cost(problem);
         if !first_objective_is_valid {
             trace!(
                 "First objective is invalid. Expected {}, got {}",
                 self.total_cost(problem),
-                self.objectives.0
+                self.objectives[0]
             );
             return false;
         }
-        let second_objective_is_valid = self.objectives.1 == self.cloudy_area(problem);
+        let second_objective_is_valid = self.objectives[1] == self.cloudy_area(problem);
         if !second_objective_is_valid {
             trace!(
                 "Second objective is invalid. Expected {}, got {}",
                 self.cloudy_area(problem),
-                self.objectives.1
+                self.objectives[1]
             );
             return false;
         }
@@ -314,15 +345,21 @@ impl EncodedSolution {
     }
 
     /// Remove image at index i
-    pub fn remove_image(&mut self, i: usize, problem: &Problem) {
+    pub fn remove_image(&mut self, i: usize, problem: &Problem<D>) {
         debug_assert!(
             self.are_objectives_valid(problem),
             "Objectives are invalid before removing image"
         );
-        self.objectives.apply_delta((
-            self.cost_delta(i, problem),
-            self.cloudy_area_delta(i, problem),
-        ));
+        let cost_delta = self.cost_delta(i, problem);
+        let cloudy_area_delta = self.cloudy_area_delta(i, problem);
+        let mut deltas = [0; D];
+        if D >= 1 {
+            deltas[0] = cost_delta;
+        }
+        if D >= 2 {
+            deltas[1] = cloudy_area_delta;
+        }
+        objectives_utils::apply_delta(&mut self.objectives, &deltas);
         problem.images[i].parts.iter().for_each(|&part| {
             self.element_coverage[part] -= 1;
         });
@@ -341,11 +378,10 @@ impl EncodedSolution {
     }
 
     /// Add image at index i
-    pub fn add_image(&mut self, i: usize, problem: &Problem) {
-        self.objectives.apply_delta((
-            self.cost_delta(i, problem),
-            self.cloudy_area_delta(i, problem),
-        ));
+    pub fn add_image(&mut self, i: usize, problem: &Problem<D>) {
+        let cost_delta = self.cost_delta(i, problem);
+        let cloudy_area_delta = self.cloudy_area_delta(i, problem);
+        objectives_utils::apply_delta_2d(&mut self.objectives, (cost_delta, cloudy_area_delta));
         problem.images[i].parts.iter().for_each(|&part| {
             self.element_coverage[part] += 1;
         });
@@ -359,7 +395,7 @@ impl EncodedSolution {
     }
 
     /// Check whether image at index i can be replaced by another image(s)
-    pub fn is_replaceable(&self, i: usize, problem: &Problem) -> bool {
+    pub fn is_replaceable(&self, i: usize, problem: &Problem<D>) -> bool {
         // For each part of the image, check if there is another image that covers the part
         self.unselected_images()
             .any(|image_index| problem.overlap_matrix[i][image_index] > 0)
@@ -367,16 +403,16 @@ impl EncodedSolution {
 
     /// Generate random weights for objectives
     pub fn generate_weights(&self) -> (f32, f32) {
-        return Objectives::generate_weights();
+        return objectives_utils::generate_weights_2d();
     }
 
     /// Create residual problem, composed of removed images, candidates to be added, and images covering the rest of the uncovered elements.
     pub fn create_residual_problem<'a>(
         &'a self,
         mut removal_candidates_indices: Vec<usize>,
-        problem: &'a Problem,
+        problem: &'a Problem<D>,
         is_deterministic: bool,
-    ) -> Option<ResidualProblem<'a>> {
+    ) -> Option<ResidualProblem<'a, D>> {
         let mut unmodified_solution = self.clone();
 
         // Remove images
@@ -427,7 +463,7 @@ impl EncodedSolution {
     fn scaled_image_objective_deltas<I: Iterator<Item = usize>>(
         &self,
         images: I,
-        problem: &Problem,
+        problem: &Problem<D>,
     ) -> Vec<ScaledObjectiveDeltas> {
         let raw_comparable_images: Vec<ImageObjectiveDeltas> = images
             .map(|image_index| ImageObjectiveDeltas {
@@ -488,7 +524,7 @@ impl EncodedSolution {
     pub fn best_unselected_images(
         &self,
         uncovered_elements: &[usize],
-        problem: &Problem,
+        problem: &Problem<D>,
         is_deterministic: bool,
     ) -> Option<Vec<usize>> {
         // If there is no unselected images, return
@@ -523,7 +559,8 @@ impl EncodedSolution {
                     }
                 }
 
-                let comparision_heur_key = scaled_objective_deltas.scaled_objectives.0 * weights.0 + scaled_objective_deltas.scaled_objectives.1 * weights.1;
+                let comparision_heur_key = scaled_objective_deltas.scaled_objectives.0 * weights.0
+                    + scaled_objective_deltas.scaled_objectives.1 * weights.1;
                 // / denominator;
 
                 Some(ComparableImage {
@@ -553,7 +590,7 @@ impl EncodedSolution {
         }
     }
 
-    pub fn worst_selected_images(&self, problem: &Problem, is_deterministic: bool) -> Vec<usize> {
+    pub fn worst_selected_images(&self, problem: &Problem<D>, is_deterministic: bool) -> Vec<usize> {
         let weights: (f32, f32) = if is_deterministic {
             (0.5, 0.5)
         } else {
@@ -586,7 +623,7 @@ impl EncodedSolution {
         return worst_selected_images;
     }
 
-    pub fn as_sims_solution(&self, problem: &Problem) -> SIMSSolution {
+    pub fn as_sims_solution(&self, problem: &Problem<D>) -> SIMSSolution {
         let selected_images = self
             .selected_images
             .iter()
@@ -613,9 +650,9 @@ impl EncodedSolution {
 
     pub fn merge_residual_solution(
         &mut self,
-        residual_solution: ResidualSolution,
-        residual_problem: &ResidualProblem,
-        problem: &Problem,
+        residual_solution: ResidualSolution<D>,
+        residual_problem: &ResidualProblem<D>,
+        problem: &Problem<D>,
     ) {
         residual_solution
             .selected_images
@@ -626,7 +663,7 @@ impl EncodedSolution {
             });
     }
 
-    fn cloudy_area_delta(&self, image_index: usize, problem: &Problem) -> i64 {
+    fn cloudy_area_delta(&self, image_index: usize, problem: &Problem<D>) -> i64 {
         let mut cloudy_area_delta: i64 = 0;
         if self.selected_images[image_index] {
             problem.images[image_index]
@@ -652,7 +689,7 @@ impl EncodedSolution {
         return cloudy_area_delta;
     }
 
-    fn cost_delta(&self, image_index: usize, problem: &Problem) -> i64 {
+    fn cost_delta(&self, image_index: usize, problem: &Problem<D>) -> i64 {
         if self.selected_images[image_index] {
             return -(problem.images[image_index].cost() as i64);
         } else {
@@ -664,10 +701,10 @@ impl EncodedSolution {
     pub fn neighborhood(
         &self,
         k: u32,
-        problem: &Problem,
+        problem: &Problem<D>,
         timer: &Timer,
         is_deterministic: bool,
-    ) -> Vec<EncodedSolution> {
+    ) -> Vec<EncodedSolution<D>> {
         let removal_candidates_lists: Vec<Vec<usize>> = if k == 1 {
             self.selected_images()
                 .filter_map(|selected_image| {
@@ -685,7 +722,7 @@ impl EncodedSolution {
                 .collect()
         };
 
-        let mut residual_solutions: Vec<EncodedSolution> = Vec::new();
+        let mut residual_solutions: Vec<EncodedSolution<D>> = Vec::new();
 
         for removal_candidates in removal_candidates_lists {
             if let Some(mut residual_problem) =
@@ -705,33 +742,34 @@ impl EncodedSolution {
 
 /// Implement non-dominance relation for solutions (where a < b iff a dominates b)
 /// Note: We minimize both objectives, so the smaller objective the better
-impl PartialOrd for EncodedSolution {
+#[expect(clippy::non_canonical_partial_ord_impl, reason="Compare only first objective")]
+impl<const D: usize> PartialOrd for EncodedSolution<D> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.objectives.0.partial_cmp(&other.objectives.0)
+        self.objectives[0].partial_cmp(&other.objectives[0])
     }
 }
 
-impl PartialEq for EncodedSolution {
+impl<const D: usize> PartialEq for EncodedSolution<D> {
     fn eq(&self, other: &Self) -> bool {
         self.selected_images == other.selected_images
     }
 }
 
 /// Implement ordering for solutions (based on first objective)
-impl Ord for EncodedSolution {
+impl<const D: usize> Ord for EncodedSolution<D> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.objectives.0.cmp(&other.objectives.0)
+        self.objectives[0].cmp(&other.objectives[0])
     }
 }
 
-impl Hash for EncodedSolution {
+impl<const D: usize> Hash for EncodedSolution<D> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.selected_images.hash(state);
     }
 }
 
 // Implement Debug for SIMSEncodedSolution by converting it to SIMSSolution
-impl Debug for EncodedSolution {
+impl<const D: usize> Debug for EncodedSolution<D> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let selected_images = &self
             .selected_images

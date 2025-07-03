@@ -35,6 +35,7 @@ const MAX_ITERATIONS: usize = 50000;
 const MAX_DURATION: &str = "240s";
 const NEIGHBORHOOD_SIZE_RANGE: RangeInclusive<u32> = 1..=6;
 const TEST_SEED: u64 = 12345_67890;
+const NUM_OBJECTIVES: usize = 2;
 
 #[derive(Parser)]
 #[command(about = "Pareto Local Search solver for the Satellite Image Selection Problem", long_about = None)]
@@ -114,10 +115,10 @@ fn main() {
     }
 
     debug!("Loading problem instance from file: {:?}", args.problem);
-    let sims_problem_instance = Problem::from_minizinc_datafile(&args.problem);
+    let sims_problem_instance = Problem::<NUM_OBJECTIVES>::from_minizinc_datafile(&args.problem);
 
     debug!("Initializing initial solution set");
-    let initial_solution_set: BTreeSolutionSet<EncodedSolution> =
+    let initial_solution_set: BTreeSolutionSet<EncodedSolution<NUM_OBJECTIVES>, NUM_OBJECTIVES> =
         if let Some(initial_population_csv) = &args.initial_population {
             debug!(
                 "Loading initial solutions from file: {:?}",
@@ -178,7 +179,7 @@ fn main() {
     #[cfg(feature = "plotting")]
     plotting::draw_solutions_plot(&pareto_local_search.explored_solutions);
 
-    let final_solutions: Vec<EncodedSolution> = final_solution_set.into_iter().collect();
+    let final_solutions: Vec<EncodedSolution<NUM_OBJECTIVES>> = final_solution_set.into_iter().collect();
 
     let non_dominated_points = pareto_local_search.explored_solutions.non_dominated();
     debug_assert_eq!(final_solutions.len(), non_dominated_points.len());

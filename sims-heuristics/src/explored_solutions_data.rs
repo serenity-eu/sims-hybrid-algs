@@ -7,49 +7,55 @@ use std::{
 
 use log::{trace, warn};
 
-use crate::{objectives::Objectives, solution::EncodedSolution};
+use crate::solution::EncodedSolution;
 
 #[derive(Debug)]
-pub struct SolutionFingerprint {
+pub struct SolutionFingerprint<const D: usize> {
     pub explored_neighborhood_size: u8,
-    pub objectives: Objectives,
+    pub objectives: pareto::Objectives<D>,
     pub iteration: u16,
     pub time: Duration,
 }
 
 #[derive(Debug, Eq, Clone, Copy)]
-pub struct SolutionPoint(pub usize, pub i32, pub i32);
+pub struct SolutionPoint<const D: usize> {
+    pub iteration: usize,
+    pub objectives: [i32; D],
+}
 
-impl PartialEq for SolutionPoint {
+impl<const D: usize> PartialEq for SolutionPoint<D> {
     fn eq(&self, other: &Self) -> bool {
-        (self.1, self.2) == (other.1, other.2)
+        self.objectives == other.objectives
     }
 }
 
-impl Ord for SolutionPoint {
+impl<const D: usize> Ord for SolutionPoint<D> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        (self.1, self.2).cmp(&(other.1, other.2))
+        self.objectives.cmp(&other.objectives)
     }
 }
 
-impl PartialOrd for SolutionPoint {
+impl<const D: usize> PartialOrd for SolutionPoint<D> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some((self.1, self.2).cmp(&(other.1, other.2)))
+        Some(self.objectives.cmp(&other.objectives))
     }
 }
 
-impl From<&SolutionFingerprint> for SolutionPoint {
-    fn from(solution: &SolutionFingerprint) -> Self {
-        SolutionPoint(
-            solution.iteration as usize,
-            solution.objectives.0 as i32,
-            solution.objectives.1 as i32,
-        )
+impl<const D: usize> From<&SolutionFingerprint<D>> for SolutionPoint<D> {
+    fn from(solution: &SolutionFingerprint<D>) -> Self {
+        let mut objectives = [0; D];
+        for i in 0..D {
+            objectives[i] = solution.objectives[i] as i32;
+        }
+        SolutionPoint {
+            iteration: solution.iteration as usize,
+            objectives,
+        }
     }
 }
 
-pub struct ExploredSolutionsData {
-    pub solutions: HashMap<u64, SolutionFingerprint>,
+pub struct ExploredSolutionsData<const D: usize> {
+    pub solutions: HashMap<u64, SolutionFingerprint<D>>,
     pub num_iterations: usize,
     pub max_cost: u64,
     pub max_cloudy_area: u64,
@@ -72,7 +78,7 @@ impl ParetoFrontSnapshot {
     }
 }
 
-impl ExploredSolutionsData {
+impl<const D: usize> ExploredSolutionsData<D> {
     pub fn new(max_cost: u64, max_cloudy_area: u64) -> Self {
         Self {
             solutions: HashMap::new(),
@@ -85,19 +91,19 @@ impl ExploredSolutionsData {
 
     pub fn get_solution_fingerprint(
         &self,
-        solution: &EncodedSolution,
-    ) -> Option<&SolutionFingerprint> {
+        solution: &EncodedSolution<D>,
+    ) -> Option<&SolutionFingerprint<D>> {
         let hash = ExploredSolutionsData::hash(solution);
         self.solutions.get(&hash)
     }
 
-    fn hash(solution: &EncodedSolution) -> u64 {
+    fn hash(solution: &EncodedSolution<D>) -> u64 {
         let mut hasher = DefaultHasher::new();
         solution.hash(&mut hasher);
         hasher.finish()
     }
 
-    pub fn register(&mut self, iteration: usize, solution: &EncodedSolution, time: Duration) {
+    pub fn register(&mut self, iteration: usize, solution: &EncodedSolution<D>, time: Duration) {
         let hash = ExploredSolutionsData::hash(solution);
 
         if let Entry::Vacant(e) = self.solutions.entry(hash) {
@@ -116,7 +122,7 @@ impl ExploredSolutionsData {
 
     pub fn update_explored_neighborhood_size(
         &mut self,
-        solution: &EncodedSolution,
+        solution: &EncodedSolution<D>,
         explored_neighborhood_size: u32,
     ) {
         let hash = ExploredSolutionsData::hash(solution);
@@ -127,7 +133,7 @@ impl ExploredSolutionsData {
         entry.explored_neighborhood_size = explored_neighborhood_size as u8;
     }
 
-    pub fn explored_neighborhood_size(&mut self, solution: &EncodedSolution) -> u32 {
+    pub fn explored_neighborhood_size(&mut self, solution: &EncodedSolution<D>) -> u32 {
         let hash = ExploredSolutionsData::hash(solution);
         let entry = self
             .solutions
@@ -136,13 +142,13 @@ impl ExploredSolutionsData {
         entry.explored_neighborhood_size as u32
     }
 
-    pub fn is_registered(&self, solution: &EncodedSolution) -> bool {
+    pub fn is_registered(&self, solution: &EncodedSolution<D>) -> bool {
         let hash = ExploredSolutionsData::hash(solution);
         self.solutions.contains_key(&hash)
     }
 
-    pub fn initial_solutions(&self) -> Vec<SolutionPoint> {
-        let initial_solutions: Vec<SolutionPoint> = self
+    pub fn initial_solutions(&self) -> Vec<SolutionPoint<D>> {
+        let initial_solutions: Vec<SolutionPoint<D>> = self
             .solutions
             .values()
             .filter_map(|solution| {
@@ -156,24 +162,24 @@ impl ExploredSolutionsData {
         initial_solutions
     }
 
-    pub fn solutions(&self) -> Vec<SolutionPoint> {
-        let solutions: Vec<SolutionPoint> =
+    pub fn solutions(&self) -> Vec<SolutionPoint<D>> {
+        let solutions: Vec<SolutionPoint<D>> =
             self.solutions.values().map(SolutionPoint::from).collect();
         solutions
     }
 
-    pub fn non_dominated(&self) -> Vec<SolutionPoint> {
-        let mut non_dominated_solutions: Vec<SolutionPoint> = Vec::new();
+    pub fn non_dominated(&self) -> Vec<SolutionPoint<D>> {
+        let mut non_dominated_solutions: Vec<SolutionPoint<D>> = Vec::new();
         let mut solutions = self.solutions();
 
         // Sort solutions in reversed lexicographical order by objectives
-        solutions.sort_by_key(|solution| Reverse((solution.1, solution.2)));
+        solutions.sort_by_key(|solution| Reverse((solution.objectives[0], solution.objectives[1])));
 
         let mut smallest_obj2;
 
         // Smallest point is vacuously non-dominated
         if let Some(first_point) = solutions.pop() {
-            smallest_obj2 = first_point.2;
+            smallest_obj2 = first_point.objectives[1];
             non_dominated_solutions.push(first_point);
         } else {
             // Solution set is empty, return empty vector
@@ -181,8 +187,8 @@ impl ExploredSolutionsData {
         }
 
         while let Some(point) = solutions.pop() {
-            if point.2 < smallest_obj2 {
-                smallest_obj2 = point.2;
+            if point.objectives[1] < smallest_obj2 {
+                smallest_obj2 = point.objectives[1];
                 non_dominated_solutions.push(point);
             }
         }
@@ -195,7 +201,7 @@ impl ExploredSolutionsData {
         elapsed: Duration,
         solutions: I,
     ) where
-        I: Iterator<Item = &'a EncodedSolution>,
+        I: Iterator<Item = &'a EncodedSolution<D>>,
     {
         let solutions: Vec<Vec<usize>> = solutions
             .map(|solution| solution.selected_images().collect())

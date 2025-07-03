@@ -3,10 +3,7 @@ use std::path::Path;
 use log::error;
 use regex::Regex;
 
-use crate::{
-    objectives::Objectives,
-    util::{DifferenceIterator, IntersectionIterator},
-};
+use crate::util::{DifferenceIterator, IntersectionIterator};
 
 #[derive(Debug, Default)]
 pub struct SIMSProblemInstanceRaw {
@@ -213,7 +210,7 @@ impl Ord for ComparableImage {
     }
 }
 
-pub struct Problem {
+pub struct Problem<const D: usize> {
     /// Name of the problem instance
     pub instance_name: String,
     /// Vector of sets of indices representing the universe, each set represents which images contain the corresponding element
@@ -223,10 +220,10 @@ pub struct Problem {
     /// Matrix of size of overlaps between images
     pub overlap_matrix: Vec<Vec<usize>>,
     /// Max values of objectives
-    pub max_objectives: Objectives,
+    pub max_objectives: pareto::Objectives<D>,
 }
 
-impl Problem {
+impl<const D: usize> Problem<D> {
     pub fn from_raw(mut raw: SIMSProblemInstanceRaw) -> Self {
         // Normalize all indices to be zero-based
         raw.images.iter_mut().for_each(|image| {
@@ -292,12 +289,17 @@ impl Problem {
         let max_cost: u64 = raw.costs.iter().sum();
         let max_cloudy_area = raw.max_cloud_area;
 
+        assert_eq!(D, 2, "Problem currently only supports 2D objectives");
+        let mut max_objectives = [0u64; D];
+        max_objectives[0] = max_cost;
+        max_objectives[1] = max_cloudy_area;
+
         Problem {
             instance_name: raw.name,
             universe,
             images,
             overlap_matrix,
-            max_objectives: Objectives(max_cost, max_cloudy_area),
+            max_objectives,
         }
     }
 
@@ -318,14 +320,14 @@ impl Problem {
     }
 }
 
-impl Default for Problem {
+impl Default for Problem<2> {
     fn default() -> Self {
         Problem {
             instance_name: String::new(),
             universe: Vec::new(),
             images: Vec::new(),
             overlap_matrix: Vec::new(),
-            max_objectives: Objectives(0, 0),
+            max_objectives: [0, 0],
         }
     }
 }
