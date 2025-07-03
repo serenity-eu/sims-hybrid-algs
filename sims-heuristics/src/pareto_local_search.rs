@@ -64,7 +64,7 @@ where
             }
         });
         for (i, solution) in population.iter().enumerate() {
-            debug!("Initial solution {}: {:?}", i, solution);
+            debug!("Initial solution {i}: {solution:?}");
         }
 
         let approximated_pareto_set = population
@@ -102,7 +102,7 @@ where
         'population: for (index, solution) in population.into_iter().enumerate() {
             debug!("######################################################");
             debug!("######## SOLUTION {} ########", index + 1);
-            debug!("######## {:?} ########", solution);
+            debug!("######## {solution:?} ########");
             debug!("######################################################");
 
             let neighbors: Vec<EncodedSolution<D>> = solution.neighborhood(
@@ -114,13 +114,10 @@ where
 
             for (neighbor_index, neighbor) in neighbors.into_iter().enumerate() {
                 explored_neighbor_count += 1;
-                debug!(
-                    "######## NEIGHBOR {} {:?} ########",
-                    neighbor_index, neighbor
-                );
+                debug!("######## NEIGHBOR {neighbor_index} {neighbor:?} ########");
                 debug_assert!(neighbor.is_valid(self.problem));
                 if self.explored_solutions.is_registered(&neighbor) {
-                    debug!("Neighbor nr {} was already explored.", neighbor_index);
+                    debug!("Neighbor nr {neighbor_index} was already explored.");
                     duplicated_neighbor_count += 1;
                     continue;
                 }
@@ -174,11 +171,11 @@ where
         error!("Iteration {iteration} [{duration_us} us, {per_solution_search_time} us/sol], neighbors: size: {neighborhood_size}, explored: {explored_neighbor_count}, duplicated: {duplicated_neighbor_count} ({duplicated_percent} %), auxiliary: +{auxiliary_added_count}-{auxiliary_removed_count}, pareto: +{pareto_added_count}-{pareto_removed_count}");
         debug!("===== Auxiliary population solutions: =====");
         for solution in auxiliary_population.iter() {
-            info!("{:?}", solution);
+            info!("{solution:?}");
         }
         info!("===== Pareto Front solutions: =====");
         for solution in self.approximated_pareto_set.iter() {
-            info!("{:?}", solution);
+            info!("{solution:?}");
         }
 
         if !auxiliary_population.is_empty() {

@@ -152,7 +152,7 @@ impl SIMSProblemInstanceRaw {
                     sims_problem.incidence_angle = parse_vec(value);
                 }
                 _ => {
-                    error!("Unknown variable: {}", key);
+                    error!("Unknown variable: {key}");
                 }
             }
         }

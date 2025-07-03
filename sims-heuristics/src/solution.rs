@@ -114,7 +114,7 @@ impl<const D: usize> SIMSSolutionTrait<D> for EncodedSolution<D> {
         let mut part_coverage_counts = vec![0; problem.universe.len()];
 
         while num_covered_elements < problem.universe.len() {
-            let element_index = rng.gen_range(0..problem.universe.len());
+            let element_index = rng.random_range(0..problem.universe.len());
             if covered_elements[element_index] {
                 continue;
             }
@@ -157,7 +157,7 @@ impl<const D: usize> SIMSSolutionTrait<D> for EncodedSolution<D> {
     }
 
     fn random(problem: &Problem<D>) -> Self {
-        return Self::random_with_seed(problem, rand::thread_rng().gen());
+        return Self::random_with_seed(problem, rand::rng().random());
     }
 
     fn is_dominated(&self, other: &Self) -> bool {
