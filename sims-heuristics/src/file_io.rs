@@ -14,7 +14,7 @@ use pls::{
     solution::EncodedSolution,
 };
 
-pub fn solution_list_from_csv(path: &PathBuf, probem_instance: &Problem) -> Vec<EncodedSolution> {
+pub fn solution_list_from_csv<const D: usize>(path: &PathBuf, probem_instance: &Problem<D>) -> Vec<EncodedSolution<D>> {
     let mut reader = ReaderBuilder::new()
         .delimiter(b';')
         .from_path(path.clone())
@@ -38,10 +38,10 @@ pub fn solution_list_from_csv(path: &PathBuf, probem_instance: &Problem) -> Vec<
         .collect();
 }
 
-pub fn append_solutions_to_csv(
+pub fn append_solutions_to_csv<const D: usize>(
     path: &PathBuf,
-    solutions: &[EncodedSolution],
-    probem_instance: &Problem,
+    solutions: &[EncodedSolution<D>],
+    probem_instance: &Problem<D>,
     timeout_s: u64,
     solution_time_s: &[f32],
     elapsed_time_s: u64,
@@ -62,7 +62,7 @@ pub fn append_solutions_to_csv(
 
     let pareto_front_str = solutions
         .iter()
-        .map(|solution| format!("[{}, {}]", solution.objectives.0, solution.objectives.1))
+        .map(|solution| format!("[{}, {}]", solution.objectives[0], solution.objectives[1]))
         .join(", ");
     let pareto_front = format!("{{{}}}", pareto_front_str);
     let pareto_solutions_time_list = format!("[{}]", solution_time_s.iter().join(", "));
@@ -127,8 +127,8 @@ pub fn append_solutions_to_csv(
     writer.flush().expect("Failed to flush CSV writer");
 }
 
-pub fn dump_invalid_initial_solutions(
-    invalid_solutions: Vec<EncodedSolution>,
+pub fn dump_invalid_initial_solutions<const D: usize>(
+    invalid_solutions: Vec<EncodedSolution<D>>,
     instance_path: &Path,
     output_path: &Path,
     timeout: Duration,

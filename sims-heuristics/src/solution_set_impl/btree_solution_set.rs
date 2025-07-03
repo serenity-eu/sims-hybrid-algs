@@ -2,17 +2,17 @@ use std::collections::{btree_set, BTreeSet};
 
 use log::{trace, warn};
 
-use crate::{problem::Problem, solution::MOSolution, solution_set::SolutionSet};
+use crate::{problem::Problem, solution::SIMSSolutionTrait, solution_set::SolutionSet};
 
 #[derive(Clone)]
-pub struct BTreeSolutionSet<T: MOSolution + Sized> {
+pub struct BTreeSolutionSet<T: SIMSSolutionTrait<D> + Sized, const D: usize> {
     btree_set: BTreeSet<T>,
     name: String,
 }
 
-impl<T> SolutionSet<'_, T> for BTreeSolutionSet<T>
+impl<T, const D: usize> SolutionSet<'_, T, D> for BTreeSolutionSet<T, D>
 where
-    T: MOSolution + Sized + Ord + Clone,
+    T: SIMSSolutionTrait<D> + Sized + Ord + Clone,
 {
     type Iter<'b>
         = btree_set::Iter<'b, T>
@@ -90,12 +90,12 @@ where
         was_inserted
     }
 
-    fn random(size: usize, problem: &Problem) -> Self {
+    fn random(size: usize, problem: &Problem<D>) -> Self {
         let random_iter = (0..size).map(|_| T::random(problem));
         return Self::from_iter(random_iter);
     }
 
-    fn random_with_seed(size: usize, problem: &Problem, seed: u64) -> Self {
+    fn random_with_seed(size: usize, problem: &Problem<D>, seed: u64) -> Self {
         let random_iter = (0..size).map(|_| T::random_with_seed(problem, seed));
         return Self::from_iter(random_iter);
     }

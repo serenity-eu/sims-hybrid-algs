@@ -1,5 +1,5 @@
 #[cfg(feature = "plotting")]
-pub fn draw_solutions_plot(solutions_data: &ExploredSolutionsData) {
+pub fn draw_solutions_plot<const D: usize>(solutions_data: &ExploredSolutionsData<D>) {
     let rainbow_colormap = DerivedColorMap::new(&[RED, ORANGE, YELLOW, GREEN, BLUE, PURPLE]);
     let num_iterations = solutions_data.num_iterations + 1;
     let root_drawing_area = SVGBackend::new("test.svg", (1024, 768)).into_drawing_area();
@@ -26,23 +26,23 @@ pub fn draw_solutions_plot(solutions_data: &ExploredSolutionsData) {
 
     // chart_ctx
     //     .draw_series(solutions_data.solutions().into_iter().map(
-    //         |SolutionPoint(iteration, x, y)| {
+    //         |solution_point| {
     //             TriangleMarker::new(
-    //                 (x, y),
+    //                 (solution_point.objectives[0], solution_point.objectives[1]),
     //                 3,
     //                 // &GREY)
-    //                 rainbow_colormap.get_color(iteration as f32 / num_iterations as f32),
+    //                 rainbow_colormap.get_color(solution_point.iteration as f32 / num_iterations as f32),
     //             )
-    //             // Text::new(format!("{}", iteration), (x, y), ("sans-serif", 10))
+    //             // Text::new(format!("{}", solution_point.iteration), (solution_point.objectives[0], solution_point.objectives[1]), ("sans-serif", 10))
     //         },
     //     ))
     //     .unwrap();
 
     chart_ctx
         .draw_series(solutions_data.non_dominated().into_iter().map(
-            |SolutionPoint(_iteration, x, y)| {
+            |solution_point| {
                 Circle::new(
-                    (x, y),
+                    (solution_point.objectives[0], solution_point.objectives[1]),
                     6,
                     &GREEN, // rainbow_colormap.get_color(iteration as f32 / num_iterations as f32),
                 )
@@ -55,7 +55,7 @@ pub fn draw_solutions_plot(solutions_data: &ExploredSolutionsData) {
             solutions_data
                 .initial_solutions()
                 .into_iter()
-                .map(|SolutionPoint(_iteration, x, y)| TriangleMarker::new((x, y), 6, &BLUE)),
+                .map(|solution_point| TriangleMarker::new((solution_point.objectives[0], solution_point.objectives[1]), 6, &BLUE)),
         )
         .unwrap();
 }

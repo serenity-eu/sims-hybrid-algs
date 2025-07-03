@@ -2,18 +2,18 @@ use std::slice;
 
 use log::trace;
 
-use crate::{solution::MOSolution, solution_set::SolutionSet};
+use crate::{solution::SIMSSolutionTrait, solution_set::SolutionSet};
 
 #[derive(Clone)]
-pub struct VecSolutionSet<T: MOSolution + Sized> {
+pub struct VecSolutionSet<T: SIMSSolutionTrait<D> + Sized, const D: usize> {
     name: String,
     last_added_position: usize,
     vec_set: Vec<T>,
 }
 
-impl<T> SolutionSet<'_, T> for VecSolutionSet<T>
+impl<T, const D: usize> SolutionSet<'_, T, D> for VecSolutionSet<T, D>
 where
-    T: MOSolution + Sized + Ord + Clone,
+    T: SIMSSolutionTrait<D> + Sized + Ord + Clone,
 {
     type Iter<'b>
         = slice::Iter<'b, T>
@@ -77,9 +77,9 @@ where
             Ok(_) => return false,
             Err(position) => {
                 let mut first_equal_pos = position;
-                let current_objective = self.vec_set[position].objectives().0;
+                let current_objective = self.vec_set[position].objectives()[0];
                 while first_equal_pos > 0
-                    && self.vec_set[first_equal_pos - 1].objectives().0 == current_objective
+                    && self.vec_set[first_equal_pos - 1].objectives()[0] == current_objective
                 {
                     first_equal_pos -= 1;
                 }
@@ -104,12 +104,12 @@ where
         was_inserted
     }
 
-    fn random(size: usize, problem: &crate::problem::Problem) -> Self {
+    fn random(size: usize, problem: &crate::problem::Problem<D>) -> Self {
         let random_iter = (0..size).map(|_| T::random(problem));
         return Self::from_iter(random_iter);
     }
 
-    fn random_with_seed(size: usize, problem: &crate::problem::Problem, seed: u64) -> Self {
+    fn random_with_seed(size: usize, problem: &crate::problem::Problem<D>, seed: u64) -> Self {
         let random_iter = (0..size).map(|_| T::random_with_seed(problem, seed));
         return Self::from_iter(random_iter);
     }

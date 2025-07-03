@@ -11,9 +11,9 @@ use crate::{
     solution_set_impl::BTreeSolutionSet,
 };
 
-pub struct ResidualProblem<'a> {
+pub struct ResidualProblem<'a, const D: usize> {
     /// Original solutions with unmodified image only
-    pub unmodified_solution: EncodedSolution,
+    pub unmodified_solution: EncodedSolution<D>,
     /// Images - candidates to be removed
     pub removal_candidates_indices: Vec<usize>,
     /// All images participating in residual problem
@@ -23,17 +23,17 @@ pub struct ResidualProblem<'a> {
     /// Uncovered elements clear parts counts
     pub original_clear_parts_counts: Vec<usize>,
     /// Original problem instance
-    pub problem: &'a Problem,
+    pub problem: &'a Problem<D>,
 }
 
-impl<'a> ResidualProblem<'a> {
+impl<'a, const D: usize> ResidualProblem<'a, D> {
     pub fn new(
-        unmodified_solution: EncodedSolution,
+        unmodified_solution: EncodedSolution<D>,
         removal_candidates_original_indices: Vec<usize>,
         addition_candidates: Vec<usize>,
         uncovered_elements_indices: Vec<usize>,
         original_clear_parts_counts: Vec<usize>,
-        problem: &'a Problem,
+        problem: &'a Problem<D>,
     ) -> Self {
         debug!("######################################################");
         debug!(
@@ -115,8 +115,8 @@ impl<'a> ResidualProblem<'a> {
         }
     }
 
-    pub fn solve_with_backtracing(&mut self) -> MergedSolutionIter {
-        let mut non_dominated_residual_set: BTreeSolutionSet<ResidualSolution> =
+    pub fn solve_with_backtracing(&mut self) -> MergedSolutionIter<D> {
+        let mut non_dominated_residual_set: BTreeSolutionSet<ResidualSolution<D>, D> =
             BTreeSolutionSet::new("residual".to_string());
 
         let element_images = self
@@ -129,7 +129,7 @@ impl<'a> ResidualProblem<'a> {
             unique_cover.sort_unstable();
             unique_cover.dedup();
 
-            let residual_solution = ResidualSolution::from_selected_images(unique_cover, self);
+            let residual_solution = ResidualSolution::<D>::from_selected_images(unique_cover, self);
 
             if !non_dominated_residual_set.contains(&residual_solution) {
                 let was_added = non_dominated_residual_set.try_add(&residual_solution);
@@ -143,7 +143,7 @@ impl<'a> ResidualProblem<'a> {
             }
         }
 
-        let solutions_iter: Vec<ResidualSolution> =
+        let solutions_iter: Vec<ResidualSolution<D>> =
             non_dominated_residual_set.into_iter().collect();
 
         trace!("*****************************************************");
@@ -235,7 +235,7 @@ impl<'a> ResidualProblem<'a> {
             }).collect();
 
             if self.do_selected_images_cover(&selected_images, &coverage_bitmaps, &all_elements_mask) {
-                let residual_solution = ResidualSolution::from_selected_images(selected_images.clone(), self);
+                let residual_solution = ResidualSolution::<D>::from_selected_images(selected_images.clone(), self);
 
                 if !non_dominated_residual_set.contains(&residual_solution) {
                     let was_added = non_dominated_residual_set.try_add(&residual_solution);
@@ -260,8 +260,8 @@ impl<'a> ResidualProblem<'a> {
     }
     */
 
-    pub fn solve(&mut self) -> MergedSolutionIter {
-        let mut non_dominated_residual_set: BTreeSolutionSet<ResidualSolution> =
+    pub fn solve(&mut self) -> MergedSolutionIter<D> {
+        let mut non_dominated_residual_set: BTreeSolutionSet<ResidualSolution<D>, D> =
             BTreeSolutionSet::new("residual".to_string());
 
         let images_indices = (0..self.all_images.len()).collect::<Vec<_>>();
@@ -294,7 +294,7 @@ impl<'a> ResidualProblem<'a> {
             }
 
             let selected_images: Vec<usize> = image_combination.iter().copied().copied().collect();
-            let residual_solution = ResidualSolution::from_selected_images(selected_images, self);
+            let residual_solution = ResidualSolution::<D>::from_selected_images(selected_images, self);
             let was_added = non_dominated_residual_set.try_add(&residual_solution);
             trace!("#####################################################");
             trace!(
@@ -305,7 +305,7 @@ impl<'a> ResidualProblem<'a> {
             );
         }
 
-        let solutions_iter: Vec<ResidualSolution> =
+        let solutions_iter: Vec<ResidualSolution<D>> =
             non_dominated_residual_set.into_iter().collect();
 
         trace!("*****************************************************");
@@ -327,15 +327,15 @@ impl<'a> ResidualProblem<'a> {
     }
 }
 
-pub struct MergedSolutionIter<'a> {
-    unmodified_solution: &'a EncodedSolution,
-    solutions_iter: Vec<ResidualSolution>,
-    residual_problem: &'a ResidualProblem<'a>,
-    problem: &'a Problem,
+pub struct MergedSolutionIter<'a, const D: usize> {
+    unmodified_solution: &'a EncodedSolution<D>,
+    solutions_iter: Vec<ResidualSolution<D>>,
+    residual_problem: &'a ResidualProblem<'a, D>,
+    problem: &'a Problem<D>,
 }
 
-impl Iterator for MergedSolutionIter<'_> {
-    type Item = EncodedSolution;
+impl<const D: usize> Iterator for MergedSolutionIter<'_, D> {
+    type Item = EncodedSolution<D>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let residual_solution = self.solutions_iter.pop()?;

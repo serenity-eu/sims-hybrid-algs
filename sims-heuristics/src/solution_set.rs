@@ -1,6 +1,6 @@
-use crate::{problem::Problem, solution::MOSolution};
+use crate::{problem::Problem, solution::SIMSSolutionTrait};
 
-pub trait SolutionSet<'a, T: MOSolution> {
+pub trait SolutionSet<'a, T: SIMSSolutionTrait<D>, const D: usize> {
     type Iter<'b>: Iterator<Item = &'b T>
     where
         Self: 'b,
@@ -15,10 +15,10 @@ pub trait SolutionSet<'a, T: MOSolution> {
     fn with_name(self, name: String) -> Self;
 
     /// Create a set of given size of random solutions
-    fn random(size: usize, problem: &Problem) -> Self;
+    fn random(size: usize, problem: &Problem<D>) -> Self;
 
     /// Create a set of given size of random solutions with given seed
-    fn random_with_seed(size: usize, problem: &Problem, seed: u64) -> Self;
+    fn random_with_seed(size: usize, problem: &Problem<D>, seed: u64) -> Self;
 
     /// Iterate over the solutions in the set
     fn iter(&self) -> Self::Iter<'_>;

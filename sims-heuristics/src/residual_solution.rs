@@ -1,22 +1,23 @@
 use crate::{
-    objectives::Objectives, problem::Problem, residual_problem::ResidualProblem,
-    solution::MOSolution,
+    problem::Problem, residual_problem::ResidualProblem,
+    solution::SIMSSolutionTrait,
 };
+use pareto::{HasObjectives, MoSolution};
 use std::fmt::Debug;
 
 #[derive(Clone, Eq)]
-pub struct ResidualSolution {
+pub struct ResidualSolution<const D: usize> {
     pub selected_images: Vec<usize>,
-    pub objectives: Objectives,
+    pub objectives: pareto::Objectives<D>,
 }
 
-impl PartialEq for ResidualSolution {
+impl<const D: usize> PartialEq for ResidualSolution<D> {
     fn eq(&self, other: &Self) -> bool {
         self.selected_images == other.selected_images
     }
 }
 
-impl Debug for ResidualSolution {
+impl<const D: usize> Debug for ResidualSolution<D> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SIMSResidualSolution")
             .field("selected_images", &self.selected_images)
@@ -25,25 +26,35 @@ impl Debug for ResidualSolution {
     }
 }
 
-impl PartialOrd for ResidualSolution {
+#[expect(clippy::non_canonical_partial_ord_impl, reason = "Compare only first objective")]
+impl<const D: usize> PartialOrd for ResidualSolution<D> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.objectives.0.partial_cmp(&other.objectives.0)
+        self.objectives[0].partial_cmp(&other.objectives[0])
     }
 }
 
-impl Ord for ResidualSolution {
+impl<const D: usize> Ord for ResidualSolution<D> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.objectives.0.cmp(&other.objectives.0)
+        self.objectives[0].cmp(&other.objectives[0])
     }
 }
 
-impl MOSolution for ResidualSolution {
+impl<const D: usize> HasObjectives<D> for ResidualSolution<D> {
+    fn objectives(&self) -> &[u64; D] {
+        // Convert Objectives(u64, u64) to &[u64; 2]
+        unsafe { std::mem::transmute(&self.objectives) }
+    }
+}
+
+impl<const D: usize> MoSolution<D> for ResidualSolution<D> {}
+
+impl<const D: usize> SIMSSolutionTrait<D> for ResidualSolution<D> {
     // Never be used, so leaving stub. TODO: Remove
-    fn random(_problem: &Problem) -> Self {
+    fn random(_problem: &Problem<D>) -> Self {
         unimplemented!()
     }
 
-    fn random_with_seed(_problem: &Problem, _seed: u64) -> Self {
+    fn random_with_seed(_problem: &Problem<D>, _seed: u64) -> Self {
         unimplemented!()
     }
 
@@ -60,25 +71,25 @@ impl MOSolution for ResidualSolution {
             || (dominance_relation == Some(std::cmp::Ordering::Equal));
     }
 
-    fn objectives(&self) -> Objectives {
+    fn objectives_tuple(&self) -> pareto::Objectives<D> {
         self.objectives
     }
 }
 
-impl ResidualSolution {
+impl<const D: usize> ResidualSolution<D> {
     pub fn from_selected_images(
         selected_images: Vec<usize>,
-        residual_problem: &ResidualProblem,
+        residual_problem: &ResidualProblem<D>,
     ) -> Self {
         let mut solution = ResidualSolution {
             selected_images,
-            objectives: Objectives(0, 0),
+            objectives: [0; D],
         };
         solution.compute_objectives(residual_problem);
         solution
     }
 
-    fn compute_objectives(&mut self, residual_problem: &ResidualProblem) {
+    fn compute_objectives(&mut self, residual_problem: &ResidualProblem<D>) {
         // Compute cost as sum of costs of selected images
         let cost: u64 = self
             .selected_images
@@ -119,6 +130,13 @@ impl ResidualSolution {
             )
             .sum();
 
-        self.objectives = Objectives(cost, cloudy_area);
+        // Set objectives based on D
+        if D >= 1 {
+            self.objectives[0] = cost;
+        }
+        if D >= 2 {
+            self.objectives[1] = cloudy_area;
+        }
+        // For D > 2, additional objectives would need to be defined
     }
 }
