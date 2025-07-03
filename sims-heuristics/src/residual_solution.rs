@@ -121,11 +121,7 @@ impl<const D: usize> ResidualSolution<D> {
             .zip(clear_parts.iter())
             .filter_map(
                 |(element, &is_clear)| {
-                    if is_clear {
-                        None
-                    } else {
-                        Some(element.area)
-                    }
+                    if is_clear { None } else { Some(element.area) }
                 },
             )
             .sum();

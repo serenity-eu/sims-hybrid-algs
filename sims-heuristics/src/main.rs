@@ -5,20 +5,6 @@ mod plotting;
 use clap::{ArgAction, Parser};
 
 use log::debug;
-#[cfg(feature = "plotting")]
-use plotters::{
-    backend::SVGBackend,
-    chart::{ChartBuilder, LabelAreaPosition},
-    drawing::IntoDrawingArea,
-    element::{Circle, TriangleMarker},
-    style::{
-        colors::colormaps::DerivedColorMap,
-        full_palette::{ORANGE, PURPLE},
-        BLUE, GREEN, RED, WHITE, YELLOW,
-    },
-};
-#[cfg(feature = "plotting")]
-use pls::explored_solutions_data::{ExploredSolutionsData, SolutionPoint};
 
 use std::{
     ops::RangeInclusive,

@@ -61,7 +61,7 @@ where
             // Remove the existing solution and add the new one
             // For now, we'll use a simple approach: rebuild the tree
             let mut new_tree = NDTree::new();
-            for existing in self.nd_tree.iter() {
+            for existing in &self.nd_tree {
                 if existing.objectives() != solution.objectives() {
                     new_tree.update_unchecked(existing.clone());
                 }

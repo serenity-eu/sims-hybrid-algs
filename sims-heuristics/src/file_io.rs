@@ -9,7 +9,7 @@ use csv::{ReaderBuilder, WriterBuilder};
 use itertools::Itertools;
 use pls::{
     explored_solutions_data::ParetoFrontSnapshot,
-    problem::{parse_set_of_vecs, Problem},
+    problem::{Problem, parse_set_of_vecs},
     solution::EncodedSolution,
 };
 

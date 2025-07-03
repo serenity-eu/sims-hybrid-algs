@@ -420,6 +420,18 @@ where
     }
 }
 
+impl<'a, T, const N: usize, const D: usize, const C: usize> IntoIterator for &'a NDTree<T, N, D, C>
+where
+    T: HasObjectives<D> + MoSolution<D> + Clone,
+{
+    type Item = &'a T;
+    type IntoIter = NDTreeSolutionIterator<'a, T, N, D, C>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 impl<T, const N: usize, const D: usize, const C: usize> Default for NDTree<T, N, D, C>
 where
     T: HasObjectives<D> + MoSolution<D> + Clone,
