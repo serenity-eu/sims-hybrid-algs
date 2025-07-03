@@ -3,7 +3,7 @@ use itertools::MinMaxResult::{MinMax, NoElements, OneElement};
 use log::{error, trace};
 use pareto::{HasObjectives, MoSolution};
 use rand::SeedableRng;
-use rand::{seq::IteratorRandom, Rng};
+use rand::{Rng, seq::IteratorRandom};
 use std::{collections::BinaryHeap, fmt::Debug, hash::Hash, vec};
 
 use crate::objectives;
@@ -514,7 +514,6 @@ impl<const D: usize> EncodedSolution<D> {
         let cost_range = max_cost - min_cost;
         let cloudy_area_range = max_cloudy_area - min_cloudy_area;
 
-        
         raw_comparable_images
             .iter()
             .map(|objective_deltas| {

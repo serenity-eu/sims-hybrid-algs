@@ -125,14 +125,19 @@ where
                 #[expect(clippy::if_not_else, reason = "Align with pseudo-code in paper")]
                 if !neighbor.is_weakly_dominated(&solution) {
                     if self.approximated_pareto_set.try_add(&neighbor) {
-                        debug!("Neighbor nr {neighbor_index} was added to approximated pareto set. Approximated pareto set size: {}", self.approximated_pareto_set.len());
+                        debug!(
+                            "Neighbor nr {neighbor_index} was added to approximated pareto set. Approximated pareto set size: {}",
+                            self.approximated_pareto_set.len()
+                        );
                         self.explored_solutions
                             .register(iteration, &neighbor, timer.elapsed());
                         pareto_added_count += 1;
                         if auxiliary_population.try_add(&neighbor) {
                             auxiliary_added_count += 1;
                         } else {
-                            debug!("Neighbor nr {neighbor_index} is dominated so it wasn't added to auxiliary population");
+                            debug!(
+                                "Neighbor nr {neighbor_index} is dominated so it wasn't added to auxiliary population"
+                            );
                         }
                     } else {
                         debug!(
@@ -168,7 +173,9 @@ where
         let duplicated_percent =
             duplicated_neighbor_count as f32 / explored_neighbor_count as f32 * 100.0;
         let per_solution_search_time = duration_us as f32 / explored_neighbor_count as f32;
-        error!("Iteration {iteration} [{duration_us} us, {per_solution_search_time} us/sol], neighbors: size: {neighborhood_size}, explored: {explored_neighbor_count}, duplicated: {duplicated_neighbor_count} ({duplicated_percent} %), auxiliary: +{auxiliary_added_count}-{auxiliary_removed_count}, pareto: +{pareto_added_count}-{pareto_removed_count}");
+        error!(
+            "Iteration {iteration} [{duration_us} us, {per_solution_search_time} us/sol], neighbors: size: {neighborhood_size}, explored: {explored_neighbor_count}, duplicated: {duplicated_neighbor_count} ({duplicated_percent} %), auxiliary: +{auxiliary_added_count}-{auxiliary_removed_count}, pareto: +{pareto_added_count}-{pareto_removed_count}"
+        );
         debug!("===== Auxiliary population solutions: =====");
         for solution in auxiliary_population.iter() {
             info!("{solution:?}");
@@ -192,7 +199,9 @@ where
             .neighborhood_size_range
             .contains(&self.neigborhood_structure)
         {
-            info!("Use solutions from approximated pareto set which are not already Pareto local optimum");
+            info!(
+                "Use solutions from approximated pareto set which are not already Pareto local optimum"
+            );
             for solution in self.approximated_pareto_set.iter().filter(|&solution| {
                 self.explored_solutions.explored_neighborhood_size(solution)
                     < self.neigborhood_structure
@@ -221,7 +230,10 @@ where
             self.explored_solutions.num_iterations = i;
 
             if step_status == StepStatus::AllNeighborhoodStructuresExplored {
-                info!("All neighborhood structures were explored. Number of iterations: {i}. Elapsed time: [{:?} ms]", pls_timer.elapsed());
+                info!(
+                    "All neighborhood structures were explored. Number of iterations: {i}. Elapsed time: [{:?} ms]",
+                    pls_timer.elapsed()
+                );
                 break;
             }
             if pls_timer.elapsed() > max_duration {

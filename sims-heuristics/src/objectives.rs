@@ -1,5 +1,5 @@
-use rand::distr::Open01;
 use rand::Rng;
+use rand::distr::Open01;
 
 #[must_use]
 pub fn generate_weights<const D: usize>() -> [f32; D] {

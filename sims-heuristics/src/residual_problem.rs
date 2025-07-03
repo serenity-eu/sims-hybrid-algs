@@ -148,8 +148,7 @@ impl<'a, const D: usize> ResidualProblem<'a, D> {
         for solution in &solutions_iter {
             trace!(
                 "****** NONDOMINANT RESIDUAL: OBJECTIVES {:?} | IMAGES {:?} ******",
-                solution.objectives,
-                solution.selected_images
+                solution.objectives, solution.selected_images
             );
         }
         trace!("*****************************************************");
@@ -311,8 +310,7 @@ impl<'a, const D: usize> ResidualProblem<'a, D> {
         for solution in &solutions_iter {
             trace!(
                 "****** NONDOMINANT RESIDUAL: OBJECTIVES {:?} | IMAGES {:?} ******",
-                solution.objectives,
-                solution.selected_images
+                solution.objectives, solution.selected_images
             );
         }
         trace!("*****************************************************");

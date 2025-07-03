@@ -1,6 +1,6 @@
 use std::{
     cmp::Reverse,
-    collections::{hash_map::DefaultHasher, hash_map::Entry, HashMap},
+    collections::{HashMap, hash_map::DefaultHasher, hash_map::Entry},
     hash::{Hash, Hasher},
     time::Duration,
 };
