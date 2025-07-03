@@ -1,4 +1,4 @@
-use rand::distributions::Open01;
+use rand::distr::Open01;
 use rand::Rng;
 
 #[must_use]
@@ -7,7 +7,7 @@ pub fn generate_weights<const D: usize>() -> [f32; D] {
     let mut remaining = 1.0_f32;
 
     for weight in weights.iter_mut().take(D - 1) {
-        let random_weight: f32 = rand::thread_rng().sample(Open01);
+        let random_weight: f32 = rand::rng().sample(Open01);
         *weight = random_weight * remaining;
         remaining -= random_weight * remaining;
     }

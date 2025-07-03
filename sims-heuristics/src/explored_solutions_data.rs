@@ -118,7 +118,7 @@ impl<const D: usize> ExploredSolutionsData<D> {
                 time,
             };
             e.insert(new_entry);
-            trace!("Registered new solution: {:?}", solution);
+            trace!("Registered new solution: {solution:?}");
         } else {
             warn!("Solution was already registered in the explored solutions set");
         }

@@ -1,6 +1,7 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use rand::prelude::*;
 use std::collections::HashSet;
+use std::hint::black_box;
 
 fn unique_count_sort_dedup(vec: &mut Vec<u32>) -> usize {
     vec.sort_unstable();
@@ -14,11 +15,11 @@ fn unique_count_hashset(vec: &[u32]) -> usize {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let sizes = [10, 100, 1_000, 10_000, 100_000];
 
     for &size in &sizes {
-        let vec: Vec<u32> = (0..size).map(|_| rng.gen()).collect();
+        let vec: Vec<u32> = (0..size).map(|_| rng.random()).collect();
 
         c.bench_function(&format!("sort_dedup_{size}"), |b| {
             b.iter(|| unique_count_sort_dedup(black_box(&mut vec.clone())));

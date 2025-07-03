@@ -114,15 +114,18 @@ fn main() {
         }
     }
 
-    debug!("Loading problem instance from file: {:?}", args.problem);
+    debug!(
+        "Loading problem instance from file: {}",
+        args.problem.display()
+    );
     let sims_problem_instance = Problem::<NUM_OBJECTIVES>::from_minizinc_datafile(&args.problem);
 
     debug!("Initializing initial solution set");
     let initial_solution_set: BTreeSolutionSet<EncodedSolution<NUM_OBJECTIVES>, NUM_OBJECTIVES> =
         if let Some(initial_population_csv) = &args.initial_population {
             debug!(
-                "Loading initial solutions from file: {:?}",
-                initial_population_csv
+                "Loading initial solutions from file: {}",
+                initial_population_csv.display()
             );
             let initial_solutions =
                 file_io::solution_list_from_csv(initial_population_csv, &sims_problem_instance);
@@ -165,7 +168,7 @@ fn main() {
     debug!("Initial solution set:");
 
     for solution in initial_solution_set.iter() {
-        debug!("Initial solution: {:?}", solution);
+        debug!("Initial solution: {solution:?}");
     }
 
     let mut pareto_local_search = ParetoLocalSearch::new(

@@ -38,10 +38,9 @@ impl<'a, const D: usize> ResidualProblem<'a, D> {
     ) -> Self {
         debug!("######################################################");
         debug!(
-            "######## RESIDUAL PROBLEM removed: {:?} added: {:?} ######",
-            removal_candidates_original_indices, addition_candidates
+            "######## RESIDUAL PROBLEM removed: {removal_candidates_original_indices:?} added: {addition_candidates:?} ######"
         );
-        debug!("######## base: {:?} ########", unmodified_solution);
+        debug!("######## base: {unmodified_solution:?} ########");
         debug!("######################################################");
 
         let uncovered_elements_map: HashMap<usize, usize> = uncovered_elements_indices
