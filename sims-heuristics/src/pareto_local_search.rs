@@ -5,13 +5,11 @@ use std::{
 };
 
 use log::{debug, error, info};
+use pareto::{HasObjectives, MoSolution};
 
 use crate::{
-    explored_solutions_data::ExploredSolutionsData,
-    problem::Problem,
-    solution::{EncodedSolution, SIMSSolutionTrait},
-    solution_set::SolutionSet,
-    timer::Timer,
+    explored_solutions_data::ExploredSolutionsData, problem::Problem, solution::EncodedSolution,
+    solution_set::SolutionSet, timer::Timer,
 };
 
 /// Statistics tracking during a single step of the algorithm
@@ -245,7 +243,7 @@ where
         step_stats: &mut StepStats,
         auxiliary_population: &mut S,
     ) {
-        if neighbor.is_weakly_dominated(current_solution) {
+        if neighbor.is_covered_by(current_solution.objectives()) {
             debug!("Neighbor nr {neighbor_index} is weakly dominated by current solution.");
             return;
         }

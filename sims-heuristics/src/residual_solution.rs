@@ -1,7 +1,6 @@
 use crate::{
-    problem::{Problem, ScaledObjectiveDeltas},
     residual_problem::ResidualProblem,
-    solution::{ResidualSolutionCapable, SIMSSolution, SIMSSolutionTrait},
+    solution::{ImageSet, ResidualSolutionCapable, SIMSCore, SIMSSolution},
 };
 use pareto::{HasObjectives, MoSolution};
 use std::fmt::Debug;
@@ -52,43 +51,10 @@ impl<const D: usize> HasObjectives<D> for ResidualSolution<D> {
 
 impl<const D: usize> MoSolution<D> for ResidualSolution<D> {}
 
-impl<const D: usize> SIMSSolutionTrait<D> for ResidualSolution<D> {
-    // Never be used, so leaving stub. TODO: Remove
-    fn random(_problem: &Problem<D>) -> Self {
-        unimplemented!()
-    }
-
-    fn random_with_seed(_problem: &Problem<D>, _seed: u64) -> Self {
-        unimplemented!()
-    }
-
-    fn from_selected_images(_selected_images_vec: &[usize], _problem: &Problem<D>) -> Self {
-        unimplemented!(
-            "ResidualSolution should be created using from_selected_images with ResidualProblem"
-        )
-    }
-
-    fn is_dominated(&self, other: &Self) -> bool {
-        // Solution is dominated by other solution iff it is greater or equal in all objectives, with at least one objective being strictly greater
-        let dominance_relation = self.objectives.partial_cmp(&other.objectives);
-        return dominance_relation == Some(std::cmp::Ordering::Greater);
-    }
-
-    fn is_weakly_dominated(&self, other: &Self) -> bool {
-        // Solution is weakly dominated by other solution iff greater or equal in all objectives
-        let dominance_relation = self.objectives.partial_cmp(&other.objectives);
-        return (dominance_relation == Some(std::cmp::Ordering::Greater))
-            || (dominance_relation == Some(std::cmp::Ordering::Equal));
-    }
-
+// Implement ImageSet trait for ResidualSolution
+impl<const D: usize> ImageSet for ResidualSolution<D> {
     fn selected_images(&self) -> Vec<usize> {
         self.selected_images.clone()
-    }
-
-    fn unselected_images(&self) -> Vec<usize> {
-        // For ResidualSolution, this doesn't make much sense but we need to implement it
-        // Return empty vector since ResidualSolution only tracks selected images
-        Vec::new()
     }
 
     fn is_image_selected(&self, image_index: usize) -> bool {
@@ -99,46 +65,17 @@ impl<const D: usize> SIMSSolutionTrait<D> for ResidualSolution<D> {
         self.selected_images.len()
     }
 
-    fn clear_parts_counts(&self) -> &[usize] {
-        // ResidualSolution doesn't track this information
-        // Return empty slice as this operation doesn't make sense for ResidualSolution
-        &[]
+    fn set_image(&mut self, image_index: usize, selected: bool) {
+        if selected && !self.selected_images.contains(&image_index) {
+            self.selected_images.push(image_index);
+        } else if !selected {
+            self.selected_images.retain(|&x| x != image_index);
+        }
     }
+}
 
-    fn element_coverage(&self) -> &[usize] {
-        // ResidualSolution doesn't track this information
-        // Return empty slice as this operation doesn't make sense for ResidualSolution
-        &[]
-    }
-
-    fn add_image(&mut self, _image_index: usize, _problem: &Problem<D>) {
-        unimplemented!("ResidualSolution doesn't support dynamic modification")
-    }
-
-    fn remove_image(&mut self, _image_index: usize, _problem: &Problem<D>) {
-        unimplemented!("ResidualSolution doesn't support dynamic modification")
-    }
-
-    fn scaled_image_objective_deltas(
-        &self,
-        _images: &[usize],
-        _problem: &Problem<D>,
-    ) -> Vec<ScaledObjectiveDeltas> {
-        unimplemented!("ResidualSolution doesn't support scaled objective deltas computation")
-    }
-
-    fn find_best_image_to_add(&self, _problem: &Problem<D>) -> Option<usize> {
-        unimplemented!("ResidualSolution doesn't support dynamic modification")
-    }
-
-    fn find_best_image_to_remove(&self, _problem: &Problem<D>) -> Option<usize> {
-        unimplemented!("ResidualSolution doesn't support dynamic modification")
-    }
-
-    fn get_neighborhood(&self, _problem: &Problem<D>) -> Vec<Self> {
-        unimplemented!("ResidualSolution doesn't support neighborhood generation")
-    }
-
+// Implement SIMSCore trait for ResidualSolution
+impl<const D: usize> SIMSCore<D> for ResidualSolution<D> {
     fn to_debug_solution(&self) -> SIMSSolution {
         SIMSSolution {
             selected_images: self.selected_images.clone(),

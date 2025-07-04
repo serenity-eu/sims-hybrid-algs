@@ -1,14 +1,13 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use itertools::Itertools;
 use log::{debug, trace};
+use pareto::{HasObjectives, MoSolution};
 
 use crate::{
     problem::{Element, Image, Problem},
     residual_solution::ResidualSolution,
     solution::ResidualSolutionCapable,
-    solution_set::SolutionSet,
-    solution_set_impl::BTreeSolutionSet,
 };
 
 pub struct ResidualProblem<'a, S: ResidualSolutionCapable<D> + Clone, const D: usize> {
@@ -114,8 +113,7 @@ impl<'a, S: ResidualSolutionCapable<D> + Clone, const D: usize> ResidualProblem<
     }
 
     pub fn solve_with_backtracing(&mut self) -> MergedSolutionIter<'_, S, D> {
-        let mut non_dominated_residual_set: BTreeSolutionSet<ResidualSolution<D>, D> =
-            BTreeSolutionSet::new("residual".to_string());
+        let mut non_dominated_residual_set: BTreeSet<ResidualSolution<D>> = BTreeSet::new();
 
         let element_images = self
             .uncovered_elements
@@ -129,8 +127,20 @@ impl<'a, S: ResidualSolutionCapable<D> + Clone, const D: usize> ResidualProblem<
 
             let residual_solution = ResidualSolution::<D>::from_selected_images(unique_cover, self);
 
-            if !non_dominated_residual_set.contains(&residual_solution) {
-                let was_added = non_dominated_residual_set.try_add(&residual_solution);
+            // Simple dominance check - only add if not dominated by existing solutions
+            let is_dominated = non_dominated_residual_set
+                .iter()
+                .any(|existing| residual_solution.is_dominated_by(existing.objectives()));
+
+            if !is_dominated {
+                let was_added = !non_dominated_residual_set.contains(&residual_solution);
+                if was_added {
+                    // Remove solutions dominated by the new one
+                    non_dominated_residual_set.retain(|existing| {
+                        !existing.is_dominated_by(residual_solution.objectives())
+                    });
+                    non_dominated_residual_set.insert(residual_solution.clone());
+                }
                 trace!("#####################################################");
                 trace!(
                     "######### RESIDUAL: OBJECTIVES {:?} | IMAGES {:?} {} #########################",
@@ -204,8 +214,7 @@ impl<'a, S: ResidualSolutionCapable<D> + Clone, const D: usize> ResidualProblem<
             })
         });
 
-        let mut non_dominated_residual_set: BTreeSolutionSet<ResidualSolution> =
-            BTreeSolutionSet::new("residual".to_string());
+        let mut non_dominated_residual_set: BTreeSet<ResidualSolution<D>> = BTreeSet::new();
 
         let mut subset_storage = [bitarr![0; MAX_IMAGES]; K];
         let mut current_indices = [0; K];
@@ -235,7 +244,19 @@ impl<'a, S: ResidualSolutionCapable<D> + Clone, const D: usize> ResidualProblem<
                 let residual_solution = ResidualSolution::<D>::from_selected_images(selected_images.clone(), self);
 
                 if !non_dominated_residual_set.contains(&residual_solution) {
-                    let was_added = non_dominated_residual_set.try_add(&residual_solution);
+                // Simple dominance check - only add if not dominated by existing solutions
+                let is_dominated = non_dominated_residual_set
+                    .iter()
+                    .any(|existing| residual_solution.is_dominated_by(existing.objectives()));
+
+                let was_added = if !is_dominated {
+                    // Remove solutions dominated by the new one
+                    non_dominated_residual_set.retain(|existing| !existing.is_dominated_by(residual_solution.objectives()));
+                    non_dominated_residual_set.insert(residual_solution.clone());
+                    true
+                } else {
+                    false
+                };
                     trace!("#####################################################");
                     trace!(
                         "######### RESIDUAL: OBJECTIVES {:?} | IMAGES {:?} {} #########################",
@@ -258,8 +279,7 @@ impl<'a, S: ResidualSolutionCapable<D> + Clone, const D: usize> ResidualProblem<
     */
 
     pub fn solve(&mut self) -> MergedSolutionIter<'_, S, D> {
-        let mut non_dominated_residual_set: BTreeSolutionSet<ResidualSolution<D>, D> =
-            BTreeSolutionSet::new("residual".to_string());
+        let mut non_dominated_residual_set: BTreeSet<ResidualSolution<D>> = BTreeSet::new();
 
         let images_indices = (0..self.all_images.len()).collect::<Vec<_>>();
 
@@ -293,7 +313,24 @@ impl<'a, S: ResidualSolutionCapable<D> + Clone, const D: usize> ResidualProblem<
             let selected_images: Vec<usize> = image_combination.iter().copied().copied().collect();
             let residual_solution =
                 ResidualSolution::<D>::from_selected_images(selected_images, self);
-            let was_added = non_dominated_residual_set.try_add(&residual_solution);
+
+            // Simple dominance check - only add if not dominated by existing solutions
+            let is_dominated = non_dominated_residual_set
+                .iter()
+                .any(|existing| residual_solution.is_dominated_by(existing.objectives()));
+
+            let was_added = if !is_dominated
+                && !non_dominated_residual_set.contains(&residual_solution)
+            {
+                // Remove solutions dominated by the new one
+                non_dominated_residual_set
+                    .retain(|existing| !existing.is_dominated_by(residual_solution.objectives()));
+                non_dominated_residual_set.insert(residual_solution.clone());
+                true
+            } else {
+                false
+            };
+
             trace!("#####################################################");
             trace!(
                 "######### RESIDUAL: OBJECTIVES {:?} | IMAGES {:?} {} #########################",

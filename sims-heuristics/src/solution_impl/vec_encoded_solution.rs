@@ -1,7 +1,7 @@
 use itertools::Itertools;
 use itertools::MinMaxResult::{MinMax, NoElements, OneElement};
 use log::{error, trace};
-use pareto::{HasObjectives, MoSolution};
+use pareto::{HasObjectives, MoSolution, Random};
 use rand::SeedableRng;
 use rand::{Rng, seq::IteratorRandom};
 use std::{collections::BinaryHeap, fmt::Debug, hash::Hash, vec};
@@ -10,7 +10,9 @@ use crate::objectives;
 use crate::problem::{ComparableImage, ImageObjectiveDeltas, Problem, ScaledObjectiveDeltas};
 use crate::residual_problem::ResidualProblem;
 use crate::residual_solution::ResidualSolution;
-use crate::solution::{SIMSSolution, SIMSSolutionTrait, VecEncodedSolution};
+use crate::solution::{
+    ImageSet, SIMSConstructible, SIMSCore, SIMSModifiable, SIMSSolution, VecEncodedSolution,
+};
 use crate::timer::Timer;
 use crate::util::IntersectionIterator;
 
@@ -79,86 +81,10 @@ impl<const D: usize> HasObjectives<D> for VecEncodedSolution<D> {
 
 impl<const D: usize> MoSolution<D> for VecEncodedSolution<D> {}
 
-impl<const D: usize> SIMSSolutionTrait<D> for VecEncodedSolution<D> {
-    /// Generate a random feasible solution (choose element randomly, then choose image randomly from those that contain the element iff it is not already covered by another image)
-    fn random_with_seed(problem: &Problem<D>, seed: u64) -> Self {
-        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-        let mut selected_images = vec![false; problem.images.len()];
-        let mut covered_elements = vec![false; problem.universe.len()];
-        let mut num_covered_elements = 0;
-        let mut clear_parts_counts = vec![0; problem.universe.len()];
-        let mut part_coverage_counts = vec![0; problem.universe.len()];
-
-        while num_covered_elements < problem.universe.len() {
-            let element_index = rng.random_range(0..problem.universe.len());
-            if covered_elements[element_index] {
-                continue;
-            }
-
-            // Choose random image that covers the element
-            let image_index = problem.universe[element_index]
-                .images
-                .iter()
-                .filter(|&image_index| !selected_images[*image_index])
-                .choose(&mut rng)
-                .unwrap();
-            selected_images[*image_index] = true;
-
-            // Mark all elements of the image as covered
-            problem.images[*image_index].parts.iter().for_each(|&part| {
-                if !covered_elements[part] {
-                    covered_elements[part] = true;
-                    num_covered_elements += 1;
-                }
-                part_coverage_counts[part] += 1;
-            });
-
-            // Mark cloudy parts
-            problem.images[*image_index]
-                .clear_parts
-                .iter()
-                .for_each(|&clear_part| {
-                    clear_parts_counts[clear_part] += 1;
-                });
-        }
-
-        let mut sims_solution = Self {
-            selected_images,
-            objectives: [0; D],
-            clear_parts_counts,
-            element_coverage: part_coverage_counts,
-        };
-        sims_solution.compute_objectives(problem);
-        sims_solution
-    }
-
-    fn random(problem: &Problem<D>) -> Self {
-        return Self::random_with_seed(problem, rand::random());
-    }
-
-    fn from_selected_images(selected_images_vec: &[usize], problem: &Problem<D>) -> Self {
-        Self::from_selected_images(selected_images_vec, problem)
-    }
-
-    fn is_dominated(&self, other: &Self) -> bool {
-        // Solution is dominated by other solution iff it is greater or equal in all objectives, with at least one objective being strictly greater
-        let dominance_relation = self.objectives.partial_cmp(&other.objectives);
-        return dominance_relation == Some(std::cmp::Ordering::Greater);
-    }
-
-    fn is_weakly_dominated(&self, other: &Self) -> bool {
-        // Solution is weakly dominated by other solution iff it is greater or equal in all objectives
-        let dominance_relation = self.objectives.partial_cmp(&other.objectives);
-        return (dominance_relation == Some(std::cmp::Ordering::Greater))
-            || (dominance_relation == Some(std::cmp::Ordering::Equal));
-    }
-
+// Implement ImageSet trait
+impl<const D: usize> ImageSet for VecEncodedSolution<D> {
     fn selected_images(&self) -> Vec<usize> {
         SelectedImagesIter::new(&self.selected_images).collect()
-    }
-
-    fn unselected_images(&self) -> Vec<usize> {
-        UnselectedImagesIter::new(&self.selected_images).collect()
     }
 
     fn is_image_selected(&self, image_index: usize) -> bool {
@@ -167,6 +93,65 @@ impl<const D: usize> SIMSSolutionTrait<D> for VecEncodedSolution<D> {
 
     fn num_selected_images(&self) -> usize {
         self.selected_images.iter().filter(|&&x| x).count()
+    }
+
+    fn set_image(&mut self, image_index: usize, selected: bool) {
+        self.selected_images[image_index] = selected;
+    }
+}
+
+// Implement SIMSCore trait
+impl<const D: usize> SIMSCore<D> for VecEncodedSolution<D> {
+    fn to_debug_solution(&self) -> SIMSSolution {
+        self.as_sims_solution()
+    }
+}
+
+// Implement Random trait from pareto
+impl<const D: usize> Random for VecEncodedSolution<D> {
+    fn random() -> Self {
+        panic!("VecEncodedSolution::random() needs a Problem parameter")
+    }
+
+    fn random_with_seed(_seed: u64) -> Self {
+        panic!("VecEncodedSolution::random_with_seed() needs a Problem parameter")
+    }
+}
+
+// Implement SIMSConstructible trait
+impl<const D: usize> SIMSConstructible<D> for VecEncodedSolution<D> {
+    fn from_selected_images(selected_images_vec: &[usize], problem: &Problem<D>) -> Self {
+        Self::from_selected_images(selected_images_vec, problem)
+    }
+
+    fn random_with_problem(problem: &Problem<D>) -> Self {
+        Self::random(problem)
+    }
+
+    fn random_with_problem_and_seed(problem: &Problem<D>, seed: u64) -> Self {
+        Self::random_with_seed(problem, seed)
+    }
+}
+
+// Add utility methods for random generation that work with Problem
+impl<const D: usize> VecEncodedSolution<D> {
+    /// Generate a random solution with problem parameter
+    #[must_use]
+    pub fn random_with_problem(problem: &Problem<D>) -> Self {
+        Self::random(problem)
+    }
+
+    /// Generate a random solution with seed and problem parameter
+    #[must_use]
+    pub fn random_with_problem_and_seed(problem: &Problem<D>, seed: u64) -> Self {
+        Self::random_with_seed(problem, seed)
+    }
+}
+
+// Implement SIMSModifiable trait
+impl<const D: usize> SIMSModifiable<D> for VecEncodedSolution<D> {
+    fn unselected_images(&self) -> Vec<usize> {
+        UnselectedImagesIter::new(&self.selected_images).collect()
     }
 
     fn clear_parts_counts(&self) -> &[usize] {
@@ -249,10 +234,6 @@ impl<const D: usize> SIMSSolutionTrait<D> for VecEncodedSolution<D> {
 
         self.neighborhood(k, problem, &timer, is_deterministic)
     }
-
-    fn to_debug_solution(&self) -> SIMSSolution {
-        self.as_sims_solution()
-    }
 }
 
 impl<const D: usize> VecEncodedSolution<D> {
@@ -277,6 +258,69 @@ impl<const D: usize> VecEncodedSolution<D> {
             solution.add_image(image_index, problem);
         }
         solution
+    }
+
+    /// Generate a random feasible solution (choose element randomly, then choose image randomly from those that contain the element iff it is not already covered by another image)
+    ///
+    /// # Panics
+    ///
+    /// Panics if there is no image that covers an uncovered element (i.e., `.choose(&mut rng).unwrap()` fails).
+    #[must_use]
+    pub fn random_with_seed(problem: &Problem<D>, seed: u64) -> Self {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        let mut selected_images = vec![false; problem.images.len()];
+        let mut covered_elements = vec![false; problem.universe.len()];
+        let mut num_covered_elements = 0;
+        let mut clear_parts_counts = vec![0; problem.universe.len()];
+        let mut part_coverage_counts = vec![0; problem.universe.len()];
+
+        while num_covered_elements < problem.universe.len() {
+            let element_index = rng.random_range(0..problem.universe.len());
+            if covered_elements[element_index] {
+                continue;
+            }
+
+            // Choose random image that covers the element
+            let image_index = problem.universe[element_index]
+                .images
+                .iter()
+                .filter(|&image_index| !selected_images[*image_index])
+                .choose(&mut rng)
+                .unwrap();
+            selected_images[*image_index] = true;
+
+            // Mark all elements of the image as covered
+            problem.images[*image_index].parts.iter().for_each(|&part| {
+                if !covered_elements[part] {
+                    covered_elements[part] = true;
+                    num_covered_elements += 1;
+                }
+                part_coverage_counts[part] += 1;
+            });
+
+            // Mark cloudy parts
+            problem.images[*image_index]
+                .clear_parts
+                .iter()
+                .for_each(|&clear_part| {
+                    clear_parts_counts[clear_part] += 1;
+                });
+        }
+
+        let mut sims_solution = Self {
+            selected_images,
+            objectives: [0; D],
+            clear_parts_counts,
+            element_coverage: part_coverage_counts,
+        };
+        sims_solution.compute_objectives(problem);
+        sims_solution
+    }
+
+    /// Generate a random feasible solution
+    #[must_use]
+    pub fn random(problem: &Problem<D>) -> Self {
+        Self::random_with_seed(problem, rand::random())
     }
 
     /// Compute the objectives of the solution

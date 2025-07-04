@@ -104,12 +104,12 @@ where
     }
 
     fn random(size: usize, problem: &Problem<2>) -> Self {
-        let random_iter = (0..size).map(|_| T::random(problem));
+        let random_iter = (0..size).map(|_| T::random_with_problem(problem));
         return Self::from_iter(random_iter);
     }
 
     fn random_with_seed(size: usize, problem: &Problem<2>, seed: u64) -> Self {
-        let random_iter = (0..size).map(|_| T::random_with_seed(problem, seed));
+        let random_iter = (0..size).map(|_| T::random_with_problem_and_seed(problem, seed));
         return Self::from_iter(random_iter);
     }
 

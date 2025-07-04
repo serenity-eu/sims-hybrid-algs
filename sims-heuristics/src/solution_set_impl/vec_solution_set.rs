@@ -46,7 +46,7 @@ where
         let potentially_dominated_solutions = &self.vec_set[start_index..];
         for (index, potentially_dominated) in potentially_dominated_solutions.iter().enumerate() {
             let original_index = start_index + index;
-            if potentially_dominated.is_weakly_dominated(solution) {
+            if potentially_dominated.is_covered_by(solution.objectives()) {
                 to_remove.push(original_index);
             }
         }
@@ -85,7 +85,7 @@ where
                 }
                 if self.vec_set[..first_equal_pos]
                     .iter()
-                    .any(|s| solution.is_weakly_dominated(s))
+                    .any(|s| solution.is_covered_by(s.objectives()))
                 {
                     return false;
                 }
@@ -105,12 +105,12 @@ where
     }
 
     fn random(size: usize, problem: &crate::problem::Problem<D>) -> Self {
-        let random_iter = (0..size).map(|_| T::random(problem));
+        let random_iter = (0..size).map(|_| T::random_with_problem(problem));
         return Self::from_iter(random_iter);
     }
 
     fn random_with_seed(size: usize, problem: &crate::problem::Problem<D>, seed: u64) -> Self {
-        let random_iter = (0..size).map(|_| T::random_with_seed(problem, seed));
+        let random_iter = (0..size).map(|_| T::random_with_problem_and_seed(problem, seed));
         return Self::from_iter(random_iter);
     }
 
