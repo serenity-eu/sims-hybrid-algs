@@ -153,10 +153,6 @@ impl<const D: usize> SIMSSolutionTrait<D> for VecEncodedSolution<D> {
             || (dominance_relation == Some(std::cmp::Ordering::Equal));
     }
 
-    fn objectives_tuple(&self) -> pareto::Objectives<D> {
-        self.objectives
-    }
-
     fn selected_images(&self) -> Vec<usize> {
         SelectedImagesIter::new(&self.selected_images).collect()
     }
