@@ -40,9 +40,6 @@ pub trait SIMSSolutionTrait<const D: usize>:
     /// Check if this solution is weakly dominated by another
     fn is_weakly_dominated(&self, other: &Self) -> bool;
 
-    /// Get the objectives as a tuple (for compatibility)
-    fn objectives_tuple(&self) -> pareto::Objectives<D>;
-
     /// Get vector of selected image indices
     fn selected_images(&self) -> Vec<usize>;
 

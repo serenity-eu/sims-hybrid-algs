@@ -81,10 +81,6 @@ impl<const D: usize> SIMSSolutionTrait<D> for ResidualSolution<D> {
             || (dominance_relation == Some(std::cmp::Ordering::Equal));
     }
 
-    fn objectives_tuple(&self) -> pareto::Objectives<D> {
-        self.objectives
-    }
-
     fn selected_images(&self) -> Vec<usize> {
         self.selected_images.clone()
     }

@@ -18,62 +18,9 @@ mod bitset_impl {
         MinMaxResult::{MinMax, NoElements, OneElement},
     };
 
-    // Iterator types for BitsetEncodedSolution
-    pub struct BitsetSelectedImagesIter<'a> {
-        bitset: &'a FixedBitSet,
-        index: usize,
-    }
-
-    impl BitsetSelectedImagesIter<'_> {
-        #[must_use]
-        pub const fn new(bitset: &FixedBitSet) -> BitsetSelectedImagesIter<'_> {
-            BitsetSelectedImagesIter { bitset, index: 0 }
-        }
-    }
-
-    impl Iterator for BitsetSelectedImagesIter<'_> {
-        type Item = usize;
-
-        fn next(&mut self) -> Option<Self::Item> {
-            while self.index < self.bitset.len() {
-                if self.bitset[self.index] {
-                    let result = Some(self.index);
-                    self.index += 1;
-                    return result;
-                }
-                self.index += 1;
-            }
-            None
-        }
-    }
-
-    pub struct BitsetUnselectedImagesIter<'a> {
-        bitset: &'a FixedBitSet,
-        index: usize,
-    }
-
-    impl BitsetUnselectedImagesIter<'_> {
-        #[must_use]
-        pub const fn new(bitset: &FixedBitSet) -> BitsetUnselectedImagesIter<'_> {
-            BitsetUnselectedImagesIter { bitset, index: 0 }
-        }
-    }
-
-    impl Iterator for BitsetUnselectedImagesIter<'_> {
-        type Item = usize;
-
-        fn next(&mut self) -> Option<Self::Item> {
-            while self.index < self.bitset.len() {
-                if !self.bitset[self.index] {
-                    let result = Some(self.index);
-                    self.index += 1;
-                    return result;
-                }
-                self.index += 1;
-            }
-            None
-        }
-    }
+    // Iterator types for BitsetEncodedSolution - leverage FixedBitSet's built-in iterators
+    pub type BitsetSelectedImagesIter<'a> = fixedbitset::Ones<'a>;
+    pub type BitsetUnselectedImagesIter<'a> = fixedbitset::Zeroes<'a>;
 
     impl<const D: usize> HasObjectives<D> for BitsetEncodedSolution<D> {
         fn objectives(&self) -> &pareto::Objectives<D> {
@@ -158,16 +105,12 @@ mod bitset_impl {
                 || (dominance_relation == Some(std::cmp::Ordering::Equal));
         }
 
-        fn objectives_tuple(&self) -> pareto::Objectives<D> {
-            self.objectives
-        }
-
         fn selected_images(&self) -> Vec<usize> {
-            BitsetSelectedImagesIter::new(&self.selected_images).collect()
+            self.selected_images.ones().collect()
         }
 
         fn unselected_images(&self) -> Vec<usize> {
-            BitsetUnselectedImagesIter::new(&self.selected_images).collect()
+            self.selected_images.zeroes().collect()
         }
 
         fn is_image_selected(&self, image_index: usize) -> bool {
@@ -203,8 +146,7 @@ mod bitset_impl {
         }
 
         fn find_best_image_to_add(&self, problem: &Problem<D>) -> Option<usize> {
-            let unselected: Vec<usize> =
-                BitsetUnselectedImagesIter::new(&self.selected_images).collect();
+            let unselected: Vec<usize> = self.selected_images.zeroes().collect();
             if unselected.is_empty() {
                 return None;
             }
@@ -226,8 +168,7 @@ mod bitset_impl {
         }
 
         fn find_best_image_to_remove(&self, problem: &Problem<D>) -> Option<usize> {
-            let selected: Vec<usize> =
-                BitsetSelectedImagesIter::new(&self.selected_images).collect();
+            let selected: Vec<usize> = self.selected_images.ones().collect();
             if selected.is_empty() {
                 return None;
             }
@@ -261,7 +202,7 @@ mod bitset_impl {
 
         fn to_debug_solution(&self) -> SIMSSolution {
             SIMSSolution {
-                selected_images: BitsetSelectedImagesIter::new(&self.selected_images).collect(),
+                selected_images: self.selected_images.ones().collect(),
             }
         }
     }
@@ -424,14 +365,14 @@ mod bitset_impl {
 
         /// Returns iterator over indices of selected images of solution
         #[must_use]
-        pub const fn selected_images(&self) -> BitsetSelectedImagesIter<'_> {
-            BitsetSelectedImagesIter::new(&self.selected_images)
+        pub fn selected_images(&self) -> BitsetSelectedImagesIter<'_> {
+            self.selected_images.ones()
         }
 
         /// Returns iterator over indices of unselected images of solution
         #[must_use]
-        const fn unselected_images(&self) -> BitsetUnselectedImagesIter<'_> {
-            BitsetUnselectedImagesIter::new(&self.selected_images)
+        pub fn unselected_images(&self) -> BitsetUnselectedImagesIter<'_> {
+            self.selected_images.zeroes()
         }
 
         /// Remove image at index i
@@ -672,7 +613,7 @@ mod bitset_impl {
         #[must_use]
         pub fn as_sims_solution(&self) -> SIMSSolution {
             SIMSSolution {
-                selected_images: BitsetSelectedImagesIter::new(&self.selected_images).collect(),
+                selected_images: self.selected_images.ones().collect(),
             }
         }
 
