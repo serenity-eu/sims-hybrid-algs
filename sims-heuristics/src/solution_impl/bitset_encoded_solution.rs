@@ -9,7 +9,7 @@ mod bitset_impl {
     use rand::{Rng, seq::IteratorRandom};
     use std::{collections::BinaryHeap, fmt::Debug, hash::Hash};
 
-    use crate::objectives;
+    use crate::objectives::{self, SolutionEvaluator};
     use crate::problem::{ComparableImage, ImageObjectiveDeltas, Problem, ScaledObjectiveDeltas};
     use crate::residual_problem::ResidualProblem;
     use crate::solution::{
@@ -17,14 +17,22 @@ mod bitset_impl {
     };
     use crate::timer::Timer;
     use crate::util::IntersectionIterator;
-    use itertools::{
-        Itertools,
-        MinMaxResult::{MinMax, NoElements, OneElement},
-    };
+    use itertools::Itertools;
 
     // Iterator types for BitsetEncodedSolution - leverage FixedBitSet's built-in iterators
     pub type BitsetSelectedImagesIter<'a> = fixedbitset::Ones<'a>;
     pub type BitsetUnselectedImagesIter<'a> = fixedbitset::Zeroes<'a>;
+
+    // Implement SolutionEvaluator trait for BitsetEncodedSolution
+    impl<const D: usize> SolutionEvaluator<D> for BitsetEncodedSolution<D> {
+        fn clear_parts_counts(&self) -> &[usize] {
+            &self.clear_parts_counts
+        }
+
+        fn element_coverage(&self) -> &[usize] {
+            &self.element_coverage
+        }
+    }
 
     impl<const D: usize> HasObjectives<D> for BitsetEncodedSolution<D> {
         fn objectives(&self) -> &pareto::Objectives<D> {
@@ -59,6 +67,10 @@ mod bitset_impl {
             SIMSSolution {
                 selected_images: self.selected_images.ones().collect(),
             }
+        }
+
+        fn objectives_mut(&mut self) -> &mut pareto::Objectives<D> {
+            &mut self.objectives
         }
     }
 
@@ -114,7 +126,7 @@ mod bitset_impl {
             &self,
             images: &[usize],
             problem: &Problem<D>,
-        ) -> Vec<ScaledObjectiveDeltas> {
+        ) -> Vec<ScaledObjectiveDeltas<D>> {
             self.scaled_image_objective_deltas_impl(images.iter().copied(), problem)
         }
 
@@ -130,10 +142,8 @@ mod bitset_impl {
 
             let min_index = (0..scaled_objective_deltas.len()).min_by(|&i, &j| {
                 // Use first component of scaled objectives
-                scaled_objective_deltas[i]
-                    .scaled_objectives
-                    .0
-                    .partial_cmp(&scaled_objective_deltas[j].scaled_objectives.0)
+                scaled_objective_deltas[i].scaled_deltas[0]
+                    .partial_cmp(&scaled_objective_deltas[j].scaled_deltas[0])
                     .unwrap()
             })?;
 
@@ -152,10 +162,8 @@ mod bitset_impl {
 
             let max_index = (0..scaled_objective_deltas.len()).max_by(|&i, &j| {
                 // Use first component of scaled objectives
-                scaled_objective_deltas[i]
-                    .scaled_objectives
-                    .0
-                    .partial_cmp(&scaled_objective_deltas[j].scaled_objectives.0)
+                scaled_objective_deltas[i].scaled_deltas[0]
+                    .partial_cmp(&scaled_objective_deltas[j].scaled_deltas[0])
                     .unwrap()
             })?;
 
@@ -261,9 +269,8 @@ mod bitset_impl {
 
         /// Compute the objectives of the solution
         fn compute_objectives(&mut self, problem: &Problem<D>) {
-            assert!(D == 2, "BitsetEncodedSolution only supports D = 2 for now");
-            self.objectives[0] = self.total_cost(problem);
-            self.objectives[1] = self.cloudy_area(problem);
+            // Use the new generic objective calculation system
+            self.recalculate_objectives(problem);
         }
 
         /// Compute area covered by clouds
@@ -413,14 +420,14 @@ mod bitset_impl {
                 self.are_objectives_valid(problem),
                 "Objectives are invalid before removing image"
             );
-            let cost_delta = self.cost_delta(i, problem);
-            let cloudy_area_delta = self.cloudy_area_delta(i, problem);
-            assert!(D == 2, "BitsetEncodedSolution only supports D = 2 for now");
-            let mut deltas = [0; D];
-            deltas[0] = cost_delta;
-            deltas[1] = cloudy_area_delta;
 
+            // Use the new generic objective delta calculation
+            let mut deltas = [0i64; D];
+            for (obj_index, delta) in deltas.iter_mut().enumerate().take(D) {
+                *delta = self.calculate_objective_delta(obj_index, i, problem);
+            }
             objectives::apply_delta(&mut self.objectives, &deltas);
+
             problem.images[i].parts.iter().for_each(|&part| {
                 self.element_coverage[part] -= 1;
             });
@@ -440,9 +447,13 @@ mod bitset_impl {
 
         /// Add image at index i
         pub fn add_image(&mut self, i: usize, problem: &Problem<D>) {
-            let cost_delta = self.cost_delta(i, problem);
-            let cloudy_area_delta = self.cloudy_area_delta(i, problem);
-            objectives::apply_delta_2d(&mut self.objectives, (cost_delta, cloudy_area_delta));
+            // Use the new generic objective delta calculation
+            let mut deltas = [0i64; D];
+            for (obj_index, delta) in deltas.iter_mut().enumerate().take(D) {
+                *delta = self.calculate_objective_delta(obj_index, i, problem);
+            }
+            objectives::apply_delta(&mut self.objectives, &deltas);
+
             problem.images[i].parts.iter().for_each(|&part| {
                 self.element_coverage[part] += 1;
             });
@@ -465,8 +476,8 @@ mod bitset_impl {
 
         /// Generate random weights for objectives
         #[must_use]
-        pub fn generate_weights(&self) -> (f32, f32) {
-            return objectives::generate_weights_2d();
+        pub fn generate_weights(&self) -> [f32; D] {
+            return objectives::generate_weights::<D>();
         }
 
         /// Create residual problem, composed of removed images, candidates to be added, and images covering the rest of the uncovered elements.
@@ -539,13 +550,15 @@ mod bitset_impl {
                 return None;
             }
 
-            let weights: (f32, f32) = if is_deterministic {
-                (0.5, 0.5)
+            let weights: [f32; D] = if is_deterministic {
+                // For deterministic mode, use equal weights
+                let equal_weight = 1.0 / D as f32;
+                [equal_weight; D]
             } else {
                 self.generate_weights()
             };
 
-            let unselected_images_scaled_deltas: Vec<ScaledObjectiveDeltas> =
+            let unselected_images_scaled_deltas: Vec<ScaledObjectiveDeltas<D>> =
                 self.scaled_image_objective_deltas(&unselected_images, problem);
 
             let mut comparable_unselected_images = unselected_images_scaled_deltas
@@ -566,9 +579,10 @@ mod bitset_impl {
                         }
                     }
 
-                    let comparision_heur_key = scaled_objective_deltas.scaled_objectives.0
-                        * weights.0
-                        + scaled_objective_deltas.scaled_objectives.1 * weights.1;
+                    let comparision_heur_key = objectives::weighted_sum_f32(
+                        &scaled_objective_deltas.scaled_deltas,
+                        &weights,
+                    );
 
                     Some(ComparableImage {
                         index: scaled_objective_deltas.image_index,
@@ -602,14 +616,16 @@ mod bitset_impl {
             problem: &Problem<D>,
             is_deterministic: bool,
         ) -> Vec<usize> {
-            let weights: (f32, f32) = if is_deterministic {
-                (0.5, 0.5)
+            let weights: [f32; D] = if is_deterministic {
+                // For deterministic mode, use equal weights
+                let equal_weight = 1.0 / D as f32;
+                [equal_weight; D]
             } else {
                 self.generate_weights()
             };
 
             let selected_images: Vec<usize> = self.selected_images().collect();
-            let selected_images_scaled_deltas: Vec<ScaledObjectiveDeltas> =
+            let selected_images_scaled_deltas: Vec<ScaledObjectiveDeltas<D>> =
                 self.scaled_image_objective_deltas(&selected_images, problem);
 
             let comparable_selected_images: BinaryHeap<ComparableImage> =
@@ -619,10 +635,10 @@ mod bitset_impl {
                         let image = &problem.images[scaled_image_deltas.image_index];
                         let covered_elements_count = image.parts.len();
 
-                        let comparision_heur_key = (scaled_image_deltas.scaled_objectives.0
-                            * weights.0
-                            + scaled_image_deltas.scaled_objectives.1 * weights.1)
-                            / covered_elements_count as f32;
+                        let comparision_heur_key = objectives::weighted_sum_f32(
+                            &scaled_image_deltas.scaled_deltas,
+                            &weights,
+                        ) / covered_elements_count as f32;
                         return ComparableImage {
                             index: scaled_image_deltas.image_index,
                             key: (100_000.0 * comparision_heur_key) as usize,
@@ -643,39 +659,6 @@ mod bitset_impl {
             SIMSSolution {
                 selected_images: self.selected_images.ones().collect(),
             }
-        }
-
-        fn cloudy_area_delta(&self, image_index: usize, problem: &Problem<D>) -> i64 {
-            let mut cloudy_area_delta: i64 = 0;
-            if self.selected_images[image_index] {
-                problem.images[image_index]
-                    .clear_parts
-                    .iter()
-                    .for_each(|&clear_part| {
-                        // If this is the last image with clear part covering the element, add element area to delta
-                        if self.clear_parts_counts[clear_part] == 1 {
-                            cloudy_area_delta += problem.universe[clear_part].area as i64;
-                        }
-                    });
-            } else {
-                problem.images[image_index]
-                    .clear_parts
-                    .iter()
-                    .for_each(|&clear_part| {
-                        // If this is the first image with clear part covering the element, subtract element area from delta
-                        if self.clear_parts_counts[clear_part] == 0 {
-                            cloudy_area_delta -= problem.universe[clear_part].area as i64;
-                        }
-                    });
-            }
-            return cloudy_area_delta;
-        }
-
-        fn cost_delta(&self, image_index: usize, problem: &Problem<D>) -> i64 {
-            if self.selected_images[image_index] {
-                return -(problem.images[image_index].cost() as i64);
-            }
-            return problem.images[image_index].cost() as i64;
         }
 
         /// Explore neighborhood of size k
@@ -724,57 +707,56 @@ mod bitset_impl {
             &self,
             images: I,
             problem: &Problem<D>,
-        ) -> Vec<ScaledObjectiveDeltas> {
-            let raw_comparable_images: Vec<ImageObjectiveDeltas> = images
-                .map(|image_index| ImageObjectiveDeltas {
-                    image_index,
-                    deltas: (
-                        self.cost_delta(image_index, problem),
-                        self.cloudy_area_delta(image_index, problem),
-                    ),
+        ) -> Vec<ScaledObjectiveDeltas<D>> {
+            let raw_comparable_images: Vec<ImageObjectiveDeltas<D>> = images
+                .map(|image_index| {
+                    // Use the new generic objective delta calculation system
+                    let mut deltas = [0i64; D];
+                    for (obj_index, delta) in deltas.iter_mut().enumerate().take(D) {
+                        *delta = self.calculate_objective_delta(obj_index, image_index, problem);
+                    }
+                    ImageObjectiveDeltas {
+                        image_index,
+                        deltas,
+                    }
                 })
                 .collect();
 
-            let cost_min_max = raw_comparable_images
-                .iter()
-                .minmax_by_key(|&image| image.deltas.0);
-            let (min_cost, max_cost) = match cost_min_max {
-                MinMax(min_cost_image, max_cost_image) => {
-                    (min_cost_image.deltas.0, max_cost_image.deltas.0)
-                }
-                OneElement(min_max_cost_image) => {
-                    (min_max_cost_image.deltas.0, min_max_cost_image.deltas.0)
-                }
-                NoElements => panic!("No elements in cost_min_max"),
-            };
+            // Calculate min/max for each objective dimension
+            let mut min_deltas = [i64::MAX; D];
+            let mut max_deltas = [i64::MIN; D];
 
-            let cloudy_area_min_max = raw_comparable_images
-                .iter()
-                .minmax_by_key(|&image| image.deltas.1);
-            let (min_cloudy_area, max_cloudy_area) = match cloudy_area_min_max {
-                MinMax(min_cloudy_area_image, max_cloudy_area_image) => (
-                    min_cloudy_area_image.deltas.1,
-                    max_cloudy_area_image.deltas.1,
-                ),
-                OneElement(min_max_cloudy_area_image) => (
-                    min_max_cloudy_area_image.deltas.1,
-                    min_max_cloudy_area_image.deltas.1,
-                ),
-                NoElements => panic!("No elements in cloudy_area_min_max"),
-            };
-            let cost_range = max_cost - min_cost;
-            let cloudy_area_range = max_cloudy_area - min_cloudy_area;
+            for image_deltas in &raw_comparable_images {
+                for (i, &delta) in image_deltas.deltas.iter().enumerate() {
+                    min_deltas[i] = min_deltas[i].min(delta);
+                    max_deltas[i] = max_deltas[i].max(delta);
+                }
+            }
+
+            // Calculate ranges for scaling
+            let mut ranges = [1i64; D]; // Default to 1 to avoid division by zero
+            for i in 0..D {
+                let range = max_deltas[i] - min_deltas[i];
+                if range > 0 {
+                    ranges[i] = range;
+                }
+            }
 
             raw_comparable_images
                 .iter()
                 .map(|objective_deltas| {
-                    let scaled_obj0 =
-                        (objective_deltas.deltas.0 - min_cost) as f32 / cost_range as f32;
-                    let scaled_obj1 = (objective_deltas.deltas.1 - min_cloudy_area) as f32
-                        / cloudy_area_range as f32;
+                    let mut scaled_deltas = [0.0f32; D];
+                    let raw_deltas = objective_deltas.deltas;
+
+                    for i in 0..D {
+                        scaled_deltas[i] =
+                            (raw_deltas[i] - min_deltas[i]) as f32 / ranges[i] as f32;
+                    }
+
                     ScaledObjectiveDeltas {
                         image_index: objective_deltas.image_index,
-                        scaled_objectives: (scaled_obj0, scaled_obj1),
+                        raw_deltas,
+                        scaled_deltas,
                     }
                 })
                 .collect()

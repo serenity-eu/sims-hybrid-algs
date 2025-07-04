@@ -1,4 +1,5 @@
 use crate::{
+    objectives::SolutionEvaluator,
     residual_problem::ResidualProblem,
     solution::{ImageSet, ResidualSolutionCapable, SIMSCore, SIMSSolution},
 };
@@ -80,6 +81,25 @@ impl<const D: usize> SIMSCore<D> for ResidualSolution<D> {
         SIMSSolution {
             selected_images: self.selected_images.clone(),
         }
+    }
+
+    fn objectives_mut(&mut self) -> &mut pareto::Objectives<D> {
+        &mut self.objectives
+    }
+}
+
+// Implement SolutionEvaluator trait for ResidualSolution
+impl<const D: usize> SolutionEvaluator<D> for ResidualSolution<D> {
+    fn clear_parts_counts(&self) -> &[usize] {
+        // ResidualSolution doesn't maintain clear_parts_counts
+        // Return empty slice as it's not used in residual solution context
+        &[]
+    }
+
+    fn element_coverage(&self) -> &[usize] {
+        // ResidualSolution doesn't maintain element_coverage
+        // Return empty slice as it's not used in residual solution context
+        &[]
     }
 }
 
