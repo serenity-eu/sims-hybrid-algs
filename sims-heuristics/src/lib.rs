@@ -57,6 +57,8 @@
 pub mod explored_solutions_data;
 pub mod objectives;
 pub mod pareto_local_search;
+#[cfg(feature = "plotting")]
+pub mod plotting;
 pub mod problem;
 pub mod residual_problem;
 pub mod residual_solution;
@@ -66,6 +68,3 @@ pub mod solution_set;
 pub mod solution_set_impl;
 pub mod timer;
 pub mod util;
-
-#[cfg(test)]
-mod test_generic_objectives;
