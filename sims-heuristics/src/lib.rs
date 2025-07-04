@@ -25,6 +25,7 @@ pub mod problem;
 pub mod residual_problem;
 pub mod residual_solution;
 pub mod solution;
+pub mod solution_impl;
 pub mod solution_set;
 pub mod solution_set_impl;
 pub mod timer;

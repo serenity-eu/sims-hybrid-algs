@@ -9,7 +9,7 @@ use log::{debug, error, info};
 use crate::{
     explored_solutions_data::ExploredSolutionsData,
     problem::Problem,
-    solution::{VecEncodedSolution, SIMSSolutionTrait},
+    solution::{EncodedSolution, SIMSSolutionTrait},
     solution_set::SolutionSet,
     timer::Timer,
 };
@@ -49,7 +49,7 @@ struct IterationMetrics {
 
 pub struct ParetoLocalSearch<'a, S, const D: usize>
 where
-    S: SolutionSet<'a, VecEncodedSolution<D>, D> + Clone,
+    S: SolutionSet<'a, EncodedSolution<D>, D> + Clone,
 {
     /// Reference to problem instance
     problem: &'a Problem<D>,
@@ -79,7 +79,7 @@ pub enum StepStatus {
 
 impl<'a, S, const D: usize> ParetoLocalSearch<'a, S, D>
 where
-    S: SolutionSet<'a, VecEncodedSolution<D>, D> + Clone,
+    S: SolutionSet<'a, EncodedSolution<D>, D> + Clone,
 {
     pub fn new(
         problem: &'a Problem<D>,
@@ -182,7 +182,7 @@ where
         }
     }
 
-    fn log_solution_debug(index: usize, solution: &VecEncodedSolution<D>) {
+    fn log_solution_debug(index: usize, solution: &EncodedSolution<D>) {
         debug!("######################################################");
         debug!("######## SOLUTION {} ########", index + 1);
         debug!("######## {solution:?} ########");
@@ -195,9 +195,9 @@ where
     )]
     fn process_neighbor(
         &mut self,
-        neighbor: &VecEncodedSolution<D>,
+        neighbor: &EncodedSolution<D>,
         neighbor_index: usize,
-        current_solution: &VecEncodedSolution<D>,
+        current_solution: &EncodedSolution<D>,
         iteration: usize,
         timer: &Timer,
         step_stats: &mut StepStats,
@@ -237,9 +237,9 @@ where
     )]
     fn evaluate_neighbor(
         &mut self,
-        neighbor: &VecEncodedSolution<D>,
+        neighbor: &EncodedSolution<D>,
         neighbor_index: usize,
-        current_solution: &VecEncodedSolution<D>,
+        current_solution: &EncodedSolution<D>,
         iteration: usize,
         timer: &Timer,
         step_stats: &mut StepStats,
@@ -262,7 +262,7 @@ where
 
     fn try_add_to_pareto_set(
         &mut self,
-        neighbor: &VecEncodedSolution<D>,
+        neighbor: &EncodedSolution<D>,
         neighbor_index: usize,
         iteration: usize,
         timer: &Timer,
@@ -288,7 +288,7 @@ where
     }
 
     fn try_add_to_auxiliary_population(
-        neighbor: &VecEncodedSolution<D>,
+        neighbor: &EncodedSolution<D>,
         neighbor_index: usize,
         step_stats: &mut StepStats,
         auxiliary_population: &mut S,

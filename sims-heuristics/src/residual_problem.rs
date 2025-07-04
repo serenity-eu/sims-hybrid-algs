@@ -6,14 +6,14 @@ use log::{debug, trace};
 use crate::{
     problem::{Element, Image, Problem},
     residual_solution::ResidualSolution,
-    solution::VecEncodedSolution,
+    solution::ResidualSolutionCapable,
     solution_set::SolutionSet,
     solution_set_impl::BTreeSolutionSet,
 };
 
-pub struct ResidualProblem<'a, const D: usize> {
+pub struct ResidualProblem<'a, S: ResidualSolutionCapable<D> + Clone, const D: usize> {
     /// Original solutions with unmodified image only
-    pub unmodified_solution: VecEncodedSolution<D>,
+    pub unmodified_solution: S,
     /// Images - candidates to be removed
     pub removal_candidates_indices: Vec<usize>,
     /// All images participating in residual problem
@@ -26,10 +26,10 @@ pub struct ResidualProblem<'a, const D: usize> {
     pub problem: &'a Problem<D>,
 }
 
-impl<'a, const D: usize> ResidualProblem<'a, D> {
+impl<'a, S: ResidualSolutionCapable<D> + Clone, const D: usize> ResidualProblem<'a, S, D> {
     #[must_use]
     pub fn new(
-        unmodified_solution: VecEncodedSolution<D>,
+        unmodified_solution: S,
         removal_candidates_original_indices: Vec<usize>,
         addition_candidates: Vec<usize>,
         uncovered_elements_indices: Vec<usize>,
@@ -113,7 +113,7 @@ impl<'a, const D: usize> ResidualProblem<'a, D> {
         }
     }
 
-    pub fn solve_with_backtracing(&mut self) -> MergedSolutionIter<'_, D> {
+    pub fn solve_with_backtracing(&mut self) -> MergedSolutionIter<'_, S, D> {
         let mut non_dominated_residual_set: BTreeSolutionSet<ResidualSolution<D>, D> =
             BTreeSolutionSet::new("residual".to_string());
 
@@ -257,7 +257,7 @@ impl<'a, const D: usize> ResidualProblem<'a, D> {
     }
     */
 
-    pub fn solve(&mut self) -> MergedSolutionIter<'_, D> {
+    pub fn solve(&mut self) -> MergedSolutionIter<'_, S, D> {
         let mut non_dominated_residual_set: BTreeSolutionSet<ResidualSolution<D>, D> =
             BTreeSolutionSet::new("residual".to_string());
 
@@ -324,15 +324,17 @@ impl<'a, const D: usize> ResidualProblem<'a, D> {
     }
 }
 
-pub struct MergedSolutionIter<'a, const D: usize> {
-    unmodified_solution: &'a VecEncodedSolution<D>,
+pub struct MergedSolutionIter<'a, S: ResidualSolutionCapable<D> + Clone, const D: usize> {
+    unmodified_solution: &'a S,
     solutions_iter: Vec<ResidualSolution<D>>,
-    residual_problem: &'a ResidualProblem<'a, D>,
+    residual_problem: &'a ResidualProblem<'a, S, D>,
     problem: &'a Problem<D>,
 }
 
-impl<const D: usize> Iterator for MergedSolutionIter<'_, D> {
-    type Item = VecEncodedSolution<D>;
+impl<S: ResidualSolutionCapable<D> + Clone, const D: usize> Iterator
+    for MergedSolutionIter<'_, S, D>
+{
+    type Item = S;
 
     fn next(&mut self) -> Option<Self::Item> {
         let residual_solution = self.solutions_iter.pop()?;

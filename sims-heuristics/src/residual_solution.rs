@@ -1,8 +1,13 @@
-use crate::{problem::Problem, residual_problem::ResidualProblem, solution::SIMSSolutionTrait};
+use crate::{
+    problem::{Problem, ScaledObjectiveDeltas},
+    residual_problem::ResidualProblem,
+    solution::{ResidualSolutionCapable, SIMSSolution, SIMSSolutionTrait},
+};
 use pareto::{HasObjectives, MoSolution};
 use std::fmt::Debug;
 
-#[derive(Clone, Eq)]
+#[derive(Clone, Eq, Hash)]
+#[allow(clippy::derived_hash_with_manual_eq)]
 pub struct ResidualSolution<const D: usize> {
     pub selected_images: Vec<usize>,
     pub objectives: pareto::Objectives<D>,
@@ -57,6 +62,12 @@ impl<const D: usize> SIMSSolutionTrait<D> for ResidualSolution<D> {
         unimplemented!()
     }
 
+    fn from_selected_images(_selected_images_vec: &[usize], _problem: &Problem<D>) -> Self {
+        unimplemented!(
+            "ResidualSolution should be created using from_selected_images with ResidualProblem"
+        )
+    }
+
     fn is_dominated(&self, other: &Self) -> bool {
         // Solution is dominated by other solution iff it is greater or equal in all objectives, with at least one objective being strictly greater
         let dominance_relation = self.objectives.partial_cmp(&other.objectives);
@@ -73,13 +84,77 @@ impl<const D: usize> SIMSSolutionTrait<D> for ResidualSolution<D> {
     fn objectives_tuple(&self) -> pareto::Objectives<D> {
         self.objectives
     }
+
+    fn selected_images(&self) -> Vec<usize> {
+        self.selected_images.clone()
+    }
+
+    fn unselected_images(&self) -> Vec<usize> {
+        // For ResidualSolution, this doesn't make much sense but we need to implement it
+        // Return empty vector since ResidualSolution only tracks selected images
+        Vec::new()
+    }
+
+    fn is_image_selected(&self, image_index: usize) -> bool {
+        self.selected_images.contains(&image_index)
+    }
+
+    fn num_selected_images(&self) -> usize {
+        self.selected_images.len()
+    }
+
+    fn clear_parts_counts(&self) -> &[usize] {
+        // ResidualSolution doesn't track this information
+        // Return empty slice as this operation doesn't make sense for ResidualSolution
+        &[]
+    }
+
+    fn element_coverage(&self) -> &[usize] {
+        // ResidualSolution doesn't track this information
+        // Return empty slice as this operation doesn't make sense for ResidualSolution
+        &[]
+    }
+
+    fn add_image(&mut self, _image_index: usize, _problem: &Problem<D>) {
+        unimplemented!("ResidualSolution doesn't support dynamic modification")
+    }
+
+    fn remove_image(&mut self, _image_index: usize, _problem: &Problem<D>) {
+        unimplemented!("ResidualSolution doesn't support dynamic modification")
+    }
+
+    fn scaled_image_objective_deltas(
+        &self,
+        _images: &[usize],
+        _problem: &Problem<D>,
+    ) -> Vec<ScaledObjectiveDeltas> {
+        unimplemented!("ResidualSolution doesn't support scaled objective deltas computation")
+    }
+
+    fn find_best_image_to_add(&self, _problem: &Problem<D>) -> Option<usize> {
+        unimplemented!("ResidualSolution doesn't support dynamic modification")
+    }
+
+    fn find_best_image_to_remove(&self, _problem: &Problem<D>) -> Option<usize> {
+        unimplemented!("ResidualSolution doesn't support dynamic modification")
+    }
+
+    fn get_neighborhood(&self, _problem: &Problem<D>) -> Vec<Self> {
+        unimplemented!("ResidualSolution doesn't support neighborhood generation")
+    }
+
+    fn to_debug_solution(&self) -> SIMSSolution {
+        SIMSSolution {
+            selected_images: self.selected_images.clone(),
+        }
+    }
 }
 
 impl<const D: usize> ResidualSolution<D> {
     #[must_use]
-    pub fn from_selected_images(
+    pub fn from_selected_images<S: ResidualSolutionCapable<D> + Clone>(
         selected_images: Vec<usize>,
-        residual_problem: &ResidualProblem<D>,
+        residual_problem: &ResidualProblem<S, D>,
     ) -> Self {
         let mut solution = Self {
             selected_images,
@@ -89,7 +164,10 @@ impl<const D: usize> ResidualSolution<D> {
         solution
     }
 
-    fn compute_objectives(&mut self, residual_problem: &ResidualProblem<D>) {
+    fn compute_objectives<S: ResidualSolutionCapable<D> + Clone>(
+        &mut self,
+        residual_problem: &ResidualProblem<S, D>,
+    ) {
         // Compute cost as sum of costs of selected images
         let cost: u64 = self
             .selected_images

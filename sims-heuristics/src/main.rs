@@ -14,7 +14,7 @@ use std::{
 
 use pls::pareto_local_search::ParetoLocalSearch;
 use pls::solution_set_impl::BTreeSolutionSet;
-use pls::{problem::Problem, solution::VecEncodedSolution, solution_set::SolutionSet};
+use pls::{problem::Problem, solution::EncodedSolution, solution_set::SolutionSet};
 
 const INITIAL_POPULATION_SIZE: usize = 100;
 const MAX_ITERATIONS: usize = 50000;
@@ -107,7 +107,7 @@ fn main() {
     let sims_problem_instance = Problem::<NUM_OBJECTIVES>::from_minizinc_datafile(&args.problem);
 
     debug!("Initializing initial solution set");
-    let initial_solution_set: BTreeSolutionSet<VecEncodedSolution<NUM_OBJECTIVES>, NUM_OBJECTIVES> =
+    let initial_solution_set: BTreeSolutionSet<EncodedSolution<NUM_OBJECTIVES>, NUM_OBJECTIVES> =
         if let Some(initial_population_csv) = &args.initial_population {
             debug!(
                 "Loading initial solutions from file: {}",
@@ -168,7 +168,7 @@ fn main() {
     #[cfg(feature = "plotting")]
     plotting::draw_solutions_plot(&pareto_local_search.explored_solutions);
 
-    let final_solutions: Vec<VecEncodedSolution<NUM_OBJECTIVES>> =
+    let final_solutions: Vec<EncodedSolution<NUM_OBJECTIVES>> =
         final_solution_set.into_iter().collect();
 
     let non_dominated_points = pareto_local_search.explored_solutions.non_dominated();
