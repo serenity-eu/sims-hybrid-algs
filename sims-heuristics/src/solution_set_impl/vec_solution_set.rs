@@ -77,7 +77,13 @@ where
             Ok(_) => return false,
             Err(position) => {
                 let mut first_equal_pos = position;
-                let current_objective = self.vec_set[position].objectives()[0];
+                // Use first objective for sorting (this maintains compatibility with existing sort behavior)
+                let current_objective = if position < self.vec_set.len() {
+                    self.vec_set[position].objectives()[0]
+                } else {
+                    // If position is at the end, use the last element's objective
+                    self.vec_set[self.vec_set.len() - 1].objectives()[0]
+                };
                 while first_equal_pos > 0
                     && self.vec_set[first_equal_pos - 1].objectives()[0] == current_objective
                 {

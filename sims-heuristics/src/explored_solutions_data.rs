@@ -55,11 +55,15 @@ impl<const D: usize> From<&SolutionFingerprint<D>> for SolutionPoint<D> {
     }
 }
 
+/// Data structure for tracking explored solutions during optimization.
+///
+/// This structure stores solution fingerprints with their objectives, iteration counts,
+/// and timing information. It supports generic dimensionality for objective spaces.
 pub struct ExploredSolutionsData<const D: usize> {
     pub solutions: HashMap<u64, SolutionFingerprint<D>>,
     pub num_iterations: usize,
-    pub max_cost: u64,
-    pub max_cloudy_area: u64,
+    /// Maximum values for each objective dimension, used for plotting bounds and normalization
+    pub max_objectives: [u64; D],
     pub pareto_front_snapshots: Vec<ParetoFrontSnapshot>,
 }
 
@@ -82,12 +86,11 @@ impl ParetoFrontSnapshot {
 
 impl<const D: usize> ExploredSolutionsData<D> {
     #[must_use]
-    pub fn new(max_cost: u64, max_cloudy_area: u64) -> Self {
+    pub fn new(max_objectives: [u64; D]) -> Self {
         Self {
             solutions: HashMap::new(),
             num_iterations: 0,
-            max_cost,
-            max_cloudy_area,
+            max_objectives,
             pareto_front_snapshots: Vec::new(),
         }
     }
@@ -225,5 +228,17 @@ impl<const D: usize> ExploredSolutionsData<D> {
             .collect();
         let pareto_front_snapshot = ParetoFrontSnapshot::new(iteration, elapsed, solutions);
         self.pareto_front_snapshots.push(pareto_front_snapshot);
+    }
+
+    /// Get the maximum value for a specific objective index
+    #[must_use]
+    pub const fn max_objective(&self, index: usize) -> u64 {
+        self.max_objectives[index]
+    }
+
+    /// Get all maximum objective values
+    #[must_use]
+    pub const fn max_objectives(&self) -> &[u64; D] {
+        &self.max_objectives
     }
 }

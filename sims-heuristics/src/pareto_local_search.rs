@@ -86,9 +86,8 @@ where
         is_deterministic: bool,
     ) -> Self {
         let mut population = S::new("population".to_string());
-        // TODO: Hardcoded for 2 objectives, should be generalized
-        let mut explored_solutions =
-            ExploredSolutionsData::<D>::new(problem.max_objectives[0], problem.max_objectives[1]);
+        // Initialize ExploredSolutionsData with the problem's max objectives array
+        let mut explored_solutions = ExploredSolutionsData::<D>::new(problem.max_objectives);
         initial_population.iter().for_each(|solution| {
             if population.try_add(solution) {
                 explored_solutions.register(0, solution, Duration::from_secs(0));

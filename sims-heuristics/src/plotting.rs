@@ -2,8 +2,15 @@ use plotters::prelude::*;
 #[cfg(feature = "plotting")]
 use pls::explored_solutions_data::ExploredSolutionsData;
 
+/// Draw a 2D solutions plot for visualization of pareto fronts.
+///
+/// This function assumes the objectives are 2-dimensional and plots the first two objectives.
+/// For problems with D != 2, only the first two objectives will be visualized.
 #[cfg(feature = "plotting")]
 pub fn draw_solutions_plot<const D: usize>(solutions_data: &ExploredSolutionsData<D>) {
+    // Note: This plotting function is designed for 2D visualization
+    // For higher-dimensional objectives, only the first two will be plotted
+
     // let rainbow_colormap = DerivedColorMap::new(&[RED, ORANGE, YELLOW, GREEN, BLUE, PURPLE]);
     // let num_iterations = solutions_data.num_iterations + 1;
     let root_drawing_area = SVGBackend::new("test.svg", (1024, 768)).into_drawing_area();
@@ -17,14 +24,15 @@ pub fn draw_solutions_plot<const D: usize>(solutions_data: &ExploredSolutionsDat
         .caption("Pareto Local Search", ("Arial", 30))
         .set_label_area_size(LabelAreaPosition::Left, 50)
         .set_label_area_size(LabelAreaPosition::Bottom, 40)
-        // .build_cartesian_2d(0..(solutions_data.max_cost as i32), 0..(solutions_data.max_cloudy_area as i32))
+        // .build_cartesian_2d(0..(solutions_data.max_objective(0) as i32), 0..(solutions_data.max_objective(1) as i32))
         .build_cartesian_2d(0u64..12_000_000u64, 0u64..4_000_000u64)
         .unwrap();
 
     chart_ctx
         .configure_mesh()
-        .x_desc("Cost")
-        .y_desc("Cloudy area")
+        // Use generic labels that work for any objective types
+        .x_desc("Objective 1")
+        .y_desc("Objective 2")
         .draw()
         .unwrap();
 

@@ -5,7 +5,10 @@ use std::hash::Hash;
 #[cfg(feature = "bitmaps")]
 use fixedbitset::FixedBitSet;
 
-use crate::problem::{Problem, ScaledObjectiveDeltas};
+use crate::{
+    objectives::SolutionEvaluator,
+    problem::{Problem, ScaledObjectiveDeltas},
+};
 
 // Re-export solution implementations
 pub use crate::solution_impl::*;
@@ -30,6 +33,7 @@ pub trait SIMSCore<const D: usize>:
     HasObjectives<D>
     + MoSolution<D>
     + ImageSet
+    + SolutionEvaluator<D>
     + Clone
     + Eq
     + PartialEq
@@ -42,6 +46,98 @@ pub trait SIMSCore<const D: usize>:
 {
     /// Convert to debug representation
     fn to_debug_solution(&self) -> SIMSSolution;
+
+    /// Get mutable reference to objectives (for internal use)
+    fn objectives_mut(&mut self) -> &mut pareto::Objectives<D>;
+
+    /// Calculate value for a specific objective using the new generic system
+    fn calculate_objective(&self, obj_index: usize, problem: &Problem<D>) -> u64 {
+        problem.get_objective_definition(obj_index).map_or_else(
+            || match obj_index {
+                0 => self
+                    .selected_images()
+                    .iter()
+                    .map(|&i| problem.images[i].cost())
+                    .sum(),
+                1 => {
+                    let mut clear_elements = vec![false; problem.universe.len()];
+                    for &image_index in &self.selected_images() {
+                        for &clear_part in &problem.images[image_index].clear_parts {
+                            clear_elements[clear_part] = true;
+                        }
+                    }
+                    clear_elements
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(element_index, &is_clear)| {
+                            if is_clear {
+                                None
+                            } else {
+                                Some(problem.universe[element_index].area)
+                            }
+                        })
+                        .sum()
+                }
+                _ => panic!("Legacy system only supports objectives 0 and 1"),
+            },
+            |obj_def| obj_def.calculate_value(self, problem),
+        )
+    }
+
+    /// Calculate delta for a specific objective when adding/removing an image
+    fn calculate_objective_delta(
+        &self,
+        obj_index: usize,
+        image_index: usize,
+        problem: &Problem<D>,
+    ) -> i64 {
+        problem.get_objective_definition(obj_index).map_or_else(
+            || {
+                // Fallback to legacy calculation for backward compatibility
+                let is_selected = self.is_image_selected(image_index);
+                match obj_index {
+                    0 => {
+                        // Cost delta
+                        if is_selected {
+                            -(problem.images[image_index].cost() as i64)
+                        } else {
+                            problem.images[image_index].cost() as i64
+                        }
+                    }
+                    1 => {
+                        // Cloudy area delta
+                        let mut cloudy_area_delta: i64 = 0;
+                        if is_selected {
+                            for &clear_part in &problem.images[image_index].clear_parts {
+                                if self.clear_parts_counts()[clear_part] == 1 {
+                                    cloudy_area_delta += problem.universe[clear_part].area as i64;
+                                }
+                            }
+                        } else {
+                            for &clear_part in &problem.images[image_index].clear_parts {
+                                if self.clear_parts_counts()[clear_part] == 0 {
+                                    cloudy_area_delta -= problem.universe[clear_part].area as i64;
+                                }
+                            }
+                        }
+                        cloudy_area_delta
+                    }
+                    _ => panic!("Legacy system only supports objectives 0 and 1"),
+                }
+            },
+            |obj_def| {
+                let is_selected = self.is_image_selected(image_index);
+                obj_def.calculate_delta(image_index, is_selected, self, problem)
+            },
+        )
+    }
+
+    /// Recalculate all objectives from scratch using the new generic system
+    fn recalculate_objectives(&mut self, problem: &Problem<D>) {
+        for i in 0..D {
+            self.objectives_mut()[i] = self.calculate_objective(i, problem);
+        }
+    }
 }
 
 /// Trait for constructible solutions (not applicable to `ResidualSolution`)
@@ -78,7 +174,7 @@ pub trait SIMSModifiable<const D: usize>: SIMSCore<D> {
         &self,
         images: &[usize],
         problem: &Problem<D>,
-    ) -> Vec<ScaledObjectiveDeltas>;
+    ) -> Vec<ScaledObjectiveDeltas<D>>;
 
     /// Find the best image to add (for greedy algorithms)
     fn find_best_image_to_add(&self, problem: &Problem<D>) -> Option<usize>;

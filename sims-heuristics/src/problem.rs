@@ -3,20 +3,23 @@ use std::path::Path;
 use log::error;
 use regex::Regex;
 
-use crate::util::{DifferenceIterator, IntersectionIterator};
+use crate::{
+    objectives::{ObjectiveDefinition, ObjectiveType},
+    util::{DifferenceIterator, IntersectionIterator},
+};
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct SIMSProblemInstanceRaw {
-    name: String,
-    num_images: usize,
-    universe_size: usize,
-    images: Vec<Vec<usize>>,
-    costs: Vec<u64>,
-    clouds: Vec<Vec<usize>>,
-    areas: Vec<u64>,
-    max_cloud_area: u64,
-    resolution: Vec<u64>,
-    incidence_angle: Vec<u64>,
+    pub name: String,
+    pub num_images: usize,
+    pub universe_size: usize,
+    pub images: Vec<Vec<usize>>,
+    pub costs: Vec<u64>,
+    pub clouds: Vec<Vec<usize>>,
+    pub areas: Vec<u64>,
+    pub max_cloud_area: u64,
+    pub resolution: Vec<u64>,
+    pub incidence_angle: Vec<u64>,
 }
 
 fn parse_vec_of_sets(input_str: &str) -> Vec<Vec<usize>> {
@@ -192,15 +195,16 @@ pub struct Element {
 }
 
 #[derive(Clone)]
-pub struct ImageObjectiveDeltas {
+pub struct ImageObjectiveDeltas<const D: usize> {
     pub image_index: usize,
-    pub deltas: (i64, i64),
+    pub deltas: [i64; D],
 }
 
 #[derive(Clone)]
-pub struct ScaledObjectiveDeltas {
+pub struct ScaledObjectiveDeltas<const D: usize> {
     pub image_index: usize,
-    pub scaled_objectives: (f32, f32),
+    pub raw_deltas: [i64; D],
+    pub scaled_deltas: [f32; D],
 }
 
 #[derive(Clone, Eq, Debug)]
@@ -237,6 +241,10 @@ pub struct Problem<const D: usize> {
     pub images: Vec<Image>,
     /// Matrix of size of overlaps between images
     pub overlap_matrix: Vec<Vec<usize>>,
+    /// Legacy objective definitions (for backward compatibility)
+    pub objectives: Vec<ObjectiveType>,
+    /// Generic objective definitions (new system)
+    pub objective_definitions: Option<Vec<Box<dyn ObjectiveDefinition<D>>>>,
     /// Max values of objectives
     pub max_objectives: pareto::Objectives<D>,
 }
@@ -313,18 +321,135 @@ impl<const D: usize> Problem<D> {
         let max_cost: u64 = raw.costs.iter().sum();
         let max_cloudy_area = raw.max_cloud_area;
 
-        assert_eq!(D, 2, "Problem currently only supports 2D objectives");
+        assert_eq!(
+            D, 2,
+            "from_raw only supports 2D objectives - use ProblemBuilder for higher dimensions"
+        );
         let mut max_objectives = [0u64; D];
         max_objectives[0] = max_cost;
         max_objectives[1] = max_cloudy_area;
+
+        // Create default 2D objectives
+        let objectives = vec![
+            crate::objectives::ObjectiveType::TotalCost,
+            crate::objectives::ObjectiveType::CloudyArea,
+        ];
 
         Self {
             instance_name: raw.name,
             universe,
             images,
             overlap_matrix,
+            objectives,
+            objective_definitions: None, // Legacy constructor uses None
             max_objectives,
         }
+    }
+
+    /// Constructs a `Problem` from a raw SIMS problem instance with custom objective definitions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `Err` if the number of objectives does not match `D` or if any objective has an incorrect index.
+    pub fn from_raw_with_objective_definitions(
+        mut raw: SIMSProblemInstanceRaw,
+        objective_definitions: Vec<Box<dyn ObjectiveDefinition<D>>>,
+    ) -> Result<Self, String> {
+        // Normalize all indices to be zero-based (same as from_raw)
+        raw.images.iter_mut().for_each(|image| {
+            for index in image.iter_mut() {
+                *index -= 1;
+            }
+            image.sort_unstable();
+        });
+        raw.clouds.iter_mut().for_each(|image| {
+            for index in image.iter_mut() {
+                *index -= 1;
+            }
+            image.sort_unstable();
+        });
+
+        // Create universe (same as from_raw)
+        let mut universe = vec![Element::default(); raw.universe_size];
+        raw.images
+            .iter()
+            .enumerate()
+            .for_each(|(image_index, image)| {
+                for &element_index in image {
+                    universe[element_index].images.push(image_index);
+                }
+            });
+        raw.areas
+            .iter()
+            .enumerate()
+            .for_each(|(element_index, &area)| {
+                universe[element_index].area = area;
+            });
+
+        // Create images (same as from_raw)
+        let images: Vec<Image> = (0..raw.num_images)
+            .map(|image_index| {
+                let cost = raw.costs[image_index];
+                let clear_parts = raw.images[image_index]
+                    .iter()
+                    .difference(raw.clouds[image_index].iter())
+                    .copied()
+                    .collect();
+                let parts = raw.images[image_index].clone();
+                Image::new(image_index, cost, parts, clear_parts)
+            })
+            .collect();
+
+        // Create overlap matrix (same as from_raw)
+        let mut overlap_matrix: Vec<Vec<usize>> = vec![vec![0; raw.num_images]; raw.num_images];
+        for i in 0..raw.num_images {
+            for j in 0..=i {
+                let common_elements = raw.images[i]
+                    .iter()
+                    .intersection(raw.images[j].iter())
+                    .count();
+                overlap_matrix[i][j] = common_elements;
+                if i != j {
+                    overlap_matrix[j][i] = common_elements;
+                }
+            }
+        }
+
+        // Calculate max objectives using the provided objective definitions
+        let mut max_objectives = [0u64; D];
+        for (i, obj_def) in objective_definitions.iter().enumerate() {
+            // Create a dummy problem to calculate max values
+            let dummy_problem = Self {
+                instance_name: raw.name.clone(),
+                universe: universe.clone(),
+                images: images.clone(),
+                overlap_matrix: overlap_matrix.clone(),
+                objectives: vec![], // Empty for dummy
+                objective_definitions: None,
+                max_objectives: [0u64; D],
+            };
+            max_objectives[i] = obj_def.max_value(&dummy_problem);
+        }
+
+        // Create legacy objectives for backward compatibility
+        let legacy_objectives = if D == 2 {
+            vec![
+                crate::objectives::ObjectiveType::TotalCost,
+                crate::objectives::ObjectiveType::CloudyArea,
+            ]
+        } else {
+            vec![] // For non-2D problems, we don't have legacy objectives
+        };
+
+        Ok(Self {
+            instance_name: raw.name,
+            universe,
+            images,
+            overlap_matrix,
+            objectives: legacy_objectives,
+            objective_definitions: Some(objective_definitions),
+            max_objectives,
+        })
     }
 
     /// Load problem instance from minizinc data file
@@ -344,6 +469,69 @@ impl<const D: usize> Problem<D> {
     pub fn total_area(&self) -> u64 {
         self.universe.iter().map(|element| element.area).sum()
     }
+
+    /// Get objective by index
+    #[must_use]
+    pub fn objective(&self, index: usize) -> &ObjectiveType {
+        &self.objectives[index]
+    }
+
+    /// Get objective by ID
+    #[must_use]
+    pub fn objective_by_id(&self, id: &str) -> Option<&ObjectiveType> {
+        self.objectives.iter().find(|obj| obj.id() == id)
+    }
+
+    /// Get objective definition by index (new system)
+    #[must_use]
+    pub fn get_objective_definition(&self, index: usize) -> Option<&dyn ObjectiveDefinition<D>> {
+        self.objective_definitions
+            .as_ref()
+            .and_then(|defs| defs.get(index))
+            .map(std::convert::AsRef::as_ref)
+    }
+
+    /// Get objective definition by ID (new system)
+    #[must_use]
+    pub fn get_objective_definition_by_id(&self, id: &str) -> Option<&dyn ObjectiveDefinition<D>> {
+        self.objective_definitions.as_ref().and_then(|defs| {
+            defs.iter()
+                .find(|obj| obj.id() == id)
+                .map(std::convert::AsRef::as_ref)
+        })
+    }
+
+    /// Get number of objectives
+    #[must_use]
+    pub const fn num_objectives(&self) -> usize {
+        D
+    }
+
+    /// Get all objective names (from new system if available, otherwise legacy)
+    #[must_use]
+    pub fn objective_names(&self) -> Vec<&str> {
+        self.objective_definitions.as_ref().map_or_else(
+            || {
+                self.objectives
+                    .iter()
+                    .map(super::objectives::ObjectiveType::name)
+                    .collect()
+            },
+            |objective_definitions| objective_definitions.iter().map(|obj| obj.name()).collect(),
+        )
+    }
+
+    /// Check if using new objective system
+    #[must_use]
+    pub fn has_objective_definitions(&self) -> bool {
+        self.objective_definitions.is_some()
+    }
+
+    /// Create a builder for this problem
+    #[must_use]
+    pub fn builder(raw_data: SIMSProblemInstanceRaw) -> ProblemBuilder<D> {
+        ProblemBuilder::new(raw_data)
+    }
 }
 
 impl Default for Problem<2> {
@@ -353,7 +541,73 @@ impl Default for Problem<2> {
             universe: Vec::new(),
             images: Vec::new(),
             overlap_matrix: Vec::new(),
+            objectives: vec![
+                crate::objectives::ObjectiveType::TotalCost,
+                crate::objectives::ObjectiveType::CloudyArea,
+            ],
+            objective_definitions: None, // Default constructor uses None
             max_objectives: [0, 0],
+        }
+    }
+}
+
+/// Builder for constructing Problem instances with custom objectives
+pub struct ProblemBuilder<const D: usize> {
+    raw_data: SIMSProblemInstanceRaw,
+    objective_definitions: Option<Vec<Box<dyn ObjectiveDefinition<D>>>>,
+}
+
+impl<const D: usize> ProblemBuilder<D> {
+    /// Create a new builder from raw problem data
+    #[must_use]
+    pub fn new(raw_data: SIMSProblemInstanceRaw) -> Self {
+        Self {
+            raw_data,
+            objective_definitions: None,
+        }
+    }
+
+    /// Set the objective definitions for this problem
+    #[must_use]
+    pub fn with_objective_definitions(
+        mut self,
+        objectives: Vec<Box<dyn ObjectiveDefinition<D>>>,
+    ) -> Self {
+        self.objective_definitions = Some(objectives);
+        self
+    }
+
+    /// Build the final Problem instance
+    ///
+    /// # Errors
+    ///
+    /// Returns an `Err` if the number of objectives does not match `D` or if any objective has an incorrect index.
+    pub fn build(self) -> Result<Problem<D>, String> {
+        if let Some(objective_definitions) = self.objective_definitions {
+            if objective_definitions.len() != D {
+                return Err(format!(
+                    "Expected {} objectives, got {}",
+                    D,
+                    objective_definitions.len()
+                ));
+            }
+
+            // Validate objective indices
+            for (i, obj) in objective_definitions.iter().enumerate() {
+                if obj.objective_index() != i {
+                    return Err(format!(
+                        "Objective at position {} has incorrect index {}",
+                        i,
+                        obj.objective_index()
+                    ));
+                }
+            }
+
+            // Build problem with custom objectives
+            Problem::from_raw_with_objective_definitions(self.raw_data, objective_definitions)
+        } else {
+            // Use default objectives for backward compatibility
+            Ok(Problem::from_raw(self.raw_data))
         }
     }
 }
