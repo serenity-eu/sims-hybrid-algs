@@ -46,7 +46,7 @@ impl Debug for SIMSSolution {
 }
 
 #[derive(Clone, Eq)]
-pub struct EncodedSolution<const D: usize> {
+pub struct VecEncodedSolution<const D: usize> {
     selected_images: Vec<bool>,
     pub objectives: pareto::Objectives<D>,
     pub clear_parts_counts: Vec<usize>,
@@ -95,15 +95,15 @@ impl Iterator for UnselectedImagesIter<'_> {
     }
 }
 
-impl<const D: usize> HasObjectives<D> for EncodedSolution<D> {
+impl<const D: usize> HasObjectives<D> for VecEncodedSolution<D> {
     fn objectives(&self) -> &pareto::Objectives<D> {
         &self.objectives
     }
 }
 
-impl<const D: usize> MoSolution<D> for EncodedSolution<D> {}
+impl<const D: usize> MoSolution<D> for VecEncodedSolution<D> {}
 
-impl<const D: usize> SIMSSolutionTrait<D> for EncodedSolution<D> {
+impl<const D: usize> SIMSSolutionTrait<D> for VecEncodedSolution<D> {
     /// Generate a random feasible solution (choose element randomly, then choose image randomly from those that contain the element iff it is not already covered by another image)
     fn random_with_seed(problem: &Problem<D>, seed: u64) -> Self {
         let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
@@ -178,7 +178,7 @@ impl<const D: usize> SIMSSolutionTrait<D> for EncodedSolution<D> {
     }
 }
 
-impl<const D: usize> EncodedSolution<D> {
+impl<const D: usize> VecEncodedSolution<D> {
     /// Creates an `EncodedSolution` from a list of selected image indices.
     ///
     /// # Panics
@@ -744,26 +744,26 @@ impl<const D: usize> EncodedSolution<D> {
     clippy::non_canonical_partial_ord_impl,
     reason = "Compare only first objective"
 )]
-impl<const D: usize> PartialOrd for EncodedSolution<D> {
+impl<const D: usize> PartialOrd for VecEncodedSolution<D> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.objectives[0].partial_cmp(&other.objectives[0])
     }
 }
 
-impl<const D: usize> PartialEq for EncodedSolution<D> {
+impl<const D: usize> PartialEq for VecEncodedSolution<D> {
     fn eq(&self, other: &Self) -> bool {
         self.selected_images == other.selected_images
     }
 }
 
 /// Implement ordering for solutions (based on first objective)
-impl<const D: usize> Ord for EncodedSolution<D> {
+impl<const D: usize> Ord for VecEncodedSolution<D> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.objectives[0].cmp(&other.objectives[0])
     }
 }
 
-impl<const D: usize> Hash for EncodedSolution<D> {
+impl<const D: usize> Hash for VecEncodedSolution<D> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.selected_images.hash(state);
     }
@@ -774,7 +774,7 @@ impl<const D: usize> Hash for EncodedSolution<D> {
     clippy::missing_fields_in_debug,
     reason = "Custom Debug impl only shows relevant fields for readability"
 )]
-impl<const D: usize> Debug for EncodedSolution<D> {
+impl<const D: usize> Debug for VecEncodedSolution<D> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let selected_images = &self
             .selected_images

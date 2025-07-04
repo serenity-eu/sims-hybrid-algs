@@ -8,7 +8,7 @@ use std::{
 use log::{trace, warn};
 use pareto::Objectives;
 
-use crate::solution::EncodedSolution;
+use crate::solution::VecEncodedSolution;
 
 #[derive(Debug)]
 pub struct SolutionFingerprint<const D: usize> {
@@ -95,19 +95,19 @@ impl<const D: usize> ExploredSolutionsData<D> {
     #[must_use]
     pub fn get_solution_fingerprint(
         &self,
-        solution: &EncodedSolution<D>,
+        solution: &VecEncodedSolution<D>,
     ) -> Option<&SolutionFingerprint<D>> {
         let hash = Self::hash(solution);
         self.solutions.get(&hash)
     }
 
-    fn hash(solution: &EncodedSolution<D>) -> u64 {
+    fn hash(solution: &VecEncodedSolution<D>) -> u64 {
         let mut hasher = DefaultHasher::new();
         solution.hash(&mut hasher);
         hasher.finish()
     }
 
-    pub fn register(&mut self, iteration: usize, solution: &EncodedSolution<D>, time: Duration) {
+    pub fn register(&mut self, iteration: usize, solution: &VecEncodedSolution<D>, time: Duration) {
         let hash = Self::hash(solution);
 
         if let Entry::Vacant(e) = self.solutions.entry(hash) {
@@ -131,7 +131,7 @@ impl<const D: usize> ExploredSolutionsData<D> {
     /// Panics if the solution is not registered in the explored solutions set.
     pub fn update_explored_neighborhood_size(
         &mut self,
-        solution: &EncodedSolution<D>,
+        solution: &VecEncodedSolution<D>,
         explored_neighborhood_size: u32,
     ) {
         let hash = Self::hash(solution);
@@ -147,7 +147,7 @@ impl<const D: usize> ExploredSolutionsData<D> {
     /// # Panics
     ///
     /// Panics if the solution is not registered in the explored solutions set.
-    pub fn explored_neighborhood_size(&mut self, solution: &EncodedSolution<D>) -> u32 {
+    pub fn explored_neighborhood_size(&mut self, solution: &VecEncodedSolution<D>) -> u32 {
         let hash = Self::hash(solution);
         let entry = self
             .solutions
@@ -157,7 +157,7 @@ impl<const D: usize> ExploredSolutionsData<D> {
     }
 
     #[must_use]
-    pub fn is_registered(&self, solution: &EncodedSolution<D>) -> bool {
+    pub fn is_registered(&self, solution: &VecEncodedSolution<D>) -> bool {
         let hash = Self::hash(solution);
         self.solutions.contains_key(&hash)
     }
@@ -218,7 +218,7 @@ impl<const D: usize> ExploredSolutionsData<D> {
         elapsed: Duration,
         solutions: I,
     ) where
-        I: Iterator<Item = &'a EncodedSolution<D>>,
+        I: Iterator<Item = &'a VecEncodedSolution<D>>,
     {
         let solutions: Vec<Vec<usize>> = solutions
             .map(|solution| solution.selected_images().collect())

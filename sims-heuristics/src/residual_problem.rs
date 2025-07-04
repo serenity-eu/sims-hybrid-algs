@@ -6,14 +6,14 @@ use log::{debug, trace};
 use crate::{
     problem::{Element, Image, Problem},
     residual_solution::ResidualSolution,
-    solution::EncodedSolution,
+    solution::VecEncodedSolution,
     solution_set::SolutionSet,
     solution_set_impl::BTreeSolutionSet,
 };
 
 pub struct ResidualProblem<'a, const D: usize> {
     /// Original solutions with unmodified image only
-    pub unmodified_solution: EncodedSolution<D>,
+    pub unmodified_solution: VecEncodedSolution<D>,
     /// Images - candidates to be removed
     pub removal_candidates_indices: Vec<usize>,
     /// All images participating in residual problem
@@ -29,7 +29,7 @@ pub struct ResidualProblem<'a, const D: usize> {
 impl<'a, const D: usize> ResidualProblem<'a, D> {
     #[must_use]
     pub fn new(
-        unmodified_solution: EncodedSolution<D>,
+        unmodified_solution: VecEncodedSolution<D>,
         removal_candidates_original_indices: Vec<usize>,
         addition_candidates: Vec<usize>,
         uncovered_elements_indices: Vec<usize>,
@@ -325,14 +325,14 @@ impl<'a, const D: usize> ResidualProblem<'a, D> {
 }
 
 pub struct MergedSolutionIter<'a, const D: usize> {
-    unmodified_solution: &'a EncodedSolution<D>,
+    unmodified_solution: &'a VecEncodedSolution<D>,
     solutions_iter: Vec<ResidualSolution<D>>,
     residual_problem: &'a ResidualProblem<'a, D>,
     problem: &'a Problem<D>,
 }
 
 impl<const D: usize> Iterator for MergedSolutionIter<'_, D> {
-    type Item = EncodedSolution<D>;
+    type Item = VecEncodedSolution<D>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let residual_solution = self.solutions_iter.pop()?;

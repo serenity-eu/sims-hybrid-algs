@@ -10,13 +10,13 @@ use itertools::Itertools;
 use pls::{
     explored_solutions_data::ParetoFrontSnapshot,
     problem::{Problem, parse_set_of_vecs},
-    solution::EncodedSolution,
+    solution::VecEncodedSolution,
 };
 
 pub fn solution_list_from_csv<const D: usize>(
     path: &Path,
     probem_instance: &Problem<D>,
-) -> Vec<EncodedSolution<D>> {
+) -> Vec<VecEncodedSolution<D>> {
     let mut reader = ReaderBuilder::new()
         .delimiter(b';')
         .from_path(path)
@@ -35,14 +35,14 @@ pub fn solution_list_from_csv<const D: usize>(
     return selected_images_vecs
         .into_iter()
         .map(|selected_images| {
-            EncodedSolution::from_selected_images(&selected_images, probem_instance)
+            VecEncodedSolution::from_selected_images(&selected_images, probem_instance)
         })
         .collect();
 }
 
 pub fn append_solutions_to_csv<const D: usize>(
     path: &PathBuf,
-    solutions: &[EncodedSolution<D>],
+    solutions: &[VecEncodedSolution<D>],
     probem_instance: &Problem<D>,
     timeout_s: u64,
     solution_time_s: &[f32],
