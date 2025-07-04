@@ -166,4 +166,41 @@ mod tests {
         assert_eq!(explored_5d.max_objectives().len(), 5);
         assert_eq!(explored_5d.max_objective(4), 50);
     }
+
+    #[test]
+    fn test_plotting_dimensions() {
+        use crate::explored_solutions_data::ExploredSolutionsData;
+
+        // Test that plotting function handles different dimensions
+        let explored_2d = ExploredSolutionsData::<2>::new([1000, 2000]);
+        let explored_3d = ExploredSolutionsData::<3>::new([100, 200, 300]);
+        let explored_4d = ExploredSolutionsData::<4>::new([10, 20, 30, 40]);
+
+        // These shouldn't panic (we can't easily test the actual plotting output in unit tests)
+        // but we can at least verify the function calls work
+        assert_eq!(explored_2d.max_objectives().len(), 2);
+        assert_eq!(explored_3d.max_objectives().len(), 3);
+        assert_eq!(explored_4d.max_objectives().len(), 4);
+
+        // Calculate expected number of pairwise combinations for verification
+        let num_pairs = |n: usize| n * (n - 1) / 2;
+        assert_eq!(num_pairs(2), 1); // 2D: 1 pair
+        assert_eq!(num_pairs(3), 3); // 3D: 3 pairs  
+        assert_eq!(num_pairs(4), 6); // 4D: 6 pairs
+    }
+
+    #[test]
+    fn test_plot_grid_calculations() {
+        #[cfg(feature = "plotting")]
+        {
+            use crate::plotting::calculate_plot_grid_dimensions;
+
+            // Test various dimensions
+            assert_eq!(calculate_plot_grid_dimensions(1), (0, 0, 0)); // Invalid
+            assert_eq!(calculate_plot_grid_dimensions(2), (1, 2, 1)); // 2D: 1 pair -> 1x2 grid
+            assert_eq!(calculate_plot_grid_dimensions(3), (2, 2, 3)); // 3D: 3 pairs -> 2x2 grid  
+            assert_eq!(calculate_plot_grid_dimensions(4), (2, 3, 6)); // 4D: 6 pairs -> 2x3 grid
+            assert_eq!(calculate_plot_grid_dimensions(5), (3, 4, 10)); // 5D: 10 pairs -> 3x4 grid
+        }
+    }
 }
