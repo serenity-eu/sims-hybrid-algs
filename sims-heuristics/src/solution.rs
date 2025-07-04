@@ -1,4 +1,4 @@
-use pareto::{HasObjectives, MoSolution};
+use pareto::{HasObjectives, MoSolution, Random};
 use std::fmt::Debug;
 use std::hash::Hash;
 
@@ -10,11 +10,26 @@ use crate::problem::{Problem, ScaledObjectiveDeltas};
 // Re-export solution implementations
 pub use crate::solution_impl::*;
 
-/// Core trait for SIMS solutions that provides all necessary operations
-/// This trait makes the codebase agnostic to the specific solution implementation
-pub trait SIMSSolutionTrait<const D: usize>:
+/// Trait for image set operations - applicable to all solution types
+pub trait ImageSet {
+    /// Get vector of selected image indices
+    fn selected_images(&self) -> Vec<usize>;
+
+    /// Check if an image is selected
+    fn is_image_selected(&self, image_index: usize) -> bool;
+
+    /// Get the number of selected images
+    fn num_selected_images(&self) -> usize;
+
+    /// Set an image's selection state
+    fn set_image(&mut self, image_index: usize, selected: bool);
+}
+
+/// Core trait for basic SIMS solution operations that all solution types must support
+pub trait SIMSCore<const D: usize>:
     HasObjectives<D>
     + MoSolution<D>
+    + ImageSet
     + Clone
     + Eq
     + PartialEq
@@ -25,32 +40,26 @@ pub trait SIMSSolutionTrait<const D: usize>:
     + Send
     + Sync
 {
-    /// Generate a random feasible solution
-    fn random(problem: &Problem<D>) -> Self;
+    /// Convert to debug representation
+    fn to_debug_solution(&self) -> SIMSSolution;
+}
 
-    /// Generate a random feasible solution with a specific seed
-    fn random_with_seed(problem: &Problem<D>, seed: u64) -> Self;
-
+/// Trait for constructible solutions (not applicable to `ResidualSolution`)
+pub trait SIMSConstructible<const D: usize>: SIMSCore<D> + Random {
     /// Create solution from selected image indices
     fn from_selected_images(selected_images: &[usize], problem: &Problem<D>) -> Self;
 
-    /// Check if this solution is dominated by another
-    fn is_dominated(&self, other: &Self) -> bool;
+    /// Generate a random feasible solution
+    fn random_with_problem(problem: &Problem<D>) -> Self;
 
-    /// Check if this solution is weakly dominated by another
-    fn is_weakly_dominated(&self, other: &Self) -> bool;
+    /// Generate a random feasible solution with a specific seed
+    fn random_with_problem_and_seed(problem: &Problem<D>, seed: u64) -> Self;
+}
 
-    /// Get vector of selected image indices
-    fn selected_images(&self) -> Vec<usize>;
-
+/// Trait for solutions that support modification operations (not applicable to `ResidualSolution`)
+pub trait SIMSModifiable<const D: usize>: SIMSCore<D> {
     /// Get vector of unselected image indices
     fn unselected_images(&self) -> Vec<usize>;
-
-    /// Check if an image is selected
-    fn is_image_selected(&self, image_index: usize) -> bool;
-
-    /// Get the number of selected images
-    fn num_selected_images(&self) -> usize;
 
     /// Get the clear parts counts
     fn clear_parts_counts(&self) -> &[usize];
@@ -79,9 +88,18 @@ pub trait SIMSSolutionTrait<const D: usize>:
 
     /// Get neighborhood solutions for local search
     fn get_neighborhood(&self, problem: &Problem<D>) -> Vec<Self>;
+}
 
-    /// Convert to debug representation (replaces `SIMSSolution` conversion)
-    fn to_debug_solution(&self) -> SIMSSolution;
+/// Combined trait for full encoded solutions (`VecEncodedSolution` and `BitsetEncodedSolution`)
+pub trait SIMSSolutionTrait<const D: usize>:
+    SIMSCore<D> + SIMSConstructible<D> + SIMSModifiable<D>
+{
+}
+
+/// Automatic implementation for types that implement all required traits
+impl<T, const D: usize> SIMSSolutionTrait<D> for T where
+    T: SIMSCore<D> + SIMSConstructible<D> + SIMSModifiable<D>
+{
 }
 
 /// Trait for solutions that can work with residual problems

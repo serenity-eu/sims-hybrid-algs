@@ -40,7 +40,8 @@ where
         let size_before = self.btree_set.len();
 
         // TODO: Can we use range() to iterate over only subset of the solution set?
-        self.btree_set.retain(|s| !s.is_dominated(solution));
+        self.btree_set
+            .retain(|s| !s.is_dominated_by(solution.objectives()));
 
         let size_after = self.btree_set.len();
         if size_before != size_after {
@@ -73,7 +74,7 @@ where
             .btree_set
             // .range(..solution)
             .iter()
-            .all(|s| !solution.is_weakly_dominated(s))
+            .all(|s| !solution.is_covered_by(s.objectives()))
         {
             self.btree_set.insert(solution.clone());
             return true;
@@ -90,12 +91,12 @@ where
     }
 
     fn random(size: usize, problem: &Problem<D>) -> Self {
-        let random_iter = (0..size).map(|_| T::random(problem));
+        let random_iter = (0..size).map(|_| T::random_with_problem(problem));
         return Self::from_iter(random_iter);
     }
 
     fn random_with_seed(size: usize, problem: &Problem<D>, seed: u64) -> Self {
-        let random_iter = (0..size).map(|_| T::random_with_seed(problem, seed));
+        let random_iter = (0..size).map(|_| T::random_with_problem_and_seed(problem, seed));
         return Self::from_iter(random_iter);
     }
 
