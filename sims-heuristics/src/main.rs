@@ -1,6 +1,4 @@
 mod file_io;
-#[cfg(feature = "plotting")]
-mod plotting;
 
 use clap::{ArgAction, Parser};
 
@@ -73,6 +71,7 @@ struct Cli {
     max_iterations: usize,
 }
 
+#[allow(clippy::too_many_lines)]
 fn main() {
     let args = Cli::parse();
     let start_time = Instant::now();
@@ -166,7 +165,10 @@ fn main() {
     let final_solution_set = pareto_local_search.run(args.max_iterations, args.timeout);
 
     #[cfg(feature = "plotting")]
-    plotting::draw_solutions_plot(&pareto_local_search.explored_solutions);
+    pls::plotting::draw_solutions_plot_with_problem(
+        &pareto_local_search.explored_solutions,
+        &sims_problem_instance,
+    );
 
     let final_solutions: Vec<EncodedSolution<NUM_OBJECTIVES>> =
         final_solution_set.into_iter().collect();

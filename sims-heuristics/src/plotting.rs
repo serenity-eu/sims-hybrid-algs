@@ -20,34 +20,68 @@
 //! - 4D: 6 pairs → 2×3 grid with all 6 subplots used  
 //! - 5D: 10 pairs → 3×4 grid with 10 subplots used
 
-use plotters::prelude::*;
 #[cfg(feature = "plotting")]
-use pls::explored_solutions_data::ExploredSolutionsData;
+use crate::explored_solutions_data::ExploredSolutionsData;
+use plotters::prelude::*;
+use std::cmp::Ordering;
 
 /// Draw solutions plot for visualization of pareto fronts.
 ///
 /// For 2D objectives: Creates a single scatter plot
 /// For >2D objectives: Creates a grid of subplots showing all pairwise combinations
+///
+/// Uses objective names from the problem instance for proper labeling of axes and captions.
 #[cfg(feature = "plotting")]
-pub fn draw_solutions_plot<const D: usize>(solutions_data: &ExploredSolutionsData<D>) {
-    if D == 2 {
-        draw_2d_plot(solutions_data);
-    } else if D > 2 {
-        draw_multi_objective_grid(solutions_data);
-    } else {
-        eprintln!("Cannot plot with D={}, need at least 2 objectives", D);
+pub fn draw_solutions_plot<const D: usize>(
+    solutions_data: &ExploredSolutionsData<D>,
+    objective_names: &[&str],
+) {
+    if objective_names.len() != D {
+        eprintln!(
+            "Warning: Expected {} objective names, got {}",
+            D,
+            objective_names.len()
+        );
     }
+
+    match D.cmp(&2) {
+        Ordering::Equal => draw_2d_plot(solutions_data, objective_names),
+        Ordering::Greater => draw_multi_objective_grid(solutions_data, objective_names),
+        Ordering::Less => eprintln!("Cannot plot with D={D}, need at least 2 objectives"),
+    }
+}
+
+/// Convenience function to draw solutions plot using a Problem instance for objective names
+///
+/// This function extracts objective names from the Problem and calls `draw_solutions_plot`.
+#[cfg(feature = "plotting")]
+pub fn draw_solutions_plot_with_problem<const D: usize>(
+    solutions_data: &ExploredSolutionsData<D>,
+    problem: &crate::problem::Problem<D>,
+) {
+    let objective_names = problem.objective_names();
+    draw_solutions_plot(solutions_data, &objective_names);
 }
 
 /// Draw a single 2D scatter plot for 2-objective problems
 #[cfg(feature = "plotting")]
-fn draw_2d_plot<const D: usize>(solutions_data: &ExploredSolutionsData<D>) {
+fn draw_2d_plot<const D: usize>(
+    solutions_data: &ExploredSolutionsData<D>,
+    objective_names: &[&str],
+) {
     let root_drawing_area =
         SVGBackend::new("pareto_solutions_2d.svg", (1024, 768)).into_drawing_area();
     root_drawing_area.fill(&WHITE).unwrap();
 
+    // Get objective names with fallbacks
+    let obj1_name = objective_names.first().copied().unwrap_or("Objective 1");
+    let obj2_name = objective_names.get(1).copied().unwrap_or("Objective 2");
+
     let mut chart_ctx = ChartBuilder::on(&root_drawing_area)
-        .caption("Pareto Local Search - 2D Objectives", ("Arial", 30))
+        .caption(
+            format!("Pareto Local Search - {obj1_name} vs {obj2_name}"),
+            ("Arial", 30),
+        )
         .set_label_area_size(LabelAreaPosition::Left, 60)
         .set_label_area_size(LabelAreaPosition::Bottom, 50)
         .margin(20)
@@ -59,8 +93,8 @@ fn draw_2d_plot<const D: usize>(solutions_data: &ExploredSolutionsData<D>) {
 
     chart_ctx
         .configure_mesh()
-        .x_desc("Objective 1")
-        .y_desc("Objective 2")
+        .x_desc(obj1_name)
+        .y_desc(obj2_name)
         .draw()
         .unwrap();
 
@@ -105,9 +139,12 @@ fn draw_2d_plot<const D: usize>(solutions_data: &ExploredSolutionsData<D>) {
 
 /// Draw a grid of subplots for multi-objective problems (D > 2)
 #[cfg(feature = "plotting")]
-fn draw_multi_objective_grid<const D: usize>(solutions_data: &ExploredSolutionsData<D>) {
+fn draw_multi_objective_grid<const D: usize>(
+    solutions_data: &ExploredSolutionsData<D>,
+    objective_names: &[&str],
+) {
     // Calculate grid dimensions for all pairwise combinations
-    let (grid_rows, grid_cols, num_pairs) = calculate_plot_grid_dimensions(D);
+    let (grid_rows, grid_cols, _num_pairs) = calculate_plot_grid_dimensions(D);
 
     // Calculate image dimensions
     let subplot_width = 300;
@@ -143,6 +180,7 @@ fn draw_multi_objective_grid<const D: usize>(solutions_data: &ExploredSolutionsD
                     solutions_data,
                     i,
                     j,
+                    objective_names,
                     subplot_width,
                     subplot_height,
                 );
@@ -159,17 +197,25 @@ fn draw_objective_pair_subplot<const D: usize>(
     solutions_data: &ExploredSolutionsData<D>,
     obj_x: usize,
     obj_y: usize,
-    width: usize,
-    height: usize,
+    objective_names: &[&str],
+    _width: usize,
+    _height: usize,
 ) {
     let max_x = solutions_data.max_objective(obj_x);
     let max_y = solutions_data.max_objective(obj_y);
 
+    // Get objective names with fallbacks
+    let x_axis_name = objective_names
+        .get(obj_x)
+        .copied()
+        .unwrap_or("Unknown Objective");
+    let y_axis_name = objective_names
+        .get(obj_y)
+        .copied()
+        .unwrap_or("Unknown Objective");
+
     let mut chart_ctx = ChartBuilder::on(drawing_area)
-        .caption(
-            &format!("Obj {} vs Obj {}", obj_x + 1, obj_y + 1),
-            ("Arial", 14),
-        )
+        .caption(format!("{x_axis_name} vs {y_axis_name}"), ("Arial", 14))
         .set_label_area_size(LabelAreaPosition::Left, 40)
         .set_label_area_size(LabelAreaPosition::Bottom, 30)
         .margin(10)
@@ -178,10 +224,10 @@ fn draw_objective_pair_subplot<const D: usize>(
 
     chart_ctx
         .configure_mesh()
-        .x_desc(&format!("Objective {}", obj_x + 1))
-        .y_desc(&format!("Objective {}", obj_y + 1))
-        .x_label_formatter(&|x| format!("{:.0}", x))
-        .y_label_formatter(&|y| format!("{:.0}", y))
+        .x_desc(x_axis_name)
+        .y_desc(y_axis_name)
+        .x_label_formatter(&|x| format!("{x:.0}"))
+        .y_label_formatter(&|y| format!("{y:.0}"))
         .draw()
         .unwrap();
 
@@ -226,8 +272,9 @@ fn draw_objective_pair_subplot<const D: usize>(
 
 /// Calculate the grid dimensions for plotting pairwise objective combinations
 ///
-/// Returns (rows, cols, num_pairs) for a given number of objectives D
+/// Returns (rows, cols, `num_pairs`) for a given number of objectives D
 #[cfg(feature = "plotting")]
+#[must_use]
 pub fn calculate_plot_grid_dimensions(num_objectives: usize) -> (usize, usize, usize) {
     if num_objectives < 2 {
         return (0, 0, 0);
@@ -235,7 +282,7 @@ pub fn calculate_plot_grid_dimensions(num_objectives: usize) -> (usize, usize, u
 
     let num_pairs = num_objectives * (num_objectives - 1) / 2;
     let grid_cols = ((num_pairs as f64).sqrt().ceil() as usize).max(2);
-    let grid_rows = (num_pairs + grid_cols - 1) / grid_cols; // Ceiling division
+    let grid_rows = num_pairs.div_ceil(grid_cols);
 
     (grid_rows, grid_cols, num_pairs)
 }
