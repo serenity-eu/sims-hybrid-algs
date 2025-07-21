@@ -670,21 +670,10 @@ fn pls_solution_to_python_solution(
     debug!("Converting PLS solution: {} selected images, objectives: {:?}", 
            raw_selected_images.len(), pls_solution.objectives);
 
-    // Convert from 1-based indexing back to 0-based indexing
-    let selected_images: Vec<usize> = raw_selected_images
-        .into_iter()
-        .filter_map(|x| {
-            if x > 0 {
-                let converted = x - 1;
-                Some(converted) // Convert from 1-based to 0-based
-            } else {
-                debug!("Found invalid index {x} in PLS solution, skipping");
-                None
-            }
-        })
-        .collect();
+    // PLS already uses 0-based indexing internally, no conversion needed
+    let selected_images: Vec<usize> = raw_selected_images;
 
-    debug!("Converted selected images (0-based): {selected_images:?}");
+    debug!("Selected images (0-based): {selected_images:?}");
 
     let cost = pls_solution.objectives[0] as i32;
     let cloudy_area = pls_solution.objectives[1] as i32;
