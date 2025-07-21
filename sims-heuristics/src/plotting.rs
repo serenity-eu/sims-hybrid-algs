@@ -25,6 +25,47 @@ use crate::explored_solutions_data::ExploredSolutionsData;
 use plotters::prelude::*;
 use std::cmp::Ordering;
 
+/// Generate a rainbow color based on iteration number and total iterations
+#[cfg(feature = "plotting")]
+fn rainbow_color(iteration: usize, max_iteration: usize) -> RGBColor {
+    if max_iteration == 0 {
+        return BLUE;
+    }
+    
+    // Normalize iteration to 0.0-1.0 range
+    let t = iteration as f64 / max_iteration as f64;
+    
+    // Convert to HSV color space: H varies from 0 (red) to 300 (magenta), S=1, V=1
+    // This gives us a rainbow progression: red -> orange -> yellow -> green -> blue -> magenta
+    let hue = t * 300.0; // 0-300 degrees
+    
+    // Convert HSV to RGB
+    let c = 1.0; // chroma (since saturation = 1)
+    let h_prime = hue / 60.0;
+    let x = c * (1.0 - ((h_prime % 2.0) - 1.0).abs());
+    
+    let (r, g, b) = if h_prime < 1.0 {
+        (c, x, 0.0)
+    } else if h_prime < 2.0 {
+        (x, c, 0.0)
+    } else if h_prime < 3.0 {
+        (0.0, c, x)
+    } else if h_prime < 4.0 {
+        (0.0, x, c)
+    } else if h_prime < 5.0 {
+        (x, 0.0, c)
+    } else {
+        (c, 0.0, x)
+    };
+    
+    // Convert to 0-255 range and create RGBColor
+    RGBColor(
+        (r * 255.0) as u8,
+        (g * 255.0) as u8,
+        (b * 255.0) as u8,
+    )
+}
+
 /// Draw solutions plot for visualization of pareto fronts.
 ///
 /// For 2D objectives: Creates a single scatter plot
@@ -70,11 +111,7 @@ fn calculate_axis_ranges<const D: usize>(
     obj_x: usize,
     obj_y: usize,
 ) -> ((u64, u64), (u64, u64)) {
-    let all_solutions: Vec<_> = solutions_data
-        .non_dominated()
-        .into_iter()
-        .chain(solutions_data.initial_solutions())
-        .collect();
+    let all_solutions = solutions_data.solutions();
 
     if all_solutions.is_empty() {
         return ((0, 100), (0, 100));
@@ -121,7 +158,7 @@ fn draw_2d_plot<const D: usize>(
 
     let mut chart_ctx = ChartBuilder::on(&root_drawing_area)
         .caption(
-            format!("Pareto Local Search - {obj1_name} vs {obj2_name}"),
+            format!("Pareto Local Search - {obj1_name} vs {obj2_name} (Rainbow Timeline)"),
             ("Arial", 30),
         )
         .set_label_area_size(LabelAreaPosition::Left, 60)
@@ -137,43 +174,67 @@ fn draw_2d_plot<const D: usize>(
         .draw()
         .unwrap();
 
-    // Draw non-dominated solutions
-    chart_ctx
-        .draw_series(
-            solutions_data
-                .non_dominated()
-                .into_iter()
-                .map(|solution_point| {
-                    Circle::new(
-                        (solution_point.objectives[0], solution_point.objectives[1]),
-                        6,
-                        GREEN.filled(),
-                    )
-                }),
-        )
-        .unwrap()
-        .label("Non-dominated solutions")
-        .legend(|(x, y)| Circle::new((x + 10, y), 4, GREEN.filled()));
+    // Get all solutions and sort them by iteration to draw in discovery order
+    let mut all_solutions = solutions_data.solutions();
+    all_solutions.sort_by_key(|s| s.iteration);
+    
+    // Find max iteration for rainbow color scaling
+    let max_iteration = all_solutions.iter().map(|s| s.iteration).max().unwrap_or(0);
+    
+    // Get non-dominated solutions for highlighting
+    let non_dominated = solutions_data.non_dominated();
+    let non_dominated_set: std::collections::HashSet<_> = 
+        non_dominated.iter().map(|s| s.objectives).collect();
 
-    // Draw initial solutions
-    chart_ctx
-        .draw_series(
-            solutions_data
-                .initial_solutions()
-                .into_iter()
-                .map(|solution_point| {
-                    TriangleMarker::new(
-                        (solution_point.objectives[0], solution_point.objectives[1]),
-                        6,
-                        BLUE.filled(),
-                    )
-                }),
-        )
-        .unwrap()
-        .label("Initial solutions")
-        .legend(|(x, y)| TriangleMarker::new((x + 10, y), 4, BLUE.filled()));
+    // Draw all solutions with rainbow colors based on discovery time
+    for solution in &all_solutions {
+        let color = rainbow_color(solution.iteration, max_iteration);
+        let is_non_dominated = non_dominated_set.contains(&solution.objectives);
+        
+        if is_non_dominated {
+            // Non-dominated solutions: larger circles with black border
+            chart_ctx
+                .draw_series(std::iter::once(Circle::new(
+                    (solution.objectives[0], solution.objectives[1]),
+                    8,
+                    color.filled(),
+                )))
+                .unwrap();
+            chart_ctx
+                .draw_series(std::iter::once(Circle::new(
+                    (solution.objectives[0], solution.objectives[1]),
+                    8,
+                    BLACK.stroke_width(2),
+                )))
+                .unwrap();
+        } else {
+            // Other solutions: smaller circles
+            chart_ctx
+                .draw_series(std::iter::once(Circle::new(
+                    (solution.objectives[0], solution.objectives[1]),
+                    4,
+                    color.filled(),
+                )))
+                .unwrap();
+        }
+    }
 
-    chart_ctx.configure_series_labels().draw().unwrap();
+    // Create a simple text legend in the chart area
+    chart_ctx
+        .draw_series(std::iter::once(Text::new(
+            format!("Rainbow colors show discovery order (early=red, late=magenta)"),
+            (x_min + (x_max - x_min) / 20, y_max - (y_max - y_min) / 20),
+            ("Arial", 12).into_font().color(&BLACK),
+        )))
+        .unwrap();
+        
+    chart_ctx
+        .draw_series(std::iter::once(Text::new(
+            format!("Large circles with black border = Pareto optimal solutions"),
+            (x_min + (x_max - x_min) / 20, y_max - (y_max - y_min) / 10),
+            ("Arial", 12).into_font().color(&BLACK),
+        )))
+        .unwrap();
 }
 
 /// Draw a grid of subplots for multi-objective problems (D > 2)
@@ -202,7 +263,7 @@ fn draw_multi_objective_grid<const D: usize>(
     let (upper, lower) = root_drawing_area.split_vertically(80);
     upper
         .titled(
-            &format!("Pareto Local Search - {D}D Objectives (Pairwise Plots)"),
+            &format!("Pareto Local Search - {D}D Objectives (Rainbow Timeline)"),
             ("Arial", 24),
         )
         .unwrap();
@@ -270,43 +331,50 @@ fn draw_objective_pair_subplot<const D: usize>(
         .draw()
         .unwrap();
 
-    // Draw non-dominated solutions
-    chart_ctx
-        .draw_series(
-            solutions_data
-                .non_dominated()
-                .into_iter()
-                .map(|solution_point| {
-                    Circle::new(
-                        (
-                            solution_point.objectives[obj_x],
-                            solution_point.objectives[obj_y],
-                        ),
-                        3,
-                        GREEN.filled(),
-                    )
-                }),
-        )
-        .unwrap();
+    // Get all solutions and sort them by iteration to draw in discovery order
+    let mut all_solutions = solutions_data.solutions();
+    all_solutions.sort_by_key(|s| s.iteration);
+    
+    // Find max iteration for rainbow color scaling
+    let max_iteration = all_solutions.iter().map(|s| s.iteration).max().unwrap_or(0);
+    
+    // Get non-dominated solutions for highlighting
+    let non_dominated = solutions_data.non_dominated();
+    let non_dominated_set: std::collections::HashSet<_> = 
+        non_dominated.iter().map(|s| s.objectives).collect();
 
-    // Draw initial solutions
-    chart_ctx
-        .draw_series(
-            solutions_data
-                .initial_solutions()
-                .into_iter()
-                .map(|solution_point| {
-                    TriangleMarker::new(
-                        (
-                            solution_point.objectives[obj_x],
-                            solution_point.objectives[obj_y],
-                        ),
-                        3,
-                        BLUE.filled(),
-                    )
-                }),
-        )
-        .unwrap();
+    // Draw all solutions with rainbow colors based on discovery time
+    for solution in &all_solutions {
+        let color = rainbow_color(solution.iteration, max_iteration);
+        let is_non_dominated = non_dominated_set.contains(&solution.objectives);
+        
+        if is_non_dominated {
+            // Non-dominated solutions: larger circles with black border
+            chart_ctx
+                .draw_series(std::iter::once(Circle::new(
+                    (solution.objectives[obj_x], solution.objectives[obj_y]),
+                    4,
+                    color.filled(),
+                )))
+                .unwrap();
+            chart_ctx
+                .draw_series(std::iter::once(Circle::new(
+                    (solution.objectives[obj_x], solution.objectives[obj_y]),
+                    4,
+                    BLACK.stroke_width(1),
+                )))
+                .unwrap();
+        } else {
+            // Other solutions: smaller circles
+            chart_ctx
+                .draw_series(std::iter::once(Circle::new(
+                    (solution.objectives[obj_x], solution.objectives[obj_y]),
+                    2,
+                    color.filled(),
+                )))
+                .unwrap();
+        }
+    }
 }
 
 /// Calculate the grid dimensions for plotting pairwise objective combinations
