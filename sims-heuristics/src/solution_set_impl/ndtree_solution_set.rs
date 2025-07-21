@@ -5,18 +5,18 @@ use pareto::{HasObjectives, MoSolution};
 use crate::{problem::Problem, solution::SIMSSolutionTrait, solution_set::SolutionSet};
 
 #[derive(Clone)]
-pub struct NdTreeSolutionSet<T>
+pub struct NdTreeSolutionSet<T, const D: usize>
 where
-    T: SIMSSolutionTrait<2> + Sized + Ord + Clone,
+    T: SIMSSolutionTrait<D> + Sized + Ord + Clone,
 {
-    nd_tree: NDTree<Solution<2>, 32, 2, 4>,
+    nd_tree: NDTree<Solution<D>, 32, D, 4>,
     solutions: Vec<T>, // Keep original solutions alongside nd-tree
     name: String,
 }
 
-impl<T> SolutionSet<'_, T, 2> for NdTreeSolutionSet<T>
+impl<T, const D: usize> SolutionSet<'_, T, D> for NdTreeSolutionSet<T, D>
 where
-    T: SIMSSolutionTrait<2> + Sized + Ord + Clone,
+    T: SIMSSolutionTrait<D> + Sized + Ord + Clone,
 {
     type Iter<'b>
         = std::slice::Iter<'b, T>
@@ -103,12 +103,12 @@ where
         was_inserted
     }
 
-    fn random(size: usize, problem: &Problem<2>) -> Self {
+    fn random(size: usize, problem: &Problem<D>) -> Self {
         let random_iter = (0..size).map(|_| T::random_with_problem(problem));
         return Self::from_iter(random_iter);
     }
 
-    fn random_with_seed(size: usize, problem: &Problem<2>, seed: u64) -> Self {
+    fn random_with_seed(size: usize, problem: &Problem<D>, seed: u64) -> Self {
         let random_iter = (0..size).map(|_| T::random_with_problem_and_seed(problem, seed));
         return Self::from_iter(random_iter);
     }

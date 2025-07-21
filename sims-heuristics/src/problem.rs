@@ -247,6 +247,8 @@ pub struct Problem<const D: usize> {
     pub objective_definitions: Option<Vec<Box<dyn ObjectiveDefinition<D>>>>,
     /// Max values of objectives
     pub max_objectives: pareto::Objectives<D>,
+    /// Raw instance data for accessing resolution and incidence angle
+    pub raw_instance: SIMSProblemInstanceRaw,
 }
 
 impl<const D: usize> Problem<D> {
@@ -336,13 +338,14 @@ impl<const D: usize> Problem<D> {
         ];
 
         Self {
-            instance_name: raw.name,
+            instance_name: raw.name.clone(),
             universe,
             images,
             overlap_matrix,
             objectives,
             objective_definitions: None, // Legacy constructor uses None
             max_objectives,
+            raw_instance: raw,
         }
     }
 
@@ -427,6 +430,7 @@ impl<const D: usize> Problem<D> {
                 objectives: vec![], // Empty for dummy
                 objective_definitions: None,
                 max_objectives: [0u64; D],
+                raw_instance: raw.clone(),
             };
             max_objectives[i] = obj_def.max_value(&dummy_problem);
         }
@@ -442,13 +446,14 @@ impl<const D: usize> Problem<D> {
         };
 
         Ok(Self {
-            instance_name: raw.name,
+            instance_name: raw.name.clone(),
             universe,
             images,
             overlap_matrix,
             objectives: legacy_objectives,
             objective_definitions: Some(objective_definitions),
             max_objectives,
+            raw_instance: raw,
         })
     }
 
@@ -547,6 +552,7 @@ impl Default for Problem<2> {
             ],
             objective_definitions: None, // Default constructor uses None
             max_objectives: [0, 0],
+            raw_instance: SIMSProblemInstanceRaw::default(),
         }
     }
 }

@@ -236,19 +236,12 @@ impl<const D: usize> SIMSModifiable<D> for VecEncodedSolution<D> {
 }
 
 impl<const D: usize> VecEncodedSolution<D> {
-    /// Creates an `EncodedSolution` from a list of selected image indices.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `D` is not equal to 2, as only `D = 2` is currently supported.
+    /// Creates a `VecEncodedSolution` from a list of selected image indices.
     #[must_use]
     pub fn from_selected_images(selected_images_vec: &[usize], problem: &Problem<D>) -> Self {
-        let mut objectives = [0; D];
-        assert!(D == 2, "EncodedSolution only supports D = 2 for now");
-        objectives[1] = problem.total_area();
         let mut solution = Self {
             selected_images: vec![false; problem.images.len()],
-            objectives,
+            objectives: [0; D],
             clear_parts_counts: vec![0; problem.universe.len()],
             element_coverage: vec![0; problem.universe.len()],
         };
@@ -257,9 +250,7 @@ impl<const D: usize> VecEncodedSolution<D> {
             solution.add_image(image_index, problem);
         }
         solution
-    }
-
-    /// Generate a random feasible solution (choose element randomly, then choose image randomly from those that contain the element iff it is not already covered by another image)
+    }    /// Generate a random feasible solution (choose element randomly, then choose image randomly from those that contain the element iff it is not already covered by another image)
     ///
     /// # Panics
     ///
