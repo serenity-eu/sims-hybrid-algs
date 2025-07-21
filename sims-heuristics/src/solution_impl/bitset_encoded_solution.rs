@@ -184,18 +184,11 @@ mod bitset_impl {
 
     impl<const D: usize> BitsetEncodedSolution<D> {
         /// Creates a `BitsetEncodedSolution` from a list of selected image indices.
-        ///
-        /// # Panics
-        ///
-        /// Panics if `D` is not equal to 2, as only `D = 2` is currently supported.
         #[must_use]
         pub fn from_selected_images(selected_images_vec: &[usize], problem: &Problem<D>) -> Self {
-            let mut objectives = [0; D];
-            assert!(D == 2, "EncodedSolution only supports D = 2 for now");
-            objectives[1] = problem.total_area();
             let mut solution = Self {
                 selected_images: FixedBitSet::with_capacity(problem.images.len()),
-                objectives,
+                objectives: [0; D],
                 clear_parts_counts: vec![0; problem.universe.len()],
                 element_coverage: vec![0; problem.universe.len()],
             };

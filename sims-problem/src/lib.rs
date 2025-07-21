@@ -1,3 +1,4 @@
+use log::{debug, info};
 use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::{
     prelude::*,
@@ -5,7 +6,6 @@ use pyo3::{
 };
 use std::collections::HashSet;
 use std::time::Duration;
-use log::{debug, info};
 
 /// Represents a SIMS discrete problem instance
 #[pyclass]
@@ -87,15 +87,15 @@ impl SimsDiscreteProblem {
     /// Create SimsDiscreteProblem from a MiniZinc data file (.dzn)
     #[classmethod]
     fn from_dzn(_cls: &Bound<'_, PyType>, file_path: &str) -> PyResult<Self> {
-        use std::fs;
         use std::collections::HashMap;
-        
+        use std::fs;
+
         // Read file content
         let content = fs::read_to_string(file_path)
-                    .map_err(|e| PyValueError::new_err(format!("Failed to read file {file_path}: {e}")))?;
-        
+            .map_err(|e| PyValueError::new_err(format!("Failed to read file {file_path}: {e}")))?;
+
         let mut data: HashMap<String, String> = HashMap::new();
-        
+
         // Parse simple integer values
         for field in ["num_images", "universe", "max_cloud_area"] {
             let pattern = format!(r"{field}\s*=\s*(\d+);");
@@ -103,7 +103,7 @@ impl SimsDiscreteProblem {
                 data.insert(field.to_string(), captures[1].to_string());
             }
         }
-        
+
         // Parse array of integers
         for field in ["costs", "areas", "resolution", "incidence_angle"] {
             let pattern = format!(r"{field}\s*=\s*\[(.*?)\];");
@@ -111,7 +111,7 @@ impl SimsDiscreteProblem {
                 data.insert(field.to_string(), captures[1].to_string());
             }
         }
-        
+
         // Parse array of sets (for images and clouds)
         for field in ["images", "clouds"] {
             let pattern = format!(r"{field}\s*=\s*\[(.*?)\];");
@@ -119,33 +119,37 @@ impl SimsDiscreteProblem {
                 data.insert(field.to_string(), captures[1].to_string());
             }
         }
-        
+
         // Extract and parse the data
-        let num_images: usize = data.get("num_images")
+        let num_images: usize = data
+            .get("num_images")
             .ok_or_else(|| PyValueError::new_err("Missing num_images"))?
             .parse()
             .map_err(|e| PyValueError::new_err(format!("Invalid num_images: {e}")))?;
-            
-        let universe: usize = data.get("universe")
+
+        let universe: usize = data
+            .get("universe")
             .ok_or_else(|| PyValueError::new_err("Missing universe"))?
             .parse()
             .map_err(|e| PyValueError::new_err(format!("Invalid universe: {e}")))?;
-            
-        let max_cloud_area: i32 = data.get("max_cloud_area")
+
+        let max_cloud_area: i32 = data
+            .get("max_cloud_area")
             .ok_or_else(|| PyValueError::new_err("Missing max_cloud_area"))?
             .parse()
             .map_err(|e| PyValueError::new_err(format!("Invalid max_cloud_area: {e}")))?;
-        
+
         // Parse integer arrays
         let costs: Vec<i32> = Self::parse_int_array(data.get("costs").map_or("", |v| v))?;
         let areas: Vec<i32> = Self::parse_int_array(data.get("areas").map_or("", |v| v))?;
         let resolution: Vec<i32> = Self::parse_int_array(data.get("resolution").map_or("", |v| v))?;
-        let incidence_angle: Vec<i32> = Self::parse_int_array(data.get("incidence_angle").map_or("", |v| v))?;
-        
+        let incidence_angle: Vec<i32> =
+            Self::parse_int_array(data.get("incidence_angle").map_or("", |v| v))?;
+
         // Parse set arrays (convert from 1-based to 0-based indexing)
         let images: Vec<Vec<usize>> = Self::parse_set_array(data.get("images").map_or("", |v| v))?;
         let clouds: Vec<Vec<usize>> = Self::parse_set_array(data.get("clouds").map_or("", |v| v))?;
-        
+
         Ok(Self::new(
             num_images,
             universe,
@@ -328,33 +332,39 @@ impl SimsDiscreteProblem {
         for value in values_str.split(',') {
             let trimmed = value.trim();
             if !trimmed.is_empty() {
-                result.push(trimmed.parse()
-                    .map_err(|e| PyValueError::new_err(format!("Invalid integer: {e}")))?);
+                result.push(
+                    trimmed
+                        .parse()
+                        .map_err(|e| PyValueError::new_err(format!("Invalid integer: {e}")))?,
+                );
             }
         }
         Ok(result)
     }
-    
+
     /// Helper method to parse set arrays from dzn format (converts 1-based to 0-based indexing)
     fn parse_set_array(sets_str: &str) -> PyResult<Vec<Vec<usize>>> {
         let mut result = Vec::new();
         let set_regex = regex::Regex::new(r"\{([^}]*)\}").unwrap();
-        
+
         for capture in set_regex.captures_iter(sets_str) {
             let set_content = &capture[1];
             let mut set_elements = Vec::new();
-            
+
             if !set_content.trim().is_empty() {
                 for element in set_content.split(',') {
                     let trimmed = element.trim();
                     if !trimmed.is_empty() {
-                        let value: usize = trimmed.parse()
-                                                    .map_err(|e| PyValueError::new_err(format!("Invalid set element: {e}")))?;
+                        let value: usize = trimmed.parse().map_err(|e| {
+                            PyValueError::new_err(format!("Invalid set element: {e}"))
+                        })?;
                         // Convert from 1-based to 0-based indexing
                         if value > 0 {
                             set_elements.push(value - 1);
                         } else {
-                            return Err(PyValueError::new_err(format!("Invalid index {value} (must be > 0)")));
+                            return Err(PyValueError::new_err(format!(
+                                "Invalid index {value} (must be > 0)"
+                            )));
                         }
                     }
                 }
@@ -366,11 +376,15 @@ impl SimsDiscreteProblem {
 
     /// Convert to sims-heuristics Problem format directly in memory
     fn to_pls_problem(&self) -> pls::problem::Problem<2> {
-        debug!("Converting SIMS problem to PLS format: {} images, universe size {}", 
-               self.num_images, self.universe);
-        debug!("Image sets: {} total, first few: {:?}", 
-               self.images.len(), 
-               self.images.iter().take(3).collect::<Vec<_>>());
+        debug!(
+            "Converting SIMS problem to PLS format: {} images, universe size {}",
+            self.num_images, self.universe
+        );
+        debug!(
+            "Image sets: {} total, first few: {:?}",
+            self.images.len(),
+            self.images.iter().take(3).collect::<Vec<_>>()
+        );
 
         // Convert from Python 0-based indexing to MiniZinc 1-based indexing for the raw data
         let converted_images: Vec<Vec<usize>> = self
@@ -667,8 +681,11 @@ fn pls_solution_to_python_solution(
 ) -> Solution {
     // Debug logging: Show raw PLS solution data
     let raw_selected_images: Vec<usize> = pls_solution.selected_images().collect();
-    debug!("Converting PLS solution: {} selected images, objectives: {:?}", 
-           raw_selected_images.len(), pls_solution.objectives);
+    debug!(
+        "Converting PLS solution: {} selected images, objectives: {:?}",
+        raw_selected_images.len(),
+        pls_solution.objectives
+    );
 
     // PLS already uses 0-based indexing internally, no conversion needed
     let selected_images: Vec<usize> = raw_selected_images;
@@ -713,8 +730,10 @@ fn solve_with_pls_advanced(
 
     // Convert to PLS problem format
     let pls_problem = sims_instance.to_pls_problem();
-    debug!("Converted SIMS problem to PLS format: {} images, universe size {}", 
-           sims_instance.num_images, sims_instance.universe);
+    debug!(
+        "Converted SIMS problem to PLS format: {} images, universe size {}",
+        sims_instance.num_images, sims_instance.universe
+    );
 
     debug!("Creating initial population of size {initial_population_size}");
 
@@ -741,18 +760,27 @@ fn solve_with_pls_advanced(
     info!("Starting PLS execution with {max_iterations} iterations timeout");
     let final_solution_set = pareto_local_search.run(max_iterations, timeout);
 
-    info!("PLS completed, processing {} solutions", final_solution_set.len());
+    info!(
+        "PLS completed, processing {} solutions",
+        final_solution_set.len()
+    );
 
     // Convert solutions back to Python format
     let final_solutions: Vec<pls::solution::EncodedSolution<2>> =
         final_solution_set.into_iter().collect();
 
-    debug!("Converting {} PLS solutions to Python format", final_solutions.len());
+    debug!(
+        "Converting {} PLS solutions to Python format",
+        final_solutions.len()
+    );
 
     let mut python_solutions = Vec::new();
     for (i, solution) in final_solutions.iter().enumerate() {
-        debug!("Processing solution {}: objectives = {:?}", i, solution.objectives);
-        
+        debug!(
+            "Processing solution {}: objectives = {:?}",
+            i, solution.objectives
+        );
+
         // Get timestamp from explored solutions if available
         let timestamp_us = pareto_local_search
             .explored_solutions
@@ -761,14 +789,225 @@ fn solve_with_pls_advanced(
             .unwrap_or(i as u64 * 1000); // Fallback: use index * 1ms
 
         let py_solution = pls_solution_to_python_solution(solution, timestamp_us);
-        debug!("Converted solution {}: cost={}, cloudy_area={}, selected_images={:?}", 
-               i, py_solution.cost, py_solution.cloudy_area, py_solution.get_selected_images_list());
+        debug!(
+            "Converted solution {}: cost={}, cloudy_area={}, selected_images={:?}",
+            i,
+            py_solution.cost,
+            py_solution.cloudy_area,
+            py_solution.get_selected_images_list()
+        );
         python_solutions.push(py_solution);
     }
 
-    info!("Successfully converted {} solutions to Python format", python_solutions.len());
+    info!(
+        "Successfully converted {} solutions to Python format",
+        python_solutions.len()
+    );
 
     Ok(python_solutions)
+}
+
+/// Solves the SIMS problem using Pareto Local Search with 4 objectives (cost, cloudy area, resolution, incidence angle)
+#[pyfunction]
+#[pyo3(signature = (sims_instance, timeout_seconds=240.0, max_iterations=50000, is_deterministic=false, initial_population_size=100, neighborhood_size_min=1, neighborhood_size_max=6))]
+fn solve_with_pls_multiobjective(
+    sims_instance: &SimsDiscreteProblem,
+    timeout_seconds: f64,
+    max_iterations: usize,
+    is_deterministic: bool,
+    initial_population_size: usize,
+    neighborhood_size_min: u32,
+    neighborhood_size_max: u32,
+) -> PyResult<Vec<Solution>> {
+    use pls::objectives::{
+        CloudyAreaObjective, MaxIncidenceAngleObjective, MinResolutionObjective, TotalCostObjective,
+    };
+    use pls::pareto_local_search::ParetoLocalSearch;
+    use pls::solution_set::SolutionSet;
+    use pls::solution_set_impl::NdTreeSolutionSet;
+    use std::ops::RangeInclusive;
+
+    info!(
+        "Starting multi-objective PLS (4D) with parameters: timeout={timeout_seconds}s, max_iterations={max_iterations}, deterministic={is_deterministic}, population_size={initial_population_size}, neighborhood={neighborhood_size_min}..{neighborhood_size_max}"
+    );
+
+    // Convert to PLS problem format and create 4D problem with all objectives
+    let raw_instance = pls::problem::SIMSProblemInstanceRaw {
+        name: "python_instance".to_string(),
+        num_images: sims_instance.num_images,
+        universe_size: sims_instance.universe,
+        images: sims_instance
+            .images
+            .iter()
+            .map(|img| img.iter().map(|&x| x + 1).collect())
+            .collect(),
+        costs: sims_instance.costs.iter().map(|&c| c as u64).collect(),
+        clouds: sims_instance
+            .clouds
+            .iter()
+            .map(|cloud| cloud.iter().map(|&x| x + 1).collect())
+            .collect(),
+        areas: sims_instance.areas.iter().map(|&a| a as u64).collect(),
+        max_cloud_area: sims_instance.max_cloud_area as u64,
+        resolution: sims_instance.resolution.iter().map(|&r| r as u64).collect(),
+        incidence_angle: sims_instance
+            .incidence_angle
+            .iter()
+            .map(|&i| i as u64)
+            .collect(),
+    };
+
+    // Create 4D problem with all objectives
+    let objective_definitions: Vec<Box<dyn pls::objectives::ObjectiveDefinition<4>>> = vec![
+        Box::new(TotalCostObjective { index: 0 }),
+        Box::new(CloudyAreaObjective { index: 1 }),
+        Box::new(MinResolutionObjective { index: 2 }),
+        Box::new(MaxIncidenceAngleObjective { index: 3 }),
+    ];
+
+    let pls_problem = pls::problem::Problem::from_raw_with_objective_definitions(
+        raw_instance,
+        objective_definitions,
+    )
+    .map_err(|e| PyValueError::new_err(format!("Failed to create 4D problem: {e}")))?;
+
+    debug!(
+        "Created 4D PLS problem: {} images, universe size {}",
+        sims_instance.num_images, sims_instance.universe
+    );
+
+    debug!("Creating initial population of size {initial_population_size}");
+
+    // Create initial population using ND-Tree for 4D optimization
+    let neighborhood_size_range: RangeInclusive<u32> =
+        neighborhood_size_min..=neighborhood_size_max;
+    let initial_solution_set: NdTreeSolutionSet<pls::solution::BitsetEncodedSolution<4>, 4> =
+        if is_deterministic {
+            NdTreeSolutionSet::random_with_seed(
+                initial_population_size,
+                &pls_problem,
+                1_234_567_890,
+            )
+        } else {
+            NdTreeSolutionSet::random(initial_population_size, &pls_problem)
+        };
+
+    println!("DEBUG: Running multi-objective PLS with max_iterations={max_iterations}, timeout={timeout_seconds}s");
+
+    // Create and run PLS
+    let mut pareto_local_search = ParetoLocalSearch::new(
+        &pls_problem,
+        &initial_solution_set,
+        neighborhood_size_range,
+        is_deterministic,
+    );
+
+    let timeout = Duration::from_secs_f64(timeout_seconds);
+    info!("Starting multi-objective PLS execution with {max_iterations} iterations timeout");
+    let final_solution_set = pareto_local_search.run(max_iterations, timeout);
+
+    info!(
+        "Multi-objective PLS completed, processing {} solutions",
+        final_solution_set.len()
+    );
+
+    // Convert solutions back to Python format
+    let final_solutions: Vec<pls::solution::BitsetEncodedSolution<4>> =
+        final_solution_set.into_iter().collect();
+
+    debug!(
+        "Converting {} 4D PLS solutions to Python format",
+        final_solutions.len()
+    );
+
+    let mut python_solutions = Vec::new();
+    for (i, solution) in final_solutions.iter().enumerate() {
+        debug!(
+            "Processing 4D solution {}: objectives = {:?}",
+            i, solution.objectives
+        );
+
+        // Get timestamp from explored solutions if available
+        let timestamp_us = pareto_local_search
+            .explored_solutions
+            .get_solution_fingerprint(solution)
+            .map(|fp| fp.time.as_micros() as u64)
+            .unwrap_or(i as u64 * 1000); // Fallback: use index * 1ms
+
+        let py_solution = pls_4d_solution_to_python_solution(solution, timestamp_us);
+        debug!(
+            "Converted 4D solution {}: cost={}, cloudy_area={}, selected_images={:?}",
+            i,
+            py_solution.cost,
+            py_solution.cloudy_area,
+            py_solution.get_selected_images_list()
+        );
+        python_solutions.push(py_solution);
+    }
+
+    info!(
+        "Successfully converted {} 4D solutions to Python format",
+        python_solutions.len()
+    );
+
+    Ok(python_solutions)
+}
+
+/// Convert 4D PLS solution to Python Solution (includes resolution and incidence angle objectives)
+fn pls_4d_solution_to_python_solution(
+    pls_solution: &pls::solution::BitsetEncodedSolution<4>,
+    timestamp_us: u64,
+) -> Solution {
+    // Debug logging: Show raw PLS solution data
+    let raw_selected_images: Vec<usize> = pls_solution.selected_images().collect();
+    debug!(
+        "Converting 4D PLS solution: {} selected images, objectives: {:?}",
+        raw_selected_images.len(),
+        pls_solution.objectives
+    );
+
+    let selected_images: Vec<usize> = raw_selected_images;
+    debug!("Selected images (0-based): {selected_images:?}");
+
+    let cost = pls_solution.objectives[0] as i32;
+    let cloudy_area = pls_solution.objectives[1] as i32;
+    let min_resolution_sum = pls_solution.objectives[2] as i32;
+    let max_incidence_angle = pls_solution.objectives[3] as i32;
+
+    debug!("Created 4D Python solution: cost={cost}, cloudy_area={cloudy_area}, min_resolution_sum={min_resolution_sum}, max_incidence_angle={max_incidence_angle}");
+
+    Solution::create(
+        selected_images,
+        cost,
+        cloudy_area,
+        timestamp_us,
+        Some(max_incidence_angle),
+        Some(min_resolution_sum),
+    )
+}
+
+/// Solves the SIMS problem using Pareto Local Search with 4 objectives and advanced parameters
+#[pyfunction]
+#[pyo3(signature = (sims_instance, timeout_seconds=240.0, max_iterations=50000, is_deterministic=false, initial_population_size=100, neighborhood_size_min=1, neighborhood_size_max=6))]
+fn solve_with_pls_multiobjective_advanced(
+    sims_instance: &SimsDiscreteProblem,
+    timeout_seconds: f64,
+    max_iterations: usize,
+    is_deterministic: bool,
+    initial_population_size: usize,
+    neighborhood_size_min: u32,
+    neighborhood_size_max: u32,
+) -> PyResult<Vec<Solution>> {
+    // Call the base multiobjective function with the advanced parameters
+    solve_with_pls_multiobjective(
+        sims_instance,
+        timeout_seconds,
+        max_iterations,
+        is_deterministic,
+        initial_population_size,
+        neighborhood_size_min,
+        neighborhood_size_max,
+    )
 }
 
 /// Solves the SIMS problem using Pareto Local Search with default parameters
@@ -791,9 +1030,11 @@ fn solve_with_pls(sims_instance: &SimsDiscreteProblem) -> PyResult<Vec<Solution>
 fn sims_problem(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Initialize logging bridge from Rust to Python
     pyo3_log::init();
-    
+
     m.add_function(wrap_pyfunction!(solve_with_pls, m)?)?;
     m.add_function(wrap_pyfunction!(solve_with_pls_advanced, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_with_pls_multiobjective, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_with_pls_multiobjective_advanced, m)?)?;
     m.add_class::<SimsDiscreteProblem>()?;
     m.add_class::<Solution>()?;
 

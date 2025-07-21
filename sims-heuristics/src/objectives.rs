@@ -9,6 +9,8 @@ use crate::problem::Problem;
 pub enum ObjectiveType {
     TotalCost,
     CloudyArea,
+    MinResolution,
+    MaxIncidenceAngle,
 }
 
 impl ObjectiveType {
@@ -18,6 +20,8 @@ impl ObjectiveType {
         match self {
             Self::TotalCost => "total_cost",
             Self::CloudyArea => "cloudy_area",
+            Self::MinResolution => "min_resolution",
+            Self::MaxIncidenceAngle => "max_incidence_angle",
         }
     }
 
@@ -27,6 +31,8 @@ impl ObjectiveType {
         match self {
             Self::TotalCost => "Total Cost",
             Self::CloudyArea => "Cloudy Area",
+            Self::MinResolution => "Minimum Resolution Sum",
+            Self::MaxIncidenceAngle => "Maximum Incidence Angle",
         }
     }
 
@@ -205,6 +211,192 @@ impl<const D: usize> ObjectiveDefinition<D> for CloudyAreaObjective {
 
     fn max_value(&self, problem: &Problem<D>) -> u64 {
         problem.total_area()
+    }
+}
+
+/// Minimum resolution sum objective implementation
+/// For each universe element, finds the best (minimum) resolution among selected images that cover it,
+/// then sums these minimum resolutions across all universe elements.
+#[derive(Debug, Clone)]
+pub struct MinResolutionObjective {
+    pub index: usize,
+}
+
+impl<const D: usize> ObjectiveDefinition<D> for MinResolutionObjective {
+    fn id(&self) -> &'static str {
+        "min_resolution"
+    }
+
+    fn name(&self) -> &'static str {
+        "Minimum Resolution Sum"
+    }
+
+    fn is_minimization(&self) -> bool {
+        true
+    }
+
+    fn objective_index(&self) -> usize {
+        self.index
+    }
+
+    fn calculate_value(&self, solution: &dyn SolutionEvaluator<D>, problem: &Problem<D>) -> u64 {
+        let mut min_resolution_sum = 0u64;
+
+        for element_index in 0..problem.universe.len() {
+            // Find minimum resolution among selected images that cover this element
+            let min_resolution = solution
+                .selected_images()
+                .iter()
+                .filter(|&&image_index| problem.images[image_index].parts.contains(&element_index))
+                .map(|&image_index| problem.raw_instance.resolution[image_index])
+                .min()
+                .unwrap_or(0);
+
+            min_resolution_sum += min_resolution;
+        }
+
+        min_resolution_sum
+    }
+
+    fn calculate_delta(
+        &self,
+        image_index: usize,
+        is_selected: bool,
+        solution: &dyn SolutionEvaluator<D>,
+        problem: &Problem<D>,
+    ) -> i64 {
+        let mut delta = 0i64;
+        let image_resolution = problem.raw_instance.resolution[image_index];
+
+        for &element_index in &problem.images[image_index].parts {
+            // Current minimum resolution for this element
+            let current_min = solution
+                .selected_images()
+                .iter()
+                .filter(|&&idx| idx != image_index && problem.images[idx].parts.contains(&element_index))
+                .map(|&idx| problem.raw_instance.resolution[idx])
+                .min();
+
+            if is_selected {
+                // Removing image - check if this was providing the minimum resolution
+                if let Some(new_min) = current_min {
+                    if image_resolution < new_min {
+                        // This image was providing the minimum, delta increases
+                        delta += (new_min - image_resolution) as i64;
+                    }
+                } else {
+                    // This was the only image covering this element
+                    delta -= image_resolution as i64;
+                }
+            } else {
+                // Adding image - check if this provides a better minimum
+                if let Some(current_min_val) = current_min {
+                    if image_resolution < current_min_val {
+                        // This image provides better resolution, delta decreases
+                        delta -= (current_min_val - image_resolution) as i64;
+                    }
+                } else {
+                    // This is the first image to cover this element
+                    delta += image_resolution as i64;
+                }
+            }
+        }
+
+        delta
+    }
+
+    fn max_value(&self, problem: &Problem<D>) -> u64 {
+        // Maximum possible value: worst resolution for each element
+        let max_resolution = problem.raw_instance.resolution.iter().max().copied().unwrap_or(0);
+        max_resolution * (problem.universe.len() as u64)
+    }
+}
+
+/// Maximum incidence angle objective implementation
+/// Finds the worst (maximum) incidence angle among all selected images.
+#[derive(Debug, Clone)]
+pub struct MaxIncidenceAngleObjective {
+    pub index: usize,
+}
+
+impl<const D: usize> ObjectiveDefinition<D> for MaxIncidenceAngleObjective {
+    fn id(&self) -> &'static str {
+        "max_incidence_angle"
+    }
+
+    fn name(&self) -> &'static str {
+        "Maximum Incidence Angle"
+    }
+
+    fn is_minimization(&self) -> bool {
+        true
+    }
+
+    fn objective_index(&self) -> usize {
+        self.index
+    }
+
+    fn calculate_value(&self, solution: &dyn SolutionEvaluator<D>, problem: &Problem<D>) -> u64 {
+        solution
+            .selected_images()
+            .iter()
+            .map(|&image_index| problem.raw_instance.incidence_angle[image_index])
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn calculate_delta(
+        &self,
+        image_index: usize,
+        is_selected: bool,
+        solution: &dyn SolutionEvaluator<D>,
+        problem: &Problem<D>,
+    ) -> i64 {
+        let image_angle = problem.raw_instance.incidence_angle[image_index];
+
+        if is_selected {
+            // Removing image
+            let current_max = solution
+                .selected_images()
+                .iter()
+                .map(|&idx| problem.raw_instance.incidence_angle[idx])
+                .max()
+                .unwrap_or(0);
+
+            if image_angle == current_max {
+                // This image had the maximum angle, find new maximum
+                let new_max = solution
+                    .selected_images()
+                    .iter()
+                    .filter(|&&idx| idx != image_index)
+                    .map(|&idx| problem.raw_instance.incidence_angle[idx])
+                    .max()
+                    .unwrap_or(0);
+                return (new_max as i64) - (current_max as i64);
+            }
+            // Image wasn't the maximum, no change
+            0
+        } else {
+            // Adding image
+            let current_max = solution
+                .selected_images()
+                .iter()
+                .map(|&idx| problem.raw_instance.incidence_angle[idx])
+                .max()
+                .unwrap_or(0);
+
+            if image_angle > current_max {
+                // New image has higher angle, becomes new maximum
+                (image_angle as i64) - (current_max as i64)
+            } else {
+                // New image doesn't affect maximum
+                0
+            }
+        }
+    }
+
+    fn max_value(&self, problem: &Problem<D>) -> u64 {
+        problem.raw_instance.incidence_angle.iter().max().copied().unwrap_or(0)
     }
 }
 
