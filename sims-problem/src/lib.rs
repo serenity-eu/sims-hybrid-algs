@@ -1025,6 +1025,189 @@ fn solve_with_pls(sims_instance: &SimsDiscreteProblem) -> PyResult<Vec<Solution>
     )
 }
 
+/// Solves the SIMS problem using PLS and generates 2D plot artifacts
+#[pyfunction]
+#[pyo3(signature = (sims_instance, plot_output_path, timeout_seconds=240.0, max_iterations=50000, is_deterministic=false, initial_population_size=100, neighborhood_size_min=1, neighborhood_size_max=6))]
+fn solve_with_pls_and_plot_2d(
+    sims_instance: &SimsDiscreteProblem,
+    plot_output_path: &str,
+    timeout_seconds: f64,
+    max_iterations: usize,
+    is_deterministic: bool,
+    initial_population_size: usize,
+    neighborhood_size_min: u32,
+    neighborhood_size_max: u32,
+) -> PyResult<Vec<Solution>> {
+    use pls::pareto_local_search::ParetoLocalSearch;
+    use pls::solution_set::SolutionSet;
+    use pls::solution_set_impl::BTreeSolutionSet;
+
+    // Convert to PLS problem format
+    let pls_problem = sims_instance.to_pls_problem();
+    
+    // Create initial population using the same pattern as existing functions
+    let neighborhood_size_range = neighborhood_size_min..=neighborhood_size_max;
+    let initial_solution_set = if is_deterministic {
+        BTreeSolutionSet::random_with_seed(initial_population_size, &pls_problem, 1_234_567_890)
+    } else {
+        BTreeSolutionSet::random(initial_population_size, &pls_problem)
+    };
+
+    // Create and run PLS
+    let mut pareto_local_search = ParetoLocalSearch::new(
+        &pls_problem,
+        &initial_solution_set,
+        neighborhood_size_range,
+        is_deterministic,
+    );
+
+    let timeout = Duration::from_secs_f64(timeout_seconds);
+    let final_solution_set = pareto_local_search.run(max_iterations, timeout);
+
+    // Generate 2D plot
+    #[cfg(feature = "plotting")]
+    {
+        let objective_names = pls_problem.objective_names();
+        pls::plotting::draw_solutions_plot(&pareto_local_search.explored_solutions, &objective_names);
+        
+        // If a custom path is provided, try to move the generated file
+        if plot_output_path != "pareto_solutions_2d.svg" {
+            if let Err(e) = std::fs::rename("pareto_solutions_2d.svg", plot_output_path) {
+                log::warn!("Failed to move plot to {plot_output_path}: {e}");
+            }
+        }
+    }
+
+    // Convert solutions to Python format (same as existing function)
+    let final_solutions: Vec<pls::solution::EncodedSolution<2>> = final_solution_set.into_iter().collect();
+    let mut python_solutions = Vec::new();
+    
+    for (i, solution) in final_solutions.iter().enumerate() {
+        let timestamp_us = pareto_local_search
+            .explored_solutions
+            .get_solution_fingerprint(solution)
+            .map(|fp| fp.time.as_micros() as u64)
+            .unwrap_or(i as u64 * 1000);
+        
+        let py_solution = pls_solution_to_python_solution(solution, timestamp_us);
+        python_solutions.push(py_solution);
+    }
+
+    Ok(python_solutions)
+}
+
+/// Solves the SIMS problem using multiobjective PLS and generates 4D plot grid artifacts
+#[pyfunction]
+#[pyo3(signature = (sims_instance, plot_output_path, timeout_seconds=240.0, max_iterations=50000, is_deterministic=false, initial_population_size=100, neighborhood_size_min=1, neighborhood_size_max=6))]
+fn solve_with_pls_multiobjective_and_plot_4d(
+    sims_instance: &SimsDiscreteProblem,
+    plot_output_path: &str,
+    timeout_seconds: f64,
+    max_iterations: usize,
+    is_deterministic: bool,
+    initial_population_size: usize,
+    neighborhood_size_min: u32,
+    neighborhood_size_max: u32,
+) -> PyResult<Vec<Solution>> {
+    use pls::objectives::{
+        CloudyAreaObjective, MaxIncidenceAngleObjective, MinResolutionObjective, TotalCostObjective,
+    };
+    use pls::pareto_local_search::ParetoLocalSearch;
+    use pls::solution_set::SolutionSet;
+    use pls::solution_set_impl::NdTreeSolutionSet;
+
+    // Convert to 4D PLS problem format (same pattern as existing multiobjective function)
+    let raw_instance = pls::problem::SIMSProblemInstanceRaw {
+        name: "python_4d_instance".to_string(),
+        num_images: sims_instance.num_images,
+        universe_size: sims_instance.universe,
+        images: sims_instance
+            .images
+            .iter()
+            .map(|img| img.iter().map(|&x| x + 1).collect())
+            .collect(),
+        costs: sims_instance.costs.iter().map(|&c| c as u64).collect(),
+        clouds: sims_instance
+            .clouds
+            .iter()
+            .map(|cloud| cloud.iter().map(|&x| x + 1).collect())
+            .collect(),
+        areas: sims_instance.areas.iter().map(|&a| a as u64).collect(),
+        max_cloud_area: sims_instance.max_cloud_area as u64,
+        resolution: sims_instance.resolution.iter().map(|&r| r as u64).collect(),
+        incidence_angle: sims_instance
+            .incidence_angle
+            .iter()
+            .map(|&i| i as u64)
+            .collect(),
+    };
+
+    // Create 4D problem with all objectives
+    let objective_definitions: Vec<Box<dyn pls::objectives::ObjectiveDefinition<4>>> = vec![
+        Box::new(TotalCostObjective { index: 0 }),
+        Box::new(CloudyAreaObjective { index: 1 }),
+        Box::new(MinResolutionObjective { index: 2 }),
+        Box::new(MaxIncidenceAngleObjective { index: 3 }),
+    ];
+
+    let pls_problem = pls::problem::Problem::from_raw_with_objective_definitions(
+        raw_instance,
+        objective_definitions,
+    )
+    .map_err(|e| PyValueError::new_err(format!("Failed to create 4D problem: {e}")))?;
+
+    // Create initial population using ND-Tree for 4D optimization
+    let neighborhood_size_range = neighborhood_size_min..=neighborhood_size_max;
+    let initial_solution_set: NdTreeSolutionSet<pls::solution::BitsetEncodedSolution<4>, 4> =
+        if is_deterministic {
+            NdTreeSolutionSet::random_with_seed(initial_population_size, &pls_problem, 1_234_567_890)
+        } else {
+            NdTreeSolutionSet::random(initial_population_size, &pls_problem)
+        };
+
+    // Create and run PLS
+    let mut pareto_local_search = ParetoLocalSearch::new(
+        &pls_problem,
+        &initial_solution_set,
+        neighborhood_size_range,
+        is_deterministic,
+    );
+
+    let timeout = Duration::from_secs_f64(timeout_seconds);
+    let final_solution_set = pareto_local_search.run(max_iterations, timeout);
+
+    // Generate 4D plot grid
+    #[cfg(feature = "plotting")]
+    {
+        let objective_names = pls_problem.objective_names();
+        pls::plotting::draw_solutions_plot(&pareto_local_search.explored_solutions, &objective_names);
+        
+        // If a custom path is provided, try to move the generated file
+        if plot_output_path != "pareto_solutions_grid.svg" {
+            if let Err(e) = std::fs::rename("pareto_solutions_grid.svg", plot_output_path) {
+                log::warn!("Failed to move plot to {plot_output_path}: {e}");
+            }
+        }
+    }
+
+    // Convert solutions to Python format (same pattern as existing multiobjective function)
+    let final_solutions: Vec<pls::solution::BitsetEncodedSolution<4>> = final_solution_set.into_iter().collect();
+    let mut python_solutions = Vec::new();
+    
+    for (i, solution) in final_solutions.iter().enumerate() {
+        let timestamp_us = pareto_local_search
+            .explored_solutions
+            .get_solution_fingerprint(solution)
+            .map(|fp| fp.time.as_micros() as u64)
+            .unwrap_or(i as u64 * 1000);
+        
+        let py_solution = pls_4d_solution_to_python_solution(solution, timestamp_us);
+        python_solutions.push(py_solution);
+    }
+
+    Ok(python_solutions)
+}
+
 /// A Python module implemented in Rust.
 #[pymodule]
 fn sims_problem(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -1035,6 +1218,8 @@ fn sims_problem(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(solve_with_pls_advanced, m)?)?;
     m.add_function(wrap_pyfunction!(solve_with_pls_multiobjective, m)?)?;
     m.add_function(wrap_pyfunction!(solve_with_pls_multiobjective_advanced, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_with_pls_and_plot_2d, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_with_pls_multiobjective_and_plot_4d, m)?)?;
     m.add_class::<SimsDiscreteProblem>()?;
     m.add_class::<Solution>()?;
 
