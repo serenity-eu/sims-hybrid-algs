@@ -17,6 +17,7 @@ dependencies = [
     "matplotlib>=3.10.3",
     "scipy>=1.15.3",
     "numpy>=2.2.6",
+    "maturin>=1.9.0",
 ]
 
 [project.optional-dependencies]
