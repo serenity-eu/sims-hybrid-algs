@@ -3,6 +3,7 @@ import sims_problem
 from .test_data_loader import get_all_test_instances, load_test_instance_as_problem
 import time
 import logging
+from pathlib import Path
 
 # Configure logging to capture Rust logs
 logging.basicConfig(
@@ -455,3 +456,181 @@ class TestMultiobjectivePLSIntegrationWithRealData:
         # Both approaches should be reasonably efficient
         assert biobjective_time < 120, "Biobjective should complete within reasonable time"
         assert multiobjective_time < 180, "Multiobjective should complete within reasonable time"
+
+    @pytest.mark.parametrize("filename", [
+        "lagos_nigeria_30.dzn",
+        "paris_50.dzn",
+        "tokyo_bay_30.dzn"
+    ])
+    def test_multiobjective_pls_with_2d_plot_generation(self, filename, test_instances):
+        """Test multiobjective PLS with 2D plot generation as artifacts."""
+        if filename not in test_instances:
+            pytest.skip(f"Test instance {filename} not available")
+        
+        problem = test_instances[filename]
+        logger = logging.getLogger(__name__)
+        
+        # Create output directory for plot artifacts
+        test_dir = Path(__file__).parent
+        output_dir = test_dir / "plot_artifacts"
+        output_dir.mkdir(exist_ok=True)
+        
+        instance_name = filename.replace('.dzn', '')
+        plot_path = str(output_dir / f"{instance_name}_2d_pareto_front.svg")
+        
+        logger.info(f"Testing multiobjective PLS with 2D plot generation on {filename}")
+        
+        # Run PLS with plot generation
+        start_time = time.time()
+        solutions = sims_problem.solve_with_pls_and_plot_2d(
+            problem,
+            plot_path,
+            timeout_seconds=60.0,
+            max_iterations=5000,
+            is_deterministic=True,
+            initial_population_size=50,
+            neighborhood_size_min=1,
+            neighborhood_size_max=5
+        )
+        
+        execution_time = time.time() - start_time
+        
+        logger.info(f"PLS with 2D plotting completed in {execution_time:.2f} seconds")
+        logger.info(f"Found {len(solutions)} solutions")
+        
+        # Basic assertions
+        assert len(solutions) > 0, f"Should find at least one solution for {filename}"
+        
+        # Verify plot file was created
+        plot_file = Path(plot_path)
+        assert plot_file.exists(), f"Plot file should be created at {plot_path}"
+        assert plot_file.stat().st_size > 0, "Plot file should not be empty"
+        
+        logger.info(f"Successfully generated 2D plot artifact: {plot_path}")
+
+    @pytest.mark.parametrize("filename", [
+        "mexico_city_30.dzn",
+        "rio_de_janeiro_50.dzn"
+    ])
+    def test_multiobjective_pls_with_4d_plot_generation(self, filename, test_instances):
+        """Test multiobjective PLS with 4D plot grid generation as artifacts."""
+        if filename not in test_instances:
+            pytest.skip(f"Test instance {filename} not available")
+        
+        problem = test_instances[filename]
+        logger = logging.getLogger(__name__)
+        
+        # Create output directory for plot artifacts
+        test_dir = Path(__file__).parent
+        output_dir = test_dir / "plot_artifacts"
+        output_dir.mkdir(exist_ok=True)
+        
+        instance_name = filename.replace('.dzn', '')
+        plot_path = str(output_dir / f"{instance_name}_4d_pareto_grid.svg")
+        
+        logger.info(f"Testing multiobjective PLS with 4D plot grid generation on {filename}")
+        
+        # Run 4D PLS with plot generation
+        start_time = time.time()
+        solutions = sims_problem.solve_with_pls_multiobjective_and_plot_4d(
+            problem,
+            plot_path,
+            timeout_seconds=90.0,
+            max_iterations=8000,
+            is_deterministic=True,
+            initial_population_size=80,
+            neighborhood_size_min=1,
+            neighborhood_size_max=6
+        )
+        
+        execution_time = time.time() - start_time
+        
+        logger.info(f"4D PLS with plotting completed in {execution_time:.2f} seconds")
+        logger.info(f"Found {len(solutions)} solutions")
+        
+        # Basic assertions for 4D objectives
+        assert len(solutions) > 0, f"Should find at least one solution for {filename}"
+        
+        # Verify all solutions have 4D objectives
+        for i, solution in enumerate(solutions[:5]):  # Check first 5
+            assert solution.cost >= 0, f"Solution {i} should have non-negative cost"
+            assert solution.cloudy_area >= 0, f"Solution {i} should have non-negative cloudy area"
+            assert solution.min_resolutions_sum >= 0, f"Solution {i} should have non-negative min_resolutions_sum"
+            assert solution.max_incidence_angle >= 0, f"Solution {i} should have non-negative max_incidence_angle"
+        
+        # Verify plot file was created
+        plot_file = Path(plot_path)
+        assert plot_file.exists(), f"4D plot grid file should be created at {plot_path}"
+        assert plot_file.stat().st_size > 0, "4D plot file should not be empty"
+        
+        # Verify we have diversity in 4D space
+        objectives_4d = set((sol.cost, sol.cloudy_area, sol.min_resolutions_sum, sol.max_incidence_angle) 
+                           for sol in solutions)
+        assert len(objectives_4d) > 1, "Should have diverse 4D objectives"
+        
+        # Print solution statistics for all 4 objectives
+        costs = [sol.cost for sol in solutions]
+        cloudy_areas = [sol.cloudy_area for sol in solutions]
+        min_res_sums = [sol.min_resolutions_sum for sol in solutions]
+        max_angles = [sol.max_incidence_angle for sol in solutions]
+        
+        logger.info("4D Solution diversity:")
+        logger.info(f"  Cost range: {min(costs)} - {max(costs)}")
+        logger.info(f"  Cloudy area range: {min(cloudy_areas)} - {max(cloudy_areas)}")
+        logger.info(f"  Min resolution sum range: {min(min_res_sums)} - {max(min_res_sums)}")
+        logger.info(f"  Max incidence angle range: {min(max_angles)} - {max(max_angles)}")
+        logger.info(f"  Unique 4D objective combinations: {len(objectives_4d)}")
+        
+        logger.info(f"Successfully generated 4D plot grid artifact: {plot_path}")
+
+    def test_plot_artifacts_directory_creation(self):
+        """Test that plot artifacts directory is properly created and accessible."""
+        test_dir = Path(__file__).parent
+        output_dir = test_dir / "plot_artifacts"
+        
+        # Ensure directory exists
+        output_dir.mkdir(exist_ok=True)
+        
+        assert output_dir.exists(), "Plot artifacts directory should exist"
+        assert output_dir.is_dir(), "Plot artifacts path should be a directory"
+        
+        # Create a README file explaining the artifacts
+        readme_path = output_dir / "README.md"
+        with open(readme_path, 'w') as f:
+            f.write("""# PLS Multi-Objective Plot Artifacts
+
+This directory contains plot artifacts generated by the PLS multi-objective tests.
+
+## Files
+
+### 2D Plots
+- `*_2d_pareto_front.svg`: 2D scatter plots showing cost vs cloudy area
+
+### 4D Plot Grids  
+- `*_4d_pareto_grid.svg`: Grid of 6 subplots showing all pairwise combinations of 4 objectives:
+  - Cost vs Cloudy Area
+  - Cost vs Min Resolution Sum
+  - Cost vs Max Incidence Angle
+  - Cloudy Area vs Min Resolution Sum
+  - Cloudy Area vs Max Incidence Angle
+  - Min Resolution Sum vs Max Incidence Angle
+
+## Objectives
+
+1. **Cost**: Total monetary cost of selected satellite images
+2. **Cloudy Area**: Total area covered by clouds (to be minimized)
+3. **Min Resolution Sum**: Sum of minimum resolutions across all universe elements  
+4. **Max Incidence Angle**: Maximum incidence angle among selected images
+
+## Plot Elements
+
+- **Green circles**: Non-dominated (Pareto optimal) solutions
+- **Blue triangles**: Initial solutions
+
+## Generated by
+
+Multi-objective PLS integration tests using real satellite image selection data.
+""")
+        
+        assert readme_path.exists(), "README file should be created"
+        print(f"Created plot artifacts directory with README: {output_dir}")

@@ -63,6 +63,45 @@ pub fn draw_solutions_plot_with_problem<const D: usize>(
     draw_solutions_plot(solutions_data, &objective_names);
 }
 
+/// Calculate dynamic axis ranges from actual solution data
+#[cfg(feature = "plotting")]
+fn calculate_axis_ranges<const D: usize>(
+    solutions_data: &ExploredSolutionsData<D>,
+    obj_x: usize,
+    obj_y: usize,
+) -> ((u64, u64), (u64, u64)) {
+    let all_solutions: Vec<_> = solutions_data
+        .non_dominated()
+        .into_iter()
+        .chain(solutions_data.initial_solutions())
+        .collect();
+
+    if all_solutions.is_empty() {
+        return ((0, 100), (0, 100));
+    }
+
+    let x_values: Vec<u64> = all_solutions.iter().map(|s| s.objectives[obj_x]).collect();
+    let y_values: Vec<u64> = all_solutions.iter().map(|s| s.objectives[obj_y]).collect();
+
+    let min_x = *x_values.iter().min().unwrap_or(&0);
+    let max_x = *x_values.iter().max().unwrap_or(&100);
+    let min_y = *y_values.iter().min().unwrap_or(&0);
+    let max_y = *y_values.iter().max().unwrap_or(&100);
+
+    // Add 10% padding to ranges for better visualization
+    let x_range = max_x.saturating_sub(min_x);
+    let y_range = max_y.saturating_sub(min_y);
+    let x_padding = (x_range / 10).max(1);
+    let y_padding = (y_range / 10).max(1);
+
+    let x_min = min_x.saturating_sub(x_padding);
+    let x_max = max_x.saturating_add(x_padding);
+    let y_min = min_y.saturating_sub(y_padding);
+    let y_max = max_y.saturating_add(y_padding);
+
+    ((x_min, x_max), (y_min, y_max))
+}
+
 /// Draw a single 2D scatter plot for 2-objective problems
 #[cfg(feature = "plotting")]
 fn draw_2d_plot<const D: usize>(
@@ -77,6 +116,9 @@ fn draw_2d_plot<const D: usize>(
     let obj1_name = objective_names.first().copied().unwrap_or("Objective 1");
     let obj2_name = objective_names.get(1).copied().unwrap_or("Objective 2");
 
+    // Calculate dynamic axis ranges from actual solution data
+    let ((x_min, x_max), (y_min, y_max)) = calculate_axis_ranges(solutions_data, 0, 1);
+
     let mut chart_ctx = ChartBuilder::on(&root_drawing_area)
         .caption(
             format!("Pareto Local Search - {obj1_name} vs {obj2_name}"),
@@ -85,10 +127,7 @@ fn draw_2d_plot<const D: usize>(
         .set_label_area_size(LabelAreaPosition::Left, 60)
         .set_label_area_size(LabelAreaPosition::Bottom, 50)
         .margin(20)
-        .build_cartesian_2d(
-            0u64..solutions_data.max_objective(0),
-            0u64..solutions_data.max_objective(1),
-        )
+        .build_cartesian_2d(x_min..x_max, y_min..y_max)
         .unwrap();
 
     chart_ctx
@@ -201,8 +240,8 @@ fn draw_objective_pair_subplot<const D: usize>(
     _width: usize,
     _height: usize,
 ) {
-    let max_x = solutions_data.max_objective(obj_x);
-    let max_y = solutions_data.max_objective(obj_y);
+    // Calculate dynamic axis ranges from actual solution data
+    let ((x_min, x_max), (y_min, y_max)) = calculate_axis_ranges(solutions_data, obj_x, obj_y);
 
     // Get objective names with fallbacks
     let x_axis_name = objective_names
@@ -219,7 +258,7 @@ fn draw_objective_pair_subplot<const D: usize>(
         .set_label_area_size(LabelAreaPosition::Left, 40)
         .set_label_area_size(LabelAreaPosition::Bottom, 30)
         .margin(10)
-        .build_cartesian_2d(0u64..max_x, 0u64..max_y)
+        .build_cartesian_2d(x_min..x_max, y_min..y_max)
         .unwrap();
 
     chart_ctx
