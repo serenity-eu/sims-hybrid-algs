@@ -6,6 +6,9 @@ use std::{
 
 use log::{debug, error, info};
 use pareto::{HasObjectives, MoSolution};
+use tracing::{
+    debug_span, info_span, instrument
+};
 
 use crate::{
     explored_solutions_data::ExploredSolutionsData, problem::Problem, solution::EncodedSolution,
@@ -111,13 +114,29 @@ where
         }
     }
 
+    #[instrument(level = "debug", skip(self, timer), fields(
+        iteration,
+        population_size = self.population.len(),
+        neighborhood_structure = self.neigborhood_structure
+    ))]
     fn step(&mut self, iteration: usize, timer: &Timer) -> StepStatus {
         let step_time = Instant::now();
         let mut step_stats = StepStats::new(self.approximated_pareto_set.len());
         let mut auxiliary_population = S::new("auxiliary".to_string());
 
+        tracing::debug!("Starting PLS step");
+
+        let population_validation_span = debug_span!("validate_population");
+        let _validation_guard = population_validation_span.enter();
         self.validate_population();
+
         let population = mem::replace(&mut self.population, S::new("population".to_string()));
+
+        let neighborhood_exploration_span = info_span!(
+            "explore_neighborhoods",
+            initial_population_size = population.len()
+        );
+        let exploration_guard = neighborhood_exploration_span.enter();
 
         self.explore_population_neighborhoods(
             population,
@@ -126,8 +145,16 @@ where
             &mut step_stats,
             &mut auxiliary_population,
         );
+        drop(exploration_guard);
 
         step_stats.auxiliary_len = auxiliary_population.len();
+
+        tracing::debug!(
+            explored_neighbors = step_stats.explored_neighbor_count,
+            duplicated_neighbors = step_stats.duplicated_neighbor_count,
+            auxiliary_size = step_stats.auxiliary_len,
+            "Step neighborhood exploration completed"
+        );
 
         self.log_iteration_stats(iteration, step_time, &step_stats);
         Self::log_auxiliary_population(&auxiliary_population);
@@ -142,6 +169,10 @@ where
         }
     }
 
+    #[instrument(level = "debug", skip(self, population, timer, step_stats, auxiliary_population), fields(
+        iteration,
+        population_size = %population.len()
+    ))]
     fn explore_population_neighborhoods(
         &mut self,
         population: S,
@@ -151,6 +182,13 @@ where
         auxiliary_population: &mut S,
     ) {
         'population: for (index, solution) in population.into_iter().enumerate() {
+            let solution_span = debug_span!(
+                "explore_solution",
+                solution_index = index,
+                neighborhood_structure = self.neigborhood_structure
+            );
+            let _solution_guard = solution_span.enter();
+
             Self::log_solution_debug(index, &solution);
 
             let neighbors = solution.neighborhood(
@@ -159,6 +197,16 @@ where
                 timer,
                 self.is_deterministic,
             );
+            let neighbor_count = neighbors.len();
+
+            tracing::debug!(
+                neighbors_generated = neighbor_count,
+                "Generated neighborhood for solution"
+            );
+
+            let neighbor_evaluation_span =
+                debug_span!("evaluate_neighbors", neighbor_count = neighbor_count);
+            let _evaluation_guard = neighbor_evaluation_span.enter();
 
             for (neighbor_index, neighbor) in neighbors.into_iter().enumerate() {
                 if self.process_neighbor(
@@ -170,6 +218,7 @@ where
                     step_stats,
                     auxiliary_population,
                 ) {
+                    tracing::debug!("Timer expired, breaking population exploration");
                     break 'population;
                 }
             }
@@ -177,6 +226,12 @@ where
             self.explored_solutions
                 .update_explored_neighborhood_size(&solution, self.neigborhood_structure);
         }
+
+        tracing::debug!(
+            total_neighbors_explored = step_stats.explored_neighbor_count,
+            duplicates_found = step_stats.duplicated_neighbor_count,
+            "Population neighborhood exploration completed"
+        );
     }
 
     fn log_solution_debug(index: usize, solution: &EncodedSolution<D>) {
@@ -189,6 +244,18 @@ where
     #[expect(
         clippy::too_many_arguments,
         reason = "Necessary for logical separation of concerns"
+    )]
+    #[instrument(
+        level = "trace",
+        skip(
+            self,
+            neighbor,
+            current_solution,
+            timer,
+            step_stats,
+            auxiliary_population
+        ),
+        fields(neighbor_index, iteration)
     )]
     fn process_neighbor(
         &mut self,
@@ -207,8 +274,14 @@ where
         if self.explored_solutions.is_registered(neighbor) {
             debug!("Neighbor nr {neighbor_index} was already explored.");
             step_stats.duplicated_neighbor_count += 1;
+            tracing::trace!("Neighbor already explored, skipping");
             return false;
         }
+
+        tracing::trace!("Evaluating new neighbor");
+
+        let evaluation_span = debug_span!("evaluate_neighbor");
+        let _eval_guard = evaluation_span.enter();
 
         self.evaluate_neighbor(
             neighbor,
@@ -222,6 +295,7 @@ where
 
         if timer.is_expired() {
             info!("Timer expired. Stop exploring neighbors.");
+            tracing::warn!("Timer expired during neighbor processing");
             return true;
         }
 
@@ -231,6 +305,18 @@ where
     #[expect(
         clippy::too_many_arguments,
         reason = "Necessary for logical separation of concerns"
+    )]
+    #[instrument(
+        level = "trace",
+        skip(
+            self,
+            neighbor,
+            current_solution,
+            timer,
+            step_stats,
+            auxiliary_population
+        ),
+        fields(neighbor_index, iteration)
     )]
     fn evaluate_neighbor(
         &mut self,
@@ -244,19 +330,37 @@ where
     ) {
         if neighbor.is_covered_by(current_solution.objectives()) {
             debug!("Neighbor nr {neighbor_index} is weakly dominated by current solution.");
+            tracing::trace!("Neighbor dominated by current solution, discarding");
             return;
         }
 
+        let pareto_evaluation_span = debug_span!("pareto_evaluation");
+        let pareto_guard = pareto_evaluation_span.enter();
+
         if self.try_add_to_pareto_set(neighbor, neighbor_index, iteration, timer, step_stats) {
+            drop(pareto_guard);
+
+            let auxiliary_evaluation_span = debug_span!("auxiliary_evaluation");
+            let _aux_guard = auxiliary_evaluation_span.enter();
+
             Self::try_add_to_auxiliary_population(
                 neighbor,
                 neighbor_index,
                 step_stats,
                 auxiliary_population,
             );
+
+            tracing::trace!("Neighbor added to Pareto set and auxiliary population evaluated");
+        } else {
+            tracing::trace!("Neighbor not added to Pareto set");
         }
     }
 
+    #[instrument(level = "trace", skip(self, neighbor, timer, step_stats), fields(
+        neighbor_index,
+        iteration,
+        pareto_set_size = self.approximated_pareto_set.len()
+    ))]
     fn try_add_to_pareto_set(
         &mut self,
         neighbor: &EncodedSolution<D>,
@@ -270,9 +374,15 @@ where
             self.explored_solutions
                 .register(iteration, neighbor, timer.elapsed());
             step_stats.pareto_added_count += 1;
+
+            tracing::trace!(
+                new_pareto_set_size = self.approximated_pareto_set.len(),
+                "Neighbor successfully added to Pareto set"
+            );
             true
         } else {
             debug!("Neighbor nr {neighbor_index} wasn't added to approximated pareto set.");
+            tracing::trace!("Neighbor rejected from Pareto set");
             false
         }
     }
@@ -299,8 +409,30 @@ where
         }
     }
 
+    #[instrument(level = "debug", skip(self, step_time, step_stats), fields(
+        iteration,
+        pareto_set_size = self.approximated_pareto_set.len()
+    ))]
     fn log_iteration_stats(&self, iteration: usize, step_time: Instant, step_stats: &StepStats) {
         let iteration_metrics = self.calculate_iteration_metrics(step_time, step_stats);
+
+        // Log detailed metrics via tracing
+        tracing::info!(
+            iteration = iteration,
+            duration_us = iteration_metrics.duration_us,
+            per_solution_time_us = iteration_metrics.per_solution_search_time,
+            neighborhood_size = iteration_metrics.neighborhood_size,
+            neighbors_explored = step_stats.explored_neighbor_count,
+            neighbors_duplicated = step_stats.duplicated_neighbor_count,
+            duplicate_percentage = iteration_metrics.duplicated_percent,
+            auxiliary_added = step_stats.auxiliary_added_count,
+            auxiliary_removed = iteration_metrics.auxiliary_removed_count,
+            pareto_added = step_stats.pareto_added_count,
+            pareto_removed = iteration_metrics.pareto_removed_count,
+            pareto_set_final_size = self.approximated_pareto_set.len(),
+            "Iteration completed"
+        );
+
         Self::log_metrics(iteration, &iteration_metrics, step_stats);
     }
 
@@ -360,28 +492,55 @@ where
         }
     }
 
+    #[instrument(level = "debug", skip(self, auxiliary_population), fields(
+        auxiliary_size = auxiliary_population.len(),
+        current_neighborhood_structure = self.neigborhood_structure,
+        max_neighborhood_structure = self.neighborhood_size_range.end()
+    ))]
     fn determine_next_step(&mut self, auxiliary_population: S) -> StepStatus {
         if !auxiliary_population.is_empty() {
+            tracing::debug!("New population found, replacing current population");
             self.replace_population_with_auxiliary(auxiliary_population);
             return StepStatus::NewPopulation;
         }
 
         if self.can_increase_neighborhood_structure() {
             info!("Increasing neighborhood structure.");
+            tracing::debug!(
+                old_structure = self.neigborhood_structure,
+                new_structure = self.neigborhood_structure + 1,
+                "Increasing neighborhood structure"
+            );
             self.neigborhood_structure += 1;
             self.add_eligible_pareto_solutions();
             StepStatus::IncreasedNeighborhoodStructure
         } else {
             info!("Reached maximum neighborhood structure.");
+            tracing::debug!("Maximum neighborhood structure reached, algorithm will terminate");
             StepStatus::AllNeighborhoodStructuresExplored
         }
     }
 
+    #[instrument(level = "debug", skip(self, auxiliary_population), fields(
+        old_population_size = self.population.len(),
+        auxiliary_size = auxiliary_population.len(),
+        old_neighborhood_structure = self.neigborhood_structure
+    ))]
     fn replace_population_with_auxiliary(&mut self, auxiliary_population: S) {
+        let start_time = Instant::now();
+
         info!("Replacing current population with auxiliary population.");
         self.population = auxiliary_population.with_name("population".to_string());
         info!("Start again with smallest neighborhood structure.");
         self.neigborhood_structure = *self.neighborhood_size_range.start();
+
+        let elapsed = start_time.elapsed();
+        tracing::debug!(
+            new_population_size = self.population.len(),
+            new_neighborhood_structure = self.neigborhood_structure,
+            duration_us = elapsed.as_micros(),
+            "Population replaced with auxiliary population"
+        );
     }
 
     fn can_increase_neighborhood_structure(&self) -> bool {
@@ -389,7 +548,14 @@ where
         self.neighborhood_size_range.contains(&next_structure)
     }
 
+    #[instrument(level = "debug", skip(self), fields(
+        current_pareto_size = self.approximated_pareto_set.len(),
+        current_population_size = self.population.len(),
+        neighborhood_structure = self.neigborhood_structure
+    ))]
     fn add_eligible_pareto_solutions(&mut self) {
+        let start_time = Instant::now();
+
         info!(
             "Use solutions from approximated pareto set which are not already Pareto local optimum"
         );
@@ -402,14 +568,43 @@ where
             })
             .collect();
 
+        let eligible_count = eligible_solutions.len();
+        tracing::debug!(
+            eligible_solutions_count = eligible_count,
+            "Found eligible Pareto solutions"
+        );
+
         for solution in eligible_solutions {
             self.population.force_add(solution);
         }
+
+        let elapsed = start_time.elapsed();
+        tracing::debug!(
+            new_population_size = self.population.len(),
+            eligible_added = eligible_count,
+            duration_us = elapsed.as_micros(),
+            "Eligible Pareto solutions added to population"
+        );
     }
 
+    #[instrument(level = "info", skip(self), fields(
+        max_iterations,
+        max_duration_ms = max_duration.as_millis(),
+        population_size = self.population.len(),
+        pareto_set_size = self.approximated_pareto_set.len()
+    ))]
     pub fn run(&mut self, max_iterations: usize, max_duration: Duration) -> S {
         let pls_timer = Timer::start(max_duration);
+
         for i in 1..=max_iterations {
+            let iteration_span = info_span!(
+                "pls_iteration",
+                iteration = i,
+                population_size = self.population.len(),
+                neighborhood_structure = self.neigborhood_structure
+            );
+            let _iteration_guard = iteration_span.enter();
+
             debug!("******************************************************");
             debug!(
                 "******** ITERATION {} POPULATION SIZE {} ********",
@@ -442,6 +637,13 @@ where
                 );
             }
         }
+
+        tracing::info!(
+            pareto_set_final_size = self.approximated_pareto_set.len(),
+            explored_solutions_total = self.explored_solutions.solutions.len(),
+            "PLS algorithm completed"
+        );
+
         self.approximated_pareto_set.clone()
     }
 }

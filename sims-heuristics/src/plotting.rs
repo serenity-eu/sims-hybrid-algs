@@ -31,39 +31,35 @@ fn rainbow_color(iteration: usize, max_iteration: usize) -> RGBColor {
     if max_iteration == 0 {
         return BLUE;
     }
-    
+
     // Normalize iteration to 0.0-1.0 range
-    let t = iteration as f64 / max_iteration as f64;
-    
+    let normalized_iteration = iteration as f64 / max_iteration as f64;
+
     // Convert to HSV color space: H varies from 0 (red) to 300 (magenta), S=1, V=1
     // This gives us a rainbow progression: red -> orange -> yellow -> green -> blue -> magenta
-    let hue = t * 300.0; // 0-300 degrees
-    
+    let hue = normalized_iteration * 300.0; // 0-300 degrees
+
     // Convert HSV to RGB
-    let c = 1.0; // chroma (since saturation = 1)
+    let chroma = 1.0; // chroma (since saturation = 1)
     let h_prime = hue / 60.0;
-    let x = c * (1.0 - ((h_prime % 2.0) - 1.0).abs());
-    
+    let secondary = chroma * (1.0 - ((h_prime % 2.0) - 1.0).abs());
+
     let (r, g, b) = if h_prime < 1.0 {
-        (c, x, 0.0)
+        (chroma, secondary, 0.0)
     } else if h_prime < 2.0 {
-        (x, c, 0.0)
+        (secondary, chroma, 0.0)
     } else if h_prime < 3.0 {
-        (0.0, c, x)
+        (0.0, chroma, secondary)
     } else if h_prime < 4.0 {
-        (0.0, x, c)
+        (0.0, secondary, chroma)
     } else if h_prime < 5.0 {
-        (x, 0.0, c)
+        (secondary, 0.0, chroma)
     } else {
-        (c, 0.0, x)
+        (chroma, 0.0, secondary)
     };
-    
+
     // Convert to 0-255 range and create RGBColor
-    RGBColor(
-        (r * 255.0) as u8,
-        (g * 255.0) as u8,
-        (b * 255.0) as u8,
-    )
+    RGBColor((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
 }
 
 /// Draw solutions plot for visualization of pareto fronts.
@@ -177,20 +173,20 @@ fn draw_2d_plot<const D: usize>(
     // Get all solutions and sort them by iteration to draw in discovery order
     let mut all_solutions = solutions_data.solutions();
     all_solutions.sort_by_key(|s| s.iteration);
-    
+
     // Find max iteration for rainbow color scaling
     let max_iteration = all_solutions.iter().map(|s| s.iteration).max().unwrap_or(0);
-    
+
     // Get non-dominated solutions for highlighting
     let non_dominated = solutions_data.non_dominated();
-    let non_dominated_set: std::collections::HashSet<_> = 
+    let non_dominated_set: std::collections::HashSet<_> =
         non_dominated.iter().map(|s| s.objectives).collect();
 
     // Draw all solutions with rainbow colors based on discovery time
     for solution in &all_solutions {
         let color = rainbow_color(solution.iteration, max_iteration);
         let is_non_dominated = non_dominated_set.contains(&solution.objectives);
-        
+
         if is_non_dominated {
             // Non-dominated solutions: larger circles with black border
             chart_ctx
@@ -222,15 +218,15 @@ fn draw_2d_plot<const D: usize>(
     // Create a simple text legend in the chart area
     chart_ctx
         .draw_series(std::iter::once(Text::new(
-            format!("Rainbow colors show discovery order (early=red, late=magenta)"),
+            "Rainbow colors show discovery order (early=red, late=magenta)".to_string(),
             (x_min + (x_max - x_min) / 20, y_max - (y_max - y_min) / 20),
             ("Arial", 12).into_font().color(&BLACK),
         )))
         .unwrap();
-        
+
     chart_ctx
         .draw_series(std::iter::once(Text::new(
-            format!("Large circles with black border = Pareto optimal solutions"),
+            "Large circles with black border = Pareto optimal solutions".to_string(),
             (x_min + (x_max - x_min) / 20, y_max - (y_max - y_min) / 10),
             ("Arial", 12).into_font().color(&BLACK),
         )))
@@ -334,20 +330,20 @@ fn draw_objective_pair_subplot<const D: usize>(
     // Get all solutions and sort them by iteration to draw in discovery order
     let mut all_solutions = solutions_data.solutions();
     all_solutions.sort_by_key(|s| s.iteration);
-    
+
     // Find max iteration for rainbow color scaling
     let max_iteration = all_solutions.iter().map(|s| s.iteration).max().unwrap_or(0);
-    
+
     // Get non-dominated solutions for highlighting
     let non_dominated = solutions_data.non_dominated();
-    let non_dominated_set: std::collections::HashSet<_> = 
+    let non_dominated_set: std::collections::HashSet<_> =
         non_dominated.iter().map(|s| s.objectives).collect();
 
     // Draw all solutions with rainbow colors based on discovery time
     for solution in &all_solutions {
         let color = rainbow_color(solution.iteration, max_iteration);
         let is_non_dominated = non_dominated_set.contains(&solution.objectives);
-        
+
         if is_non_dominated {
             // Non-dominated solutions: larger circles with black border
             chart_ctx

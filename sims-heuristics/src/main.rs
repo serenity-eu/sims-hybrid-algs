@@ -3,6 +3,7 @@ mod file_io;
 use clap::{ArgAction, Parser};
 
 use log::debug;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use std::{
     ops::RangeInclusive,
@@ -69,17 +70,54 @@ struct Cli {
         default_value_t = MAX_ITERATIONS
     )]
     max_iterations: usize,
+    #[arg(
+        long = "chrome-trace",
+        help = "Path to output Chrome trace file for viewing in chrome://tracing"
+    )]
+    chrome_trace: Option<PathBuf>,
 }
 
 #[allow(clippy::too_many_lines)]
 fn main() {
     let args = Cli::parse();
     let start_time = Instant::now();
-    stderrlog::new()
-        .module(module_path!())
-        .verbosity(log::Level::Error)
-        .init()
-        .unwrap();
+
+    // Initialize tracing with logging handler as default
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,pls=debug"));
+
+    // Always add the console logging layer
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        .with_target(false)
+        .with_level(true)
+        .with_thread_ids(true)
+        .with_line_number(true)
+        .with_file(true)
+        .compact();
+
+    // Optionally add Chrome tracing layer
+    if let Some(chrome_trace_path) = &args.chrome_trace {
+        let (chrome_layer, guard) = tracing_chrome::ChromeLayerBuilder::new()
+            .file(chrome_trace_path)
+            .build();
+
+        tracing_subscriber::registry()
+            .with(fmt_layer)
+            .with(chrome_layer)
+            .with(env_filter)
+            .init();
+
+        // Keep the guard alive for the duration of the program
+        std::mem::forget(guard);
+    } else {
+        tracing_subscriber::registry()
+            .with(fmt_layer)
+            .with(env_filter)
+            .init();
+    }
+
+    // Bridge log crate to tracing (ignore errors if already set)
+    let _ = tracing_log::LogTracer::init();
 
     debug!("Starting Pareto Local Search solver");
 
