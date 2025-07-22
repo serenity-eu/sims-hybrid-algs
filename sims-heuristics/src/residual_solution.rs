@@ -129,8 +129,11 @@ impl<const D: usize> ResidualSolution<D> {
             }
         } else {
             // Legacy fallback for 2D case
-            assert!(D == 2, "ResidualSolution without objective definitions only supports D = 2");
-            
+            assert!(
+                D == 2,
+                "ResidualSolution without objective definitions only supports D = 2"
+            );
+
             // Compute cost as sum of costs of selected images
             let cost: u64 = self
                 .selected_images

@@ -273,7 +273,9 @@ impl<const D: usize> ObjectiveDefinition<D> for MinResolutionObjective {
             let current_min = solution
                 .selected_images()
                 .iter()
-                .filter(|&&idx| idx != image_index && problem.images[idx].parts.contains(&element_index))
+                .filter(|&&idx| {
+                    idx != image_index && problem.images[idx].parts.contains(&element_index)
+                })
                 .map(|&idx| problem.raw_instance.resolution[idx])
                 .min();
 
@@ -307,7 +309,13 @@ impl<const D: usize> ObjectiveDefinition<D> for MinResolutionObjective {
 
     fn max_value(&self, problem: &Problem<D>) -> u64 {
         // Maximum possible value: worst resolution for each element
-        let max_resolution = problem.raw_instance.resolution.iter().max().copied().unwrap_or(0);
+        let max_resolution = problem
+            .raw_instance
+            .resolution
+            .iter()
+            .max()
+            .copied()
+            .unwrap_or(0);
         max_resolution * (problem.universe.len() as u64)
     }
 }
@@ -396,7 +404,13 @@ impl<const D: usize> ObjectiveDefinition<D> for MaxIncidenceAngleObjective {
     }
 
     fn max_value(&self, problem: &Problem<D>) -> u64 {
-        problem.raw_instance.incidence_angle.iter().max().copied().unwrap_or(0)
+        problem
+            .raw_instance
+            .incidence_angle
+            .iter()
+            .max()
+            .copied()
+            .unwrap_or(0)
     }
 }
 

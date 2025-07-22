@@ -4,6 +4,7 @@ use pareto::{HasObjectives, MoSolution, Random};
 use rand::SeedableRng;
 use rand::{Rng, seq::IteratorRandom};
 use std::{collections::BinaryHeap, fmt::Debug, hash::Hash, vec};
+use tracing::instrument;
 
 use crate::objectives::{self, SolutionEvaluator};
 use crate::problem::{ComparableImage, ImageObjectiveDeltas, Problem, ScaledObjectiveDeltas};
@@ -250,7 +251,8 @@ impl<const D: usize> VecEncodedSolution<D> {
             solution.add_image(image_index, problem);
         }
         solution
-    }    /// Generate a random feasible solution (choose element randomly, then choose image randomly from those that contain the element iff it is not already covered by another image)
+    }
+    /// Generate a random feasible solution (choose element randomly, then choose image randomly from those that contain the element iff it is not already covered by another image)
     ///
     /// # Panics
     ///
@@ -763,6 +765,11 @@ impl<const D: usize> VecEncodedSolution<D> {
 
     /// Explore neighborhood of size k
     #[must_use]
+    #[instrument(level = "debug", skip(self, problem, timer), fields(
+        k = k,
+        neighborhood_structure = k,
+        solution_objectives = ?self.objectives
+    ))]
     pub fn neighborhood(
         &self,
         k: u32,

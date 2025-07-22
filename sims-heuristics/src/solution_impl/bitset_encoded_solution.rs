@@ -8,6 +8,7 @@ mod bitset_impl {
     use rand::SeedableRng;
     use rand::{Rng, seq::IteratorRandom};
     use std::{collections::BinaryHeap, fmt::Debug, hash::Hash};
+    use tracing::instrument;
 
     use crate::objectives::{self, SolutionEvaluator};
     use crate::problem::{ComparableImage, ImageObjectiveDeltas, Problem, ScaledObjectiveDeltas};
@@ -656,6 +657,11 @@ mod bitset_impl {
 
         /// Explore neighborhood of size k
         #[must_use]
+        #[instrument(level = "debug", skip(self, problem, timer), fields(
+            k = k,
+            neighborhood_structure = k,
+            solution_objectives = ?self.objectives
+        ))]
         pub fn neighborhood(
             &self,
             k: u32,
