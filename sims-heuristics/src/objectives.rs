@@ -214,7 +214,8 @@ impl<const D: usize> ObjectiveDefinition<D> for CloudyAreaObjective {
     }
 }
 
-/// Minimum resolution sum objective implementation
+/// Minimum resolution sum objective implementation.
+///
 /// For each universe element, finds the best (minimum) resolution among selected images that cover it,
 /// then sums these minimum resolutions across all universe elements.
 #[derive(Debug, Clone)]

@@ -6,9 +6,7 @@ use std::{
 
 use log::{debug, error, info};
 use pareto::{HasObjectives, MoSolution};
-use tracing::{
-    debug_span, info_span, instrument
-};
+use tracing::{debug_span, info_span, instrument};
 
 use crate::{
     explored_solutions_data::ExploredSolutionsData, problem::Problem, solution::EncodedSolution,
