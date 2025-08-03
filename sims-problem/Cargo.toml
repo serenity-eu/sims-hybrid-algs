@@ -16,6 +16,7 @@ plotting = ["pls/plotting"]
 pyo3 = { version = "0.25.1", features = ["extension-module"] }
 pls = { path = "../sims-heuristics", package = "sims-heuristics", version = "0.1.0", features = ["plotting"] }
 pareto = { path = "../pareto", version = "0.1.0" }
+augmecon = { path = "../augmecon-rs", version = "0.1.0" }
 regex = "1.0"
 log = "0.4"
 pyo3-log = "0.12"
