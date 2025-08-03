@@ -3,11 +3,18 @@ use pyo3::{prelude::*, types::PyDict};
 use std::{
     collections::HashSet,
     hash::{Hash, Hasher},
+    time::Duration,
 };
 
 use crate::problem::SimsDiscreteProblem;
 
 /// Represents a solution to the SIMS problem
+///
+/// A solution contains:
+/// - The set of selected satellite images
+/// - Associated objective values (cost, cloudy area coverage)
+/// - Optional additional objectives (resolution, incidence angle)
+/// - Timestamp indicating when the solution was found
 #[pyclass]
 #[derive(Clone, Debug)]
 pub struct Solution {
@@ -18,7 +25,7 @@ pub struct Solution {
     #[pyo3(get, set)]
     pub cloudy_area: i32,
     #[pyo3(get, set)]
-    pub timestamp_us: u64, // Using u64 for microseconds
+    pub timestamp: Duration, // Using Duration for timedelta compatibility
     #[pyo3(get, set)]
     pub max_incidence_angle: Option<i32>,
     #[pyo3(get, set)]
@@ -64,7 +71,7 @@ impl Solution {
             selected_images: selected_images.into_iter().collect(),
             cost,
             cloudy_area,
-            timestamp_us,
+            timestamp: Duration::from_micros(timestamp_us),
             max_incidence_angle,
             min_resolutions_sum,
         }
@@ -80,7 +87,7 @@ impl Solution {
             dict.set_item("selected_images", selected_images_list)?;
             dict.set_item("cost", self.cost)?;
             dict.set_item("cloudy_area", self.cloudy_area)?;
-            dict.set_item("timestamp_us", self.timestamp_us)?;
+            dict.set_item("timestamp", self.timestamp)?; // PyO3 automatically converts Duration to timedelta
             dict.set_item("max_incidence_angle", self.max_incidence_angle)?;
             dict.set_item("min_resolutions_sum", self.min_resolutions_sum)?;
 

@@ -1,3 +1,4 @@
+use augmecon::{sims_problem::SimsInstance, Augmecon, HasObjectives, ObjectiveDirection, Options};
 use log::{debug, info};
 use pls::{pareto_local_search::ParetoLocalSearch, solution_set::SolutionSet};
 use pyo3::exceptions::PyValueError;
@@ -314,4 +315,197 @@ pub fn solve_with_pls(
 
         Ok(python_solutions)
     }
+}
+
+/// Solves the SIMS problem using MILP with AUGMECON for exact Pareto solutions
+#[pyfunction]
+#[pyo3(signature = (
+    sims_instance,
+    objectives=vec!["min_cost".to_string(), "cloud_coverage".to_string()],
+    grid_points=50,
+    timeout_seconds=300.0,
+    bypass_coefficient=true,
+    early_exit=true,
+    flag_array=true,
+    solver_name="cbc".to_string()
+))]
+pub fn solve_with_milp(
+    sims_instance: &SimsDiscreteProblem,
+    objectives: Vec<String>,
+    grid_points: usize,
+    timeout_seconds: f64,
+    bypass_coefficient: bool,
+    early_exit: bool,
+    flag_array: bool,
+    solver_name: String,
+) -> PyResult<Vec<Solution>> {
+    // Validate objectives
+    let valid_objectives = [
+        "min_cost",
+        "cloud_coverage",
+        "min_resolution",
+        "max_incidence_angle",
+    ];
+    for obj in &objectives {
+        if !valid_objectives.contains(&obj.as_str()) {
+            return Err(PyValueError::new_err(format!(
+                "Invalid objective '{obj}'. Valid objectives are: {valid_objectives:?}"
+            )));
+        }
+    }
+
+    // Convert objectives to indices for augmecon
+    let mut objective_indices = Vec::new();
+    let mut objective_directions = Vec::new();
+
+    for obj in &objectives {
+        match obj.as_str() {
+            "min_cost" => {
+                objective_indices.push(0);
+                objective_directions.push(ObjectiveDirection::Minimize);
+            }
+            "cloud_coverage" => {
+                objective_indices.push(1);
+                objective_directions.push(ObjectiveDirection::Minimize);
+            }
+            "min_resolution" => {
+                objective_indices.push(2);
+                objective_directions.push(ObjectiveDirection::Minimize);
+            }
+            "max_incidence_angle" => {
+                objective_indices.push(3);
+                objective_directions.push(ObjectiveDirection::Minimize);
+            }
+            _ => unreachable!(), // Already validated above
+        }
+    }
+
+    info!(
+        "Starting MILP algorithm with objectives: {objectives:?}, grid_points: {grid_points}, timeout: {timeout_seconds}s, solver: {solver_name}"
+    );
+
+    // Convert SimsDiscreteProblem to SimsInstance for augmecon
+    let mut sims_augmecon_instance = SimsInstance::new(
+        sims_instance.num_images,
+        sims_instance.universe,
+        sims_instance.num_images, // Use one cloud entity per image
+        sims_instance.max_cloud_area,
+    );
+
+    // Convert images (sets of universe points covered)
+    for (i, image_set) in sims_instance.images.iter().enumerate() {
+        let coverage_set: std::collections::HashSet<usize> = image_set.iter().cloned().collect();
+        sims_augmecon_instance.set_image_coverage(i, coverage_set);
+        sims_augmecon_instance.set_cost(i, sims_instance.costs[i] as f64);
+        sims_augmecon_instance.set_resolution(i, sims_instance.resolution[i] as f64);
+        sims_augmecon_instance.set_incidence_angle(i, sims_instance.incidence_angle[i] as f64);
+    }
+
+    // Set universe point areas
+    for (k, &area) in sims_instance.areas.iter().enumerate() {
+        sims_augmecon_instance.set_area(k, area as f64);
+    }
+
+    // Convert cloud coverage data - each image has its own cloud entity
+    for (i, cloud_set) in sims_instance.clouds.iter().enumerate() {
+        let cloud_coverage_set: std::collections::HashSet<usize> =
+            cloud_set.iter().cloned().collect();
+        sims_augmecon_instance.set_cloud_coverage(i, cloud_coverage_set);
+
+        // Calculate cloud area as sum of covered universe areas
+        let cloud_area: f64 = cloud_set
+            .iter()
+            .map(|&point| sims_instance.areas[point] as f64)
+            .sum();
+        sims_augmecon_instance.set_cloud_area(i, cloud_area);
+    }
+
+    // Create MultiObjectiveProblem using the free function
+    let problem = augmecon::sims_problem::create_sims_problem(&sims_augmecon_instance);
+
+    // Configure options
+    let options = Options::new()
+        .with_name("sims_problem")
+        .with_grid_points(grid_points)
+        .with_bypass_coefficient(bypass_coefficient)
+        .with_early_exit(early_exit)
+        .with_flag_array(flag_array);
+
+    // Solve with AUGMECON
+    let mut solver = Augmecon::try_new(problem, options)
+        .map_err(|e| PyValueError::new_err(format!("Failed to create AUGMECON solver: {e}")))?;
+
+    let pareto_solutions = solver
+        .solve()
+        .map_err(|e| PyValueError::new_err(format!("MILP solving failed: {e}")))?;
+
+    info!("MILP solving completed, converting solutions");
+
+    // Convert augmecon solutions to our Solution format
+    let mut python_solutions = Vec::new();
+
+    for (i, milp_solution) in pareto_solutions.iter().enumerate() {
+        debug!(
+            "Processing MILP solution {}: objectives = {:?}",
+            i,
+            milp_solution.objectives()
+        );
+
+        // Extract selected images from decision variables
+        let mut selected_images = Vec::new();
+        for img_idx in 0..sims_instance.num_images {
+            let var_name = format!("x_{img_idx}");
+            if let Some(value) = milp_solution.get_variable(&var_name) {
+                if value > 0.5 {
+                    // Binary variable is "true"
+                    selected_images.push(img_idx);
+                }
+            }
+        }
+
+        // Extract objective values
+        let milp_objectives = milp_solution.objectives();
+        let cost = milp_objectives.first().copied().unwrap_or(0.0) as i32;
+        let cloudy_area = milp_objectives.get(1).copied().unwrap_or(0.0) as i32;
+
+        // Handle optional objectives
+        let min_resolution_sum = if milp_objectives.len() > 2 {
+            Some(milp_objectives[2] as i32)
+        } else {
+            None
+        };
+
+        let max_incidence_angle = if milp_objectives.len() > 3 {
+            Some(milp_objectives[3] as i32)
+        } else {
+            None
+        };
+
+        // Create Python solution with timestamp (use solution index * 1ms as timestamp)
+        let py_solution = Solution::create(
+            selected_images,
+            cost,
+            cloudy_area,
+            i as u64 * 1000, // Simple timestamp based on index
+            max_incidence_angle,
+            min_resolution_sum,
+        );
+
+        debug!(
+            "Converted MILP solution {}: cost={}, cloudy_area={}, selected_images={:?}",
+            i,
+            py_solution.cost,
+            py_solution.cloudy_area,
+            py_solution.get_selected_images_list()
+        );
+
+        python_solutions.push(py_solution);
+    }
+
+    info!(
+        "Successfully converted {} MILP solutions to Python format",
+        python_solutions.len()
+    );
+
+    Ok(python_solutions)
 }

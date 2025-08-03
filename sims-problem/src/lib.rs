@@ -16,8 +16,9 @@ fn sims_problem(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Initialize logging bridge from Rust to Python
     pyo3_log::init();
 
-    // Add solver function
+    // Add solver functions
     m.add_function(wrap_pyfunction!(solver::solve_with_pls, m)?)?;
+    m.add_function(wrap_pyfunction!(solver::solve_with_milp, m)?)?;
 
     // Add classes
     m.add_class::<SimsDiscreteProblem>()?;
