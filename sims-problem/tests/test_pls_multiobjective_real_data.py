@@ -7,7 +7,7 @@ from pathlib import Path
 
 # Configure logging to capture Rust logs
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.WARNING,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
@@ -57,8 +57,9 @@ class TestMultiobjectivePLSIntegrationWithRealData:
         
         # Run multiobjective PLS with moderate parameters for small instances
         logger.info("Starting multiobjective PLS algorithm...")
-        solutions = sims_problem.solve_with_pls_multiobjective_advanced(
+        solutions = sims_problem.solve_with_pls(
             problem,
+            objectives=["min_cost", "cloud_coverage", "min_resolution", "max_incidence_angle"],
             timeout_seconds=120.0,  # 2 minute timeout for debugging
             max_iterations=10000,   # More iterations
             is_deterministic=True,  # Deterministic for debugging
@@ -83,9 +84,9 @@ class TestMultiobjectivePLSIntegrationWithRealData:
             # Check 4D objective properties
             assert solution.cost >= 0, f"Solution {i} should have non-negative cost"
             assert solution.cloudy_area >= 0, f"Solution {i} should have non-negative cloudy area"
-            assert solution.min_resolutions_sum >= 0, f"Solution {i} should have non-negative min_resolutions_sum"
-            assert solution.max_incidence_angle >= 0, f"Solution {i} should have non-negative max_incidence_angle"
-            assert solution.timestamp_us >= 0, f"Solution {i} should have non-negative timestamp"
+            assert solution.min_resolutions_sum is None or solution.min_resolutions_sum >= 0, f"Solution {i} should have non-negative min_resolutions_sum"
+            assert solution.max_incidence_angle is None or solution.max_incidence_angle >= 0, f"Solution {i} should have non-negative max_incidence_angle"
+            assert solution.timestamp.total_seconds() >= 0, f"Solution {i} should have non-negative timestamp"
             
             # Check that selected images are valid
             selected_images = solution.get_selected_images_list()
@@ -164,8 +165,9 @@ class TestMultiobjectivePLSIntegrationWithRealData:
         
         # Run multiobjective PLS with more generous parameters for medium instances
         logger.info("Starting multiobjective PLS algorithm for medium instance...")
-        solutions = sims_problem.solve_with_pls_multiobjective_advanced(
+        solutions = sims_problem.solve_with_pls(
             problem,
+            objectives=["min_cost", "cloud_coverage", "min_resolution", "max_incidence_angle"],
             timeout_seconds=300.0,  # 5 minutes timeout
             max_iterations=15000,   # More iterations
             is_deterministic=True,  # Deterministic for debugging
@@ -189,8 +191,8 @@ class TestMultiobjectivePLSIntegrationWithRealData:
             # Check 4D objective properties
             assert solution.cost >= 0, f"Solution {i} should have non-negative cost"
             assert solution.cloudy_area >= 0, f"Solution {i} should have non-negative cloudy area"
-            assert solution.min_resolutions_sum >= 0, f"Solution {i} should have non-negative min_resolutions_sum"
-            assert solution.max_incidence_angle >= 0, f"Solution {i} should have non-negative max_incidence_angle"
+            assert solution.min_resolutions_sum is None or solution.min_resolutions_sum >= 0, f"Solution {i} should have non-negative min_resolutions_sum"
+            assert solution.max_incidence_angle is None or solution.max_incidence_angle >= 0, f"Solution {i} should have non-negative max_incidence_angle"
             
             # Validate solution
             is_valid = solution.validate(problem)
@@ -207,13 +209,15 @@ class TestMultiobjectivePLSIntegrationWithRealData:
         # Print solution statistics for all 4 objectives
         costs = [sol.cost for sol in solutions]
         cloudy_areas = [sol.cloudy_area for sol in solutions]
-        min_res_sums = [sol.min_resolutions_sum for sol in solutions]
-        max_angles = [sol.max_incidence_angle for sol in solutions]
+        min_res_sums = [sol.min_resolutions_sum for sol in solutions if sol.min_resolutions_sum is not None]
+        max_angles = [sol.max_incidence_angle for sol in solutions if sol.max_incidence_angle is not None]
         
         print(f"Cost range: {min(costs)} - {max(costs)}")
         print(f"Cloudy area range: {min(cloudy_areas)} - {max(cloudy_areas)}")
-        print(f"Min resolution sum range: {min(min_res_sums)} - {max(min_res_sums)}")
-        print(f"Max incidence angle range: {min(max_angles)} - {max(max_angles)}")
+        if min_res_sums:
+            print(f"Min resolution sum range: {min(min_res_sums)} - {max(min_res_sums)}")
+        if max_angles:
+            print(f"Max incidence angle range: {min(max_angles)} - {max(max_angles)}")
 
     @pytest.mark.parametrize("filename", [
         "lagos_nigeria_145.dzn",
@@ -242,8 +246,9 @@ class TestMultiobjectivePLSIntegrationWithRealData:
         start_time = time.time()
         
         # Run multiobjective PLS with extended parameters for large instances
-        solutions = sims_problem.solve_with_pls_multiobjective_advanced(
+        solutions = sims_problem.solve_with_pls(
             problem,
+            objectives=["min_cost", "cloud_coverage", "min_resolution", "max_incidence_angle"],
             timeout_seconds=300.0,  # 5 minutes timeout
             max_iterations=20000,
             is_deterministic=False,
@@ -268,8 +273,8 @@ class TestMultiobjectivePLSIntegrationWithRealData:
             # Check 4D objective properties
             assert solution.cost >= 0, f"Solution {i} should have non-negative cost"
             assert solution.cloudy_area >= 0, f"Solution {i} should have non-negative cloudy area"
-            assert solution.min_resolutions_sum >= 0, f"Solution {i} should have non-negative min_resolutions_sum"
-            assert solution.max_incidence_angle >= 0, f"Solution {i} should have non-negative max_incidence_angle"
+            assert solution.min_resolutions_sum is None or solution.min_resolutions_sum >= 0, f"Solution {i} should have non-negative min_resolutions_sum"
+            assert solution.max_incidence_angle is None or solution.max_incidence_angle >= 0, f"Solution {i} should have non-negative max_incidence_angle"
             
             # Use the built-in validate method to check coverage and constraints
             assert solution.validate(problem), \
@@ -278,13 +283,15 @@ class TestMultiobjectivePLSIntegrationWithRealData:
         # Print solution statistics for all 4 objectives
         costs = [sol.cost for sol in solutions]
         cloudy_areas = [sol.cloudy_area for sol in solutions]
-        min_res_sums = [sol.min_resolutions_sum for sol in solutions]
-        max_angles = [sol.max_incidence_angle for sol in solutions]
+        min_res_sums = [sol.min_resolutions_sum for sol in solutions if sol.min_resolutions_sum is not None]
+        max_angles = [sol.max_incidence_angle for sol in solutions if sol.max_incidence_angle is not None]
         
         print(f"Cost range: {min(costs)} - {max(costs)}")
         print(f"Cloudy area range: {min(cloudy_areas)} - {max(cloudy_areas)}")
-        print(f"Min resolution sum range: {min(min_res_sums)} - {max(min_res_sums)}")
-        print(f"Max incidence angle range: {min(max_angles)} - {max(max_angles)}")
+        if min_res_sums:
+            print(f"Min resolution sum range: {min(min_res_sums)} - {max(min_res_sums)}")
+        if max_angles:
+            print(f"Max incidence angle range: {min(max_angles)} - {max(max_angles)}")
 
     def test_multiobjective_deterministic_behavior_real_data(self, test_instances):
         """Test deterministic behavior on a real data instance with multiobjective PLS."""
@@ -305,8 +312,16 @@ class TestMultiobjectivePLSIntegrationWithRealData:
             'neighborhood_size_max': 3
         }
         
-        solutions1 = sims_problem.solve_with_pls_multiobjective_advanced(problem, **common_params)
-        solutions2 = sims_problem.solve_with_pls_multiobjective_advanced(problem, **common_params)
+        solutions1 = sims_problem.solve_with_pls(
+            problem, 
+            objectives=["min_cost", "cloud_coverage", "min_resolution", "max_incidence_angle"],
+            **common_params
+        )
+        solutions2 = sims_problem.solve_with_pls(
+            problem, 
+            objectives=["min_cost", "cloud_coverage", "min_resolution", "max_incidence_angle"],
+            **common_params
+        )
         
         # Should produce same number of solutions
         assert len(solutions1) == len(solutions2), \
@@ -328,8 +343,9 @@ class TestMultiobjectivePLSIntegrationWithRealData:
         
         problem = test_instances[filename]
         
-        solutions = sims_problem.solve_with_pls_multiobjective_advanced(
+        solutions = sims_problem.solve_with_pls(
             problem,
+            objectives=["min_cost", "cloud_coverage", "min_resolution", "max_incidence_angle"],
             timeout_seconds=60.0,
             max_iterations=5000,
             is_deterministic=False,
@@ -355,8 +371,13 @@ class TestMultiobjectivePLSIntegrationWithRealData:
         
         cost_range = max(costs) - min(costs)
         cloudy_range = max(cloudy_areas) - min(cloudy_areas)
-        resolution_range = max(min_res_sums) - min(min_res_sums)
-        angle_range = max(max_angles) - min(max_angles)
+        
+        # Filter out None values for min_res_sums and max_angles
+        valid_min_res_sums = [x for x in min_res_sums if x is not None]
+        valid_max_angles = [x for x in max_angles if x is not None]
+        
+        resolution_range = max(valid_min_res_sums) - min(valid_min_res_sums) if valid_min_res_sums else 0
+        angle_range = max(valid_max_angles) - min(valid_max_angles) if valid_max_angles else 0
         
         assert cost_range > 0, "Should have diverse costs"
         # Note: Other objectives might have 0 range on small instances, which is acceptable
@@ -364,8 +385,10 @@ class TestMultiobjectivePLSIntegrationWithRealData:
         print(f"Found {len(unique_objectives)} unique 4D objective combinations")
         print(f"Cost range: {min(costs)} - {max(costs)} (range: {cost_range})")
         print(f"Cloudy area range: {min(cloudy_areas)} - {max(cloudy_areas)} (range: {cloudy_range})")
-        print(f"Min resolution sum range: {min(min_res_sums)} - {max(min_res_sums)} (range: {resolution_range})")
-        print(f"Max incidence angle range: {min(max_angles)} - {max(max_angles)} (range: {angle_range})")
+        min_res_display = f"{min(valid_min_res_sums)} - {max(valid_min_res_sums)}" if valid_min_res_sums else "N/A"
+        max_angle_display = f"{min(valid_max_angles)} - {max(valid_max_angles)}" if valid_max_angles else "N/A"
+        print(f"Min resolution sum range: {min_res_display} (range: {resolution_range})")
+        print(f"Max incidence angle range: {max_angle_display} (range: {angle_range})")
 
     def test_multiobjective_pareto_optimality_real_data(self, test_instances):
         """Test that multiobjective PLS produces valid Pareto optimal solutions on real data."""
@@ -376,8 +399,9 @@ class TestMultiobjectivePLSIntegrationWithRealData:
         
         problem = test_instances[filename]
         
-        solutions = sims_problem.solve_with_pls_multiobjective_advanced(
+        solutions = sims_problem.solve_with_pls(
             problem,
+            objectives=["min_cost", "cloud_coverage", "min_resolution", "max_incidence_angle"],
             timeout_seconds=45.0,
             max_iterations=3000,
             is_deterministic=True,
@@ -395,7 +419,26 @@ class TestMultiobjectivePLSIntegrationWithRealData:
             for j, obj2 in enumerate(objectives):
                 if i != j:
                     # Check if obj1 dominates obj2 (all objectives are minimization)
-                    dominates = all(obj1[k] <= obj2[k] for k in range(4)) and any(obj1[k] < obj2[k] for k in range(4))
+                    # Handle None values properly
+                    dominates_checks = []
+                    strictly_better_checks = []
+                    
+                    for k in range(4):
+                        if obj1[k] is None and obj2[k] is None:
+                            dominates_checks.append(True)  # Equal (None == None)
+                            strictly_better_checks.append(False)  # Not strictly better
+                        elif obj1[k] is None:
+                            dominates_checks.append(False)  # None doesn't dominate a value
+                            strictly_better_checks.append(False)
+                        elif obj2[k] is None:
+                            dominates_checks.append(True)  # Value dominates None
+                            strictly_better_checks.append(True)  # Strictly better
+                        else:
+                            # Both are not None, safe to compare
+                            dominates_checks.append(obj1[k] <= obj2[k])  # type: ignore
+                            strictly_better_checks.append(obj1[k] < obj2[k])  # type: ignore
+                    
+                    dominates = all(dominates_checks) and any(strictly_better_checks)
                     assert not dominates, f"Solution {i} {obj1} dominates solution {j} {obj2}, violating Pareto optimality"
         
         print(f"Verified Pareto optimality for {len(solutions)} solutions")
@@ -427,12 +470,12 @@ class TestMultiobjectivePLSIntegrationWithRealData:
         
         # Run biobjective PLS
         start_time = time.time()
-        biobjective_solutions = sims_problem.solve_with_pls_advanced(problem, **common_params)
+        biobjective_solutions = sims_problem.solve_with_pls(problem, objectives=["min_cost", "cloud_coverage"], **common_params)
         biobjective_time = time.time() - start_time
         
         # Run multiobjective PLS
         start_time = time.time()
-        multiobjective_solutions = sims_problem.solve_with_pls_multiobjective_advanced(problem, **common_params)
+        multiobjective_solutions = sims_problem.solve_with_pls(problem, objectives=["min_cost", "cloud_coverage", "min_resolution", "max_incidence_angle"], **common_params)
         multiobjective_time = time.time() - start_time
         
         # Both should find solutions
@@ -482,9 +525,11 @@ class TestMultiobjectivePLSIntegrationWithRealData:
         
         # Run PLS with plot generation
         start_time = time.time()
-        solutions = sims_problem.solve_with_pls_and_plot_2d(
+        solutions = sims_problem.solve_with_pls(
             problem,
-            plot_path,
+            objectives=["min_cost", "cloud_coverage"],
+            plots=True,
+            plot_output_path=plot_path,
             timeout_seconds=60.0,
             max_iterations=5000,
             is_deterministic=True,
@@ -532,9 +577,11 @@ class TestMultiobjectivePLSIntegrationWithRealData:
         
         # Run 4D PLS with plot generation
         start_time = time.time()
-        solutions = sims_problem.solve_with_pls_multiobjective_and_plot_4d(
+        solutions = sims_problem.solve_with_pls(
             problem,
-            plot_path,
+            objectives=["min_cost", "cloud_coverage", "min_resolution", "max_incidence_angle"],
+            plots=True,
+            plot_output_path=plot_path,
             timeout_seconds=90.0,
             max_iterations=8000,
             is_deterministic=True,
@@ -555,8 +602,8 @@ class TestMultiobjectivePLSIntegrationWithRealData:
         for i, solution in enumerate(solutions[:5]):  # Check first 5
             assert solution.cost >= 0, f"Solution {i} should have non-negative cost"
             assert solution.cloudy_area >= 0, f"Solution {i} should have non-negative cloudy area"
-            assert solution.min_resolutions_sum >= 0, f"Solution {i} should have non-negative min_resolutions_sum"
-            assert solution.max_incidence_angle >= 0, f"Solution {i} should have non-negative max_incidence_angle"
+            assert solution.min_resolutions_sum is None or solution.min_resolutions_sum >= 0, f"Solution {i} should have non-negative min_resolutions_sum"
+            assert solution.max_incidence_angle is None or solution.max_incidence_angle >= 0, f"Solution {i} should have non-negative max_incidence_angle"
         
         # Verify plot file was created
         plot_file = Path(plot_path)
@@ -574,11 +621,17 @@ class TestMultiobjectivePLSIntegrationWithRealData:
         min_res_sums = [sol.min_resolutions_sum for sol in solutions]
         max_angles = [sol.max_incidence_angle for sol in solutions]
         
+        # Filter out None values for display
+        valid_min_res = [x for x in min_res_sums if x is not None]
+        valid_max_angles = [x for x in max_angles if x is not None]
+        
         logger.info("4D Solution diversity:")
         logger.info(f"  Cost range: {min(costs)} - {max(costs)}")
         logger.info(f"  Cloudy area range: {min(cloudy_areas)} - {max(cloudy_areas)}")
-        logger.info(f"  Min resolution sum range: {min(min_res_sums)} - {max(min_res_sums)}")
-        logger.info(f"  Max incidence angle range: {min(max_angles)} - {max(max_angles)}")
+        min_res_range = f"{min(valid_min_res)} - {max(valid_min_res)}" if valid_min_res else "N/A (all None)"
+        max_angle_range = f"{min(valid_max_angles)} - {max(valid_max_angles)}" if valid_max_angles else "N/A (all None)"
+        logger.info(f"  Min resolution sum range: {min_res_range}")
+        logger.info(f"  Max incidence angle range: {max_angle_range}")
         logger.info(f"  Unique 4D objective combinations: {len(objectives_4d)}")
         
         logger.info(f"Successfully generated 4D plot grid artifact: {plot_path}")

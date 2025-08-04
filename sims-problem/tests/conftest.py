@@ -1,4 +1,16 @@
 import pytest
+# Import fixtures from real_data_utils to make them available to all tests
+from .real_data_utils import (
+    all_test_instances,
+    plots_directory,
+    logger,
+    small_pls_config,
+    medium_pls_config,
+    large_pls_config,
+    small_milp_config,
+    medium_milp_config,
+    large_milp_config
+)
 
 
 def pytest_configure(config):
