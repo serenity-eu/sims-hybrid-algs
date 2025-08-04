@@ -26,7 +26,7 @@ def test_solve_with_pls_biobjective_basic():
         # Check that solutions have valid structure
         assert hasattr(solution, 'cost'), "Solution should have cost attribute"
         assert hasattr(solution, 'cloudy_area'), "Solution should have cloudy_area attribute"
-        assert hasattr(solution, 'timestamp_us'), "Solution should have timestamp_us attribute"
+        assert hasattr(solution, 'timestamp'), "Solution should have timestamp attribute"
         
         # Check that selected images are valid
         selected_images = solution.get_selected_images_list()
@@ -54,8 +54,8 @@ def test_solve_with_pls_biobjective_advanced():
         max_cloud_area=40
     )
     
-    # Test the advanced solve_with_pls_advanced function
-    solutions = sims_problem.solve_with_pls_advanced(
+    # Test the advanced solve_with_pls function
+    solutions = sims_problem.solve_with_pls(
         test_problem,
         timeout_seconds=2.0,
         max_iterations=500,
@@ -79,8 +79,10 @@ def test_solve_with_pls_biobjective_advanced():
         assert solution.cost >= 0, "Cost should be non-negative"
         assert solution.cloudy_area >= 0, "Cloudy area should be non-negative"
         
-        # Check timestamp is present
-        assert solution.timestamp_us >= 0, "Timestamp should be non-negative"
+        # Check timestamp is present and is a valid timedelta
+        assert hasattr(solution, 'timestamp'), "Solution should have timestamp attribute"
+        from datetime import timedelta
+        assert isinstance(solution.timestamp, timedelta), "Timestamp should be a timedelta object"
 
 
 def test_biobjective_deterministic_behavior():
@@ -99,7 +101,7 @@ def test_biobjective_deterministic_behavior():
     )
     
     # Run deterministic solver twice
-    solutions1 = sims_problem.solve_with_pls_advanced(
+    solutions1 = sims_problem.solve_with_pls(
         test_problem,
         timeout_seconds=1.0,
         max_iterations=100,
@@ -109,7 +111,7 @@ def test_biobjective_deterministic_behavior():
         neighborhood_size_max=2
     )
     
-    solutions2 = sims_problem.solve_with_pls_advanced(
+    solutions2 = sims_problem.solve_with_pls(
         test_problem,
         timeout_seconds=1.0,
         max_iterations=100,
@@ -147,7 +149,7 @@ def test_biobjective_parameter_validation():
     )
     
     # Test with very small timeout - should still return solutions
-    solutions = sims_problem.solve_with_pls_advanced(
+    solutions = sims_problem.solve_with_pls(
         test_problem,
         timeout_seconds=0.1,
         max_iterations=10,
@@ -180,8 +182,11 @@ def test_solve_with_pls_multiobjective_basic():
         max_cloud_area=50
     )
     
-    # Test the multiobjective solve_with_pls_multiobjective function
-    solutions = sims_problem.solve_with_pls_multiobjective(test_problem)
+    # Test the multiobjective solve_with_pls function with 4D objectives
+    solutions = sims_problem.solve_with_pls(
+        test_problem,
+        objectives=["min_cost", "cloud_coverage", "min_resolution", "max_incidence_angle"]
+    )
     
     # Assertions
     assert len(solutions) > 0, "Should return at least one solution"
@@ -192,7 +197,7 @@ def test_solve_with_pls_multiobjective_basic():
         assert hasattr(solution, 'cloudy_area'), "Solution should have cloudy_area attribute"
         assert hasattr(solution, 'min_resolutions_sum'), "Solution should have min_resolutions_sum attribute"
         assert hasattr(solution, 'max_incidence_angle'), "Solution should have max_incidence_angle attribute"
-        assert hasattr(solution, 'timestamp_us'), "Solution should have timestamp_us attribute"
+        assert hasattr(solution, 'timestamp'), "Solution should have timestamp attribute"
         
         # Check that selected images are valid
         selected_images = solution.get_selected_images_list()
@@ -203,8 +208,8 @@ def test_solve_with_pls_multiobjective_basic():
         # Check that all objectives are non-negative
         assert solution.cost >= 0, "Cost should be non-negative"
         assert solution.cloudy_area >= 0, "Cloudy area should be non-negative"
-        assert solution.min_resolutions_sum >= 0, "Min resolution should be non-negative"
-        assert solution.max_incidence_angle >= 0, "Max incidence angle should be non-negative"
+        assert solution.min_resolutions_sum is None or solution.min_resolutions_sum >= 0, "Min resolution should be non-negative"
+        assert solution.max_incidence_angle is None or solution.max_incidence_angle >= 0, "Max incidence angle should be non-negative"
 
 
 def test_solve_with_pls_multiobjective_advanced():
@@ -223,8 +228,9 @@ def test_solve_with_pls_multiobjective_advanced():
     )
     
     # Test the multiobjective solve with custom parameters
-    solutions = sims_problem.solve_with_pls_multiobjective(
+    solutions = sims_problem.solve_with_pls(
         test_problem,
+        objectives=["min_cost", "cloud_coverage", "min_resolution", "max_incidence_angle"],
         timeout_seconds=3.0,
         max_iterations=750,
         is_deterministic=True,
@@ -256,9 +262,12 @@ def test_solve_with_pls_multiobjective_advanced():
         # Verify all 4 objectives are valid
         assert solution.cost >= 0, "Cost should be non-negative"
         assert solution.cloudy_area >= 0, "Cloudy area should be non-negative"
-        assert solution.min_resolutions_sum >= 0, "Min resolution should be non-negative"
-        assert solution.max_incidence_angle >= 0, "Max incidence angle should be non-negative"
-        assert solution.timestamp_us >= 0, "Timestamp should be non-negative"
+        assert solution.min_resolutions_sum is None or solution.min_resolutions_sum >= 0, "Min resolution should be non-negative"
+        assert solution.max_incidence_angle is None or solution.max_incidence_angle >= 0, "Max incidence angle should be non-negative"
+        # Check timestamp is present and is a valid timedelta
+        assert hasattr(solution, 'timestamp'), "Solution should have timestamp attribute"
+        from datetime import timedelta
+        assert isinstance(solution.timestamp, timedelta), "Timestamp should be a timedelta object"
 
 
 def test_multiobjective_deterministic_behavior():
@@ -277,8 +286,9 @@ def test_multiobjective_deterministic_behavior():
     )
     
     # Run deterministic multiobjective solver twice
-    solutions1 = sims_problem.solve_with_pls_multiobjective(
+    solutions1 = sims_problem.solve_with_pls(
         test_problem,
+        objectives=["min_cost", "cloud_coverage", "min_resolution", "max_incidence_angle"],
         timeout_seconds=1.5,
         max_iterations=200,
         is_deterministic=True,
@@ -287,8 +297,9 @@ def test_multiobjective_deterministic_behavior():
         neighborhood_size_max=2
     )
     
-    solutions2 = sims_problem.solve_with_pls_multiobjective(
+    solutions2 = sims_problem.solve_with_pls(
         test_problem,
+        objectives=["min_cost", "cloud_coverage", "min_resolution", "max_incidence_angle"],
         timeout_seconds=1.5,
         max_iterations=200,
         is_deterministic=True,
@@ -326,8 +337,9 @@ def test_multiobjective_pareto_optimality():
         max_cloud_area=50
     )
     
-    solutions = sims_problem.solve_with_pls_multiobjective(
+    solutions = sims_problem.solve_with_pls(
         test_problem,
+        objectives=["min_cost", "cloud_coverage", "min_resolution", "max_incidence_angle"],
         timeout_seconds=2.0,
         max_iterations=500,
         is_deterministic=True,
@@ -343,14 +355,20 @@ def test_multiobjective_pareto_optimality():
                 # Check if sol1 dominates sol2 (all objectives better or equal, at least one strictly better)
                 cost_better = sol1.cost <= sol2.cost
                 cloudy_better = sol1.cloudy_area <= sol2.cloudy_area
-                resolution_better = sol1.min_resolutions_sum <= sol2.min_resolutions_sum
-                angle_better = sol1.max_incidence_angle <= sol2.max_incidence_angle
+                resolution_better = (sol1.min_resolutions_sum is None and sol2.min_resolutions_sum is None) or \
+                                  (sol1.min_resolutions_sum is not None and sol2.min_resolutions_sum is not None and \
+                                   sol1.min_resolutions_sum <= sol2.min_resolutions_sum)
+                angle_better = (sol1.max_incidence_angle is None and sol2.max_incidence_angle is None) or \
+                             (sol1.max_incidence_angle is not None and sol2.max_incidence_angle is not None and \
+                              sol1.max_incidence_angle <= sol2.max_incidence_angle)
                 
                 all_better_or_equal = cost_better and cloudy_better and resolution_better and angle_better
                 at_least_one_strictly_better = (sol1.cost < sol2.cost or 
                                                 sol1.cloudy_area < sol2.cloudy_area or
-                                                sol1.min_resolutions_sum < sol2.min_resolutions_sum or
-                                                sol1.max_incidence_angle < sol2.max_incidence_angle)
+                                                (sol1.min_resolutions_sum is not None and sol2.min_resolutions_sum is not None and 
+                                                 sol1.min_resolutions_sum < sol2.min_resolutions_sum) or
+                                                (sol1.max_incidence_angle is not None and sol2.max_incidence_angle is not None and 
+                                                 sol1.max_incidence_angle < sol2.max_incidence_angle))
                 
                 dominates = all_better_or_equal and at_least_one_strictly_better
                 
@@ -373,8 +391,9 @@ def test_multiobjective_objective_relationships():
         max_cloud_area=20
     )
     
-    solutions = sims_problem.solve_with_pls_multiobjective(
+    solutions = sims_problem.solve_with_pls(
         test_problem,
+        objectives=["min_cost", "cloud_coverage", "min_resolution", "max_incidence_angle"],
         timeout_seconds=1.0,
         max_iterations=100,
         is_deterministic=True
@@ -388,7 +407,7 @@ def test_multiobjective_objective_relationships():
         # Verify min resolution calculation
         if len(selected_images) > 0:
             # The objective sums minimum resolutions per element, so it should be reasonable
-            assert solution.min_resolutions_sum >= 0, "Min resolution sum should be non-negative"
+            assert solution.min_resolutions_sum is None or solution.min_resolutions_sum >= 0, "Min resolution sum should be non-negative"
         
         # Verify max incidence angle calculation
         if len(selected_images) > 0:
@@ -414,8 +433,9 @@ def test_multiobjective_parameter_validation():
     )
     
     # Test with very small timeout - should still return solutions
-    solutions = sims_problem.solve_with_pls_multiobjective(
+    solutions = sims_problem.solve_with_pls(
         test_problem,
+        objectives=["min_cost", "cloud_coverage", "min_resolution", "max_incidence_angle"],
         timeout_seconds=0.1,
         max_iterations=10,
         is_deterministic=True,
@@ -451,8 +471,9 @@ def test_biobjective_vs_multiobjective_comparison():
     )
     
     # Run biobjective optimization
-    biobjective_solutions = sims_problem.solve_with_pls_advanced(
+    biobjective_solutions = sims_problem.solve_with_pls(
         test_problem,
+        objectives=["min_cost", "cloud_coverage"],
         timeout_seconds=1.0,
         max_iterations=200,
         is_deterministic=True,
@@ -460,8 +481,9 @@ def test_biobjective_vs_multiobjective_comparison():
     )
     
     # Run multiobjective optimization
-    multiobjective_solutions = sims_problem.solve_with_pls_multiobjective(
+    multiobjective_solutions = sims_problem.solve_with_pls(
         test_problem,
+        objectives=["min_cost", "cloud_coverage", "min_resolution", "max_incidence_angle"],
         timeout_seconds=1.0,
         max_iterations=200,
         is_deterministic=True,

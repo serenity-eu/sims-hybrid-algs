@@ -10,13 +10,14 @@ use crate::problem::SimsDiscreteProblem;
 use crate::solution::Solution;
 
 /// Solves the SIMS problem using Pareto Local Search with flexible objective configuration
+#[expect(clippy::too_many_arguments, reason = "It's okay for Python API to have many parameters")]
 #[pyfunction]
 #[pyo3(signature = (
     sims_instance,
     objectives=vec!["min_cost".to_string(), "cloud_coverage".to_string()], 
     plots=false,
     plot_output_path=None,
-    timeout_seconds=240.0,
+    timeout=Duration::from_secs(240),
     max_iterations=50000,
     is_deterministic=false,
     initial_population_size=100,
@@ -28,7 +29,7 @@ pub fn solve_with_pls(
     objectives: Vec<String>,
     plots: bool,
     plot_output_path: Option<String>,
-    timeout_seconds: f64,
+    timeout: Duration,
     max_iterations: usize,
     is_deterministic: bool,
     initial_population_size: usize,
@@ -55,13 +56,13 @@ pub fn solve_with_pls(
         || objectives.contains(&"min_resolution".to_string())
         || objectives.contains(&"max_incidence_angle".to_string());
 
+    let timeout_seconds = timeout.as_secs_f64();
     info!(
         "Starting PLS algorithm with objectives: {objectives:?}, plots: {plots}, timeout: {timeout_seconds}s, max_iterations: {max_iterations}, deterministic: {is_deterministic}, population_size: {initial_population_size}, neighborhood: {neighborhood_size_min}..{neighborhood_size_max}"
     );
 
     let neighborhood_size_range: RangeInclusive<u32> =
         neighborhood_size_min..=neighborhood_size_max;
-    let timeout = Duration::from_secs_f64(timeout_seconds);
 
     if use_multiobjective {
         // 4D optimization (cost + cloud coverage + resolution + incidence angle)
@@ -318,12 +319,13 @@ pub fn solve_with_pls(
 }
 
 /// Solves the SIMS problem using MILP with AUGMECON for exact Pareto solutions
+#[expect(clippy::too_many_arguments, reason = "It's okay for Python API to have many parameters")]
 #[pyfunction]
 #[pyo3(signature = (
     sims_instance,
     objectives=vec!["min_cost".to_string(), "cloud_coverage".to_string()],
     grid_points=50,
-    timeout_seconds=300.0,
+    timeout=Duration::from_secs(300),
     bypass_coefficient=true,
     early_exit=true,
     flag_array=true,
@@ -333,7 +335,7 @@ pub fn solve_with_milp(
     sims_instance: &SimsDiscreteProblem,
     objectives: Vec<String>,
     grid_points: usize,
-    timeout_seconds: f64,
+    timeout: Duration,
     bypass_coefficient: bool,
     early_exit: bool,
     flag_array: bool,
@@ -380,9 +382,14 @@ pub fn solve_with_milp(
         }
     }
 
+    let timeout_seconds = timeout.as_secs_f64();
     info!(
         "Starting MILP algorithm with objectives: {objectives:?}, grid_points: {grid_points}, timeout: {timeout_seconds}s, solver: {solver_name}"
     );
+
+    // Note: The timeout parameter is passed to AUGMECON but may not be fully enforced
+    // in the current implementation. The solver will attempt to respect the timeout
+    // but this is dependent on the underlying AUGMECON solver implementation.
 
     // Convert SimsDiscreteProblem to SimsInstance for augmecon
     let mut sims_augmecon_instance = SimsInstance::new(
@@ -429,7 +436,8 @@ pub fn solve_with_milp(
         .with_grid_points(grid_points)
         .with_bypass_coefficient(bypass_coefficient)
         .with_early_exit(early_exit)
-        .with_flag_array(flag_array);
+        .with_flag_array(flag_array)
+        .with_timeout(timeout);
 
     // Solve with AUGMECON
     let mut solver = Augmecon::try_new(problem, options)
