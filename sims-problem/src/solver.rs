@@ -9,8 +9,121 @@ use crate::conversion::PlsSolutionWithTimestamp;
 use crate::problem::SimsDiscreteProblem;
 use crate::solution::Solution;
 
+/// Configuration for MILP solver
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct MilpConfig {
+    #[pyo3(get, set)]
+    pub objectives: Vec<String>,
+    #[pyo3(get, set)]
+    pub grid_points: usize,
+    #[pyo3(get, set)]
+    pub bypass_coefficient: bool,
+    #[pyo3(get, set)]
+    pub early_exit: bool,
+    #[pyo3(get, set)]
+    pub flag_array: bool,
+    #[pyo3(get, set)]
+    pub solver_name: String,
+}
+
+#[pymethods]
+impl MilpConfig {
+    #[new]
+    #[pyo3(signature = (
+        objectives=vec!["min_cost".to_string(), "cloud_coverage".to_string()],
+        grid_points=50,
+        bypass_coefficient=true,
+        early_exit=true,
+        flag_array=true,
+        solver_name="cbc".to_string()
+    ))]
+    pub fn new(
+        objectives: Vec<String>,
+        grid_points: usize,
+        bypass_coefficient: bool,
+        early_exit: bool,
+        flag_array: bool,
+        solver_name: String,
+    ) -> Self {
+        Self {
+            objectives,
+            grid_points,
+            bypass_coefficient,
+            early_exit,
+            flag_array,
+            solver_name,
+        }
+    }
+}
+
+/// Configuration for PLS solver
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct PlsConfig {
+    #[pyo3(get, set)]
+    pub objectives: Vec<String>,
+    #[pyo3(get, set)]
+    pub max_iterations: usize,
+    #[pyo3(get, set)]
+    pub is_deterministic: bool,
+    #[pyo3(get, set)]
+    pub initial_population_size: usize,
+    #[pyo3(get, set)]
+    pub neighborhood_size_min: u32,
+    #[pyo3(get, set)]
+    pub neighborhood_size_max: u32,
+    #[pyo3(get, set)]
+    pub plots: bool,
+    #[pyo3(get, set)]
+    pub plot_output_path: Option<String>,
+}
+
+#[pymethods]
+impl PlsConfig {
+    #[new]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Configuration struct needs all these parameters"
+    )]
+    #[pyo3(signature = (
+        objectives=vec!["min_cost".to_string(), "cloud_coverage".to_string()],
+        max_iterations=50000,
+        is_deterministic=false,
+        initial_population_size=100,
+        neighborhood_size_min=1,
+        neighborhood_size_max=6,
+        plots=false,
+        plot_output_path=None
+    ))]
+    pub fn new(
+        objectives: Vec<String>,
+        max_iterations: usize,
+        is_deterministic: bool,
+        initial_population_size: usize,
+        neighborhood_size_min: u32,
+        neighborhood_size_max: u32,
+        plots: bool,
+        plot_output_path: Option<String>,
+    ) -> Self {
+        Self {
+            objectives,
+            max_iterations,
+            is_deterministic,
+            initial_population_size,
+            neighborhood_size_min,
+            neighborhood_size_max,
+            plots,
+            plot_output_path,
+        }
+    }
+}
+
 /// Solves the SIMS problem using Pareto Local Search with flexible objective configuration
-#[expect(clippy::too_many_arguments, reason = "It's okay for Python API to have many parameters")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "It's okay for Python API to have many parameters"
+)]
 #[pyfunction]
 #[pyo3(signature = (
     sims_instance,
@@ -319,7 +432,10 @@ pub fn solve_with_pls(
 }
 
 /// Solves the SIMS problem using MILP with AUGMECON for exact Pareto solutions
-#[expect(clippy::too_many_arguments, reason = "It's okay for Python API to have many parameters")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "It's okay for Python API to have many parameters"
+)]
 #[pyfunction]
 #[pyo3(signature = (
     sims_instance,
@@ -516,4 +632,409 @@ pub fn solve_with_milp(
     );
 
     Ok(python_solutions)
+}
+
+/// Solves the SIMS problem using a hybrid approach: MILP first, then PLS with MILP solutions as initial population
+#[pyfunction]
+#[pyo3(signature = (
+    sims_instance,
+    milp_config,
+    pls_config,
+    ratio,
+    timeout=Duration::from_secs(300)
+))]
+pub fn solve_with_hybrid(
+    sims_instance: &SimsDiscreteProblem,
+    milp_config: &MilpConfig,
+    pls_config: &PlsConfig,
+    ratio: (i32, i32),
+    timeout: Duration,
+) -> PyResult<Vec<Solution>> {
+    let total_ratio = ratio.0 + ratio.1;
+    if total_ratio != 100 {
+        return Err(PyValueError::new_err(format!(
+            "Ratio values must sum to 100 (representing percentages), got {} + {} = {}",
+            ratio.0, ratio.1, total_ratio
+        )));
+    }
+    if ratio.0 == 0 || ratio.1 == 0 {
+        return Err(PyValueError::new_err("Both ratio values must be positive"));
+    }
+
+    let milp_ratio = ratio.0 as f64 / 100.0;
+    let pls_ratio = ratio.1 as f64 / 100.0;
+
+    // Calculate timeouts for each phase based on the total timeout and ratio
+    let milp_timeout = Duration::from_secs_f64(timeout.as_secs_f64() * milp_ratio);
+    let pls_timeout = Duration::from_secs_f64(timeout.as_secs_f64() * pls_ratio);
+
+    info!(
+        "Starting hybrid algorithm: MILP for {:.1}s ({:.1}%), then PLS for {:.1}s ({:.1}%)",
+        milp_timeout.as_secs_f64(),
+        milp_ratio * 100.0,
+        pls_timeout.as_secs_f64(),
+        pls_ratio * 100.0
+    );
+
+    // Phase 1: Run MILP to get initial solutions
+    info!("Phase 1: Running MILP algorithm");
+    let milp_solutions = solve_with_milp(
+        sims_instance,
+        milp_config.objectives.clone(),
+        milp_config.grid_points,
+        milp_timeout,
+        milp_config.bypass_coefficient,
+        milp_config.early_exit,
+        milp_config.flag_array,
+        milp_config.solver_name.clone(),
+    )?;
+
+    info!(
+        "MILP phase completed with {} solutions",
+        milp_solutions.len()
+    );
+
+    if milp_solutions.is_empty() {
+        info!("MILP found no solutions, falling back to PLS only");
+        return solve_with_pls(
+            sims_instance,
+            pls_config.objectives.clone(),
+            pls_config.plots,
+            pls_config.plot_output_path.clone(),
+            pls_timeout,
+            pls_config.max_iterations,
+            pls_config.is_deterministic,
+            pls_config.initial_population_size,
+            pls_config.neighborhood_size_min,
+            pls_config.neighborhood_size_max,
+        );
+    }
+
+    // Phase 2: Run PLS with MILP solutions as initial population
+    info!(
+        "Phase 2: Running PLS with {} MILP solutions as initial population",
+        milp_solutions.len()
+    );
+
+    // Validate objectives consistency
+    if milp_config.objectives != pls_config.objectives {
+        return Err(PyValueError::new_err(
+            "MILP and PLS must use the same objectives for hybrid approach",
+        ));
+    }
+
+    let objectives = &pls_config.objectives;
+    let valid_objectives = [
+        "min_cost",
+        "cloud_coverage",
+        "min_resolution",
+        "max_incidence_angle",
+    ];
+    for obj in objectives {
+        if !valid_objectives.contains(&obj.as_str()) {
+            return Err(PyValueError::new_err(format!(
+                "Invalid objective '{obj}'. Valid objectives are: {valid_objectives:?}"
+            )));
+        }
+    }
+
+    // Determine if multiobjective based on objectives
+    let use_multiobjective = objectives.len() > 2
+        || objectives.contains(&"min_resolution".to_string())
+        || objectives.contains(&"max_incidence_angle".to_string());
+
+    let neighborhood_size_range: RangeInclusive<u32> =
+        pls_config.neighborhood_size_min..=pls_config.neighborhood_size_max;
+
+    if use_multiobjective {
+        // 4D optimization with MILP solutions as initial population
+        use pls::objectives::{
+            CloudyAreaObjective, MaxIncidenceAngleObjective, MinResolutionObjective,
+            TotalCostObjective,
+        };
+        use pls::solution::BitsetEncodedSolution;
+        use pls::solution_set_impl::NdTreeSolutionSet;
+
+        debug!("Using 4D hybrid optimization");
+
+        // Convert to PLS problem format
+        let raw_instance = pls::problem::SIMSProblemInstanceRaw {
+            name: "python_hybrid_instance".to_string(),
+            num_images: sims_instance.num_images,
+            universe_size: sims_instance.universe,
+            images: sims_instance
+                .images
+                .iter()
+                .map(|img| img.iter().map(|&x| x + 1).collect())
+                .collect(),
+            costs: sims_instance.costs.iter().map(|&c| c as u64).collect(),
+            clouds: sims_instance
+                .clouds
+                .iter()
+                .map(|cloud| cloud.iter().map(|&x| x + 1).collect())
+                .collect(),
+            areas: sims_instance.areas.iter().map(|&a| a as u64).collect(),
+            max_cloud_area: sims_instance.max_cloud_area as u64,
+            resolution: sims_instance.resolution.iter().map(|&r| r as u64).collect(),
+            incidence_angle: sims_instance
+                .incidence_angle
+                .iter()
+                .map(|&i| i as u64)
+                .collect(),
+        };
+
+        // Create 4D problem
+        let objective_definitions: Vec<Box<dyn pls::objectives::ObjectiveDefinition<4>>> = vec![
+            Box::new(TotalCostObjective { index: 0 }),
+            Box::new(CloudyAreaObjective { index: 1 }),
+            Box::new(MinResolutionObjective { index: 2 }),
+            Box::new(MaxIncidenceAngleObjective { index: 3 }),
+        ];
+
+        let pls_problem = pls::problem::Problem::from_raw_with_objective_definitions(
+            raw_instance,
+            objective_definitions,
+        )
+        .map_err(|e| PyValueError::new_err(format!("Failed to create 4D problem: {e}")))?;
+
+        // Convert MILP solutions to PLS initial solutions
+        let mut initial_solutions = Vec::new();
+        for milp_sol in &milp_solutions {
+            let selected_images = milp_sol.get_selected_images_list();
+
+            // Create PLS solution from selected images
+            let pls_solution =
+                BitsetEncodedSolution::from_selected_images(&selected_images, &pls_problem);
+            initial_solutions.push(pls_solution);
+        }
+
+        // Create additional random solutions if we have fewer MILP solutions than desired population size
+        let initial_solution_set = if initial_solutions.len() < pls_config.initial_population_size {
+            let remaining_size = pls_config.initial_population_size - initial_solutions.len();
+            info!("Adding {remaining_size} random solutions to reach desired population size");
+
+            let random_solutions: NdTreeSolutionSet<BitsetEncodedSolution<4>, 4> =
+                if pls_config.is_deterministic {
+                    NdTreeSolutionSet::random_with_seed(remaining_size, &pls_problem, 1_234_567_890)
+                } else {
+                    NdTreeSolutionSet::random(remaining_size, &pls_problem)
+                };
+
+            let mut combined_set = NdTreeSolutionSet::new("hybrid_4d_solutions".to_string());
+            // Add MILP solutions
+            for sol in initial_solutions {
+                combined_set.force_add(&sol);
+            }
+            // Add random solutions
+            for sol in random_solutions.into_iter() {
+                combined_set.force_add(&sol);
+            }
+            combined_set
+        } else {
+            // Use only MILP solutions (truncate if we have too many)
+            let mut solution_set = NdTreeSolutionSet::new("hybrid_4d_milp_only".to_string());
+            for sol in initial_solutions
+                .into_iter()
+                .take(pls_config.initial_population_size)
+            {
+                solution_set.force_add(&sol);
+            }
+            solution_set
+        };
+
+        info!(
+            "Created initial population of {} solutions for 4D PLS",
+            initial_solution_set.len()
+        );
+
+        // Create and run PLS
+        let mut pareto_local_search = ParetoLocalSearch::new(
+            &pls_problem,
+            &initial_solution_set,
+            neighborhood_size_range,
+            pls_config.is_deterministic,
+        );
+
+        info!(
+            "Starting 4D PLS phase with {} iterations",
+            pls_config.max_iterations
+        );
+        let final_solution_set = pareto_local_search.run(pls_config.max_iterations, pls_timeout);
+
+        info!(
+            "Hybrid 4D algorithm completed with {} final solutions",
+            final_solution_set.len()
+        );
+
+        // Generate plots if requested
+        if pls_config.plots {
+            #[cfg(feature = "plotting")]
+            {
+                let objective_names = pls_problem.objective_names();
+                pls::plotting::draw_solutions_plot(
+                    &pareto_local_search.explored_solutions,
+                    &objective_names,
+                );
+
+                if let Some(path) = &pls_config.plot_output_path {
+                    if path != "pareto_solutions_grid.svg" {
+                        if let Err(e) = std::fs::rename("pareto_solutions_grid.svg", path) {
+                            log::warn!("Failed to move plot to {path}: {e}");
+                        }
+                    }
+                }
+            }
+            #[cfg(not(feature = "plotting"))]
+            {
+                log::warn!("Plotting requested but plotting feature is not enabled");
+            }
+        }
+
+        // Convert final solutions to Python format
+        let final_solutions: Vec<BitsetEncodedSolution<4>> =
+            final_solution_set.into_iter().collect();
+        let mut python_solutions = Vec::new();
+
+        for (i, solution) in final_solutions.iter().enumerate() {
+            let timestamp_us = pareto_local_search
+                .explored_solutions
+                .get_solution_fingerprint(solution)
+                .map(|fp| fp.time.as_micros() as u64)
+                .unwrap_or(i as u64 * 1000);
+
+            let py_solution: Solution =
+                PlsSolutionWithTimestamp::new(solution, timestamp_us).into();
+            python_solutions.push(py_solution);
+        }
+
+        info!(
+            "Successfully converted {} hybrid 4D solutions",
+            python_solutions.len()
+        );
+        Ok(python_solutions)
+    } else {
+        // 2D optimization with MILP solutions as initial population
+        use pls::solution::EncodedSolution;
+        use pls::solution_set_impl::BTreeSolutionSet;
+
+        debug!("Using 2D hybrid optimization");
+
+        // Convert to PLS problem format
+        let pls_problem = sims_instance.to_pls_problem();
+
+        // Convert MILP solutions to PLS initial solutions
+        let mut initial_solutions = Vec::new();
+        for milp_sol in &milp_solutions {
+            let selected_images = milp_sol.get_selected_images_list();
+
+            // Create PLS solution from selected images
+            let pls_solution =
+                EncodedSolution::from_selected_images(&selected_images, &pls_problem);
+            initial_solutions.push(pls_solution);
+        }
+
+        // Create additional random solutions if needed
+        let initial_solution_set = if initial_solutions.len() < pls_config.initial_population_size {
+            let remaining_size = pls_config.initial_population_size - initial_solutions.len();
+            info!("Adding {remaining_size} random solutions to reach desired population size");
+
+            let random_solutions: BTreeSolutionSet<EncodedSolution<2>, 2> =
+                if pls_config.is_deterministic {
+                    BTreeSolutionSet::random_with_seed(remaining_size, &pls_problem, 1_234_567_890)
+                } else {
+                    BTreeSolutionSet::random(remaining_size, &pls_problem)
+                };
+
+            let mut combined_set = BTreeSolutionSet::new("hybrid_2d_solutions".to_string());
+            // Add MILP solutions
+            for sol in initial_solutions {
+                combined_set.force_add(&sol);
+            }
+            // Add random solutions
+            for sol in random_solutions.into_iter() {
+                combined_set.force_add(&sol);
+            }
+            combined_set
+        } else {
+            // Use only MILP solutions
+            let mut solution_set = BTreeSolutionSet::new("hybrid_2d_milp_only".to_string());
+            for sol in initial_solutions
+                .into_iter()
+                .take(pls_config.initial_population_size)
+            {
+                solution_set.force_add(&sol);
+            }
+            solution_set
+        };
+
+        info!(
+            "Created initial population of {} solutions for 2D PLS",
+            initial_solution_set.len()
+        );
+
+        // Create and run PLS
+        let mut pareto_local_search = ParetoLocalSearch::new(
+            &pls_problem,
+            &initial_solution_set,
+            neighborhood_size_range,
+            pls_config.is_deterministic,
+        );
+
+        info!(
+            "Starting 2D PLS phase with {} iterations",
+            pls_config.max_iterations
+        );
+        let final_solution_set = pareto_local_search.run(pls_config.max_iterations, pls_timeout);
+
+        info!(
+            "Hybrid 2D algorithm completed with {} final solutions",
+            final_solution_set.len()
+        );
+
+        // Generate plots if requested
+        if pls_config.plots {
+            #[cfg(feature = "plotting")]
+            {
+                let objective_names = pls_problem.objective_names();
+                pls::plotting::draw_solutions_plot(
+                    &pareto_local_search.explored_solutions,
+                    &objective_names,
+                );
+
+                if let Some(path) = &pls_config.plot_output_path {
+                    if path != "pareto_solutions_2d.svg" {
+                        if let Err(e) = std::fs::rename("pareto_solutions_2d.svg", path) {
+                            log::warn!("Failed to move plot to {path}: {e}");
+                        }
+                    }
+                }
+            }
+            #[cfg(not(feature = "plotting"))]
+            {
+                log::warn!("Plotting requested but plotting feature is not enabled");
+            }
+        }
+
+        // Convert final solutions to Python format
+        let final_solutions: Vec<EncodedSolution<2>> = final_solution_set.into_iter().collect();
+        let mut python_solutions = Vec::new();
+
+        for (i, solution) in final_solutions.iter().enumerate() {
+            let timestamp_us = pareto_local_search
+                .explored_solutions
+                .get_solution_fingerprint(solution)
+                .map(|fp| fp.time.as_micros() as u64)
+                .unwrap_or(i as u64 * 1000);
+
+            let py_solution: Solution =
+                PlsSolutionWithTimestamp::new(solution, timestamp_us).into();
+            python_solutions.push(py_solution);
+        }
+
+        info!(
+            "Successfully converted {} hybrid 2D solutions",
+            python_solutions.len()
+        );
+        Ok(python_solutions)
+    }
 }
