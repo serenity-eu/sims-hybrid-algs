@@ -7,6 +7,7 @@ pub mod solver;
 // Re-export the main types
 pub use problem::SimsDiscreteProblem;
 pub use solution::Solution;
+pub use solver::{MilpConfig, PlsConfig};
 
 use pyo3::prelude::*;
 
@@ -19,10 +20,13 @@ fn sims_problem(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Add solver functions
     m.add_function(wrap_pyfunction!(solver::solve_with_pls, m)?)?;
     m.add_function(wrap_pyfunction!(solver::solve_with_milp, m)?)?;
+    m.add_function(wrap_pyfunction!(solver::solve_with_hybrid, m)?)?;
 
     // Add classes
     m.add_class::<SimsDiscreteProblem>()?;
     m.add_class::<Solution>()?;
+    m.add_class::<MilpConfig>()?;
+    m.add_class::<PlsConfig>()?;
 
     Ok(())
 }

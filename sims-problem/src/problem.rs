@@ -34,7 +34,10 @@ pub struct SimsDiscreteProblem {
 
 #[pymethods]
 impl SimsDiscreteProblem {
-    #[expect(clippy::too_many_arguments, reason = "It's okay for Python API to have many parameters")]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "It's okay for Python API to have many parameters"
+    )]
     #[new]
     pub fn new(
         num_images: usize,
