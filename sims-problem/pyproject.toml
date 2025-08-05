@@ -24,6 +24,9 @@ dev = [
     "black",
     "ruff",
 ]
+benchmark = [
+    "rich>=13.0.0",
+]
 [tool.maturin]
 features = ["pyo3/extension-module"]
 
