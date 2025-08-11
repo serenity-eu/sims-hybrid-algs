@@ -5,12 +5,14 @@ use std::{
 };
 
 use log::{debug, error, info};
-use pareto::{HasObjectives, MoSolution};
+use pareto::ParetoFront;
 use tracing::{debug_span, info_span, instrument};
 
 use crate::{
-    explored_solutions_data::ExploredSolutionsData, problem::Problem, solution::EncodedSolution,
-    solution_set::SolutionSet, timer::Timer,
+    explored_solutions_data::ExploredSolutionsData,
+    problem::Problem,
+    solution::{EncodedSolution, ImageSet},
+    timer::Timer,
 };
 
 /// Statistics tracking during a single step of the algorithm
@@ -46,12 +48,13 @@ struct IterationMetrics {
     per_solution_search_time: f32,
 }
 
-pub struct ParetoLocalSearch<'a, S, const D: usize>
+pub struct ParetoLocalSearch<'a, T, S, const D: usize>
 where
-    S: SolutionSet<'a, EncodedSolution<D>, D> + Clone,
+    T: ImageSet<D> + EncodedSolution<D>,
+    S: ParetoFront<'a, T> + Clone,
 {
     /// Reference to problem instance
-    problem: &'a Problem<D>,
+    problem: &'a Problem<T, D>,
     /// Current population
     population: S,
     /// Approximation of Pareto set
@@ -76,21 +79,22 @@ pub enum StepStatus {
     AllNeighborhoodStructuresExplored,
 }
 
-impl<'a, S, const D: usize> ParetoLocalSearch<'a, S, D>
+impl<'a, T, S, const D: usize> ParetoLocalSearch<'a, T, S, D>
 where
-    S: SolutionSet<'a, EncodedSolution<D>, D> + Clone,
+    T: ImageSet<D> + EncodedSolution<D>,
+    S: ParetoFront<'a, T> + Clone + FromIterator<T> + IntoIterator<Item = T>,
 {
     pub fn new(
-        problem: &'a Problem<D>,
+        problem: &'a Problem<T, D>,
         initial_population: &S,
         neighborhood_size_range: RangeInclusive<u32>,
         is_deterministic: bool,
     ) -> Self {
-        let mut population = S::new("population".to_string());
+        let mut population = S::new("population");
         // Initialize ExploredSolutionsData with the problem's max objectives array
         let mut explored_solutions = ExploredSolutionsData::<D>::new(problem.max_objectives);
         initial_population.iter().for_each(|solution| {
-            if population.try_add(solution) {
+            if population.try_insert(solution) {
                 explored_solutions.register(0, solution, Duration::from_secs(0));
             }
         });
@@ -98,9 +102,7 @@ where
             debug!("Initial solution {i}: {solution:?}");
         }
 
-        let approximated_pareto_set = population
-            .clone()
-            .with_name("approximated Pareto set".to_string());
+        let approximated_pareto_set = population.clone().with_name("approximated Pareto set");
         ParetoLocalSearch {
             problem,
             population,
@@ -120,15 +122,15 @@ where
     fn step(&mut self, iteration: usize, timer: &Timer) -> StepStatus {
         let step_time = Instant::now();
         let mut step_stats = StepStats::new(self.approximated_pareto_set.len());
-        let mut auxiliary_population = S::new("auxiliary".to_string());
+        let mut auxiliary_population = S::new("auxiliary");
 
         tracing::debug!("Starting PLS step");
 
         let population_validation_span = debug_span!("validate_population");
         let _validation_guard = population_validation_span.enter();
-        self.validate_population();
+        self.population.validate();
 
-        let population = mem::replace(&mut self.population, S::new("population".to_string()));
+        let population = mem::replace(&mut self.population, S::new("population"));
 
         let neighborhood_exploration_span = info_span!(
             "explore_neighborhoods",
@@ -161,12 +163,6 @@ where
         self.determine_next_step(auxiliary_population)
     }
 
-    fn validate_population(&self) {
-        for solution in self.population.iter() {
-            debug_assert!(solution.is_valid(self.problem));
-        }
-    }
-
     #[instrument(level = "debug", skip(self, population, timer, step_stats, auxiliary_population), fields(
         iteration,
         population_size = %population.len()
@@ -186,8 +182,6 @@ where
                 neighborhood_structure = self.neigborhood_structure
             );
             let _solution_guard = solution_span.enter();
-
-            Self::log_solution_debug(index, &solution);
 
             let neighbors = solution.neighborhood(
                 self.neigborhood_structure,
@@ -232,13 +226,6 @@ where
         );
     }
 
-    fn log_solution_debug(index: usize, solution: &EncodedSolution<D>) {
-        debug!("######################################################");
-        debug!("######## SOLUTION {} ########", index + 1);
-        debug!("######## {solution:?} ########");
-        debug!("######################################################");
-    }
-
     #[expect(
         clippy::too_many_arguments,
         reason = "Necessary for logical separation of concerns"
@@ -257,9 +244,9 @@ where
     )]
     fn process_neighbor(
         &mut self,
-        neighbor: &EncodedSolution<D>,
+        neighbor: &T,
         neighbor_index: usize,
-        current_solution: &EncodedSolution<D>,
+        current_solution: &T,
         iteration: usize,
         timer: &Timer,
         step_stats: &mut StepStats,
@@ -318,9 +305,9 @@ where
     )]
     fn evaluate_neighbor(
         &mut self,
-        neighbor: &EncodedSolution<D>,
+        neighbor: &T,
         neighbor_index: usize,
-        current_solution: &EncodedSolution<D>,
+        current_solution: &T,
         iteration: usize,
         timer: &Timer,
         step_stats: &mut StepStats,
@@ -361,13 +348,13 @@ where
     ))]
     fn try_add_to_pareto_set(
         &mut self,
-        neighbor: &EncodedSolution<D>,
+        neighbor: &T,
         neighbor_index: usize,
         iteration: usize,
         timer: &Timer,
         step_stats: &mut StepStats,
     ) -> bool {
-        if self.approximated_pareto_set.try_add(neighbor) {
+        if self.approximated_pareto_set.try_insert(neighbor) {
             self.log_pareto_set_addition(neighbor_index);
             self.explored_solutions
                 .register(iteration, neighbor, timer.elapsed());
@@ -393,12 +380,12 @@ where
     }
 
     fn try_add_to_auxiliary_population(
-        neighbor: &EncodedSolution<D>,
+        neighbor: &T,
         neighbor_index: usize,
         step_stats: &mut StepStats,
         auxiliary_population: &mut S,
     ) {
-        if auxiliary_population.try_add(neighbor) {
+        if auxiliary_population.try_insert(neighbor) {
             step_stats.auxiliary_added_count += 1;
         } else {
             debug!(
@@ -528,7 +515,7 @@ where
         let start_time = Instant::now();
 
         info!("Replacing current population with auxiliary population.");
-        self.population = auxiliary_population.with_name("population".to_string());
+        self.population = auxiliary_population.with_name("population");
         info!("Start again with smallest neighborhood structure.");
         self.neigborhood_structure = *self.neighborhood_size_range.start();
 
@@ -573,7 +560,7 @@ where
         );
 
         for solution in eligible_solutions {
-            self.population.force_add(solution);
+            self.population.insert_unchecked(solution);
         }
 
         let elapsed = start_time.elapsed();
@@ -642,6 +629,32 @@ where
             "PLS algorithm completed"
         );
 
+        // Validate final approximated Pareto set for dominated solutions
+        self.approximated_pareto_set.validate();
+
+        // Print all solutions' objectives in lexicographically sorted order
+        self.print_sorted_objectives();
+
         self.approximated_pareto_set.clone()
+    }
+
+    fn print_sorted_objectives(&self) {
+        let mut objectives: Vec<_> = self
+            .approximated_pareto_set
+            .iter()
+            .map(T::objectives)
+            .collect();
+
+        // Sort objectives lexicographically
+        objectives.sort();
+
+        error!(
+            "===== Final Pareto Set Objectives - {} (lexicographically sorted) =====",
+            self.problem.instance_name
+        );
+        for (i, obj) in objectives.iter().enumerate() {
+            error!("Solution {}: {:?}", i + 1, obj);
+        }
+        error!("===== Total solutions: {} =====", objectives.len());
     }
 }

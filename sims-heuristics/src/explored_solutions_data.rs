@@ -5,10 +5,10 @@ use std::{
     time::Duration,
 };
 
-use log::{trace, warn};
-use pareto::Objectives;
+use pareto::{HasObjectives, Objectives};
+use tracing::warn;
 
-use crate::solution::EncodedSolution;
+use crate::solution::ImageSet;
 
 #[derive(Debug)]
 pub struct SolutionFingerprint<const D: usize> {
@@ -55,18 +55,6 @@ impl<const D: usize> From<&SolutionFingerprint<D>> for SolutionPoint<D> {
     }
 }
 
-/// Data structure for tracking explored solutions during optimization.
-///
-/// This structure stores solution fingerprints with their objectives, iteration counts,
-/// and timing information. It supports generic dimensionality for objective spaces.
-pub struct ExploredSolutionsData<const D: usize> {
-    pub solutions: HashMap<u64, SolutionFingerprint<D>>,
-    pub num_iterations: usize,
-    /// Maximum values for each objective dimension, used for plotting bounds and normalization
-    pub max_objectives: [u64; D],
-    pub pareto_front_snapshots: Vec<ParetoFrontSnapshot>,
-}
-
 pub struct ParetoFrontSnapshot {
     pub iteration: usize,
     pub timestamp: Duration,
@@ -84,6 +72,18 @@ impl ParetoFrontSnapshot {
     }
 }
 
+/// Data structure for tracking explored solutions during optimization.
+///
+/// This structure stores solution fingerprints with their objectives, iteration counts,
+/// and timing information. It supports generic dimensionality for objective spaces.
+pub struct ExploredSolutionsData<const D: usize> {
+    pub solutions: HashMap<u64, SolutionFingerprint<D>>,
+    pub num_iterations: usize,
+    /// Maximum values for each objective dimension, used for plotting bounds and normalization
+    pub max_objectives: [u64; D],
+    pub pareto_front_snapshots: Vec<ParetoFrontSnapshot>,
+}
+
 impl<const D: usize> ExploredSolutionsData<D> {
     #[must_use]
     pub fn new(max_objectives: [u64; D]) -> Self {
@@ -96,32 +96,36 @@ impl<const D: usize> ExploredSolutionsData<D> {
     }
 
     #[must_use]
-    pub fn get_solution_fingerprint(
+    pub fn get_solution_fingerprint<T: Hash>(
         &self,
-        solution: &EncodedSolution<D>,
+        solution: &T,
     ) -> Option<&SolutionFingerprint<D>> {
         let hash = Self::hash(solution);
         self.solutions.get(&hash)
     }
 
-    fn hash(solution: &EncodedSolution<D>) -> u64 {
+    fn hash<T: Hash>(solution: &T) -> u64 {
         let mut hasher = DefaultHasher::new();
         solution.hash(&mut hasher);
         hasher.finish()
     }
 
-    pub fn register(&mut self, iteration: usize, solution: &EncodedSolution<D>, time: Duration) {
+    pub fn register<T: HasObjectives<D> + Hash>(
+        &mut self,
+        iteration: usize,
+        solution: &T,
+        time: Duration,
+    ) {
         let hash = Self::hash(solution);
 
         if let Entry::Vacant(e) = self.solutions.entry(hash) {
             let new_entry = SolutionFingerprint {
                 iteration: iteration as u16,
-                objectives: solution.objectives,
+                objectives: *solution.objectives(),
                 explored_neighborhood_size: 0,
                 time,
             };
             e.insert(new_entry);
-            trace!("Registered new solution: {solution:?}");
         } else {
             warn!("Solution was already registered in the explored solutions set");
         }
@@ -132,9 +136,9 @@ impl<const D: usize> ExploredSolutionsData<D> {
     /// # Panics
     ///
     /// Panics if the solution is not registered in the explored solutions set.
-    pub fn update_explored_neighborhood_size(
+    pub fn update_explored_neighborhood_size<T: Hash>(
         &mut self,
-        solution: &EncodedSolution<D>,
+        solution: &T,
         explored_neighborhood_size: u32,
     ) {
         let hash = Self::hash(solution);
@@ -150,7 +154,7 @@ impl<const D: usize> ExploredSolutionsData<D> {
     /// # Panics
     ///
     /// Panics if the solution is not registered in the explored solutions set.
-    pub fn explored_neighborhood_size(&mut self, solution: &EncodedSolution<D>) -> u32 {
+    pub fn explored_neighborhood_size<T: Hash>(&mut self, solution: &T) -> u32 {
         let hash = Self::hash(solution);
         let entry = self
             .solutions
@@ -160,7 +164,7 @@ impl<const D: usize> ExploredSolutionsData<D> {
     }
 
     #[must_use]
-    pub fn is_registered(&self, solution: &EncodedSolution<D>) -> bool {
+    pub fn is_registered<T: Hash>(&self, solution: &T) -> bool {
         let hash = Self::hash(solution);
         self.solutions.contains_key(&hash)
     }
@@ -215,16 +219,16 @@ impl<const D: usize> ExploredSolutionsData<D> {
         non_dominated_solutions
     }
 
-    pub fn register_pareto_snapshot<'a, I>(
+    pub fn register_pareto_snapshot<'a, T: ImageSet<D> + 'a, I>(
         &mut self,
         iteration: usize,
         elapsed: Duration,
         solutions: I,
     ) where
-        I: Iterator<Item = &'a EncodedSolution<D>>,
+        I: Iterator<Item = &'a T>,
     {
         let solutions: Vec<Vec<usize>> = solutions
-            .map(|solution| solution.selected_images().collect())
+            .map(super::solution::ImageSet::selected_images)
             .collect();
         let pareto_front_snapshot = ParetoFrontSnapshot::new(iteration, elapsed, solutions);
         self.pareto_front_snapshots.push(pareto_front_snapshot);

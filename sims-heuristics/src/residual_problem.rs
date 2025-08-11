@@ -1,18 +1,18 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 
 use itertools::Itertools;
 use log::{debug, trace};
-use pareto::{HasObjectives, MoSolution};
+use pareto::{HasObjectives, ParetoFront};
 
 use crate::{
     problem::{Element, Image, Problem},
     residual_solution::ResidualSolution,
-    solution::ResidualSolutionCapable,
+    solution::{ImageSet, MergeableWithResidual},
 };
 
-pub struct ResidualProblem<'a, S: ResidualSolutionCapable<D> + Clone, const D: usize> {
+pub struct ResidualProblem<'a, R: MergeableWithResidual<D> + Clone, const D: usize> {
     /// Original solutions with unmodified image only
-    pub unmodified_solution: S,
+    pub unmodified_solution: R,
     /// Images - candidates to be removed
     pub removal_candidates_indices: Vec<usize>,
     /// All images participating in residual problem
@@ -22,18 +22,18 @@ pub struct ResidualProblem<'a, S: ResidualSolutionCapable<D> + Clone, const D: u
     /// Uncovered elements clear parts counts
     pub original_clear_parts_counts: Vec<usize>,
     /// Original problem instance
-    pub problem: &'a Problem<D>,
+    pub problem: &'a Problem<R, D>,
 }
 
-impl<'a, S: ResidualSolutionCapable<D> + Clone, const D: usize> ResidualProblem<'a, S, D> {
+impl<'a, R: MergeableWithResidual<D> + Clone, const D: usize> ResidualProblem<'a, R, D> {
     #[must_use]
     pub fn new(
-        unmodified_solution: S,
+        unmodified_solution: R,
         removal_candidates_original_indices: Vec<usize>,
         addition_candidates: Vec<usize>,
         uncovered_elements_indices: Vec<usize>,
         original_clear_parts_counts: Vec<usize>,
-        problem: &'a Problem<D>,
+        problem: &'a Problem<R, D>,
     ) -> Self {
         debug!("######################################################");
         debug!(
@@ -112,8 +112,10 @@ impl<'a, S: ResidualSolutionCapable<D> + Clone, const D: usize> ResidualProblem<
         }
     }
 
-    pub fn solve_with_backtracing(&mut self) -> MergedSolutionIter<'_, S, D> {
-        let mut non_dominated_residual_set: BTreeSet<ResidualSolution<D>> = BTreeSet::new();
+    pub fn solve_with_backtracing<S: ParetoFront<'a, ResidualSolution<D>> + Default>(
+        &mut self,
+    ) -> MergedSolutionIter<'_, R, D> {
+        let mut non_dominated_residual_set: S = S::default();
 
         let element_images = self
             .uncovered_elements
@@ -125,30 +127,18 @@ impl<'a, S: ResidualSolutionCapable<D> + Clone, const D: usize> ResidualProblem<
             unique_cover.sort_unstable();
             unique_cover.dedup();
 
-            let residual_solution = ResidualSolution::<D>::from_selected_images(unique_cover, self);
+            let residual_solution =
+                ResidualSolution::from_selected_images(&unique_cover, self.problem);
 
-            // Simple dominance check - only add if not dominated by existing solutions
-            let is_dominated = non_dominated_residual_set
-                .iter()
-                .any(|existing| residual_solution.is_dominated_by(existing.objectives()));
+            let was_added = non_dominated_residual_set.try_insert(&residual_solution);
 
-            if !is_dominated {
-                let was_added = !non_dominated_residual_set.contains(&residual_solution);
-                if was_added {
-                    // Remove solutions dominated by the new one
-                    non_dominated_residual_set.retain(|existing| {
-                        !existing.is_dominated_by(residual_solution.objectives())
-                    });
-                    non_dominated_residual_set.insert(residual_solution.clone());
-                }
-                trace!("#####################################################");
-                trace!(
-                    "######### RESIDUAL: OBJECTIVES {:?} | IMAGES {:?} {} #########################",
-                    residual_solution.objectives,
-                    residual_solution.selected_images,
-                    if was_added { "ADDED" } else { "NOT ADDED" }
-                );
-            }
+            trace!("#####################################################");
+            trace!(
+                "######### RESIDUAL: OBJECTIVES {:?} | IMAGES {:?} {} #########################",
+                residual_solution.objectives(),
+                residual_solution.selected_images(),
+                if was_added { "ADDED" } else { "NOT ADDED" }
+            );
         }
 
         let solutions_iter: Vec<ResidualSolution<D>> =
@@ -158,7 +148,8 @@ impl<'a, S: ResidualSolutionCapable<D> + Clone, const D: usize> ResidualProblem<
         for solution in &solutions_iter {
             trace!(
                 "****** NONDOMINANT RESIDUAL: OBJECTIVES {:?} | IMAGES {:?} ******",
-                solution.objectives, solution.selected_images
+                solution.objectives(),
+                solution.selected_images()
             );
         }
         trace!("*****************************************************");
@@ -278,8 +269,10 @@ impl<'a, S: ResidualSolutionCapable<D> + Clone, const D: usize> ResidualProblem<
     }
     */
 
-    pub fn solve(&mut self) -> MergedSolutionIter<'_, S, D> {
-        let mut non_dominated_residual_set: BTreeSet<ResidualSolution<D>> = BTreeSet::new();
+    pub fn solve<S: ParetoFront<'a, ResidualSolution<D>> + Default>(
+        &mut self,
+    ) -> MergedSolutionIter<'_, R, D> {
+        let mut non_dominated_residual_set: S = S::default();
 
         let images_indices = (0..self.all_images.len()).collect::<Vec<_>>();
 
@@ -312,30 +305,15 @@ impl<'a, S: ResidualSolutionCapable<D> + Clone, const D: usize> ResidualProblem<
 
             let selected_images: Vec<usize> = image_combination.iter().copied().copied().collect();
             let residual_solution =
-                ResidualSolution::<D>::from_selected_images(selected_images, self);
+                ResidualSolution::from_selected_images(&selected_images, self.problem);
 
-            // Simple dominance check - only add if not dominated by existing solutions
-            let is_dominated = non_dominated_residual_set
-                .iter()
-                .any(|existing| residual_solution.is_dominated_by(existing.objectives()));
-
-            let was_added = if !is_dominated
-                && !non_dominated_residual_set.contains(&residual_solution)
-            {
-                // Remove solutions dominated by the new one
-                non_dominated_residual_set
-                    .retain(|existing| !existing.is_dominated_by(residual_solution.objectives()));
-                non_dominated_residual_set.insert(residual_solution.clone());
-                true
-            } else {
-                false
-            };
+            let was_added = non_dominated_residual_set.try_insert(&residual_solution);
 
             trace!("#####################################################");
             trace!(
                 "######### RESIDUAL: OBJECTIVES {:?} | IMAGES {:?} {} #########################",
-                residual_solution.objectives,
-                residual_solution.selected_images,
+                residual_solution.objectives(),
+                residual_solution.selected_images(),
                 if was_added { "ADDED" } else { "NOT ADDED" }
             );
         }
@@ -347,7 +325,8 @@ impl<'a, S: ResidualSolutionCapable<D> + Clone, const D: usize> ResidualProblem<
         for solution in &solutions_iter {
             trace!(
                 "****** NONDOMINANT RESIDUAL: OBJECTIVES {:?} | IMAGES {:?} ******",
-                solution.objectives, solution.selected_images
+                solution.objectives(),
+                solution.selected_images()
             );
         }
         trace!("*****************************************************");
@@ -361,17 +340,17 @@ impl<'a, S: ResidualSolutionCapable<D> + Clone, const D: usize> ResidualProblem<
     }
 }
 
-pub struct MergedSolutionIter<'a, S: ResidualSolutionCapable<D> + Clone, const D: usize> {
-    unmodified_solution: &'a S,
+pub struct MergedSolutionIter<'a, R: MergeableWithResidual<D> + Clone, const D: usize> {
+    unmodified_solution: &'a R,
     solutions_iter: Vec<ResidualSolution<D>>,
-    residual_problem: &'a ResidualProblem<'a, S, D>,
-    problem: &'a Problem<D>,
+    residual_problem: &'a ResidualProblem<'a, R, D>,
+    problem: &'a Problem<R, D>,
 }
 
-impl<S: ResidualSolutionCapable<D> + Clone, const D: usize> Iterator
-    for MergedSolutionIter<'_, S, D>
+impl<R: MergeableWithResidual<D> + Clone, const D: usize> Iterator
+    for MergedSolutionIter<'_, R, D>
 {
-    type Item = S;
+    type Item = R;
 
     fn next(&mut self) -> Option<Self::Item> {
         let residual_solution = self.solutions_iter.pop()?;

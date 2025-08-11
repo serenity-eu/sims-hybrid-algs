@@ -87,7 +87,7 @@ where
 #[derive(Clone)]
 pub struct NDTree<T, const N: usize, const D: usize, const C: usize>
 where
-    T: HasObjectives<D> + MoSolution<D> + Clone,
+    T: HasObjectives<D> + MoSolution<D> + Clone + PartialEq,
 {
     arena: SlotMap<DefaultKey, Node<T, N, D, C>>,
     root: Option<DefaultKey>,
@@ -96,7 +96,7 @@ where
 
 impl<T, const N: usize, const D: usize, const C: usize> NDTree<T, N, D, C>
 where
-    T: HasObjectives<D> + MoSolution<D> + Clone,
+    T: HasObjectives<D> + MoSolution<D> + Clone + PartialEq,
 {
     /// Create an empty tree
     #[must_use]
@@ -112,7 +112,7 @@ where
     /// Returns true if the solution was added, false otherwise.
     pub fn update(&mut self, new_solution: T) -> bool {
         if let Some(root_key) = self.root {
-            if self.update_node(root_key, &new_solution) == Dominance::IsDominatedBy {
+            if self.update_node(root_key, &new_solution) == Dominance::IsDominated {
                 false
             } else {
                 if self.arena[root_key].is_empty() {
@@ -203,7 +203,7 @@ where
                 if new_solution.is_covered_by(nadir) {
                     // Property 1
                     // Exit early, new solution is rejected
-                    return Dominance::IsDominatedBy;
+                    return Dominance::IsDominated;
                 } else if new_solution.covers(ideal) {
                     // Property 2
                     // Clear solutions in the leaf
@@ -217,7 +217,7 @@ where
                     while i < solutions.len() {
                         if solutions[i].covers(new_solution.objectives()) {
                             // Return, new solution is rejected
-                            return Dominance::IsDominatedBy;
+                            return Dominance::IsDominated;
                         } else if new_solution.dominates(solutions[i].objectives()) {
                             // Remove dominated solution
                             solutions.swap_remove(i);
@@ -239,7 +239,7 @@ where
                 if new_solution.is_covered_by(nadir) {
                     // Property 1
                     // Exit early, new solution is rejected
-                    return Dominance::IsDominatedBy;
+                    return Dominance::IsDominated;
                 } else if new_solution.covers(ideal) {
                     // Property 2
                     // Extract children keys first to avoid borrow conflicts
@@ -257,7 +257,7 @@ where
 
                     for child_key in children_keys {
                         dominance_relation = self.update_node(child_key, new_solution);
-                        if dominance_relation == Dominance::IsDominatedBy {
+                        if dominance_relation == Dominance::IsDominated {
                             // If any child rejects the solution, we can stop early
                             return dominance_relation;
                         }
@@ -410,6 +410,49 @@ where
     }
 
     #[must_use]
+    pub fn contains(&self, solution: &T) -> bool {
+        let Some(root_key) = self.root else {
+            return false;
+        };
+
+        let mut stack = vec![root_key];
+
+        while let Some(node_key) = stack.pop() {
+            let node = &self.arena[node_key];
+
+            // Get node bounds
+            let (ideal, nadir) = match node {
+                Node::Leaf { ideal, nadir, .. } | Node::Internal { ideal, nadir, .. } => {
+                    (ideal, nadir)
+                }
+            };
+
+            // Use MoSolution dominance methods for bounds checking
+            // Skip this subtree if solution is outside the bounds [ideal, nadir]
+            if solution.is_covered_by(ideal) || solution.covers(nadir) {
+                continue; // Solution cannot be in this subtree, skip
+            }
+
+            match node {
+                Node::Leaf { solutions, .. } => {
+                    // Check if the solution exists in this leaf
+                    if solutions.contains(solution) {
+                        return true;
+                    }
+                }
+                Node::Internal { children, .. } => {
+                    // Add children to stack for further exploration
+                    for &child_key in children {
+                        stack.push(child_key);
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
+    #[must_use]
     pub fn len(&self) -> usize {
         self.iter().count()
     }
@@ -420,21 +463,21 @@ where
     }
 }
 
-impl<'a, T, const N: usize, const D: usize, const C: usize> IntoIterator for &'a NDTree<T, N, D, C>
+impl<T, const N: usize, const D: usize, const C: usize> IntoIterator for &NDTree<T, N, D, C>
 where
-    T: HasObjectives<D> + MoSolution<D> + Clone,
+    T: HasObjectives<D> + MoSolution<D> + Clone + PartialEq,
 {
-    type Item = &'a T;
-    type IntoIter = NDTreeSolutionIterator<'a, T, N, D, C>;
+    type Item = T;
+    type IntoIter = NDTreeSolutionIntoIterator<T, N, D, C>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.iter()
+        NDTreeSolutionIntoIterator::new(self.clone())
     }
 }
 
 impl<T, const N: usize, const D: usize, const C: usize> Default for NDTree<T, N, D, C>
 where
-    T: HasObjectives<D> + MoSolution<D> + Clone,
+    T: HasObjectives<D> + MoSolution<D> + Clone + PartialEq,
 {
     fn default() -> Self {
         Self::new()
@@ -444,25 +487,27 @@ where
 /// Consuming iterator for `NDTree`, yielding owned Solutions
 pub struct NDTreeSolutionIntoIterator<T, const N: usize, const D: usize, const C: usize>
 where
-    T: HasObjectives<D> + MoSolution<D> + Clone,
+    T: HasObjectives<D> + MoSolution<D> + Clone + PartialEq,
 {
     tree: NDTree<T, N, D, C>,
-    stack: Vec<DefaultKey>,
-    next_solution_loc: Option<(DefaultKey, usize)>,
+    node_stack: Vec<DefaultKey>,
+    current_leaf_solutions: Option<ArrayVec<T, N>>,
+    current_solution_index: usize,
 }
 
 impl<T, const N: usize, const D: usize, const C: usize> NDTreeSolutionIntoIterator<T, N, D, C>
 where
-    T: HasObjectives<D> + MoSolution<D> + Clone,
+    T: HasObjectives<D> + MoSolution<D> + Clone + PartialEq,
 {
     #[must_use]
     pub fn new(tree: NDTree<T, N, D, C>) -> Self {
-        let stack = tree.root.map_or_else(Vec::new, |root_key| vec![root_key]);
+        let node_stack = tree.root.map_or_else(Vec::new, |root_key| vec![root_key]);
 
         Self {
-            stack,
             tree,
-            next_solution_loc: None,
+            node_stack,
+            current_leaf_solutions: None,
+            current_solution_index: 0,
         }
     }
 }
@@ -470,33 +515,40 @@ where
 impl<T, const N: usize, const D: usize, const C: usize> Iterator
     for NDTreeSolutionIntoIterator<T, N, D, C>
 where
-    T: HasObjectives<D> + MoSolution<D> + Clone,
+    T: HasObjectives<D> + MoSolution<D> + Clone + PartialEq,
 {
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            if let Some((idx, sol_idx)) = self.next_solution_loc {
-                if let Node::Leaf { solutions, .. } = &mut self.tree.arena[idx] {
-                    if sol_idx < solutions.len() {
-                        self.next_solution_loc = Some((idx, sol_idx + 1));
-                        // Remove and return the solution by value
-                        return Some(solutions[sol_idx].clone());
-                    }
+            // If we have current leaf solutions, try to get the next solution from them
+            if let Some(ref solutions) = self.current_leaf_solutions {
+                if self.current_solution_index < solutions.len() {
+                    let solution = solutions[self.current_solution_index].clone();
+                    self.current_solution_index += 1;
+                    return Some(solution);
                 }
-                self.next_solution_loc = None;
+                // Current leaf is exhausted, move to next
+                self.current_leaf_solutions = None;
+                self.current_solution_index = 0;
             }
-            let idx = self.stack.pop()?;
+
+            // Get the next node from the stack (same logic as NDTreeNodeIterator)
+            let idx = self.node_stack.pop()?;
             match &self.tree.arena[idx] {
-                Node::Leaf { solutions, .. } => {
-                    if !solutions.is_empty() {
-                        self.next_solution_loc = Some((idx, 0));
-                    }
+                Node::Leaf { solutions, .. } if !solutions.is_empty() => {
+                    self.current_leaf_solutions = Some(solutions.clone());
+                    self.current_solution_index = 0;
+                    // Continue to the next iteration to get the first solution
                 }
                 Node::Internal { children, .. } => {
+                    // Add children to stack in reverse order for DFS pre-order traversal
                     for &child_idx in children.iter().rev() {
-                        self.stack.push(child_idx);
+                        self.node_stack.push(child_idx);
                     }
+                }
+                Node::Leaf { .. } => {
+                    // Empty leaf, continue to next node
                 }
             }
         }
@@ -505,7 +557,7 @@ where
 
 impl<T, const N: usize, const D: usize, const C: usize> IntoIterator for NDTree<T, N, D, C>
 where
-    T: HasObjectives<D> + MoSolution<D> + Clone,
+    T: HasObjectives<D> + MoSolution<D> + Clone + PartialEq,
 {
     type Item = T;
     type IntoIter = NDTreeSolutionIntoIterator<T, N, D, C>;
@@ -518,7 +570,7 @@ where
 /// Depth-First Search-like iterator for `NDTree`
 pub struct NDTreeSolutionIterator<'a, T, const N: usize, const D: usize, const C: usize>
 where
-    T: HasObjectives<D> + MoSolution<D> + Clone,
+    T: HasObjectives<D> + MoSolution<D> + Clone + PartialEq,
 {
     leaf_iterator: NDTreeNodeIterator<'a, T, N, D, C>,
     current_leaf_solutions: Option<&'a ArrayVec<T, N>>,
@@ -528,7 +580,7 @@ where
 
 impl<'a, T, const N: usize, const D: usize, const C: usize> NDTreeSolutionIterator<'a, T, N, D, C>
 where
-    T: HasObjectives<D> + MoSolution<D> + Clone,
+    T: HasObjectives<D> + MoSolution<D> + Clone + PartialEq,
 {
     #[must_use]
     pub fn new(tree: &'a NDTree<T, N, D, C>) -> Self {
@@ -544,7 +596,7 @@ where
 impl<'a, T, const N: usize, const D: usize, const C: usize> Iterator
     for NDTreeSolutionIterator<'a, T, N, D, C>
 where
-    T: HasObjectives<D> + MoSolution<D> + Clone,
+    T: HasObjectives<D> + MoSolution<D> + Clone + PartialEq,
 {
     type Item = &'a T;
 
@@ -583,7 +635,7 @@ where
 /// Generator for pre-order traversal of `NDTree` nodes (yields node references)
 pub struct NDTreeNodeIterator<'a, T, const N: usize, const D: usize, const C: usize>
 where
-    T: HasObjectives<D> + MoSolution<D> + Clone,
+    T: HasObjectives<D> + MoSolution<D> + Clone + PartialEq,
 {
     tree: &'a NDTree<T, N, D, C>,
     stack: Vec<DefaultKey>,
@@ -592,7 +644,7 @@ where
 
 impl<'a, T, const N: usize, const D: usize, const C: usize> NDTreeNodeIterator<'a, T, N, D, C>
 where
-    T: HasObjectives<D> + MoSolution<D> + Clone,
+    T: HasObjectives<D> + MoSolution<D> + Clone + PartialEq,
 {
     #[must_use]
     pub fn new(tree: &'a NDTree<T, N, D, C>) -> Self {
@@ -609,7 +661,7 @@ where
 impl<'a, T, const N: usize, const D: usize, const C: usize> Iterator
     for NDTreeNodeIterator<'a, T, N, D, C>
 where
-    T: HasObjectives<D> + MoSolution<D> + Clone,
+    T: HasObjectives<D> + MoSolution<D> + Clone + PartialEq,
 {
     type Item = &'a Node<T, N, D, C>;
 
@@ -626,9 +678,50 @@ where
     }
 }
 
+/// Generator for pre-order traversal of `NDTree` nodes (yields owned nodes)
+pub struct NDTreeNodeIntoIterator<T, const N: usize, const D: usize, const C: usize>
+where
+    T: HasObjectives<D> + MoSolution<D> + Clone + PartialEq,
+{
+    tree: NDTree<T, N, D, C>,
+    stack: Vec<DefaultKey>,
+}
+
+impl<T, const N: usize, const D: usize, const C: usize> NDTreeNodeIntoIterator<T, N, D, C>
+where
+    T: HasObjectives<D> + MoSolution<D> + Clone + PartialEq,
+{
+    #[must_use]
+    pub fn new(tree: NDTree<T, N, D, C>) -> Self {
+        let stack = tree.root.map_or_else(Vec::new, |root_key| vec![root_key]);
+
+        Self { tree, stack }
+    }
+}
+
+impl<T, const N: usize, const D: usize, const C: usize> Iterator
+    for NDTreeNodeIntoIterator<T, N, D, C>
+where
+    T: HasObjectives<D> + MoSolution<D> + Clone + PartialEq,
+{
+    type Item = Node<T, N, D, C>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let key = self.stack.pop()?;
+        let node = self.tree.arena.remove(key)?;
+        if let Node::Internal { children, .. } = &node {
+            // Push children in reverse order so leftmost is visited first
+            for &child in children.iter().rev() {
+                self.stack.push(child);
+            }
+        }
+        Some(node)
+    }
+}
+
 impl<T, const N: usize, const D: usize, const C: usize> std::fmt::Debug for NDTree<T, N, D, C>
 where
-    T: HasObjectives<D> + MoSolution<D> + Clone + std::fmt::Debug,
+    T: HasObjectives<D> + MoSolution<D> + Clone + PartialEq + std::fmt::Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         fn write_node<T, const N: usize, const D: usize, const C: usize>(
@@ -639,7 +732,7 @@ where
             last: bool,
         ) -> std::fmt::Result
         where
-            T: HasObjectives<D> + MoSolution<D> + Clone + std::fmt::Debug,
+            T: HasObjectives<D> + MoSolution<D> + Clone + PartialEq + std::fmt::Debug,
         {
             let node = &tree.arena[key];
             let connector = if last { "└── " } else { "├── " };

@@ -1,5 +1,7 @@
 use log::debug;
+use pls::objectives::ObjectiveType;
 use pls::problem::{Problem, SIMSProblemInstanceRaw};
+use pls::solution::bitset_encoded_solution::BitsetEncodedSolution;
 use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::{
     prelude::*,
@@ -377,7 +379,7 @@ impl SimsDiscreteProblem {
     }
 
     /// Convert to sims-heuristics Problem format directly in memory
-    pub fn to_pls_problem(&self) -> Problem<2> {
+    pub fn to_pls_problem(&self) -> Problem<BitsetEncodedSolution<2>, 2> {
         debug!(
             "Converting SIMS problem to PLS format: {} images, universe size {}",
             self.num_images, self.universe
@@ -414,7 +416,9 @@ impl SimsDiscreteProblem {
         };
 
         debug!("Creating PLS problem from raw instance");
-        let pls_problem = Problem::from_raw(raw_instance);
+        let objectives = [ObjectiveType::TotalCost, ObjectiveType::CloudyArea];
+        let pls_problem = Problem::from_raw_with_objectives(raw_instance, objectives)
+            .expect("Failed to create PLS problem from raw instance");
         log::info!("Successfully created PLS problem");
         pls_problem
     }

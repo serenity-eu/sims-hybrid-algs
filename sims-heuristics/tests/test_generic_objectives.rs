@@ -1,7 +1,7 @@
+use pls::objectives::ObjectiveType;
 // Integration tests for verifying the generic objectives refactoring
-use pls::objectives::{CloudyAreaObjective, TotalCostObjective};
 use pls::problem::{Problem, SIMSProblemInstanceRaw};
-use pls::solution::VecEncodedSolution;
+use pls::solution_impl::bitset_encoded_solution::BitsetEncodedSolution;
 
 #[test]
 fn test_generic_objectives_2d() {
@@ -28,7 +28,11 @@ fn test_generic_objectives_2d() {
     };
 
     // Test with default 2D objectives (backward compatibility)
-    let problem_legacy: Problem<2> = Problem::from_raw(raw_data.clone());
+    let problem_legacy: Problem<BitsetEncodedSolution<2>, 2> = Problem::from_raw_with_objectives(
+        raw_data.clone(),
+        [ObjectiveType::TotalCost, ObjectiveType::CloudyArea],
+    )
+    .expect("Failed to create legacy problem instance");
     assert_eq!(problem_legacy.num_objectives(), 2);
     assert_eq!(
         problem_legacy.objective_names(),
@@ -36,30 +40,21 @@ fn test_generic_objectives_2d() {
     );
 
     // Test with explicit objective definitions using builder pattern
-    let problem_builder_result: Result<Problem<2>, String> = Problem::builder(raw_data)
-        .with_objective_definitions(vec![
-            Box::new(TotalCostObjective { index: 0 }),
-            Box::new(CloudyAreaObjective { index: 1 }),
-        ])
-        .build();
+    let problem_builder_result: Result<Problem<BitsetEncodedSolution<2>, 2>, String> =
+        Problem::builder(raw_data)
+            .with_objectives(vec![ObjectiveType::TotalCost, ObjectiveType::CloudyArea])
+            .build();
 
     assert!(problem_builder_result.is_ok());
     let problem_generic = problem_builder_result.unwrap();
 
     assert_eq!(problem_generic.num_objectives(), 2);
-    assert!(problem_generic.has_objective_definitions());
-    assert_eq!(
-        problem_generic.get_objective_definition(0).unwrap().id(),
-        "total_cost"
-    );
-    assert_eq!(
-        problem_generic.get_objective_definition(1).unwrap().id(),
-        "cloudy_area"
-    );
+    assert_eq!(problem_generic.objective(0).id(), "total_cost");
+    assert_eq!(problem_generic.objective(1).id(), "cloudy_area");
 
     // Test that both legacy and generic systems produce the same results
-    let solution_legacy = VecEncodedSolution::from_selected_images(&[0, 1], &problem_legacy);
-    let solution_generic = VecEncodedSolution::from_selected_images(&[0, 1], &problem_generic);
+    let solution_legacy = BitsetEncodedSolution::from_selected_images(&[0, 1], &problem_legacy);
+    let solution_generic = BitsetEncodedSolution::from_selected_images(&[0, 1], &problem_generic);
 
     assert_eq!(solution_legacy.objectives, solution_generic.objectives);
     println!("Legacy objectives: {:?}", solution_legacy.objectives);
@@ -82,29 +77,16 @@ fn test_generic_objectives_validation() {
     };
 
     // Test validation - wrong number of objectives
-    let result: Result<Problem<3>, String> = Problem::builder(raw_data.clone())
-        .with_objective_definitions(vec![
-            Box::new(TotalCostObjective { index: 0 }),
-            Box::new(CloudyAreaObjective { index: 1 }),
-            // Missing third objective
+    let result: Result<Problem<BitsetEncodedSolution<3>, 3>, String> = Problem::builder(raw_data)
+        .with_objectives(vec![
+            ObjectiveType::TotalCost,
+            ObjectiveType::CloudyArea, // Only 2 objectives provided
         ])
         .build();
 
     assert!(result.is_err());
     let error_msg = result.err().unwrap();
     assert!(error_msg.contains("Expected 3 objectives, got 2"));
-
-    // Test validation - wrong objective index
-    let result: Result<Problem<2>, String> = Problem::builder(raw_data)
-        .with_objective_definitions(vec![
-            Box::new(TotalCostObjective { index: 0 }),
-            Box::new(CloudyAreaObjective { index: 2 }), // Should be index 1
-        ])
-        .build();
-
-    assert!(result.is_err());
-    let error_msg = result.err().unwrap();
-    assert!(error_msg.contains("incorrect index"));
 }
 
 #[test]

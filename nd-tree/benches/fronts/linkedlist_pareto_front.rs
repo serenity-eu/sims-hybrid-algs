@@ -45,7 +45,6 @@ where
     where
         Self: 'b,
         T: 'b;
-    type IntoIter = std::collections::linked_list::IntoIter<T>;
 
     fn new(name: &'static str) -> Self {
         Self::new(name)
@@ -87,20 +86,6 @@ where
 
     fn insert_unchecked(&mut self, solution: &T) {
         self.solutions.push_back(solution.clone());
-    }
-
-    fn replace_if_exists(&mut self, solution: T) {
-        let target_objectives = solution.objectives();
-
-        // Find existing solution with same objectives and replace it
-        let mut cursor = self.solutions.cursor_front_mut();
-        while let Some(current) = cursor.current() {
-            if current.objectives() == target_objectives {
-                *current = solution;
-                return;
-            }
-            cursor.move_next();
-        }
     }
 
     fn len(&self) -> usize {
