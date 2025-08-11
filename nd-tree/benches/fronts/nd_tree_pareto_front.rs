@@ -5,7 +5,7 @@ use std::fmt::Debug;
 /// A Pareto front implementation that uses an ND-Tree for efficient dominance checking.
 pub struct NdTreeParetoFront<T, const N: usize, const D: usize, const C: usize>
 where
-    T: HasObjectives<D> + MoSolution<D> + Clone,
+    T: HasObjectives<D> + MoSolution<D> + Clone + PartialEq,
 {
     nd_tree: NDTree<T, N, D, C>,
 }
@@ -13,13 +13,12 @@ where
 impl<T, const N: usize, const D: usize, const C: usize> ParetoFront<'static, T>
     for NdTreeParetoFront<T, N, D, C>
 where
-    T: HasObjectives<D> + MoSolution<D> + Clone + Debug + 'static,
+    T: HasObjectives<D> + MoSolution<D> + Clone + PartialEq + Debug + 'static,
 {
     type Iter<'b>
         = NDTreeSolutionIterator<'b, T, N, D, C>
     where
         T: 'b;
-    type IntoIter = NDTreeSolutionIntoIterator<T, N, D, C>;
 
     fn new(_name: &'static str) -> Self {
         Self {
@@ -50,27 +49,6 @@ where
         self.nd_tree.update_unchecked(solution.clone());
     }
 
-    fn replace_if_exists(&mut self, solution: T) {
-        // Find if there's an existing solution with the same objectives
-        let has_existing = self
-            .nd_tree
-            .iter()
-            .any(|s| s.objectives() == solution.objectives());
-
-        if has_existing {
-            // Remove the existing solution and add the new one
-            // For now, we'll use a simple approach: rebuild the tree
-            let mut new_tree = NDTree::new();
-            for existing in &self.nd_tree {
-                if existing.objectives() != solution.objectives() {
-                    new_tree.update_unchecked(existing.clone());
-                }
-            }
-            new_tree.update_unchecked(solution);
-            self.nd_tree = new_tree;
-        }
-    }
-
     fn len(&self) -> usize {
         self.nd_tree.len()
     }
@@ -79,9 +57,22 @@ where
     }
 }
 
+impl<T, const N: usize, const D: usize, const C: usize> IntoIterator
+    for NdTreeParetoFront<T, N, D, C>
+where
+    T: HasObjectives<D> + MoSolution<D> + Clone + PartialEq,
+{
+    type Item = T;
+    type IntoIter = NDTreeSolutionIntoIterator<T, N, D, C>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.nd_tree.into_iter()
+    }
+}
+
 impl<T, const N: usize, const D: usize, const C: usize> Debug for NdTreeParetoFront<T, N, D, C>
 where
-    T: HasObjectives<D> + MoSolution<D> + Clone + Debug,
+    T: HasObjectives<D> + MoSolution<D> + Clone + PartialEq + Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_struct("NdTreeParetoFront")

@@ -1,27 +1,46 @@
-use std::slice;
-
 use log::trace;
+use pareto::{ParetoFront, Random, RandomCollection};
 
-use crate::{solution::SIMSSolutionTrait, solution_set::SolutionSet};
+use crate::solution::EncodedSolution;
 
 #[derive(Clone)]
-pub struct VecSolutionSet<T: SIMSSolutionTrait<D> + Sized, const D: usize> {
-    name: String,
+pub struct VecSolutionSet<T: EncodedSolution<D> + Sized, const D: usize> {
+    name: &'static str,
     last_added_position: usize,
     vec_set: Vec<T>,
 }
 
-impl<T, const D: usize> SolutionSet<'_, T, D> for VecSolutionSet<T, D>
+impl<T, const D: usize> VecSolutionSet<T, D>
 where
-    T: SIMSSolutionTrait<D> + Sized + Ord + Clone,
+    T: EncodedSolution<D> + Sized + Clone,
+{
+    #[must_use]
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            last_added_position: 0,
+            vec_set: Vec::new(),
+        }
+    }
+
+    fn binary_search(&self, solution: &T) -> Result<usize, usize> {
+        self.vec_set
+            .binary_search_by_key(solution.objectives().first().unwrap(), |s| {
+                *s.objectives().first().unwrap()
+            })
+    }
+}
+
+impl<T, const D: usize> ParetoFront<'_, T> for VecSolutionSet<T, D>
+where
+    T: EncodedSolution<D> + Sized + Clone,
 {
     type Iter<'b>
-        = slice::Iter<'b, T>
+        = std::slice::Iter<'b, T>
     where
         T: 'b;
-    type IntoIter = std::vec::IntoIter<T>;
 
-    fn new(name: String) -> Self {
+    fn new(name: &'static str) -> Self {
         Self {
             name,
             last_added_position: 0,
@@ -34,47 +53,22 @@ where
     }
 
     fn contains(&self, solution: &T) -> bool {
-        self.vec_set.binary_search(solution).is_ok()
+        self.binary_search(solution).is_ok()
     }
 
-    /// Note: This can be done efficiently given that the solutions are sorted, first we find the first solution which is dominated by first objective, then we remove all solutions that are dominated by the second objective
-    fn remove_dominated(&mut self, solution: &T) {
-        let size_before = self.vec_set.len();
-        let mut to_remove = Vec::new();
-
-        let start_index = self.last_added_position;
-        let potentially_dominated_solutions = &self.vec_set[start_index..];
-        for (index, potentially_dominated) in potentially_dominated_solutions.iter().enumerate() {
-            let original_index = start_index + index;
-            if potentially_dominated.is_covered_by(solution.objectives()) {
-                to_remove.push(original_index);
-            }
-        }
-
-        for index in to_remove.iter().rev() {
-            self.vec_set.remove(*index);
-        }
-
-        let size_after = self.vec_set.len();
-        if size_before != size_after {
-            trace!(
-                "Removed {} dominated solutions from the {} set. Size after: {}",
-                size_before - size_after,
-                self.name,
-                size_after
-            );
-        }
-    }
-
-    fn insert_if_not_dominated(&mut self, solution: &T) -> bool {
+    fn try_insert(&mut self, solution: &T) -> bool {
         // Insert if set is empty
         if self.vec_set.is_empty() {
             self.vec_set.push(solution.clone());
             return true;
         }
 
-        match self.vec_set.binary_search(solution) {
-            Ok(_) => return false,
+        let was_inserted;
+
+        match self.binary_search(solution) {
+            Ok(_) => {
+                was_inserted = false;
+            }
             Err(position) => {
                 let mut first_equal_pos = position;
                 // Use first objective for sorting (this maintains compatibility with existing sort behavior)
@@ -93,58 +87,87 @@ where
                     .iter()
                     .any(|s| solution.is_covered_by(s.objectives()))
                 {
-                    return false;
+                    was_inserted = false;
+                } else {
+                    self.vec_set.insert(position, solution.clone());
+                    self.last_added_position = position;
+                    was_inserted = true;
                 }
-                self.vec_set.insert(position, solution.clone());
-                self.last_added_position = position;
-                return true;
             }
         }
-    }
-
-    fn try_add(&mut self, solution: &T) -> bool {
-        let was_inserted = self.insert_if_not_dominated(solution);
         if was_inserted {
-            self.remove_dominated(solution);
+            let size_before = self.vec_set.len();
+            let mut to_remove = Vec::new();
+
+            let start_index = self.last_added_position;
+            let potentially_dominated_solutions = &self.vec_set[start_index..];
+            for (index, potentially_dominated) in potentially_dominated_solutions.iter().enumerate()
+            {
+                let original_index = start_index + index;
+                if potentially_dominated.is_covered_by(solution.objectives()) {
+                    to_remove.push(original_index);
+                }
+            }
+
+            for index in to_remove.iter().rev() {
+                self.vec_set.remove(*index);
+            }
+
+            let size_after = self.vec_set.len();
+            if size_before != size_after {
+                trace!(
+                    "Removed {} dominated solutions from the {} set. Size after: {}",
+                    size_before - size_after,
+                    self.name,
+                    size_after
+                );
+            }
         }
         was_inserted
     }
 
-    fn random(size: usize, problem: &crate::problem::Problem<D>) -> Self {
-        let random_iter = (0..size).map(|_| T::random_with_problem(problem));
-        return Self::from_iter(random_iter);
-    }
-
-    fn random_with_seed(size: usize, problem: &crate::problem::Problem<D>, seed: u64) -> Self {
-        let random_iter = (0..size).map(|_| T::random_with_problem_and_seed(problem, seed));
-        return Self::from_iter(random_iter);
-    }
-
-    fn with_name(mut self, name: String) -> Self {
+    fn with_name(mut self, name: &'static str) -> Self {
         self.name = name;
         self
     }
 
-    fn force_add(&mut self, solution: &T) {
-        let position = self.vec_set.binary_search(solution).unwrap_err();
-        self.vec_set.insert(position, solution.clone());
-    }
-
-    fn replace_if_exists(&mut self, solution: T) {
-        if let Ok(position) = self.vec_set.binary_search(&solution) {
-            self.vec_set[position] = solution;
+    fn insert_unchecked(&mut self, solution: &T) {
+        match self.binary_search(solution) {
+            Ok(position) | Err(position) => {
+                // Solution already exists, insert anyway (unchecked)
+                self.vec_set.insert(position, solution.clone());
+            }
         }
     }
+}
 
+impl<T, const D: usize> FromIterator<T> for VecSolutionSet<T, D>
+where
+    T: EncodedSolution<D> + Sized + Clone,
+{
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        let vec_set: Vec<T> = iter.into_iter().collect();
         Self {
-            name: "unnamed".to_string(),
-            vec_set: iter.into_iter().collect(),
+            name: "unnamed",
+            vec_set,
             last_added_position: 0,
         }
     }
+}
+
+impl<T, const D: usize> IntoIterator for VecSolutionSet<T, D>
+where
+    T: EncodedSolution<D> + Sized + Clone,
+{
+    type Item = T;
+    type IntoIter = std::vec::IntoIter<T>;
 
     fn into_iter(self) -> Self::IntoIter {
-        return self.vec_set.into_iter();
+        self.vec_set.into_iter()
     }
+}
+
+impl<T, const D: usize> RandomCollection<T> for VecSolutionSet<T, D> where
+    T: EncodedSolution<D> + Sized + Clone + Random
+{
 }

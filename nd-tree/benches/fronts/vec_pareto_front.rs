@@ -38,7 +38,6 @@ where
         Self: 'b,
         T: 'b;
 
-    type IntoIter = std::vec::IntoIter<T>;
     fn new(name: &'static str) -> Self {
         Self::new(name)
     }
@@ -81,25 +80,21 @@ where
         self.solutions.push(solution.clone());
     }
 
-    fn replace_if_exists(&mut self, solution: T) {
-        let target_objectives = solution.objectives();
-
-        // Find existing solution with same objectives
-        if let Some(pos) = self
-            .solutions
-            .iter()
-            .position(|s| s.objectives() == target_objectives)
-        {
-            self.solutions[pos] = solution;
-        }
-    }
-
     fn len(&self) -> usize {
         self.solutions.len()
     }
 
     fn is_empty(&self) -> bool {
         self.solutions.is_empty()
+    }
+}
+
+impl<T, const D: usize> IntoIterator for VecParetoFront<T, D> {
+    type Item = T;
+    type IntoIter = std::vec::IntoIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.solutions.into_iter()
     }
 }
 

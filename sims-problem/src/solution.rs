@@ -269,3 +269,27 @@ impl Solution {
         Ok(())
     }
 }
+
+/// Result structure containing both final Pareto solutions and all explored solutions
+/// for comprehensive visualization and analysis
+#[pyclass]
+#[derive(Clone, Debug)]
+pub struct SolvingResult {
+    /// The final Pareto-optimal solutions
+    #[pyo3(get, set)]
+    pub final_solutions: Vec<Solution>,
+    /// All solutions explored during the search process
+    #[pyo3(get, set)]
+    pub explored_solutions: Vec<Solution>,
+}
+
+#[pymethods]
+impl SolvingResult {
+    #[new]
+    pub fn new(final_solutions: Vec<Solution>, explored_solutions: Vec<Solution>) -> Self {
+        Self {
+            final_solutions,
+            explored_solutions,
+        }
+    }
+}

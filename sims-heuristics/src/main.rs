@@ -11,9 +11,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use pls::pareto_local_search::ParetoLocalSearch;
+use pareto::{ParetoFront, RandomCollection};
 use pls::solution_set_impl::BTreeSolutionSet;
-use pls::{problem::Problem, solution::EncodedSolution, solution_set::SolutionSet};
+use pls::{objectives::ObjectiveType, pareto_local_search::ParetoLocalSearch};
+use pls::{problem::Problem, solution_impl::bitset_encoded_solution::BitsetEncodedSolution};
 
 const INITIAL_POPULATION_SIZE: usize = 100;
 const MAX_ITERATIONS: usize = 50000;
@@ -141,52 +142,60 @@ fn main() {
         "Loading problem instance from file: {}",
         args.problem.display()
     );
-    let sims_problem_instance = Problem::<NUM_OBJECTIVES>::from_minizinc_datafile(&args.problem);
+    let sims_problem_instance =
+        Problem::<BitsetEncodedSolution<NUM_OBJECTIVES>, NUM_OBJECTIVES>::from_minizinc_datafile(
+            &args.problem,
+            [ObjectiveType::TotalCost, ObjectiveType::CloudyArea],
+        )
+        .expect("Failed to load problem instance");
 
     debug!("Initializing initial solution set");
-    let initial_solution_set: BTreeSolutionSet<EncodedSolution<NUM_OBJECTIVES>, NUM_OBJECTIVES> =
-        if let Some(initial_population_csv) = &args.initial_population {
-            debug!(
-                "Loading initial solutions from file: {}",
-                initial_population_csv.display()
-            );
-            let initial_solutions =
-                file_io::solution_list_from_csv(initial_population_csv, &sims_problem_instance);
-
-            // debug!("Checking validity of initial solutions");
-            // let (valid_initial_solutions, invalid_initial_solutions): (Vec<_>, Vec<_>) =
-            //     initial_solutions
-            //         .into_iter()
-            //         .partition(|solution| solution.is_valid(&sims_problem_instance));
-            // if !invalid_initial_solutions.is_empty() {
-            //     file_io::dump_invalid_initial_solutions(
-            //         invalid_initial_solutions,
-            //         &args.problem,
-            //         &args.output,
-            //         args.timeout,
-            //     );
-            // }
-            // if !valid_initial_solutions.is_empty() {
-            if !initial_solutions.is_empty() {
-                BTreeSolutionSet::from_iter(initial_solutions)
-            } else if args.is_deterministic {
-                BTreeSolutionSet::random_with_seed(
-                    INITIAL_POPULATION_SIZE,
+    let initial_solution_set: BTreeSolutionSet<
+        BitsetEncodedSolution<NUM_OBJECTIVES>,
+        NUM_OBJECTIVES,
+    > = if let Some(initial_population_csv) = &args.initial_population {
+        debug!(
+            "Loading initial solutions from file: {}",
+            initial_population_csv.display()
+        );
+        let initial_solutions_indices =
+            file_io::solution_list_from_csv::<NUM_OBJECTIVES>(initial_population_csv);
+        let initial_solutions = initial_solutions_indices
+            .into_iter()
+            .map(|selected_images| {
+                BitsetEncodedSolution::from_selected_images(
+                    &selected_images,
                     &sims_problem_instance,
-                    TEST_SEED,
                 )
-            } else {
-                BTreeSolutionSet::random(INITIAL_POPULATION_SIZE, &sims_problem_instance)
-            }
+            })
+            .collect::<Vec<_>>();
+
+        // debug!("Checking validity of initial solutions");
+        // let (valid_initial_solutions, invalid_initial_solutions): (Vec<_>, Vec<_>) =
+        //     initial_solutions
+        //         .into_iter()
+        //         .partition(|solution| solution.is_valid(&sims_problem_instance));
+        // if !invalid_initial_solutions.is_empty() {
+        //     file_io::dump_invalid_initial_solutions(
+        //         invalid_initial_solutions,
+        //         &args.problem,
+        //         &args.output,
+        //         args.timeout,
+        //     );
+        // }
+        // if !valid_initial_solutions.is_empty() {
+        if !initial_solutions.is_empty() {
+            BTreeSolutionSet::from_iter(initial_solutions)
         } else if args.is_deterministic {
-            BTreeSolutionSet::random_with_seed(
-                INITIAL_POPULATION_SIZE,
-                &sims_problem_instance,
-                TEST_SEED,
-            )
+            BTreeSolutionSet::random_with_seed(INITIAL_POPULATION_SIZE, TEST_SEED)
         } else {
-            BTreeSolutionSet::random(INITIAL_POPULATION_SIZE, &sims_problem_instance)
-        };
+            BTreeSolutionSet::random(INITIAL_POPULATION_SIZE)
+        }
+    } else if args.is_deterministic {
+        BTreeSolutionSet::random_with_seed(INITIAL_POPULATION_SIZE, TEST_SEED)
+    } else {
+        BTreeSolutionSet::random(INITIAL_POPULATION_SIZE)
+    };
 
     debug!("Initial solution set:");
 
@@ -208,7 +217,7 @@ fn main() {
         &sims_problem_instance,
     );
 
-    let final_solutions: Vec<EncodedSolution<NUM_OBJECTIVES>> =
+    let final_solutions: Vec<BitsetEncodedSolution<NUM_OBJECTIVES>> =
         final_solution_set.into_iter().collect();
 
     let non_dominated_points = pareto_local_search.explored_solutions.non_dominated();

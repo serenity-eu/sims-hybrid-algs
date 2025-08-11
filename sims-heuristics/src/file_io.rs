@@ -7,16 +7,14 @@ use std::{
 use chrono::Local;
 use csv::{ReaderBuilder, WriterBuilder};
 use itertools::Itertools;
+use pareto::HasObjectives;
 use pls::{
     explored_solutions_data::ParetoFrontSnapshot,
     problem::{Problem, parse_set_of_vecs},
-    solution::EncodedSolution,
+    solution::ImageSet,
 };
 
-pub fn solution_list_from_csv<const D: usize>(
-    path: &Path,
-    probem_instance: &Problem<D>,
-) -> Vec<EncodedSolution<D>> {
+pub fn solution_list_from_csv<const D: usize>(path: &Path) -> Vec<Vec<usize>> {
     let mut reader = ReaderBuilder::new()
         .delimiter(b';')
         .from_path(path)
@@ -32,18 +30,13 @@ pub fn solution_list_from_csv<const D: usize>(
         .get(solutions_pareto_front_record_index)
         .unwrap();
     let selected_images_vecs: Vec<Vec<usize>> = parse_set_of_vecs(solutions_pareto_front);
-    return selected_images_vecs
-        .into_iter()
-        .map(|selected_images| {
-            EncodedSolution::from_selected_images(&selected_images, probem_instance)
-        })
-        .collect();
+    return selected_images_vecs;
 }
 
-pub fn append_solutions_to_csv<const D: usize>(
+pub fn append_solutions_to_csv<T: ImageSet<D> + HasObjectives<D>, const D: usize>(
     path: &PathBuf,
-    solutions: &[EncodedSolution<D>],
-    probem_instance: &Problem<D>,
+    solutions: &[T],
+    probem_instance: &Problem<T, D>,
     timeout_s: u64,
     solution_time_s: &[f32],
     elapsed_time_s: u64,
@@ -65,7 +58,7 @@ pub fn append_solutions_to_csv<const D: usize>(
     let pareto_front_str = solutions
         .iter()
         .map(|solution| {
-            let objectives_str = solution.objectives.iter().join(", ");
+            let objectives_str = solution.objectives().iter().join(", ");
             format!("[{objectives_str}]")
         })
         .join(", ");
@@ -74,7 +67,7 @@ pub fn append_solutions_to_csv<const D: usize>(
 
     let solutions_pareto_front_str = solutions
         .iter()
-        .map(|solution| format!("[{}]", solution.selected_images().join(", ")))
+        .map(|solution| format!("[{}]", solution.selected_images().iter().join(", ")))
         .join(", ");
     let solutions_pareto_front = format!("{{{solutions_pareto_front_str}}}");
 
