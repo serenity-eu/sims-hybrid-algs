@@ -1,6 +1,6 @@
 use augmecon::{sims_problem::SimsInstance, Augmecon, HasObjectives, ObjectiveDirection, Options};
 use log::{debug, info};
-use pareto::{ParetoFront, RandomCollection};
+use pareto::ParetoFront;
 use pls::problem::{Problem, SIMSProblemInstanceRaw};
 use pls::{
     objectives::ObjectiveType, pareto_local_search::ParetoLocalSearch,
@@ -392,12 +392,16 @@ fn solve_pls_2d(
         sims_instance.num_images, sims_instance.universe
     );
 
-    // Create initial population
-    let initial_solution_set = if is_deterministic {
-        BTreeSolutionSet::random_with_seed(initial_population_size, 1_234_567_890)
-    } else {
-        BTreeSolutionSet::random(initial_population_size)
-    };
+    // Create initial population manually instead of using RandomCollection
+    let mut initial_solution_set = BTreeSolutionSet::new("initial_2d_solutions");
+    for i in 0..initial_population_size {
+        let random_solution = if is_deterministic {
+            BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
+        } else {
+            BitsetEncodedSolution::random(&pls_problem)
+        };
+        initial_solution_set.try_insert(&random_solution);
+    }
 
     // Create and run PLS
     let mut pareto_local_search = ParetoLocalSearch::new(
@@ -584,12 +588,16 @@ fn solve_pls_3d(
         sims_instance.num_images, sims_instance.universe
     );
 
-    // Create initial population using ND-Tree for 3D optimization
-    let initial_solution_set: NdTreeSolutionSet<BitsetEncodedSolution<3>, 3> = if is_deterministic {
-        NdTreeSolutionSet::random_with_seed(initial_population_size, 1_234_567_890)
-    } else {
-        NdTreeSolutionSet::random(initial_population_size)
-    };
+    // Create initial population manually using ND-Tree for 3D optimization
+    let mut initial_solution_set: NdTreeSolutionSet<BitsetEncodedSolution<3>, 3> = NdTreeSolutionSet::new("initial_3d_solutions");
+    for i in 0..initial_population_size {
+        let random_solution = if is_deterministic {
+            BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
+        } else {
+            BitsetEncodedSolution::random(&pls_problem)
+        };
+        initial_solution_set.try_insert(&random_solution);
+    }
 
     // Create and run PLS
     let mut pareto_local_search = ParetoLocalSearch::new(
@@ -782,12 +790,16 @@ fn solve_pls_4d(
         sims_instance.num_images, sims_instance.universe
     );
 
-    // Create initial population using ND-Tree for 4D optimization
-    let initial_solution_set: NdTreeSolutionSet<BitsetEncodedSolution<4>, 4> = if is_deterministic {
-        NdTreeSolutionSet::random_with_seed(initial_population_size, 1_234_567_890)
-    } else {
-        NdTreeSolutionSet::random(initial_population_size)
-    };
+    // Create initial population manually using ND-Tree for 4D optimization
+    let mut initial_solution_set: NdTreeSolutionSet<BitsetEncodedSolution<4>, 4> = NdTreeSolutionSet::new("initial_4d_solutions");
+    for i in 0..initial_population_size {
+        let random_solution = if is_deterministic {
+            BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
+        } else {
+            BitsetEncodedSolution::random(&pls_problem)
+        };
+        initial_solution_set.try_insert(&random_solution);
+    }
 
     // Create and run PLS
     let mut pareto_local_search = ParetoLocalSearch::new(
@@ -1358,12 +1370,16 @@ fn solve_hybrid_2d(
         let remaining_size = pls_config.initial_population_size - initial_solutions.len();
         info!("Adding {remaining_size} random solutions to reach desired population size");
 
-        let random_solutions: BTreeSolutionSet<BitsetEncodedSolution<2>, 2> =
-            if pls_config.is_deterministic {
-                BTreeSolutionSet::random_with_seed(remaining_size, 1_234_567_890)
+        // Create random solutions manually
+        let mut random_solutions: BTreeSolutionSet<BitsetEncodedSolution<2>, 2> = BTreeSolutionSet::new("random_2d_solutions");
+        for i in 0..remaining_size {
+            let random_solution = if pls_config.is_deterministic {
+                BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
             } else {
-                BTreeSolutionSet::random(remaining_size)
+                BitsetEncodedSolution::random(&pls_problem)
             };
+            random_solutions.try_insert(&random_solution);
+        }
 
         let mut combined_set = BTreeSolutionSet::new("hybrid_2d_solutions");
         // Add MILP solutions
@@ -1520,12 +1536,16 @@ fn solve_hybrid_3d(
         let remaining_size = pls_config.initial_population_size - initial_solutions.len();
         info!("Adding {remaining_size} random solutions to reach desired population size");
 
-        let random_solutions: NdTreeSolutionSet<BitsetEncodedSolution<3>, 3> =
-            if pls_config.is_deterministic {
-                NdTreeSolutionSet::random_with_seed(remaining_size, 1_234_567_890)
+        // Create random solutions manually
+        let mut random_solutions: NdTreeSolutionSet<BitsetEncodedSolution<3>, 3> = NdTreeSolutionSet::new("random_3d_solutions");
+        for i in 0..remaining_size {
+            let random_solution = if pls_config.is_deterministic {
+                BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
             } else {
-                NdTreeSolutionSet::random(remaining_size)
+                BitsetEncodedSolution::random(&pls_problem)
             };
+            random_solutions.try_insert(&random_solution);
+        }
 
         let mut combined_set = NdTreeSolutionSet::new("hybrid_3d_solutions");
         // Add MILP solutions
@@ -1682,12 +1702,16 @@ fn solve_hybrid_4d(
         let remaining_size = pls_config.initial_population_size - initial_solutions.len();
         info!("Adding {remaining_size} random solutions to reach desired population size");
 
-        let random_solutions: NdTreeSolutionSet<BitsetEncodedSolution<4>, 4> =
-            if pls_config.is_deterministic {
-                NdTreeSolutionSet::random_with_seed(remaining_size, 1_234_567_890)
+        // Create random solutions manually
+        let mut random_solutions: NdTreeSolutionSet<BitsetEncodedSolution<4>, 4> = NdTreeSolutionSet::new("random_4d_solutions");
+        for i in 0..remaining_size {
+            let random_solution = if pls_config.is_deterministic {
+                BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
             } else {
-                NdTreeSolutionSet::random(remaining_size)
+                BitsetEncodedSolution::random(&pls_problem)
             };
+            random_solutions.try_insert(&random_solution);
+        }
 
         let mut combined_set = NdTreeSolutionSet::new("hybrid_4d_solutions");
         // Add MILP solutions
