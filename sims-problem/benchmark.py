@@ -59,8 +59,6 @@ from rich.layout import Layout
 from rich.live import Live
 from rich import box
 from sims_problem import Solution
-import plotly.graph_objects as go
-import plotly as plotly
 
 @dataclass
 class ValidationResult:
@@ -801,10 +799,10 @@ class BenchmarkRunner(ABC):
         if not instance_results:
             return
             
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        finished_at = datetime.now().strftime("%Y%m%d_%H%M%S")
         
         # Save detailed results for this instance
-        detailed_file = self.output_dir / f"{instance_name}_detailed_{timestamp}.json"
+        detailed_file = self.output_dir / f"{instance_name}_detailed_{finished_at}.json"
         with open(detailed_file, 'w') as f:
             json.dump(
                 [result.to_dict() for result in instance_results],
@@ -815,12 +813,12 @@ class BenchmarkRunner(ABC):
         
         # Create and save summary statistics for this instance
         summary = self.create_instance_summary_statistics(instance_name, instance_results)
-        summary_file = self.output_dir / f"{instance_name}_summary_{timestamp}.json"
+        summary_file = self.output_dir / f"{instance_name}_summary_{finished_at}.json"
         with open(summary_file, 'w') as f:
             json.dump(summary.to_dict(), f, indent=2, default=str)
         
         # Create visualization for this instance
-        self.create_instance_3d_visualization(instance_name, instance_results, timestamp)
+        self.create_instance_3d_visualization(instance_name, instance_results)
         
         self.console.print(f"\n[green]Instance {instance_name} results saved:")
         self.console.print(f"  Detailed: {detailed_file}")
@@ -832,41 +830,33 @@ class BenchmarkRunner(ABC):
         pass
     
     @abstractmethod
-    def create_instance_3d_visualization(self, instance_name: str, instance_results: list[BenchmarkResult], timestamp: str) -> bool:
+    def create_instance_3d_visualization(self, instance_name: str, instance_results: list[BenchmarkResult]) -> bool:
         """Create 3D visualization for a single instance. Must be implemented by subclasses."""
         pass
     
     @abstractmethod
-    def print_summary(self):
-        """Print summary of results. Must be implemented by subclasses."""
+    def get_algorithm_name(self) -> str:
+        """Get the name of the algorithm for this runner."""
         pass
-
-
-class HybridBenchmarkRunner(BenchmarkRunner):
-    """Hybrid algorithm benchmark runner with TUI progress tracking."""
     
-    def __init__(self, instances_dir: Path, output_dir: Path, iterations: int = 1, ratio_step: int = 10, use_tui: bool = False, size_limit: Optional[int] = None, name_filter: Optional[str] = None, timeout: float = 300.0, validate_solutions: bool = True):
-        super().__init__(instances_dir, output_dir, iterations, use_tui, size_limit, name_filter, timeout, validate_solutions)
-        
-        # Generate ratio configurations (MILP%, PLS%)
-        self.ratios = [(i, 100-i) for i in range(100, -1, -ratio_step)]
+    @abstractmethod
+    def get_visualization_filename_suffix(self) -> str:
+        """Get the filename suffix for visualizations (e.g., 'hybrid', 'pls')."""
+        pass
     
-    def create_3d_visualization(
-        self, 
-        algorithm_name: str, 
-        output_suffix: str = ""
-    ) -> bool:
-        """Create 3D Plotly visualization from benchmark results."""
-        # Filter successful results
-        successful_results = [r for r in self.results if not r.error and r.final_solutions]
+    def _collect_visualization_data(self, successful_results: list[BenchmarkResult], instance_name: Optional[str] = None) -> tuple:
+        """
+        Collect and organize solutions data for visualization.
         
-        if not successful_results:
-            self.console.print("❌ No successful results with solutions to visualize")
-            return False
+        Args:
+            successful_results: List of successful benchmark results
+            instance_name: Name of the instance (used to load JSONL solutions)
         
-        self.console.print(f"📊 Creating 3D visualization for {algorithm_name}...")
-        
-        # Collect all explored solutions and final solutions from all runs
+        Returns:
+            Tuple of (explored_data, final_data, jsonl_data, all_timestamps_range) where each data is
+            (costs, cloudy_areas, incidence_angles, timestamps, solution_details)
+        """
+        # Collect all explored solutions and final solutions
         all_explored_costs = []
         all_explored_cloudy_areas = []
         all_explored_incidence_angles = []
@@ -879,20 +869,17 @@ class HybridBenchmarkRunner(BenchmarkRunner):
         all_final_timestamps = []
         final_solution_details = []
         
+        # Collect JSONL solutions data
+        all_jsonl_costs = []
+        all_jsonl_cloudy_areas = []
+        all_jsonl_incidence_angles = []
+        jsonl_solution_details = []
+        
         for result in successful_results:
-            # DEBUG: Print explored solutions info
-            print(f"DEBUG: Processing result for {result.instance_name} iter={result.iteration} ratio={result.ratio}")
-            print(f"DEBUG: result.explored_solutions type: {type(result.explored_solutions)}")
-            print(f"DEBUG: result.explored_solutions length: {len(result.explored_solutions) if result.explored_solutions else 'None/Empty'}")
-            print(f"DEBUG: result.final_solutions length: {len(result.final_solutions) if result.final_solutions else 'None/Empty'}")
-            
             # Process explored solutions
             if result.explored_solutions:
-                print(f"DEBUG: Processing {len(result.explored_solutions)} explored solutions")
                 exp_costs, exp_cloudy_areas, exp_incidence_angles = self.extract_solution_objectives(result.explored_solutions)
                 exp_timestamps = self.extract_solution_timestamps(result.explored_solutions)
-                
-                print(f"DEBUG: Extracted {len(exp_costs)} explored objectives")
                 
                 all_explored_costs.extend(exp_costs)
                 all_explored_cloudy_areas.extend(exp_cloudy_areas)
@@ -901,19 +888,8 @@ class HybridBenchmarkRunner(BenchmarkRunner):
                 
                 # Create hover details for explored solutions
                 for (cost, cloudy, incidence) in zip(exp_costs, exp_cloudy_areas, exp_incidence_angles):
-                    detail = (
-                        f"Instance: {result.instance_name}<br>"
-                        f"Iteration: {result.iteration}<br>"
-                        f"Ratio: {result.ratio[0]}:{result.ratio[1]}<br>"
-                        f"Type: Explored Solution<br>"
-                        f"Cost: {cost}<br>"
-                        f"Cloudy Area: {cloudy}<br>"
-                        f"Max Incidence Angle: {incidence}<br>"
-                        f"Runtime: {result.total_runtime_seconds:.2f}s"
-                    )
+                    detail = self._create_explored_solution_detail(result, cost, cloudy, incidence)
                     explored_solution_details.append(detail)
-            else:
-                print("DEBUG: No explored solutions for this result")
             
             # Process final solutions
             final_costs, final_cloudy_areas, final_incidence_angles = self.extract_solution_objectives(result.final_solutions)
@@ -926,49 +902,203 @@ class HybridBenchmarkRunner(BenchmarkRunner):
             
             # Create hover details for final solutions
             for i, (cost, cloudy, incidence) in enumerate(zip(final_costs, final_cloudy_areas, final_incidence_angles)):
-                detail = (
-                    f"Instance: {result.instance_name}<br>"
-                    f"Iteration: {result.iteration}<br>"
-                    f"Ratio: {result.ratio[0]}:{result.ratio[1]}<br>"
-                    f"Type: Final Pareto Solution<br>"
-                    f"Cost: {cost}<br>"
-                    f"Cloudy Area: {cloudy}<br>"
-                    f"Max Incidence Angle: {incidence}<br>"
-                    f"Runtime: {result.total_runtime_seconds:.2f}s"
-                )
+                detail = self._create_final_solution_detail(result, cost, cloudy, incidence)
                 final_solution_details.append(detail)
         
-        if not all_final_costs and not all_explored_costs:
-            self.console.print("❌ No solutions found in results")
-            return False
+        # Load and process JSONL solutions if instance name is provided
+        if instance_name:
+            import json  # Import here to avoid issues with error handling
+            
+            # Debug: Print directory structure
+            self.console.print(f"🔍 DEBUG: instances_dir = {self.instances_dir}")
+            self.console.print(f"🔍 DEBUG: instances_dir.parent = {self.instances_dir.parent}")
+            
+            # Fix path construction - instances_dir is already tests/data, so go up to project root
+            jsonl_file = self.instances_dir.parent.parent / "tests" / "data" / "manuels_results" / f"{instance_name}.jsonl"
+            self.console.print(f"🔍 DEBUG: Looking for JSONL at: {jsonl_file}")
+            self.console.print(f"🔍 DEBUG: JSONL file exists: {jsonl_file.exists()}")
+            
+            if jsonl_file.exists():
+                self.console.print(f"🔍 DEBUG: Found JSONL file, starting to process...")
+                
+                # Load the corresponding instance to compute objectives
+                instance_file = self.instances_dir / f"{instance_name}.dzn"
+                if not instance_file.exists():
+                    raise FileNotFoundError(f"Instance file not found: {instance_file}")
+                
+                import sims_problem
+                try:
+                    problem = sims_problem.SimsDiscreteProblem.from_dzn(str(instance_file))
+                    self.console.print(f"🔍 DEBUG: Loaded problem instance successfully")
+                except Exception as e:
+                    raise RuntimeError(f"Failed to load instance {instance_file}: {e}")
+                
+                jsonl_solutions_count = 0
+                try:
+                    with open(jsonl_file, 'r') as f:
+                        for line_idx, line in enumerate(f):
+                            line = line.strip()
+                            if line:
+                                try:
+                                    selected_images = json.loads(line)
+                                    if not isinstance(selected_images, list) or not all(isinstance(i, int) for i in selected_images):
+                                        raise ValueError(f"Line {line_idx + 1}: Invalid format, expected list of integers, got: {type(selected_images)}")
+                                    
+                                    # Create Solution object and compute objectives
+                                    try:
+                                        solution = sims_problem.Solution.create(
+                                            selected_images=selected_images,
+                                            cost=0,  # Will be computed
+                                            cloudy_area=0,  # Will be computed
+                                            timestamp_us=0,  # Not relevant
+                                            max_incidence_angle=None,  # Will be computed
+                                            min_resolutions_sum=None   # Will be computed
+                                        )
+                                    except Exception as e:
+                                        raise RuntimeError(f"Failed to create Solution object for line {line_idx + 1}: {e}")
+                                    
+                                    # Compute objectives using the problem
+                                    try:
+                                        cost, cloudy_area, max_angle, min_res = solution.compute_objectives(problem)
+                                        solution.cost = cost
+                                        solution.cloudy_area = cloudy_area
+                                        solution.max_incidence_angle = max_angle
+                                        solution.min_resolutions_sum = min_res
+                                    except Exception as e:
+                                        raise RuntimeError(f"Failed to compute objectives for line {line_idx + 1}: {e}")
+                                    
+                                    all_jsonl_costs.append(cost)
+                                    all_jsonl_cloudy_areas.append(cloudy_area)
+                                    all_jsonl_incidence_angles.append(max_angle)
+                                    jsonl_solutions_count += 1
+                                    
+                                    # Create hover detail for JSONL solution
+                                    detail = (
+                                        f"Instance: {instance_name}<br>"
+                                        f"Source: Manuel's Results<br>"
+                                        f"Solution #{line_idx + 1}<br>"
+                                        f"Type: Reference Solution<br>"
+                                        f"Cost: {cost}<br>"
+                                        f"Cloudy Area: {cloudy_area}<br>"
+                                        f"Max Incidence Angle: {max_angle}<br>"
+                                        f"Selected Images: {len(selected_images)}"
+                                    )
+                                    jsonl_solution_details.append(detail)
+                                    
+                                except json.JSONDecodeError as e:
+                                    raise ValueError(f"Failed to parse JSON on line {line_idx + 1}: {e}")
+                                except Exception as e:
+                                    raise RuntimeError(f"Error processing JSONL line {line_idx + 1}: {e}")
+                    
+                    self.console.print(f"✅ DEBUG: Successfully loaded {jsonl_solutions_count} JSONL solutions")
+                except IOError as e:
+                    raise IOError(f"Failed to read JSONL file {jsonl_file}: {e}")
+            else:
+                # Only log missing JSONL file, don't raise error (it's optional)
+                self.console.print(f"ℹ️ No JSONL reference file found for {instance_name} at {jsonl_file}")
+                
+                # Debug: List what files are actually in the manuels_results directory
+                manuels_dir = self.instances_dir / "manuels_results"
+                if manuels_dir.exists():
+                    available_files = list(manuels_dir.glob("*.jsonl"))
+                    self.console.print(f"🔍 DEBUG: Available JSONL files in {manuels_dir}:")
+                    for f in available_files:
+                        self.console.print(f"   - {f.name}")
+                else:
+                    self.console.print(f"🔍 DEBUG: Manuels results directory does not exist: {manuels_dir}")
         
-        # DEBUG: Print final counts
-        print("DEBUG: Total collected solutions:")
-        print(f"DEBUG: - Explored solutions: {len(all_explored_costs)}")
-        print(f"DEBUG: - Final solutions: {len(all_final_costs)}")
-        print(f"DEBUG: - Total successful results processed: {len(successful_results)}")
+        self.console.print(f"🔍 DEBUG: Final JSONL counts - costs: {len(all_jsonl_costs)}, areas: {len(all_jsonl_cloudy_areas)}, angles: {len(all_jsonl_incidence_angles)}")
         
         # Calculate normalized timestamps for coloring (combine all timestamps)
         all_timestamps = all_explored_timestamps + all_final_timestamps
         if all_timestamps:
             min_timestamp = min(all_timestamps)
             max_timestamp = max(all_timestamps)
-            timestamp_range = max_timestamp - min_timestamp if max_timestamp > min_timestamp else 1
+            timestamp_range = max_timestamp - min_timestamp if max_timestamp > min_timestamp else timedelta(seconds=1)
         else:
-            min_timestamp, max_timestamp, timestamp_range = 0, 1, 1
+            min_timestamp, max_timestamp, timestamp_range = timedelta(0), timedelta(seconds=1), timedelta(seconds=1)
         
-        # Normalize timestamps for explored solutions
+        # Normalize timestamps
         explored_norm_timestamps = []
         for ts in all_explored_timestamps:
-            explored_norm_timestamps.append((ts - min_timestamp) / timestamp_range if timestamp_range > 0 else 0.5)
+            explored_norm_timestamps.append((ts - min_timestamp) / timestamp_range if timestamp_range.total_seconds() > 0 else 0.5)
         
-        # Normalize timestamps for final solutions  
         final_norm_timestamps = []
         for ts in all_final_timestamps:
-            final_norm_timestamps.append((ts - min_timestamp) / timestamp_range if timestamp_range > 0 else 0.5)
+            final_norm_timestamps.append((ts - min_timestamp) / timestamp_range if timestamp_range.total_seconds() > 0 else 0.5)
         
-        # Create 3D scatter plot with separate traces for explored and final solutions
-        if go is None:
+        # JSONL solutions get a neutral timestamp color (middle of range)
+        jsonl_norm_timestamps = [0.5] * len(all_jsonl_costs)
+        
+        explored_data = (all_explored_costs, all_explored_cloudy_areas, all_explored_incidence_angles, 
+                        explored_norm_timestamps, explored_solution_details)
+        final_data = (all_final_costs, all_final_cloudy_areas, all_final_incidence_angles, 
+                     final_norm_timestamps, final_solution_details)
+        jsonl_data = (all_jsonl_costs, all_jsonl_cloudy_areas, all_jsonl_incidence_angles,
+                     jsonl_norm_timestamps, jsonl_solution_details)
+        
+        return explored_data, final_data, jsonl_data, (min_timestamp, max_timestamp, timestamp_range)
+    
+    def _create_explored_solution_detail(self, result: BenchmarkResult, cost: float, cloudy: float, incidence: float) -> str:
+        """Create hover detail text for explored solutions. Can be overridden by subclasses."""
+        return (
+            f"Instance: {result.instance_name}<br>"
+            f"Iteration: {result.iteration}<br>"
+            f"Type: Explored Solution<br>"
+            f"Cost: {cost}<br>"
+            f"Cloudy Area: {cloudy}<br>"
+            f"Max Incidence Angle: {incidence}<br>"
+            f"Runtime: {result.total_runtime_seconds:.2f}s"
+        )
+    
+    def _create_final_solution_detail(self, result: BenchmarkResult, cost: float, cloudy: float, incidence: float) -> str:
+        """Create hover detail text for final solutions. Can be overridden by subclasses."""
+        return (
+            f"Instance: {result.instance_name}<br>"
+            f"Iteration: {result.iteration}<br>"
+            f"Type: Final Pareto Solution<br>"
+            f"Cost: {cost}<br>"
+            f"Cloudy Area: {cloudy}<br>"
+            f"Max Incidence Angle: {incidence}<br>"
+            f"Runtime: {result.total_runtime_seconds:.2f}s"
+        )
+    
+    def _create_3d_visualization_base(self, instance_name: str, instance_results: list[BenchmarkResult], 
+                                     title_context: str = "for this instance") -> bool:
+        """
+        Base implementation for 3D visualization creation.
+        
+        Args:
+            instance_name: Name of the instance
+            instance_results: List of benchmark results
+            title_context: Context string for the subtitle (e.g., "for this instance", "exploration")
+            
+        Returns:
+            True if visualization was created successfully, False otherwise
+        """
+        # Filter successful results
+        successful_results = [r for r in instance_results if not r.error and r.final_solutions]
+        
+        if not successful_results:
+            self.console.print(f"❌ No successful results for {instance_name} to visualize")
+            return False
+        
+        self.console.print(f"📊 Creating 3D visualization for instance {instance_name}...")
+        
+        # Collect visualization data
+        explored_data, final_data, jsonl_data, timestamp_range = self._collect_visualization_data(successful_results, instance_name)
+        all_explored_costs, all_explored_cloudy_areas, all_explored_incidence_angles, explored_norm_timestamps, explored_solution_details = explored_data
+        all_final_costs, all_final_cloudy_areas, all_final_incidence_angles, final_norm_timestamps, final_solution_details = final_data
+        all_jsonl_costs, all_jsonl_cloudy_areas, all_jsonl_incidence_angles, jsonl_norm_timestamps, jsonl_solution_details = jsonl_data
+        
+        if not all_final_costs and not all_explored_costs and not all_jsonl_costs:
+            self.console.print(f"❌ No solutions found for instance {instance_name}")
+            return False
+        
+        # Check if plotly is available 
+        try:
+            import plotly.graph_objects as go
+        except ImportError:
             self.console.print("❌ Plotly not available for creating plots")
             return False
         
@@ -982,10 +1112,9 @@ class HybridBenchmarkRunner(BenchmarkRunner):
                 z=all_explored_incidence_angles,
                 mode='markers',
                 marker=dict(
-                    size=6,
+                    size=2,
                     color=explored_norm_timestamps,
-                    colorscale='Viridis',
-                    colorbar=dict(title="Time Progress", x=0.85),
+                    colorscale='Rainbow_r',  # Reversed colorscale: early=yellow, late=purple
                     opacity=0.4,
                     line=dict(color='black', width=0.5),
                     symbol='x'
@@ -1004,9 +1133,9 @@ class HybridBenchmarkRunner(BenchmarkRunner):
                 z=all_final_incidence_angles,
                 mode='markers',
                 marker=dict(
-                    size=8,
+                    size=4,
                     color=final_norm_timestamps,
-                    colorscale='Plasma',
+                    colorscale='Rainbow_r',  # Reversed colorscale: early=yellow, late=purple
                     colorbar=dict(title="Final Time", x=0.92),
                     opacity=0.9,
                     line=dict(color='black', width=1),
@@ -1018,32 +1147,42 @@ class HybridBenchmarkRunner(BenchmarkRunner):
                 legendgroup='final'
             ))
         
+        # JSONL Reference solutions (Diamond markers)
+        if all_jsonl_costs:
+            print("Adding JSONL reference solutions to visualization...")
+            traces.append(go.Scatter3d(
+                x=all_jsonl_costs,
+                y=all_jsonl_cloudy_areas,
+                z=all_jsonl_incidence_angles,
+                mode='markers',
+                marker=dict(
+                    size=4,
+                    color='red',  # Fixed red color for reference solutions
+                    opacity=0.8,
+                    line=dict(color='darkred', width=1),
+                    symbol='diamond'
+                ),
+                text=jsonl_solution_details,
+                hovertemplate='%{text}<extra></extra>',
+                name=f'💎 Reference Solutions ({len(all_jsonl_costs)})',
+                legendgroup='reference'
+            ))
+        
         fig = go.Figure(data=traces)
         
         # Update layout
         fig.update_layout(
             title=dict(
-                text=f'{algorithm_name} Benchmark Results - 3D Exploration Visualization<br>'
-                     f'<sub>Interactive 3D plot showing all explored solutions (X) and final Pareto solutions (○)</sub>',
+                text=f'{self.get_algorithm_name()} Benchmark Results - {instance_name}<br>'
+                     f'<sub>Interactive 3D plot showing explored solutions (X), final Pareto solutions (○), and reference solutions (◆)</sub>',
                 x=0.5,
                 font=dict(size=16)
             ),
             scene=dict(
-                xaxis=dict(
-                    title='Cost (minimize)',
-                    tickfont=dict(size=12)
-                ),
-                yaxis=dict(
-                    title='Cloudy Area Coverage (minimize)',
-                    tickfont=dict(size=12)
-                ),
-                zaxis=dict(
-                    title='Max Incidence Angle (minimize)',
-                    tickfont=dict(size=12)
-                ),
-                camera=dict(
-                    eye=dict(x=1.5, y=1.5, z=1.5)
-                )
+                xaxis=dict(title='Cost (minimize)', tickfont=dict(size=12)),
+                yaxis=dict(title='Cloudy Area Coverage (minimize)', tickfont=dict(size=12)),
+                zaxis=dict(title='Max Incidence Angle (minimize)', tickfont=dict(size=12)),
+                camera=dict(eye=dict(x=1.5, y=1.5, z=1.5))
             ),
             width=1200,
             height=800,
@@ -1051,18 +1190,18 @@ class HybridBenchmarkRunner(BenchmarkRunner):
         )
         
         # Add statistics annotation
-        total_solutions = len(all_explored_costs) + len(all_final_costs)
-        all_combined_costs = all_explored_costs + all_final_costs
-        all_combined_cloudy = all_explored_cloudy_areas + all_final_cloudy_areas
-        all_combined_incidence = all_explored_incidence_angles + all_final_incidence_angles
+        total_solutions = len(all_explored_costs) + len(all_final_costs) + len(all_jsonl_costs)
+        all_combined_costs = all_explored_costs + all_final_costs + all_jsonl_costs
+        all_combined_cloudy = all_explored_cloudy_areas + all_final_cloudy_areas + all_jsonl_cloudy_areas
+        all_combined_incidence = all_explored_incidence_angles + all_final_incidence_angles + all_jsonl_incidence_angles
         
         annotation_text = (
-            f"📊 {algorithm_name} Benchmark Statistics:<br>"
+            f"📊 {instance_name} Statistics:<br>"
             f"• Total Solutions: {total_solutions}<br>"
             f"• Explored Solutions: {len(all_explored_costs)}<br>"
             f"• Final Pareto Solutions: {len(all_final_costs)}<br>"
+            f"• Reference Solutions: {len(all_jsonl_costs)}<br>"
             f"• Successful Runs: {len(successful_results)}<br>"
-            f"• Instances: {len(set(r.instance_name for r in successful_results))}<br>"
         )
         
         if all_combined_costs:
@@ -1087,13 +1226,28 @@ class HybridBenchmarkRunner(BenchmarkRunner):
         )
         
         # Save visualization
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_file = self.output_dir / f"{algorithm_name.lower()}_exploration_3d_{timestamp}{output_suffix}.html"
+        finished_at = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_file = self.output_dir / f"{instance_name}_{self.get_visualization_filename_suffix()}_3d_{finished_at}.html"
         fig.write_html(output_file)
         
-        self.console.print(f"✓ 3D exploration visualization saved: {output_file}")
+        self.console.print(f"✓ 3D visualization saved: {output_file}")
         return True
+    
+    @abstractmethod
+    def print_summary(self):
+        """Print summary of results. Must be implemented by subclasses."""
+        pass
+
+
+class HybridBenchmarkRunner(BenchmarkRunner):
+    """Hybrid algorithm benchmark runner with TUI progress tracking."""
+    
+    def __init__(self, instances_dir: Path, output_dir: Path, iterations: int = 1, ratio_step: int = 10, use_tui: bool = False, size_limit: Optional[int] = None, name_filter: Optional[str] = None, timeout: float = 300.0, validate_solutions: bool = True):
+        super().__init__(instances_dir, output_dir, iterations, use_tui, size_limit, name_filter, timeout, validate_solutions)
         
+        # Generate ratio configurations (MILP%, PLS%)
+        self.ratios = [(i, 100-i) for i in range(100, -1, -ratio_step)]
+    
     def load_instance(self, instance_file: Path) -> sims_problem.SimsDiscreteProblem:
         """Load a SIMS problem instance from .dzn file."""
         try:
@@ -1177,19 +1331,6 @@ class HybridBenchmarkRunner(BenchmarkRunner):
             # Convert solutions to Solution objects
             result.final_solutions = solutions
             result.num_final_solutions = len(solutions)
-            
-            # DEBUG: Print first solution for debugging
-            if solutions:
-                first_solution = solutions[0]
-                print(f"DEBUG: First solution type: {type(first_solution)}")
-                print(f"DEBUG: First solution: {first_solution}")
-                if hasattr(first_solution, '__dict__'):
-                    print(f"DEBUG: First solution __dict__: {first_solution.__dict__}")
-                if hasattr(first_solution, 'selected_images'):
-                    print(f"DEBUG: First solution.selected_images type: {type(first_solution.selected_images)}")
-                    print(f"DEBUG: First solution.selected_images: {first_solution.selected_images}")
-                else:
-                    print("DEBUG: First solution has no selected_images attribute")
             
             # For now, we don't have access to intermediate MILP solutions
             # This would require modifying the solver to return them
@@ -1425,9 +1566,6 @@ class HybridBenchmarkRunner(BenchmarkRunner):
         self.console.print("\n[green]Results saved:")
         self.console.print(f"  Detailed: {detailed_file}")
         self.console.print(f"  Summary:  {summary_file}")
-        
-        # Create 3D visualization
-        self.create_3d_visualization("Hybrid")
     
     def create_summary_statistics(self) -> BenchmarkSummaryStatistics:
         """Create summary statistics from benchmark results."""
@@ -1704,134 +1842,43 @@ class HybridBenchmarkRunner(BenchmarkRunner):
             performance_by_ratio=performance_by_ratio
         )
     
-    def create_instance_3d_visualization(self, instance_name: str, instance_results: list[BenchmarkResult], timestamp: str) -> bool:
-        """Create 3D visualization for a single instance."""
-        # Filter successful results
-        successful_results = [r for r in instance_results if not r.error and r.final_solutions]
-        
-        if not successful_results:
-            self.console.print(f"❌ No successful results for {instance_name} to visualize")
-            return False
-        
-        self.console.print(f"📊 Creating 3D visualization for instance {instance_name}...")
-        
-        # Collect all solutions from this instance
-        all_costs = []
-        all_cloudy_areas = []
-        all_incidence_angles = []
-        all_timestamps = []
-        solution_details = []
-        
-        for result in successful_results:
-            costs, cloudy_areas, incidence_angles = self.extract_solution_objectives(result.final_solutions)
-            timestamps = self.extract_solution_timestamps(result.final_solutions)
-            
-            # Add solutions from this run
-            all_costs.extend(costs)
-            all_cloudy_areas.extend(cloudy_areas)
-            all_incidence_angles.extend(incidence_angles)
-            all_timestamps.extend(timestamps)
-            
-            # Create hover details
-            for i, (cost, cloudy, incidence) in enumerate(zip(costs, cloudy_areas, incidence_angles)):
-                detail = (
-                    f"Instance: {result.instance_name}<br>"
-                    f"Iteration: {result.iteration}<br>"
-                    f"Ratio: {result.ratio[0]}:{result.ratio[1]}<br>"
-                    f"Timestamp: {result.finished_at}<br>"
-                    f"Cost: {cost}<br>"
-                    f"Cloudy Area: {cloudy}<br>"
-                    f"Max Incidence Angle: {incidence}<br>"
-                    f"Runtime: {result.total_runtime_seconds:.2f}s"
-                )
-                solution_details.append(detail)
-        
-        if not all_costs:
-            self.console.print(f"❌ No solutions found for instance {instance_name}")
-            return False
-        
-        # Calculate normalized timestamps for rainbow coloring
-        if all_timestamps:
-            min_timestamp = min(all_timestamps)
-            max_timestamp = max(all_timestamps)
-            timestamp_range = max_timestamp - min_timestamp if max_timestamp > min_timestamp else 1
-            normalized_timestamps = [(t - min_timestamp) / timestamp_range for t in all_timestamps]
-        else:
-            normalized_timestamps = [0.5] * len(all_costs)
-        
-        # Check if plotly is available 
-        try:
-            import plotly.graph_objects as go
-        except ImportError:
-            self.console.print("❌ Plotly not available for creating plots")
-            return False
-            
-        fig = go.Figure(data=[go.Scatter3d(
-            x=all_costs,
-            y=all_cloudy_areas,
-            z=all_incidence_angles,
-            mode='markers',
-            marker=dict(
-                size=6,
-                color=normalized_timestamps,
-                colorscale='Rainbow',
-                colorbar=dict(title="Timestamp"),
-                opacity=0.7,
-                line=dict(color='black', width=0.3)
-            ),
-            text=solution_details,
-            hovertemplate='%{text}<extra></extra>',
-            name=f'{instance_name} Solutions'
-        )])
-        
-        # Update layout
-        fig.update_layout(
-            title=dict(
-                text=f'Hybrid Benchmark Results - {instance_name}<br>'
-                     f'<sub>Interactive 3D plot of solutions for this instance</sub>',
-                x=0.5,
-                font=dict(size=16)
-            ),
-            scene=dict(
-                xaxis=dict(title='Cost (minimize)', tickfont=dict(size=12)),
-                yaxis=dict(title='Cloudy Area Coverage (minimize)', tickfont=dict(size=12)),
-                zaxis=dict(title='Max Incidence Angle (minimize)', tickfont=dict(size=12)),
-                camera=dict(eye=dict(x=1.5, y=1.5, z=1.5))
-            ),
-            width=1200,
-            height=800,
-            margin=dict(l=0, r=0, b=0, t=100)
+    def get_algorithm_name(self) -> str:
+        """Get the name of the algorithm for this runner."""
+        return "Hybrid"
+    
+    def get_visualization_filename_suffix(self) -> str:
+        """Get the filename suffix for visualizations."""
+        return "hybrid"
+    
+    def _create_explored_solution_detail(self, result: BenchmarkResult, cost: float, cloudy: float, incidence: float) -> str:
+        """Create hover detail text for explored solutions with ratio information."""
+        return (
+            f"Instance: {result.instance_name}<br>"
+            f"Iteration: {result.iteration}<br>"
+            f"Ratio: {result.ratio[0]}:{result.ratio[1]}<br>"
+            f"Type: Explored Solution<br>"
+            f"Cost: {cost}<br>"
+            f"Cloudy Area: {cloudy}<br>"
+            f"Max Incidence Angle: {incidence}<br>"
+            f"Runtime: {result.total_runtime_seconds:.2f}s"
         )
-        
-        # Add statistics annotation
-        annotation_text = (
-            f"📊 {instance_name} Statistics:<br>"
-            f"• Total Solutions: {len(all_costs)}<br>"
-            f"• Successful Runs: {len(successful_results)}<br>"
-            f"• Cost Range: {min(all_costs):.1f} - {max(all_costs):.1f}<br>"
-            f"• Cloudy Area Range: {min(all_cloudy_areas):.1f} - {max(all_cloudy_areas):.1f}<br>"
-            f"• Incidence Angle Range: {min(all_incidence_angles):.1f} - {max(all_incidence_angles):.1f}<br>"
-            f"• Avg Runtime: {statistics.mean([r.total_runtime_seconds for r in successful_results]):.2f}s"
+    
+    def _create_final_solution_detail(self, result: BenchmarkResult, cost: float, cloudy: float, incidence: float) -> str:
+        """Create hover detail text for final solutions with ratio information."""
+        return (
+            f"Instance: {result.instance_name}<br>"
+            f"Iteration: {result.iteration}<br>"
+            f"Ratio: {result.ratio[0]}:{result.ratio[1]}<br>"
+            f"Type: Final Pareto Solution<br>"
+            f"Cost: {cost}<br>"
+            f"Cloudy Area: {cloudy}<br>"
+            f"Max Incidence Angle: {incidence}<br>"
+            f"Runtime: {result.total_runtime_seconds:.2f}s"
         )
-        
-        fig.add_annotation(
-            text=annotation_text,
-            xref="paper", yref="paper",
-            x=0.02, y=0.98,
-            showarrow=False,
-            align="left",
-            bgcolor="rgba(255, 255, 255, 0.9)",
-            bordercolor="black",
-            borderwidth=1,
-            font=dict(size=11)
-        )
-        
-        # Save visualization
-        output_file = self.output_dir / f"{instance_name}_hybrid_3d_{timestamp}.html"
-        fig.write_html(output_file)
-        
-        self.console.print(f"✓ 3D visualization saved: {output_file}")
-        return True
+    
+    def create_instance_3d_visualization(self, instance_name: str, instance_results: list[BenchmarkResult]) -> bool:
+        """Create 3D visualization for a single instance using the base implementation."""
+        return self._create_3d_visualization_base(instance_name, instance_results)
 
 
 class PlsBenchmarkRunner(BenchmarkRunner):
@@ -1841,154 +1888,38 @@ class PlsBenchmarkRunner(BenchmarkRunner):
         super().__init__(instances_dir, output_dir, iterations, use_tui, size_limit, name_filter, timeout, validate_solutions)
         self.max_iterations = max_iterations
     
-    def create_3d_visualization(
-        self, 
-        algorithm_name: str, 
-        output_suffix: str = ""
-    ) -> bool:
-        """Create 3D Plotly visualization from benchmark results."""
-        
-        # Filter successful results
-        successful_results = [r for r in self.results if not r.error and r.final_solutions]
-        
-        if not successful_results:
-            self.console.print("❌ No successful results with solutions to visualize")
-            return False
-        
-        self.console.print(f"📊 Creating 3D visualization for {algorithm_name}...")
-        
-        # Collect all solutions from all runs
-        all_costs = []
-        all_cloudy_areas = []
-        all_incidence_angles = []
-        all_timestamps = []  # For timestamp-based coloring
-        solution_details = []
-        
-        for result in successful_results:
-            costs, cloudy_areas, incidence_angles = self.extract_solution_objectives(result.final_solutions)
-            timestamps = self.extract_solution_timestamps(result.final_solutions)
-            
-            # Add solutions from this run
-            all_costs.extend(costs)
-            all_cloudy_areas.extend(cloudy_areas)
-            all_incidence_angles.extend(incidence_angles)
-            all_timestamps.extend(timestamps)
-            
-            # Create hover details
-            for i, (cost, cloudy, incidence) in enumerate(zip(costs, cloudy_areas, incidence_angles)):
-                detail = (
-                    f"Instance: {result.instance_name}<br>"
-                    f"Iteration: {result.iteration}<br>"
-                    f"Timestamp: {result.finished_at}<br>"
-                    f"Cost: {cost}<br>"
-                    f"Cloudy Area: {cloudy}<br>"
-                    f"Max Incidence Angle: {incidence}<br>"
-                    f"Runtime: {result.total_runtime_seconds:.2f}s"
-                )
-                solution_details.append(detail)
-        
-        if not all_costs:
-            self.console.print("❌ No solutions found in results")
-            return False
-        
-        # Calculate normalized timestamps for rainbow coloring
-        if all_timestamps:
-            min_timestamp = min(all_timestamps)
-            max_timestamp = max(all_timestamps)
-            timestamp_range = max_timestamp - min_timestamp if max_timestamp > min_timestamp else 1
-            # Normalize timestamps to 0-1 range for rainbow colorscheme
-            normalized_timestamps = [(t - min_timestamp) / timestamp_range for t in all_timestamps]
-        else:
-            normalized_timestamps = [0.5] * len(all_costs)  # Default to mid-range color
-
-        # Create 3D scatter plot (using global go after ensure_plotly_available)
-        if go is None:
-            self.console.print("❌ Plotly not available for creating plots")
-            return False
-            
-        fig = go.Figure(data=[go.Scatter3d(
-            x=all_costs,
-            y=all_cloudy_areas,
-            z=all_incidence_angles,
-            mode='markers',
-            marker=dict(
-                size=6,
-                color=normalized_timestamps,  # Color by normalized timestamp
-                colorscale='Rainbow',  # Rainbow colorscheme for timestamp-based coloring
-                colorbar=dict(title="Timestamp"),
-                opacity=0.7,
-                line=dict(
-                    color='black',
-                    width=0.3
-                )
-            ),
-            text=solution_details,
-            hovertemplate='%{text}<extra></extra>',
-            name=f'{algorithm_name} Solutions'
-        )])
-        
-        # Update layout
-        fig.update_layout(
-            title=dict(
-                text=f'{algorithm_name} Benchmark Results - 3D Pareto Visualization<br>'
-                     f'<sub>Interactive 3D plot of all benchmark solutions</sub>',
-                x=0.5,
-                font=dict(size=16)
-            ),
-            scene=dict(
-                xaxis=dict(
-                    title='Cost (minimize)',
-                    tickfont=dict(size=12)
-                ),
-                yaxis=dict(
-                    title='Cloudy Area Coverage (minimize)',
-                    tickfont=dict(size=12)
-                ),
-                zaxis=dict(
-                    title='Max Incidence Angle (minimize)',
-                    tickfont=dict(size=12)
-                ),
-                camera=dict(
-                    eye=dict(x=1.5, y=1.5, z=1.5)
-                )
-            ),
-            width=1200,
-            height=800,
-            margin=dict(l=0, r=0, b=0, t=100)
+    def get_algorithm_name(self) -> str:
+        """Get the name of the algorithm for this runner."""
+        return "PLS"
+    
+    def get_visualization_filename_suffix(self) -> str:
+        """Get the filename suffix for visualizations."""
+        return "pls"
+    
+    def _create_explored_solution_detail(self, result: BenchmarkResult, cost: float, cloudy: float, incidence: float) -> str:
+        """Create hover detail text for explored solutions (PLS doesn't use ratios)."""
+        return (
+            f"Instance: {result.instance_name}<br>"
+            f"Iteration: {result.iteration}<br>"
+            f"Type: Explored Solution<br>"
+            f"Cost: {cost}<br>"
+            f"Cloudy Area: {cloudy}<br>"
+            f"Max Incidence Angle: {incidence}<br>"
+            f"Runtime: {result.total_runtime_seconds:.2f}s"
         )
-        
-        # Add statistics annotation
-        annotation_text = (
-            f"📊 {algorithm_name} Benchmark Statistics:<br>"
-            f"• Total Solutions: {len(all_costs)}<br>"
-            f"• Successful Runs: {len(successful_results)}<br>"
-            f"• Instances: {len(set(r.instance_name for r in successful_results))}<br>"
-            f"• Cost Range: {min(all_costs):.1f} - {max(all_costs):.1f}<br>"
-            f"• Cloudy Area Range: {min(all_cloudy_areas):.1f} - {max(all_cloudy_areas):.1f}<br>"
-            f"• Incidence Angle Range: {min(all_incidence_angles):.1f} - {max(all_incidence_angles):.1f}<br>"
-            f"• Avg Runtime: {statistics.mean([r.total_runtime_seconds for r in successful_results]):.2f}s"
+    
+    def _create_final_solution_detail(self, result: BenchmarkResult, cost: float, cloudy: float, incidence: float) -> str:
+        """Create hover detail text for final solutions (PLS doesn't use ratios)."""
+        return (
+            f"Instance: {result.instance_name}<br>"
+            f"Iteration: {result.iteration}<br>"
+            f"Type: Final Pareto Solution<br>"
+            f"Cost: {cost}<br>"
+            f"Cloudy Area: {cloudy}<br>"
+            f"Max Incidence Angle: {incidence}<br>"
+            f"Runtime: {result.total_runtime_seconds:.2f}s"
         )
-        
-        fig.add_annotation(
-            text=annotation_text,
-            xref="paper", yref="paper",
-            x=0.02, y=0.98,
-            showarrow=False,
-            align="left",
-            bgcolor="rgba(255, 255, 255, 0.9)",
-            bordercolor="black",
-            borderwidth=1,
-            font=dict(size=11)
-        )
-        
-        # Save visualization
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_file = self.output_dir / f"{algorithm_name.lower()}_benchmark_3d_{timestamp}{output_suffix}.html"
-        fig.write_html(output_file)
-        
-        self.console.print(f"✓ 3D visualization saved: {output_file}")
-        return True
-        
+    
     def load_instance(self, instance_file: Path) -> sims_problem.SimsDiscreteProblem:
         """Load a SIMS problem instance from .dzn file."""
         try:
@@ -2043,19 +1974,8 @@ class PlsBenchmarkRunner(BenchmarkRunner):
             result.num_explored_solutions = len(solving_result.explored_solutions)
             result.milp_solutions = []
             result.num_milp_solutions = 0
-            
-            # DEBUG: Print first solution for debugging
-            if solving_result.final_solutions:
-                first_solution = solving_result.final_solutions[0]
-                print(f"DEBUG PLS: First solution type: {type(first_solution)}")
-                print(f"DEBUG PLS: First solution: {first_solution}")
-                if hasattr(first_solution, '__dict__'):
-                    print(f"DEBUG PLS: First solution __dict__: {first_solution.__dict__}")
-                if hasattr(first_solution, 'selected_images'):
-                    print(f"DEBUG PLS: First solution.selected_images type: {type(first_solution.selected_images)}")
-                    print(f"DEBUG PLS: First solution.selected_images: {first_solution.selected_images}")
-                else:
-                    print("DEBUG PLS: First solution has no selected_images attribute")
+
+            print(f"DEBUG: EXPLORED SOLUTIONS COUNT: {result.num_explored_solutions}")
             
             # Validate solutions and Pareto front
             if result.final_solutions and self.validate_solutions and self.validator:
@@ -2238,9 +2158,6 @@ class PlsBenchmarkRunner(BenchmarkRunner):
         self.console.print("\n[green]PLS Results saved:")
         self.console.print(f"  Detailed: {detailed_file}")
         self.console.print(f"  Summary:  {summary_file}")
-        
-        # Create 3D visualization
-        self.create_3d_visualization("PLS")
     
     def create_summary_statistics(self) -> BenchmarkSummaryStatistics:
         """Create summary statistics from PLS benchmark results."""
@@ -2475,133 +2392,9 @@ class PlsBenchmarkRunner(BenchmarkRunner):
             validation_statistics=validation_stats
         )
     
-    def create_instance_3d_visualization(self, instance_name: str, instance_results: list[BenchmarkResult], timestamp: str) -> bool:
-        """Create 3D visualization for a single instance."""
-        # Filter successful results
-        successful_results = [r for r in instance_results if not r.error and r.final_solutions]
-        
-        if not successful_results:
-            self.console.print(f"❌ No successful results for {instance_name} to visualize")
-            return False
-        
-        self.console.print(f"📊 Creating 3D visualization for instance {instance_name}...")
-        
-        # Collect all solutions from this instance
-        all_costs = []
-        all_cloudy_areas = []
-        all_incidence_angles = []
-        all_timestamps = []
-        solution_details = []
-        
-        for result in successful_results:
-            costs, cloudy_areas, incidence_angles = self.extract_solution_objectives(result.final_solutions)
-            timestamps = self.extract_solution_timestamps(result.final_solutions)
-            
-            # Add solutions from this run
-            all_costs.extend(costs)
-            all_cloudy_areas.extend(cloudy_areas)
-            all_incidence_angles.extend(incidence_angles)
-            all_timestamps.extend(timestamps)
-            
-            # Create hover details
-            for i, (cost, cloudy, incidence) in enumerate(zip(costs, cloudy_areas, incidence_angles)):
-                detail = (
-                    f"Instance: {result.instance_name}<br>"
-                    f"Iteration: {result.iteration}<br>"
-                    f"Timestamp: {result.finished_at}<br>"
-                    f"Cost: {cost}<br>"
-                    f"Cloudy Area: {cloudy}<br>"
-                    f"Max Incidence Angle: {incidence}<br>"
-                    f"Runtime: {result.total_runtime_seconds:.2f}s"
-                )
-                solution_details.append(detail)
-        
-        if not all_costs:
-            self.console.print(f"❌ No solutions found for instance {instance_name}")
-            return False
-        
-        # Calculate normalized timestamps for rainbow coloring
-        if all_timestamps:
-            min_timestamp = min(all_timestamps)
-            max_timestamp = max(all_timestamps)
-            timestamp_range = max_timestamp - min_timestamp if max_timestamp > min_timestamp else 1
-            normalized_timestamps = [(t - min_timestamp) / timestamp_range for t in all_timestamps]
-        else:
-            normalized_timestamps = [0.5] * len(all_costs)
-
-        # Check if plotly is available 
-        try:
-            import plotly.graph_objects as go
-        except ImportError:
-            self.console.print("❌ Plotly not available for creating plots")
-            return False
-            
-        fig = go.Figure(data=[go.Scatter3d(
-            x=all_costs,
-            y=all_cloudy_areas,
-            z=all_incidence_angles,
-            mode='markers',
-            marker=dict(
-                size=6,
-                color=normalized_timestamps,
-                colorscale='Rainbow',
-                colorbar=dict(title="Timestamp"),
-                opacity=0.7,
-                line=dict(color='black', width=0.3)
-            ),
-            text=solution_details,
-            hovertemplate='%{text}<extra></extra>',
-            name=f'{instance_name} Solutions'
-        )])
-        
-        # Update layout
-        fig.update_layout(
-            title=dict(
-                text=f'PLS Benchmark Results - {instance_name}<br>'
-                     f'<sub>Interactive 3D plot of solutions for this instance</sub>',
-                x=0.5,
-                font=dict(size=16)
-            ),
-            scene=dict(
-                xaxis=dict(title='Cost (minimize)', tickfont=dict(size=12)),
-                yaxis=dict(title='Cloudy Area Coverage (minimize)', tickfont=dict(size=12)),
-                zaxis=dict(title='Max Incidence Angle (minimize)', tickfont=dict(size=12)),
-                camera=dict(eye=dict(x=1.5, y=1.5, z=1.5))
-            ),
-            width=1200,
-            height=800,
-            margin=dict(l=0, r=0, b=0, t=100)
-        )
-        
-        # Add statistics annotation
-        annotation_text = (
-            f"📊 {instance_name} Statistics:<br>"
-            f"• Total Solutions: {len(all_costs)}<br>"
-            f"• Successful Runs: {len(successful_results)}<br>"
-            f"• Cost Range: {min(all_costs):.1f} - {max(all_costs):.1f}<br>"
-            f"• Cloudy Area Range: {min(all_cloudy_areas):.1f} - {max(all_cloudy_areas):.1f}<br>"
-            f"• Incidence Angle Range: {min(all_incidence_angles):.1f} - {max(all_incidence_angles):.1f}<br>"
-            f"• Avg Runtime: {statistics.mean([r.total_runtime_seconds for r in successful_results]):.2f}s"
-        )
-        
-        fig.add_annotation(
-            text=annotation_text,
-            xref="paper", yref="paper",
-            x=0.02, y=0.98,
-            showarrow=False,
-            align="left",
-            bgcolor="rgba(255, 255, 255, 0.9)",
-            bordercolor="black",
-            borderwidth=1,
-            font=dict(size=11)
-        )
-        
-        # Save visualization
-        output_file = self.output_dir / f"{instance_name}_pls_3d_{timestamp}.html"
-        fig.write_html(output_file)
-        
-        self.console.print(f"✓ 3D visualization saved: {output_file}")
-        return True
+    def create_instance_3d_visualization(self, instance_name: str, instance_results: list[BenchmarkResult]) -> bool:
+        """Create 3D visualization for a single instance using the base implementation."""
+        return self._create_3d_visualization_base(instance_name, instance_results)
 
 
 def run_hybrid_benchmark(args):

@@ -263,6 +263,8 @@ where
             return false;
         }
 
+        self.explored_solutions.register(iteration, neighbor, timer.elapsed());
+
         tracing::trace!("Evaluating new neighbor");
 
         let evaluation_span = debug_span!("evaluate_neighbor");
@@ -272,8 +274,6 @@ where
             neighbor,
             neighbor_index,
             current_solution,
-            iteration,
-            timer,
             step_stats,
             auxiliary_population,
         );
@@ -287,17 +287,12 @@ where
         false
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "Necessary for logical separation of concerns"
-    )]
     #[instrument(
         level = "trace",
         skip(
             self,
             neighbor,
             current_solution,
-            timer,
             step_stats,
             auxiliary_population
         ),
@@ -308,8 +303,6 @@ where
         neighbor: &T,
         neighbor_index: usize,
         current_solution: &T,
-        iteration: usize,
-        timer: &Timer,
         step_stats: &mut StepStats,
         auxiliary_population: &mut S,
     ) {
@@ -322,7 +315,7 @@ where
         let pareto_evaluation_span = debug_span!("pareto_evaluation");
         let pareto_guard = pareto_evaluation_span.enter();
 
-        if self.try_add_to_pareto_set(neighbor, neighbor_index, iteration, timer, step_stats) {
+        if self.try_add_to_pareto_set(neighbor, neighbor_index, step_stats) {
             drop(pareto_guard);
 
             let auxiliary_evaluation_span = debug_span!("auxiliary_evaluation");
@@ -341,7 +334,7 @@ where
         }
     }
 
-    #[instrument(level = "trace", skip(self, neighbor, timer, step_stats), fields(
+    #[instrument(level = "trace", skip(self, neighbor, step_stats), fields(
         neighbor_index,
         iteration,
         pareto_set_size = self.approximated_pareto_set.len()
@@ -350,14 +343,10 @@ where
         &mut self,
         neighbor: &T,
         neighbor_index: usize,
-        iteration: usize,
-        timer: &Timer,
         step_stats: &mut StepStats,
     ) -> bool {
         if self.approximated_pareto_set.try_insert(neighbor) {
             self.log_pareto_set_addition(neighbor_index);
-            self.explored_solutions
-                .register(iteration, neighbor, timer.elapsed());
             step_stats.pareto_added_count += 1;
 
             tracing::trace!(
@@ -459,7 +448,7 @@ where
             step_stats.auxiliary_added_count,
             metrics.auxiliary_removed_count,
             step_stats.pareto_added_count,
-            metrics.pareto_removed_count
+            metrics.pareto_removed_count,
         );
     }
 

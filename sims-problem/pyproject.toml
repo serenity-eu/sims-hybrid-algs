@@ -29,7 +29,7 @@ dev = [
 ]
 
 [tool.uv]
-cache-keys = [{file = "pyproject.toml"}, {file = "Cargo.toml"}, {file = "**/*.rs"}]
+cache-keys = [{file = "pyproject.toml"}, {file = "Cargo.toml"}, {file = "**/*.rs"}, {file = "../sims-heuristics/Cargo.toml"}, {file = "../sims-heuristics/**/*.rs"}]
 
 [tool.maturin]
 features = ["pyo3/extension-module"]

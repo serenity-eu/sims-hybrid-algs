@@ -1,11 +1,7 @@
 use augmecon::{sims_problem::SimsInstance, Augmecon, HasObjectives, ObjectiveDirection, Options};
 use log::{debug, info};
 use pareto::ParetoFront;
-use pls::problem::{Problem, SIMSProblemInstanceRaw};
-use pls::{
-    objectives::ObjectiveType, pareto_local_search::ParetoLocalSearch,
-    solution_impl::bitset_encoded_solution::BitsetEncodedSolution,
-};
+use pls::pareto_local_search::ParetoLocalSearch;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::{iter::IntoIterator, ops::RangeInclusive, time::Duration};
@@ -124,7 +120,7 @@ impl PlsConfig {
     }
 }
 
-/// Solves the SIMS problem using Pareto Local Search with flexible objective configuration
+/// Monolithic PLS solver that handles 2D, 3D, and 4D optimization in a single function
 #[expect(
     clippy::too_many_arguments,
     reason = "It's okay for Python API to have many parameters"
@@ -154,7 +150,7 @@ pub fn solve_with_pls(
     neighborhood_size_min: u32,
     neighborhood_size_max: u32,
 ) -> PyResult<SolvingResult> {
-    debug!("solve_with_pls called with {} objectives", objectives.len());
+    debug!("solve_with_pls_monolith called with {} objectives", objectives.len());
 
     // Validate number of objectives first
     if objectives.len() < 2 {
@@ -167,7 +163,7 @@ pub fn solve_with_pls(
     // Validate objectives
     let valid_objectives = [
         "min_cost",
-        "cloud_coverage",
+        "cloud_coverage", 
         "min_resolution",
         "max_incidence_angle",
     ];
@@ -179,580 +175,16 @@ pub fn solve_with_pls(
         }
     }
 
-    // Dispatch to the appropriate dimensional solver based on number of objectives
-    match objectives.len() {
-        2 => solve_pls_2d(
-            sims_instance,
-            objectives,
-            plots,
-            plot_output_path,
-            timeout,
-            max_iterations,
-            is_deterministic,
-            initial_population_size,
-            neighborhood_size_min,
-            neighborhood_size_max,
-        ),
-        3 => solve_pls_3d(
-            sims_instance,
-            objectives,
-            plots,
-            plot_output_path,
-            timeout,
-            max_iterations,
-            is_deterministic,
-            initial_population_size,
-            neighborhood_size_min,
-            neighborhood_size_max,
-        ),
-        4 => solve_pls_4d(
-            sims_instance,
-            objectives,
-            plots,
-            plot_output_path,
-            timeout,
-            max_iterations,
-            is_deterministic,
-            initial_population_size,
-            neighborhood_size_min,
-            neighborhood_size_max,
-        ),
-        n => Err(PyValueError::new_err(format!(
-            "Unsupported number of objectives: {n}. Supported: 2, 3, or 4 objectives."
-        ))),
-    }
-}
-
-/// 2D PLS solver implementation
-/// Helper function to create 2D objective definitions from string names
-fn create_objective_definitions_2d(
-    objectives: &[String],
-) -> PyResult<[ObjectiveType<BitsetEncodedSolution<2>, 2>; 2]> {
-    if objectives.len() != 2 {
-        return Err(PyValueError::new_err(format!(
-            "Expected exactly 2 objectives for 2D optimization, got {}",
-            objectives.len()
-        )));
-    }
-
-    let mut result = [ObjectiveType::TotalCost, ObjectiveType::CloudyArea];
-
-    for (i, obj_name) in objectives.iter().enumerate() {
-        result[i] = match obj_name.as_str() {
-            "min_cost" => ObjectiveType::TotalCost,
-            "cloud_coverage" => ObjectiveType::CloudyArea,
-            "min_resolution" => ObjectiveType::MinResolution,
-            "max_incidence_angle" => ObjectiveType::MaxIncidenceAngle,
-            _ => {
-                return Err(PyValueError::new_err(format!(
-                    "Unknown objective: {}",
-                    obj_name
-                )))
-            }
-        };
-    }
-
-    Ok(result)
-}
-
-/// Helper function to create 3D objective definitions from string names
-fn create_objective_definitions_3d(
-    objectives: &[String],
-) -> PyResult<[ObjectiveType<BitsetEncodedSolution<3>, 3>; 3]> {
-    if objectives.len() != 3 {
-        return Err(PyValueError::new_err(format!(
-            "Expected exactly 3 objectives for 3D optimization, got {}",
-            objectives.len()
-        )));
-    }
-
-    let mut result = [
-        ObjectiveType::TotalCost,
-        ObjectiveType::CloudyArea,
-        ObjectiveType::MinResolution,
-    ];
-
-    for (i, obj_name) in objectives.iter().enumerate() {
-        result[i] = match obj_name.as_str() {
-            "min_cost" => ObjectiveType::TotalCost,
-            "cloud_coverage" => ObjectiveType::CloudyArea,
-            "min_resolution" => ObjectiveType::MinResolution,
-            "max_incidence_angle" => ObjectiveType::MaxIncidenceAngle,
-            _ => {
-                return Err(PyValueError::new_err(format!(
-                    "Unknown objective: {}",
-                    obj_name
-                )))
-            }
-        };
-    }
-
-    Ok(result)
-}
-
-/// Helper function to create 4D objective definitions from string names
-fn create_objective_definitions_4d(
-    objectives: &[String],
-) -> PyResult<[ObjectiveType<BitsetEncodedSolution<4>, 4>; 4]> {
-    if objectives.len() != 4 {
-        return Err(PyValueError::new_err(format!(
-            "Expected exactly 4 objectives for 4D optimization, got {}",
-            objectives.len()
-        )));
-    }
-
-    let mut result = [
-        ObjectiveType::TotalCost,
-        ObjectiveType::CloudyArea,
-        ObjectiveType::MinResolution,
-        ObjectiveType::MaxIncidenceAngle,
-    ];
-
-    for (i, obj_name) in objectives.iter().enumerate() {
-        result[i] = match obj_name.as_str() {
-            "min_cost" => ObjectiveType::TotalCost,
-            "cloud_coverage" => ObjectiveType::CloudyArea,
-            "min_resolution" => ObjectiveType::MinResolution,
-            "max_incidence_angle" => ObjectiveType::MaxIncidenceAngle,
-            _ => {
-                return Err(PyValueError::new_err(format!(
-                    "Unknown objective: {}",
-                    obj_name
-                )))
-            }
-        };
-    }
-
-    Ok(result)
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Internal function needs all parameters"
-)]
-fn solve_pls_2d(
-    sims_instance: &SimsDiscreteProblem,
-    objectives: Vec<String>,
-    plots: bool,
-    plot_output_path: Option<String>,
-    timeout: Duration,
-    max_iterations: usize,
-    is_deterministic: bool,
-    initial_population_size: usize,
-    neighborhood_size_min: u32,
-    neighborhood_size_max: u32,
-) -> PyResult<SolvingResult> {
-    use pls::solution_set_impl::BTreeSolutionSet;
-
-    debug!("Using 2D optimization with objectives: {objectives:?}");
-
     let timeout_seconds = timeout.as_secs_f64();
     info!(
-        "Starting 2D PLS algorithm with objectives: {objectives:?}, plots: {plots}, timeout: {timeout_seconds}s, max_iterations: {max_iterations}, deterministic: {is_deterministic}, population_size: {initial_population_size}, neighborhood: {neighborhood_size_min}..{neighborhood_size_max}"
+        "Starting PLS algorithm with {} objectives: {objectives:?}, plots: {plots}, timeout: {timeout_seconds}s, max_iterations: {max_iterations}, deterministic: {is_deterministic}, population_size: {initial_population_size}, neighborhood: {neighborhood_size_min}..{neighborhood_size_max}",
+        objectives.len()
     );
 
     let neighborhood_size_range: RangeInclusive<u32> =
         neighborhood_size_min..=neighborhood_size_max;
 
-    // Convert to PLS problem format and create 2D problem with specified objectives
-    let raw_instance = SIMSProblemInstanceRaw {
-        name: "python_instance".to_string(),
-        num_images: sims_instance.num_images,
-        universe_size: sims_instance.universe,
-        images: sims_instance
-            .images
-            .iter()
-            .map(|img| img.iter().map(|&x| x + 1).collect())
-            .collect(),
-        costs: sims_instance.costs.iter().map(|&c| c as u64).collect(),
-        clouds: sims_instance
-            .clouds
-            .iter()
-            .map(|cloud| cloud.iter().map(|&x| x + 1).collect())
-            .collect(),
-        areas: sims_instance.areas.iter().map(|&a| a as u64).collect(),
-        max_cloud_area: sims_instance.max_cloud_area as u64,
-        resolution: sims_instance.resolution.iter().map(|&r| r as u64).collect(),
-        incidence_angle: sims_instance
-            .incidence_angle
-            .iter()
-            .map(|&i| i as u64)
-            .collect(),
-    };
-
-    // Create 2D problem with specified objectives
-    let objective_definitions = create_objective_definitions_2d(&objectives)?;
-
-    let pls_problem =
-        pls::problem::Problem::from_raw_with_objectives(raw_instance, objective_definitions)
-            .map_err(|e| PyValueError::new_err(format!("Failed to create 2D problem: {e}")))?;
-
-    debug!(
-        "Created 2D PLS problem: {} images, universe size {}",
-        sims_instance.num_images, sims_instance.universe
-    );
-
-    // Create initial population manually instead of using RandomCollection
-    let mut initial_solution_set = BTreeSolutionSet::new("initial_2d_solutions");
-    for i in 0..initial_population_size {
-        let random_solution = if is_deterministic {
-            BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
-        } else {
-            BitsetEncodedSolution::random(&pls_problem)
-        };
-        initial_solution_set.try_insert(&random_solution);
-    }
-
-    // Create and run PLS
-    let mut pareto_local_search = ParetoLocalSearch::new(
-        &pls_problem,
-        &initial_solution_set,
-        neighborhood_size_range,
-        is_deterministic,
-    );
-
-    info!("Starting 2D PLS execution with {max_iterations} iterations timeout");
-    let final_solution_set = pareto_local_search.run(max_iterations, timeout);
-
-    info!(
-        "2D PLS completed, processing {} solutions",
-        final_solution_set.len()
-    );
-
-    // Generate 2D plot if requested
-    if plots {
-        #[cfg(feature = "plotting")]
-        {
-            let objective_names = pls_problem.objective_names();
-            pls::plotting::draw_solutions_plot(
-                &pareto_local_search.explored_solutions,
-                &objective_names,
-            );
-
-            // Handle custom plot output path
-            if let Some(path) = plot_output_path {
-                if path != "pareto_solutions_2d.svg" {
-                    if let Err(e) = std::fs::rename("pareto_solutions_2d.svg", &path) {
-                        log::warn!("Failed to move plot to {path}: {e}");
-                    }
-                }
-            }
-        }
-        #[cfg(not(feature = "plotting"))]
-        {
-            log::warn!("Plotting requested but plotting feature is not enabled");
-        }
-    }
-
-    // Convert solutions back to Python format
-    let final_solutions: Vec<BitsetEncodedSolution<2>> = final_solution_set.into_iter().collect();
-
-    debug!(
-        "Converting {} 2D PLS final solutions to Python format",
-        final_solutions.len()
-    );
-
-    let mut python_final_solutions = Vec::new();
-    for (i, solution) in final_solutions.iter().enumerate() {
-        debug!(
-            "Processing 2D final solution {}: objectives = {:?}",
-            i, solution.objectives
-        );
-
-        // Get timestamp from explored solutions if available
-        let timestamp_us = pareto_local_search
-            .explored_solutions
-            .get_solution_fingerprint(solution)
-            .map(|fp| fp.time.as_micros() as u64)
-            .unwrap_or(i as u64 * 1000); // Fallback: use index * 1ms
-
-        let py_solution: Solution =
-            PlsSolutionWithTimestamp::new(solution, timestamp_us, &pls_problem).into();
-        debug!(
-            "Converted 2D final solution {}: cost={}, cloudy_area={}, selected_images={:?}",
-            i,
-            py_solution.cost,
-            py_solution.cloudy_area,
-            py_solution.get_selected_images_list()
-        );
-        python_final_solutions.push(py_solution);
-    }
-
-    // Extract all explored solutions
-    let explored_solution_fingerprints: Vec<&pls::explored_solutions_data::SolutionFingerprint<2>> =
-        pareto_local_search
-            .explored_solutions
-            .solutions
-            .values()
-            .collect();
-    debug!(
-        "Converting {} 2D explored solutions to Python format",
-        explored_solution_fingerprints.len()
-    );
-
-    let mut python_explored_solutions = Vec::new();
-    for (i, solution_fingerprint) in explored_solution_fingerprints.iter().enumerate() {
-        debug!(
-            "Processing 2D explored solution {}: objectives = {:?}",
-            i, solution_fingerprint.objectives
-        );
-
-        // Create a minimal solution with objectives and timestamp
-        let py_solution = Solution {
-            selected_images: std::collections::HashSet::new(), // We don't have the actual selection
-            cost: solution_fingerprint.objectives[0] as i32,
-            cloudy_area: solution_fingerprint.objectives[1] as i32,
-            timestamp: solution_fingerprint.time,
-            max_incidence_angle: None,
-            min_resolutions_sum: None,
-        };
-
-        python_explored_solutions.push(py_solution);
-    }
-
-    info!(
-        "Successfully converted {} 2D final solutions and {} explored solutions to Python format",
-        python_final_solutions.len(),
-        python_explored_solutions.len()
-    );
-
-    Ok(SolvingResult::new(
-        python_final_solutions,
-        python_explored_solutions,
-    ))
-}
-
-/// 3D PLS solver implementation
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Internal function needs all parameters"
-)]
-fn solve_pls_3d(
-    sims_instance: &SimsDiscreteProblem,
-    objectives: Vec<String>,
-    plots: bool,
-    plot_output_path: Option<String>,
-    timeout: Duration,
-    max_iterations: usize,
-    is_deterministic: bool,
-    initial_population_size: usize,
-    neighborhood_size_min: u32,
-    neighborhood_size_max: u32,
-) -> PyResult<SolvingResult> {
-    use pls::solution_set_impl::NdTreeSolutionSet;
-
-    debug!("Using 3D optimization with objectives: {objectives:?}");
-
-    let timeout_seconds = timeout.as_secs_f64();
-    info!(
-        "Starting 3D PLS algorithm with objectives: {objectives:?}, plots: {plots}, timeout: {timeout_seconds}s, max_iterations: {max_iterations}, deterministic: {is_deterministic}, population_size: {initial_population_size}, neighborhood: {neighborhood_size_min}..{neighborhood_size_max}"
-    );
-
-    let neighborhood_size_range: RangeInclusive<u32> =
-        neighborhood_size_min..=neighborhood_size_max;
-
-    // Convert to PLS problem format and create 3D problem with specified objectives
-    let raw_instance = SIMSProblemInstanceRaw {
-        name: "python_instance".to_string(),
-        num_images: sims_instance.num_images,
-        universe_size: sims_instance.universe,
-        images: sims_instance
-            .images
-            .iter()
-            .map(|img| img.iter().map(|&x| x + 1).collect())
-            .collect(),
-        costs: sims_instance.costs.iter().map(|&c| c as u64).collect(),
-        clouds: sims_instance
-            .clouds
-            .iter()
-            .map(|cloud| cloud.iter().map(|&x| x + 1).collect())
-            .collect(),
-        areas: sims_instance.areas.iter().map(|&a| a as u64).collect(),
-        max_cloud_area: sims_instance.max_cloud_area as u64,
-        resolution: sims_instance.resolution.iter().map(|&r| r as u64).collect(),
-        incidence_angle: sims_instance
-            .incidence_angle
-            .iter()
-            .map(|&i| i as u64)
-            .collect(),
-    };
-
-    // Create 3D problem with specified objectives
-    let objective_definitions = create_objective_definitions_3d(&objectives)?;
-
-    let pls_problem = Problem::from_raw_with_objectives(raw_instance, objective_definitions)
-        .map_err(|e| PyValueError::new_err(format!("Failed to create 3D problem: {e}")))?;
-
-    debug!(
-        "Created 3D PLS problem: {} images, universe size {}",
-        sims_instance.num_images, sims_instance.universe
-    );
-
-    // Create initial population manually using ND-Tree for 3D optimization
-    let mut initial_solution_set: NdTreeSolutionSet<BitsetEncodedSolution<3>, 3> = NdTreeSolutionSet::new("initial_3d_solutions");
-    for i in 0..initial_population_size {
-        let random_solution = if is_deterministic {
-            BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
-        } else {
-            BitsetEncodedSolution::random(&pls_problem)
-        };
-        initial_solution_set.try_insert(&random_solution);
-    }
-
-    // Create and run PLS
-    let mut pareto_local_search = ParetoLocalSearch::new(
-        &pls_problem,
-        &initial_solution_set,
-        neighborhood_size_range,
-        is_deterministic,
-    );
-
-    info!("Starting 3D PLS execution with {max_iterations} iterations timeout");
-    let final_solution_set = pareto_local_search.run(max_iterations, timeout);
-
-    info!(
-        "3D PLS completed, processing {} solutions",
-        final_solution_set.len()
-    );
-
-    // Generate 3D plot if requested
-    if plots {
-        #[cfg(feature = "plotting")]
-        {
-            let objective_names = pls_problem.objective_names();
-            pls::plotting::draw_solutions_plot(
-                &pareto_local_search.explored_solutions,
-                &objective_names,
-            );
-
-            // Handle custom plot output path
-            if let Some(path) = plot_output_path {
-                if path != "pareto_solutions_grid.svg" {
-                    if let Err(e) = std::fs::rename("pareto_solutions_grid.svg", &path) {
-                        log::warn!("Failed to move plot to {path}: {e}");
-                    }
-                }
-            }
-        }
-        #[cfg(not(feature = "plotting"))]
-        {
-            log::warn!("Plotting requested but plotting feature is not enabled");
-        }
-    }
-
-    // Convert solutions back to Python format
-    let final_solutions: Vec<BitsetEncodedSolution<3>> = final_solution_set.into_iter().collect();
-
-    debug!(
-        "Converting {} 3D PLS final solutions to Python format",
-        final_solutions.len()
-    );
-
-    let mut python_final_solutions = Vec::new();
-    for (i, solution) in final_solutions.iter().enumerate() {
-        debug!(
-            "Processing 3D final solution {}: objectives = {:?}",
-            i, solution.objectives
-        );
-
-        // Get timestamp from explored solutions if available
-        let timestamp_us = pareto_local_search
-            .explored_solutions
-            .get_solution_fingerprint(solution)
-            .map(|fp| fp.time.as_micros() as u64)
-            .unwrap_or(i as u64 * 1000); // Fallback: use index * 1ms
-
-        let py_solution: Solution =
-            PlsSolutionWithTimestamp::new(solution, timestamp_us, &pls_problem).into();
-        debug!(
-            "Converted 3D final solution {}: cost={}, cloudy_area={}, selected_images={:?}",
-            i,
-            py_solution.cost,
-            py_solution.cloudy_area,
-            py_solution.get_selected_images_list()
-        );
-        python_final_solutions.push(py_solution);
-    }
-
-    // Extract all explored solutions
-    let explored_solution_fingerprints: Vec<&pls::explored_solutions_data::SolutionFingerprint<3>> =
-        pareto_local_search
-            .explored_solutions
-            .solutions
-            .values()
-            .collect();
-    debug!(
-        "Converting {} 3D explored solutions to Python format",
-        explored_solution_fingerprints.len()
-    );
-
-    let mut python_explored_solutions = Vec::new();
-    for (i, solution_fingerprint) in explored_solution_fingerprints.iter().enumerate() {
-        debug!(
-            "Processing 3D explored solution {}: objectives = {:?}",
-            i, solution_fingerprint.objectives
-        );
-
-        // Create a minimal solution with objectives and timestamp
-        let py_solution = Solution {
-            selected_images: std::collections::HashSet::new(), // We don't have the actual selection
-            cost: solution_fingerprint.objectives[0] as i32,
-            cloudy_area: solution_fingerprint.objectives[1] as i32,
-            timestamp: solution_fingerprint.time,
-            max_incidence_angle: if solution_fingerprint.objectives.len() > 2 {
-                Some(solution_fingerprint.objectives[2] as i32)
-            } else {
-                None
-            },
-            min_resolutions_sum: None,
-        };
-
-        python_explored_solutions.push(py_solution);
-    }
-
-    info!(
-        "Successfully converted {} 3D final solutions and {} explored solutions to Python format",
-        python_final_solutions.len(),
-        python_explored_solutions.len()
-    );
-
-    Ok(SolvingResult::new(
-        python_final_solutions,
-        python_explored_solutions,
-    ))
-}
-
-/// 4D PLS solver implementation
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Internal function needs all parameters"
-)]
-fn solve_pls_4d(
-    sims_instance: &SimsDiscreteProblem,
-    objectives: Vec<String>,
-    plots: bool,
-    plot_output_path: Option<String>,
-    timeout: Duration,
-    max_iterations: usize,
-    is_deterministic: bool,
-    initial_population_size: usize,
-    neighborhood_size_min: u32,
-    neighborhood_size_max: u32,
-) -> PyResult<SolvingResult> {
-    use pls::solution_impl::bitset_encoded_solution::BitsetEncodedSolution;
-    use pls::solution_set_impl::NdTreeSolutionSet;
-
-    debug!("Using 4D optimization with objectives: {objectives:?}");
-
-    let timeout_seconds = timeout.as_secs_f64();
-    info!(
-        "Starting 4D PLS algorithm with objectives: {objectives:?}, plots: {plots}, timeout: {timeout_seconds}s, max_iterations: {max_iterations}, deterministic: {is_deterministic}, population_size: {initial_population_size}, neighborhood: {neighborhood_size_min}..{neighborhood_size_max}"
-    );
-
-    let neighborhood_size_range: RangeInclusive<u32> =
-        neighborhood_size_min..=neighborhood_size_max;
-
-    // Convert to PLS problem format and create 4D problem with specified objectives
+    // Convert to PLS problem format - common for all dimensions
     let raw_instance = pls::problem::SIMSProblemInstanceRaw {
         name: "python_instance".to_string(),
         num_images: sims_instance.num_images,
@@ -778,154 +210,362 @@ fn solve_pls_4d(
             .collect(),
     };
 
-    // Create 4D problem with specified objectives
-    let objective_definitions = create_objective_definitions_4d(&objectives)?;
-
-    let pls_problem =
-        pls::problem::Problem::from_raw_with_objectives(raw_instance, objective_definitions)
-            .map_err(|e| PyValueError::new_err(format!("Failed to create 4D problem: {e}")))?;
-
     debug!(
-        "Created 4D PLS problem: {} images, universe size {}",
+        "Created PLS problem: {} images, universe size {}",
         sims_instance.num_images, sims_instance.universe
     );
 
-    // Create initial population manually using ND-Tree for 4D optimization
-    let mut initial_solution_set: NdTreeSolutionSet<BitsetEncodedSolution<4>, 4> = NdTreeSolutionSet::new("initial_4d_solutions");
-    for i in 0..initial_population_size {
-        let random_solution = if is_deterministic {
-            BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
-        } else {
-            BitsetEncodedSolution::random(&pls_problem)
-        };
-        initial_solution_set.try_insert(&random_solution);
-    }
+    // Branch based on number of objectives and handle each case inline
+    match objectives.len() {
+        2 => {
+            use pls::solution_set_impl::BTreeSolutionSet;
+            use pls::solution_impl::bitset_encoded_solution::BitsetEncodedSolution;
 
-    // Create and run PLS
-    let mut pareto_local_search = ParetoLocalSearch::new(
-        &pls_problem,
-        &initial_solution_set,
-        neighborhood_size_range,
-        is_deterministic,
-    );
+            debug!("Using 2D optimization with objectives: {objectives:?}");
 
-    info!("Starting 4D PLS execution with {max_iterations} iterations timeout");
-    let final_solution_set = pareto_local_search.run(max_iterations, timeout);
+            // Create 2D objective definitions inline
+            let mut objective_definitions = [pls::objectives::ObjectiveType::TotalCost, pls::objectives::ObjectiveType::CloudyArea];
+            for (i, obj_name) in objectives.iter().enumerate() {
+                objective_definitions[i] = match obj_name.as_str() {
+                    "min_cost" => pls::objectives::ObjectiveType::TotalCost,
+                    "cloud_coverage" => pls::objectives::ObjectiveType::CloudyArea,
+                    "min_resolution" => pls::objectives::ObjectiveType::MinResolution,
+                    "max_incidence_angle" => pls::objectives::ObjectiveType::MaxIncidenceAngle,
+                    _ => return Err(PyValueError::new_err(format!("Unknown objective: {}", obj_name))),
+                };
+            }
 
-    info!(
-        "4D PLS completed, processing {} solutions",
-        final_solution_set.len()
-    );
+            let pls_problem = pls::problem::Problem::from_raw_with_objectives(raw_instance, objective_definitions)
+                .map_err(|e| PyValueError::new_err(format!("Failed to create 2D problem: {e}")))?;
 
-    // Generate 4D plot if requested
-    if plots {
-        #[cfg(feature = "plotting")]
-        {
-            let objective_names = pls_problem.objective_names();
-            pls::plotting::draw_solutions_plot(
-                &pareto_local_search.explored_solutions,
-                &objective_names,
+            // Create initial population manually for 2D
+            let mut initial_solution_set = BTreeSolutionSet::new("initial_2d_solutions");
+            for _ in 0..initial_population_size {
+                let random_solution = if is_deterministic {
+                    BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
+                } else {
+                    BitsetEncodedSolution::random(&pls_problem)
+                };
+                initial_solution_set.try_insert(&random_solution);
+            }
+
+            // Create and run 2D PLS
+            let mut pareto_local_search = pls::pareto_local_search::ParetoLocalSearch::new(
+                &pls_problem,
+                &initial_solution_set,
+                neighborhood_size_range,
+                is_deterministic,
             );
 
-            // Handle custom plot output path
-            if let Some(path) = plot_output_path {
-                if path != "pareto_solutions_grid.svg" {
-                    if let Err(e) = std::fs::rename("pareto_solutions_grid.svg", &path) {
-                        log::warn!("Failed to move plot to {path}: {e}");
+            info!("Starting 2D PLS execution with {max_iterations} iterations timeout");
+            let final_solution_set = pareto_local_search.run(max_iterations, timeout);
+
+            info!("2D PLS completed, processing {} solutions", final_solution_set.len());
+
+            // Generate 2D plot if requested
+            if plots {
+                #[cfg(feature = "plotting")]
+                {
+                    let objective_names = pls_problem.objective_names();
+                    pls::plotting::draw_solutions_plot(
+                        &pareto_local_search.explored_solutions,
+                        &objective_names,
+                    );
+
+                    if let Some(path) = plot_output_path {
+                        if path != "pareto_solutions_2d.svg" {
+                            if let Err(e) = std::fs::rename("pareto_solutions_2d.svg", &path) {
+                                log::warn!("Failed to move plot to {path}: {e}");
+                            }
+                        }
                     }
                 }
+                #[cfg(not(feature = "plotting"))]
+                {
+                    log::warn!("Plotting requested but plotting feature is not enabled");
+                }
             }
-        }
-        #[cfg(not(feature = "plotting"))]
-        {
-            log::warn!("Plotting requested but plotting feature is not enabled");
-        }
+
+            // Convert 2D solutions back to Python format
+            let final_solutions: Vec<BitsetEncodedSolution<2>> = final_solution_set.into_iter().collect();
+            let mut python_final_solutions = Vec::new();
+            for (i, solution) in final_solutions.iter().enumerate() {
+                let timestamp_us = pareto_local_search
+                    .explored_solutions
+                    .get_solution_fingerprint(solution)
+                    .map(|fp| fp.time.as_micros() as u64)
+                    .unwrap_or(i as u64 * 1000);
+
+                let py_solution: crate::solution::Solution =
+                    crate::conversion::PlsSolutionWithTimestamp::new(solution, timestamp_us, &pls_problem).into();
+                python_final_solutions.push(py_solution);
+            }
+
+            // Extract 2D explored solutions
+            let explored_solution_fingerprints: Vec<&pls::explored_solutions_data::SolutionFingerprint<2>> =
+                pareto_local_search.explored_solutions.solutions.values().collect();
+            let mut python_explored_solutions = Vec::new();
+            for solution_fingerprint in explored_solution_fingerprints.iter() {
+                let py_solution = crate::solution::Solution {
+                    selected_images: std::collections::HashSet::new(),
+                    cost: solution_fingerprint.objectives[0] as i32,
+                    cloudy_area: solution_fingerprint.objectives[1] as i32,
+                    timestamp: solution_fingerprint.time,
+                    max_incidence_angle: None,
+                    min_resolutions_sum: None,
+                };
+                python_explored_solutions.push(py_solution);
+            }
+
+            info!(
+                "Successfully converted {} 2D final solutions and {} explored solutions to Python format",
+                python_final_solutions.len(),
+                python_explored_solutions.len()
+            );
+
+            Ok(crate::solution::SolvingResult::new(python_final_solutions, python_explored_solutions))
+        },
+        3 => {
+            use pls::solution_set_impl::NdTreeSolutionSet;
+            use pls::solution_impl::bitset_encoded_solution::BitsetEncodedSolution;
+
+            debug!("Using 3D optimization with objectives: {objectives:?}");
+
+            // Create 3D objective definitions inline
+            let mut objective_definitions = [
+                pls::objectives::ObjectiveType::TotalCost,
+                pls::objectives::ObjectiveType::CloudyArea,
+                pls::objectives::ObjectiveType::MinResolution,
+            ];
+            for (i, obj_name) in objectives.iter().enumerate() {
+                objective_definitions[i] = match obj_name.as_str() {
+                    "min_cost" => pls::objectives::ObjectiveType::TotalCost,
+                    "cloud_coverage" => pls::objectives::ObjectiveType::CloudyArea,
+                    "min_resolution" => pls::objectives::ObjectiveType::MinResolution,
+                    "max_incidence_angle" => pls::objectives::ObjectiveType::MaxIncidenceAngle,
+                    _ => return Err(PyValueError::new_err(format!("Unknown objective: {}", obj_name))),
+                };
+            }
+
+            let pls_problem = pls::problem::Problem::from_raw_with_objectives(raw_instance, objective_definitions)
+                .map_err(|e| PyValueError::new_err(format!("Failed to create 3D problem: {e}")))?;
+
+            // Create initial population manually for 3D using ND-Tree
+            let mut initial_solution_set: NdTreeSolutionSet<BitsetEncodedSolution<3>, 3> = NdTreeSolutionSet::new("initial_3d_solutions");
+            for _ in 0..initial_population_size {
+                let random_solution = if is_deterministic {
+                    BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
+                } else {
+                    BitsetEncodedSolution::random(&pls_problem)
+                };
+                initial_solution_set.try_insert(&random_solution);
+            }
+
+            // Create and run 3D PLS
+            let mut pareto_local_search = pls::pareto_local_search::ParetoLocalSearch::new(
+                &pls_problem,
+                &initial_solution_set,
+                neighborhood_size_range,
+                is_deterministic,
+            );
+
+            info!("Starting 3D PLS execution with {max_iterations} iterations timeout");
+            let final_solution_set = pareto_local_search.run(max_iterations, timeout);
+
+            info!("3D PLS completed, processing {} solutions", final_solution_set.len());
+
+            // Generate 3D plot if requested
+            if plots {
+                #[cfg(feature = "plotting")]
+                {
+                    let objective_names = pls_problem.objective_names();
+                    pls::plotting::draw_solutions_plot(
+                        &pareto_local_search.explored_solutions,
+                        &objective_names,
+                    );
+
+                    if let Some(path) = plot_output_path {
+                        if path != "pareto_solutions_grid.svg" {
+                            if let Err(e) = std::fs::rename("pareto_solutions_grid.svg", &path) {
+                                log::warn!("Failed to move plot to {path}: {e}");
+                            }
+                        }
+                    }
+                }
+                #[cfg(not(feature = "plotting"))]
+                {
+                    log::warn!("Plotting requested but plotting feature is not enabled");
+                }
+            }
+
+            // Convert 3D solutions back to Python format
+            let final_solutions: Vec<BitsetEncodedSolution<3>> = final_solution_set.into_iter().collect();
+            let mut python_final_solutions = Vec::new();
+            for (i, solution) in final_solutions.iter().enumerate() {
+                let timestamp_us = pareto_local_search
+                    .explored_solutions
+                    .get_solution_fingerprint(solution)
+                    .map(|fp| fp.time.as_micros() as u64)
+                    .unwrap_or(i as u64 * 1000);
+
+                let py_solution: crate::solution::Solution =
+                    crate::conversion::PlsSolutionWithTimestamp::new(solution, timestamp_us, &pls_problem).into();
+                python_final_solutions.push(py_solution);
+            }
+
+            // Extract 3D explored solutions
+            let explored_solution_fingerprints: Vec<&pls::explored_solutions_data::SolutionFingerprint<3>> =
+                pareto_local_search.explored_solutions.solutions.values().collect();
+            let mut python_explored_solutions = Vec::new();
+            for solution_fingerprint in explored_solution_fingerprints.iter() {
+                let py_solution = crate::solution::Solution {
+                    selected_images: std::collections::HashSet::new(),
+                    cost: solution_fingerprint.objectives[0] as i32,
+                    cloudy_area: solution_fingerprint.objectives[1] as i32,
+                    timestamp: solution_fingerprint.time,
+                    max_incidence_angle: if solution_fingerprint.objectives.len() > 2 {
+                        Some(solution_fingerprint.objectives[2] as i32)
+                    } else {
+                        None
+                    },
+                    min_resolutions_sum: None,
+                };
+                python_explored_solutions.push(py_solution);
+            }
+
+            info!(
+                "Successfully converted {} 3D final solutions and {} explored solutions to Python format",
+                python_final_solutions.len(),
+                python_explored_solutions.len()
+            );
+
+            Ok(crate::solution::SolvingResult::new(python_final_solutions, python_explored_solutions))
+        },
+        4 => {
+            use pls::solution_set_impl::NdTreeSolutionSet;
+            use pls::solution_impl::bitset_encoded_solution::BitsetEncodedSolution;
+
+            debug!("Using 4D optimization with objectives: {objectives:?}");
+
+            // Create 4D objective definitions inline
+            let mut objective_definitions = [
+                pls::objectives::ObjectiveType::TotalCost,
+                pls::objectives::ObjectiveType::CloudyArea,
+                pls::objectives::ObjectiveType::MinResolution,
+                pls::objectives::ObjectiveType::MaxIncidenceAngle,
+            ];
+            for (i, obj_name) in objectives.iter().enumerate() {
+                objective_definitions[i] = match obj_name.as_str() {
+                    "min_cost" => pls::objectives::ObjectiveType::TotalCost,
+                    "cloud_coverage" => pls::objectives::ObjectiveType::CloudyArea,
+                    "min_resolution" => pls::objectives::ObjectiveType::MinResolution,
+                    "max_incidence_angle" => pls::objectives::ObjectiveType::MaxIncidenceAngle,
+                    _ => return Err(PyValueError::new_err(format!("Unknown objective: {}", obj_name))),
+                };
+            }
+
+            let pls_problem = pls::problem::Problem::from_raw_with_objectives(raw_instance, objective_definitions)
+                .map_err(|e| PyValueError::new_err(format!("Failed to create 4D problem: {e}")))?;
+
+            // Create initial population manually for 4D using ND-Tree
+            let mut initial_solution_set: NdTreeSolutionSet<BitsetEncodedSolution<4>, 4> = NdTreeSolutionSet::new("initial_4d_solutions");
+            for _ in 0..initial_population_size {
+                let random_solution = if is_deterministic {
+                    BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
+                } else {
+                    BitsetEncodedSolution::random(&pls_problem)
+                };
+                initial_solution_set.try_insert(&random_solution);
+            }
+
+            // Create and run 4D PLS
+            let mut pareto_local_search = pls::pareto_local_search::ParetoLocalSearch::new(
+                &pls_problem,
+                &initial_solution_set,
+                neighborhood_size_range,
+                is_deterministic,
+            );
+
+            info!("Starting 4D PLS execution with {max_iterations} iterations timeout");
+            let final_solution_set = pareto_local_search.run(max_iterations, timeout);
+
+            info!("4D PLS completed, processing {} solutions", final_solution_set.len());
+
+            // Generate 4D plot if requested
+            if plots {
+                #[cfg(feature = "plotting")]
+                {
+                    let objective_names = pls_problem.objective_names();
+                    pls::plotting::draw_solutions_plot(
+                        &pareto_local_search.explored_solutions,
+                        &objective_names,
+                    );
+
+                    if let Some(path) = plot_output_path {
+                        if path != "pareto_solutions_grid.svg" {
+                            if let Err(e) = std::fs::rename("pareto_solutions_grid.svg", &path) {
+                                log::warn!("Failed to move plot to {path}: {e}");
+                            }
+                        }
+                    }
+                }
+                #[cfg(not(feature = "plotting"))]
+                {
+                    log::warn!("Plotting requested but plotting feature is not enabled");
+                }
+            }
+
+            // Convert 4D solutions back to Python format
+            let final_solutions: Vec<BitsetEncodedSolution<4>> = final_solution_set.into_iter().collect();
+            let mut python_final_solutions = Vec::new();
+            for (i, solution) in final_solutions.iter().enumerate() {
+                let timestamp_us = pareto_local_search
+                    .explored_solutions
+                    .get_solution_fingerprint(solution)
+                    .map(|fp| fp.time.as_micros() as u64)
+                    .unwrap_or(i as u64 * 1000);
+
+                let py_solution: crate::solution::Solution =
+                    crate::conversion::PlsSolutionWithTimestamp::new(solution, timestamp_us, &pls_problem).into();
+                python_final_solutions.push(py_solution);
+            }
+
+            // Extract 4D explored solutions
+            let explored_solution_fingerprints: Vec<&pls::explored_solutions_data::SolutionFingerprint<4>> =
+                pareto_local_search.explored_solutions.solutions.values().collect();
+            let mut python_explored_solutions = Vec::new();
+            for solution_fingerprint in explored_solution_fingerprints.iter() {
+                let py_solution = crate::solution::Solution {
+                    selected_images: std::collections::HashSet::new(),
+                    cost: solution_fingerprint.objectives[0] as i32,
+                    cloudy_area: solution_fingerprint.objectives[1] as i32,
+                    timestamp: solution_fingerprint.time,
+                    max_incidence_angle: if solution_fingerprint.objectives.len() > 2 {
+                        Some(solution_fingerprint.objectives[2] as i32)
+                    } else {
+                        None
+                    },
+                    min_resolutions_sum: if solution_fingerprint.objectives.len() > 3 {
+                        Some(solution_fingerprint.objectives[3] as i32)
+                    } else {
+                        None
+                    },
+                };
+                python_explored_solutions.push(py_solution);
+            }
+
+            info!(
+                "Successfully converted {} 4D final solutions and {} explored solutions to Python format",
+                python_final_solutions.len(),
+                python_explored_solutions.len()
+            );
+
+            Ok(crate::solution::SolvingResult::new(python_final_solutions, python_explored_solutions))
+        },
+        n => Err(PyValueError::new_err(format!(
+            "Unsupported number of objectives: {n}. Supported: 2, 3, or 4 objectives."
+        ))),
     }
-
-    // Convert solutions back to Python format
-    let final_solutions: Vec<BitsetEncodedSolution<4>> = final_solution_set.into_iter().collect();
-
-    debug!(
-        "Converting {} 4D PLS final solutions to Python format",
-        final_solutions.len()
-    );
-
-    let mut python_final_solutions = Vec::new();
-    for (i, solution) in final_solutions.iter().enumerate() {
-        debug!(
-            "Processing 4D final solution {}: objectives = {:?}",
-            i, solution.objectives
-        );
-
-        // Get timestamp from explored solutions if available
-        let timestamp_us = pareto_local_search
-            .explored_solutions
-            .get_solution_fingerprint(solution)
-            .map(|fp| fp.time.as_micros() as u64)
-            .unwrap_or(i as u64 * 1000); // Fallback: use index * 1ms
-
-        let py_solution: Solution =
-            PlsSolutionWithTimestamp::new(solution, timestamp_us, &pls_problem).into();
-        debug!(
-            "Converted 4D final solution {}: cost={}, cloudy_area={}, selected_images={:?}",
-            i,
-            py_solution.cost,
-            py_solution.cloudy_area,
-            py_solution.get_selected_images_list()
-        );
-        python_final_solutions.push(py_solution);
-    }
-
-    // Extract all explored solutions
-    let explored_solution_fingerprints: Vec<&pls::explored_solutions_data::SolutionFingerprint<4>> =
-        pareto_local_search
-            .explored_solutions
-            .solutions
-            .values()
-            .collect();
-    debug!(
-        "Converting {} 4D explored solutions to Python format",
-        explored_solution_fingerprints.len()
-    );
-
-    let mut python_explored_solutions = Vec::new();
-    for (i, solution_fingerprint) in explored_solution_fingerprints.iter().enumerate() {
-        debug!(
-            "Processing 4D explored solution {}: objectives = {:?}",
-            i, solution_fingerprint.objectives
-        );
-
-        // Create a minimal solution with objectives and timestamp
-        let py_solution = Solution {
-            selected_images: std::collections::HashSet::new(), // We don't have the actual selection
-            cost: solution_fingerprint.objectives[0] as i32,
-            cloudy_area: solution_fingerprint.objectives[1] as i32,
-            timestamp: solution_fingerprint.time,
-            max_incidence_angle: if solution_fingerprint.objectives.len() > 2 {
-                Some(solution_fingerprint.objectives[2] as i32)
-            } else {
-                None
-            },
-            min_resolutions_sum: if solution_fingerprint.objectives.len() > 3 {
-                Some(solution_fingerprint.objectives[3] as i32)
-            } else {
-                None
-            },
-        };
-
-        python_explored_solutions.push(py_solution);
-    }
-
-    info!(
-        "Successfully converted {} 4D final solutions and {} explored solutions to Python format",
-        python_final_solutions.len(),
-        python_explored_solutions.len()
-    );
-
-    Ok(SolvingResult::new(
-        python_final_solutions,
-        python_explored_solutions,
-    ))
 }
 
 /// Solves the SIMS problem using MILP with AUGMECON for exact Pareto solutions
@@ -1347,8 +987,17 @@ fn solve_hybrid_2d(
             .collect(),
     };
 
-    // Create 2D problem with specified objectives
-    let objective_definitions = create_objective_definitions_2d(&pls_config.objectives)?;
+    // Create 2D problem with specified objectives inline
+    let mut objective_definitions = [pls::objectives::ObjectiveType::TotalCost, pls::objectives::ObjectiveType::CloudyArea];
+    for (i, obj_name) in pls_config.objectives.iter().enumerate() {
+        objective_definitions[i] = match obj_name.as_str() {
+            "min_cost" => pls::objectives::ObjectiveType::TotalCost,
+            "cloud_coverage" => pls::objectives::ObjectiveType::CloudyArea,
+            "min_resolution" => pls::objectives::ObjectiveType::MinResolution,
+            "max_incidence_angle" => pls::objectives::ObjectiveType::MaxIncidenceAngle,
+            _ => return Err(PyValueError::new_err(format!("Unknown objective: {}", obj_name))),
+        };
+    }
 
     let pls_problem =
         pls::problem::Problem::from_raw_with_objectives(raw_instance, objective_definitions)
@@ -1372,7 +1021,7 @@ fn solve_hybrid_2d(
 
         // Create random solutions manually
         let mut random_solutions: BTreeSolutionSet<BitsetEncodedSolution<2>, 2> = BTreeSolutionSet::new("random_2d_solutions");
-        for i in 0..remaining_size {
+        for _ in 0..remaining_size {
             let random_solution = if pls_config.is_deterministic {
                 BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
             } else {
@@ -1513,8 +1162,21 @@ fn solve_hybrid_3d(
             .collect(),
     };
 
-    // Create 3D problem
-    let objective_definitions = create_objective_definitions_3d(&pls_config.objectives)?;
+    // Create 3D problem with specified objectives inline
+    let mut objective_definitions = [
+        pls::objectives::ObjectiveType::TotalCost,
+        pls::objectives::ObjectiveType::CloudyArea,
+        pls::objectives::ObjectiveType::MinResolution,
+    ];
+    for (i, obj_name) in pls_config.objectives.iter().enumerate() {
+        objective_definitions[i] = match obj_name.as_str() {
+            "min_cost" => pls::objectives::ObjectiveType::TotalCost,
+            "cloud_coverage" => pls::objectives::ObjectiveType::CloudyArea,
+            "min_resolution" => pls::objectives::ObjectiveType::MinResolution,
+            "max_incidence_angle" => pls::objectives::ObjectiveType::MaxIncidenceAngle,
+            _ => return Err(PyValueError::new_err(format!("Unknown objective: {}", obj_name))),
+        };
+    }
 
     let pls_problem =
         pls::problem::Problem::from_raw_with_objectives(raw_instance, objective_definitions)
@@ -1538,7 +1200,7 @@ fn solve_hybrid_3d(
 
         // Create random solutions manually
         let mut random_solutions: NdTreeSolutionSet<BitsetEncodedSolution<3>, 3> = NdTreeSolutionSet::new("random_3d_solutions");
-        for i in 0..remaining_size {
+        for _ in 0..remaining_size {
             let random_solution = if pls_config.is_deterministic {
                 BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
             } else {
@@ -1679,8 +1341,22 @@ fn solve_hybrid_4d(
             .collect(),
     };
 
-    // Create 4D problem
-    let objective_definitions = create_objective_definitions_4d(&pls_config.objectives)?;
+    // Create 4D problem with specified objectives inline
+    let mut objective_definitions = [
+        pls::objectives::ObjectiveType::TotalCost,
+        pls::objectives::ObjectiveType::CloudyArea,
+        pls::objectives::ObjectiveType::MinResolution,
+        pls::objectives::ObjectiveType::MaxIncidenceAngle,
+    ];
+    for (i, obj_name) in pls_config.objectives.iter().enumerate() {
+        objective_definitions[i] = match obj_name.as_str() {
+            "min_cost" => pls::objectives::ObjectiveType::TotalCost,
+            "cloud_coverage" => pls::objectives::ObjectiveType::CloudyArea,
+            "min_resolution" => pls::objectives::ObjectiveType::MinResolution,
+            "max_incidence_angle" => pls::objectives::ObjectiveType::MaxIncidenceAngle,
+            _ => return Err(PyValueError::new_err(format!("Unknown objective: {}", obj_name))),
+        };
+    }
 
     let pls_problem =
         pls::problem::Problem::from_raw_with_objectives(raw_instance, objective_definitions)
@@ -1704,7 +1380,7 @@ fn solve_hybrid_4d(
 
         // Create random solutions manually
         let mut random_solutions: NdTreeSolutionSet<BitsetEncodedSolution<4>, 4> = NdTreeSolutionSet::new("random_4d_solutions");
-        for i in 0..remaining_size {
+        for _ in 0..remaining_size {
             let random_solution = if pls_config.is_deterministic {
                 BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
             } else {
