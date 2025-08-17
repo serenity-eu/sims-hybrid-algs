@@ -335,6 +335,7 @@ class BenchmarkResult:
     error: str = ""
     finished_at: datetime = field(default_factory=datetime.now)
     validation_results: Optional[ComprehensiveValidationReport] = None
+    trace_data: Optional[bytes] = None  # Optimization trace archive data
         
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization with compact solution format."""
@@ -803,7 +804,7 @@ class BenchmarkRunner(ABC):
     
     def save_instance_results(self, instance_name: str, instance_results: list[BenchmarkResult]):
         """
-        Save results for a single instance (detailed, summary, and visualization).
+        Save results for a single instance (trace archives, summary, and visualization).
         Default implementation - subclasses can override for custom behavior.
         
         Args:
@@ -815,15 +816,14 @@ class BenchmarkRunner(ABC):
             
         finished_at = datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        # Save detailed results for this instance
-        detailed_file = self.output_dir / f"{instance_name}_detailed_{finished_at}.json"
-        with open(detailed_file, 'w') as f:
-            json.dump(
-                [result.to_dict() for result in instance_results],
-                f,
-                indent=2,
-                default=str
-            )
+        # Save trace archives for each result that has trace data
+        trace_files = []
+        for i, result in enumerate(instance_results):
+            if result.trace_data:
+                trace_file = self.output_dir / f"{instance_name}_trace_{i}_{finished_at}.tar.gz"
+                with open(trace_file, 'wb') as f:
+                    f.write(result.trace_data)
+                trace_files.append(trace_file)
         
         # Create and save summary statistics for this instance
         summary = self.create_instance_summary_statistics(instance_name, instance_results)
@@ -835,7 +835,9 @@ class BenchmarkRunner(ABC):
         self.create_instance_3d_visualization(instance_name, instance_results)
         
         self.console.print(f"\n[green]Instance {instance_name} results saved:")
-        self.console.print(f"  Detailed: {detailed_file}")
+        if trace_files:
+            for trace_file in trace_files:
+                self.console.print(f"  Trace:    {trace_file}")
         self.console.print(f"  Summary:  {summary_file}")
     
     @abstractmethod
@@ -1274,12 +1276,12 @@ class HybridBenchmarkRunner(BenchmarkRunner):
         instance: sims_problem.SimsDiscreteProblem,
         ratio: tuple[int, int],
         timeout_seconds: Optional[float] = None
-    ) -> tuple[list[sims_problem.Solution], float, float]:
+    ) -> tuple[sims_problem.SolvingResult, float, float]:
         """
-        Run the hybrid solver and return solutions with timing information.
+        Run the hybrid solver and return SolvingResult with timing information.
         
         Returns:
-            tuple of (solutions, milp_time, pls_time)
+            tuple of (solving_result, milp_time, pls_time)
         """
         if timeout_seconds is None:
             timeout_seconds = self.timeout
@@ -1311,7 +1313,8 @@ class HybridBenchmarkRunner(BenchmarkRunner):
             milp_config,
             pls_config,
             ratio,
-            timedelta(seconds=timeout_seconds)
+            timedelta(seconds=timeout_seconds),
+            trace=True
         )
         
         total_time = time.time() - start_time
@@ -1337,14 +1340,19 @@ class HybridBenchmarkRunner(BenchmarkRunner):
         result.ratio = ratio
         
         try:
-            solutions, milp_time, pls_time = self.run_hybrid_solver(instance, ratio)
+            solving_result, milp_time, pls_time = self.run_hybrid_solver(instance, ratio)
             result.milp_runtime_seconds = milp_time
             result.pls_runtime_seconds = pls_time
             result.total_runtime_seconds = milp_time + pls_time
             
-            # Convert solutions to Solution objects
-            result.final_solutions = solutions
-            result.num_final_solutions = len(solutions)
+            # Extract solutions from SolvingResult
+            result.final_solutions = solving_result.final_solutions
+            result.explored_solutions = solving_result.explored_solutions
+            result.num_final_solutions = len(solving_result.final_solutions)
+            result.num_explored_solutions = len(solving_result.explored_solutions)
+            
+            # Store trace data for saving
+            result.trace_data = solving_result.trace
             
             # For now, we don't have access to intermediate MILP solutions
             # This would require modifying the solver to return them
@@ -1558,18 +1566,17 @@ class HybridBenchmarkRunner(BenchmarkRunner):
                 progress.update(main_task, completed=len(self.instance_files))
     
     def save_results(self):
-        """Save benchmark results to JSON files and create 3D visualization."""
+        """Save benchmark results with trace archives and create 3D visualization."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        # Save detailed results
-        detailed_file = self.output_dir / f"hybrid_benchmark_detailed_{timestamp}.json"
-        with open(detailed_file, 'w') as f:
-            json.dump(
-                [result.to_dict() for result in self.results],
-                f,
-                indent=2,
-                default=str
-            )
+        # Save trace archives for results that have trace data
+        trace_files = []
+        for i, result in enumerate(self.results):
+            if result.trace_data:
+                trace_file = self.output_dir / f"hybrid_benchmark_trace_{i}_{timestamp}.tar.gz"
+                with open(trace_file, 'wb') as f:
+                    f.write(result.trace_data)
+                trace_files.append(trace_file)
         
         # Create summary statistics
         summary = self.create_summary_statistics()
@@ -1578,7 +1585,9 @@ class HybridBenchmarkRunner(BenchmarkRunner):
             json.dump(summary.to_dict(), f, indent=2, default=str)
         
         self.console.print("\n[green]Results saved:")
-        self.console.print(f"  Detailed: {detailed_file}")
+        if trace_files:
+            for trace_file in trace_files:
+                self.console.print(f"  Trace:    {trace_file}")
         self.console.print(f"  Summary:  {summary_file}")
     
     def create_summary_statistics(self) -> BenchmarkSummaryStatistics:
@@ -1957,7 +1966,8 @@ class PlsBenchmarkRunner(BenchmarkRunner):
             is_deterministic=False,
             initial_population_size=100,
             neighborhood_size_min=1,
-            neighborhood_size_max=6
+            neighborhood_size_max=6,
+            trace=True
         )
     
     def run_single_benchmark(
@@ -1988,6 +1998,9 @@ class PlsBenchmarkRunner(BenchmarkRunner):
             result.num_explored_solutions = len(solving_result.explored_solutions)
             result.milp_solutions = []
             result.num_milp_solutions = 0
+            
+            # Store trace data for saving
+            result.trace_data = solving_result.trace
 
             print(f"DEBUG: EXPLORED SOLUTIONS COUNT: {result.num_explored_solutions}")
             
@@ -2152,17 +2165,17 @@ class PlsBenchmarkRunner(BenchmarkRunner):
             progress.update(main_task, completed=len(self.instance_files))
     
     def save_results(self):
-        """Save PLS benchmark results to JSON files and create 3D visualization."""
+        """Save PLS benchmark results with trace archives and create 3D visualization."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        detailed_file = self.output_dir / f"pls_benchmark_detailed_{timestamp}.json"
-        with open(detailed_file, 'w') as f:
-            json.dump(
-                [result.to_dict() for result in self.results],
-                f,
-                indent=2,
-                default=str
-            )
+        # Save trace archives for results that have trace data
+        trace_files = []
+        for i, result in enumerate(self.results):
+            if result.trace_data:
+                trace_file = self.output_dir / f"pls_benchmark_trace_{i}_{timestamp}.tar.gz"
+                with open(trace_file, 'wb') as f:
+                    f.write(result.trace_data)
+                trace_files.append(trace_file)
         
         summary = self.create_summary_statistics()
         summary_file = self.output_dir / f"pls_benchmark_summary_{timestamp}.json"
@@ -2170,7 +2183,9 @@ class PlsBenchmarkRunner(BenchmarkRunner):
             json.dump(summary.to_dict(), f, indent=2, default=str)
         
         self.console.print("\n[green]PLS Results saved:")
-        self.console.print(f"  Detailed: {detailed_file}")
+        if trace_files:
+            for trace_file in trace_files:
+                self.console.print(f"  Trace:    {trace_file}")
         self.console.print(f"  Summary:  {summary_file}")
     
     def create_summary_statistics(self) -> BenchmarkSummaryStatistics:
@@ -2471,8 +2486,8 @@ class MilpBenchmarkRunner(BenchmarkRunner):
         self, 
         instance: sims_problem.SimsDiscreteProblem,
         timeout: timedelta = timedelta(seconds=300)
-    ) -> list[Any]:
-        """Run MILP solver and return list of Solution objects."""
+    ) -> sims_problem.SolvingResult:
+        """Run MILP solver and return SolvingResult."""
         return sims_problem.solve_with_milp(
             instance,
             objectives=["min_cost", "cloud_coverage", "max_incidence_angle"],
@@ -2481,7 +2496,8 @@ class MilpBenchmarkRunner(BenchmarkRunner):
             bypass_coefficient=self.bypass_coefficient,
             early_exit=self.early_exit,
             flag_array=self.flag_array,
-            solver_name=self.solver_name
+            solver_name=self.solver_name,
+            trace=True
         )
     
     def run_single_benchmark(
@@ -2500,18 +2516,22 @@ class MilpBenchmarkRunner(BenchmarkRunner):
         
         try:
             start_time = time.time()
-            solutions = self.run_milp_solver(instance, timedelta(seconds=self.timeout))
+            solving_result = self.run_milp_solver(instance, timedelta(seconds=self.timeout))
             result.total_runtime_seconds = time.time() - start_time
             result.milp_runtime_seconds = result.total_runtime_seconds
             result.pls_runtime_seconds = 0.0
             
-            # Convert solutions to the expected format
+            # Extract solutions from SolvingResult
+            solutions = solving_result.final_solutions
             result.final_solutions = solutions
-            result.explored_solutions = []  # MILP doesn't provide explored solutions
+            result.explored_solutions = solving_result.explored_solutions
             result.num_final_solutions = len(solutions)
-            result.num_explored_solutions = 0
+            result.num_explored_solutions = len(solving_result.explored_solutions)
             result.milp_solutions = solutions  # Store MILP solutions separately
             result.num_milp_solutions = len(solutions)
+            
+            # Store trace data for saving
+            result.trace_data = solving_result.trace
 
             print(f"DEBUG: MILP SOLUTIONS COUNT: {result.num_milp_solutions}")
             
@@ -2754,15 +2774,14 @@ class MilpBenchmarkRunner(BenchmarkRunner):
         
         finished_at = datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        # Save detailed results
-        detailed_file = self.output_dir / f"milp_detailed_{finished_at}.json"
-        with open(detailed_file, 'w') as f:
-            json.dump(
-                [result.to_dict() for result in self.results],
-                f,
-                indent=2,
-                default=str
-            )
+        # Save trace archives for results that have trace data
+        trace_files = []
+        for i, result in enumerate(self.results):
+            if result.trace_data:
+                trace_file = self.output_dir / f"milp_trace_{i}_{finished_at}.tar.gz"
+                with open(trace_file, 'wb') as f:
+                    f.write(result.trace_data)
+                trace_files.append(trace_file)
         
         # Create and save summary statistics
         summary = self.create_summary_statistics()
@@ -2774,7 +2793,9 @@ class MilpBenchmarkRunner(BenchmarkRunner):
         self.create_comprehensive_3d_visualization()
         
         self.console.print("\n[green]All MILP results saved:")
-        self.console.print(f"  Detailed: {detailed_file}")
+        if trace_files:
+            for trace_file in trace_files:
+                self.console.print(f"  Trace:    {trace_file}")
         self.console.print(f"  Summary:  {summary_file}")
     
     def create_comprehensive_3d_visualization(self) -> bool:
