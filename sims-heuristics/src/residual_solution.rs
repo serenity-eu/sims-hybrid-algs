@@ -1,15 +1,17 @@
 use crate::{
     problem::Problem,
     solution::{ImageSet, SIMSCore, SIMSSolution},
+    timer::Timer,
 };
 use pareto::{HasObjectives, MoSolution};
-use std::fmt::Debug;
+use std::{fmt::Debug, time::Duration};
 
 #[derive(Clone, Eq, Hash)]
 #[allow(clippy::derived_hash_with_manual_eq)]
 pub struct ResidualSolution<const D: usize> {
     pub selected_images: Vec<usize>,
     pub objectives: pareto::Objectives<D>,
+    pub timestamp: Duration,
 }
 
 impl<const D: usize> ResidualSolution<D> {
@@ -17,10 +19,12 @@ impl<const D: usize> ResidualSolution<D> {
     pub fn from_selected_images<T: ImageSet<D>>(
         selected_images: &[usize],
         problem: &Problem<T, D>,
+        timer: &Timer,
     ) -> Self {
         let mut solution = Self {
             selected_images: selected_images.to_vec(),
             objectives: [0; D],
+            timestamp: timer.elapsed(),
         };
         // Calculate objectives directly for residual solution
         for i in 0..D {
@@ -41,6 +45,7 @@ impl<const D: usize> Debug for ResidualSolution<D> {
         f.debug_struct("SIMSResidualSolution")
             .field("selected_images", &self.selected_images)
             .field("objectives", &self.objectives)
+            .field("timestamp", &self.timestamp)
             .finish()
     }
 }

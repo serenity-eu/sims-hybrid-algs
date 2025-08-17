@@ -337,7 +337,16 @@ class BenchmarkResult:
     validation_results: Optional[ComprehensiveValidationReport] = None
         
     def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for JSON serialization."""
+        """Convert to dictionary for JSON serialization with compact solution format."""
+        
+        def convert_solution_to_compact(solution: Solution) -> dict:
+            """Convert a solution to compact format: {"s":[indices],"o":[objectives],"t":timestamp_us}"""
+            return {
+                "s": list(solution.selected_images),  # selected_images as array of indices
+                "o": [solution.cost, solution.cloudy_area, solution.max_incidence_angle or 0],  # objectives array
+                "t": int(solution.timestamp.total_seconds() * 1_000_000)  # timestamp in microseconds
+            }
+        
         return {
             "instance_name": self.instance_name,
             "iteration": self.iteration,
@@ -345,9 +354,10 @@ class BenchmarkResult:
             "total_runtime_seconds": self.total_runtime_seconds,
             "milp_runtime_seconds": self.milp_runtime_seconds,
             "pls_runtime_seconds": self.pls_runtime_seconds,
-            "milp_solutions": [sol.to_json() for sol in self.milp_solutions],
-            "final_solutions": [sol.to_json() for sol in self.final_solutions],
-            "explored_solutions": [sol.to_json() for sol in self.explored_solutions],
+            "objective_names": ["min_cost", "cloud_coverage", "max_incidence_angle"],  # Top-level field with objective names
+            "milp_solutions": [convert_solution_to_compact(sol) for sol in self.milp_solutions],
+            "final_solutions": [convert_solution_to_compact(sol) for sol in self.final_solutions],
+            "explored_solutions": [convert_solution_to_compact(sol) for sol in self.explored_solutions],
             "num_milp_solutions": self.num_milp_solutions,
             "num_final_solutions": self.num_final_solutions,
             "num_explored_solutions": self.num_explored_solutions,

@@ -114,6 +114,7 @@ impl<'a, R: MergeableWithResidual<D> + Clone, const D: usize> ResidualProblem<'a
 
     pub fn solve_with_backtracing<S: ParetoFront<'a, ResidualSolution<D>> + Default>(
         &mut self,
+        timer: &crate::timer::Timer,
     ) -> MergedSolutionIter<'_, R, D> {
         let mut non_dominated_residual_set: S = S::default();
 
@@ -128,7 +129,7 @@ impl<'a, R: MergeableWithResidual<D> + Clone, const D: usize> ResidualProblem<'a
             unique_cover.dedup();
 
             let residual_solution =
-                ResidualSolution::from_selected_images(&unique_cover, self.problem);
+                ResidualSolution::from_selected_images(&unique_cover, self.problem, timer);
 
             let was_added = non_dominated_residual_set.try_insert(&residual_solution);
 
@@ -232,7 +233,7 @@ impl<'a, R: MergeableWithResidual<D> + Clone, const D: usize> ResidualProblem<'a
             }).collect();
 
             if self.do_selected_images_cover(&selected_images, &coverage_bitmaps, &all_elements_mask) {
-                let residual_solution = ResidualSolution::<D>::from_selected_images(selected_images.clone(), self);
+                let residual_solution = ResidualSolution::<D>::from_selected_images(selected_images.clone(), self, timer);
 
                 if !non_dominated_residual_set.contains(&residual_solution) {
                 // Simple dominance check - only add if not dominated by existing solutions
@@ -271,6 +272,7 @@ impl<'a, R: MergeableWithResidual<D> + Clone, const D: usize> ResidualProblem<'a
 
     pub fn solve<S: ParetoFront<'a, ResidualSolution<D>> + Default>(
         &mut self,
+        timer: &crate::timer::Timer,
     ) -> MergedSolutionIter<'_, R, D> {
         let mut non_dominated_residual_set: S = S::default();
 
@@ -305,7 +307,7 @@ impl<'a, R: MergeableWithResidual<D> + Clone, const D: usize> ResidualProblem<'a
 
             let selected_images: Vec<usize> = image_combination.iter().copied().copied().collect();
             let residual_solution =
-                ResidualSolution::from_selected_images(&selected_images, self.problem);
+                ResidualSolution::from_selected_images(&selected_images, self.problem, timer);
 
             let was_added = non_dominated_residual_set.try_insert(&residual_solution);
 

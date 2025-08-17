@@ -3,7 +3,7 @@ use log::trace;
 use pareto::{HasObjectives, MoSolution, Random};
 use rand::SeedableRng;
 use rand::{Rng, seq::IteratorRandom};
-use std::{collections::BinaryHeap, fmt::Debug, hash::Hash, vec};
+use std::{collections::BinaryHeap, fmt::Debug, hash::Hash, time::Duration, vec};
 
 use crate::objectives::{self, SolutionEvaluator};
 use crate::probabilistic_probing_neighborhood::ProbabilisticProbingNeighborhood;
@@ -21,6 +21,7 @@ pub struct VecEncodedSolution<const D: usize> {
     pub objectives: pareto::Objectives<D>,
     pub clear_parts_counts: Vec<usize>,
     pub element_coverage: Vec<usize>,
+    pub timestamp: Duration,
 }
 
 // Iterator types for VecEncodedSolution
@@ -146,6 +147,7 @@ impl<const D: usize> VecEncodedSolution<D> {
             objectives: [0; D],
             clear_parts_counts: vec![0; problem.universe.len()],
             element_coverage: vec![0; problem.universe.len()],
+            timestamp: Duration::new(0, 0), // Initial solutions have timestamp 0
         };
 
         for &image_index in selected_images_vec {
@@ -246,7 +248,15 @@ impl<const D: usize> SIMSModifiable<D> for VecEncodedSolution<D> {
         let max_probes = 50; // Default maximum probes
         let objective_weights = None; // Use equal weights by default
 
-        self.probabilistic_probing_neighborhood(k, problem, &timer, is_deterministic, probing_probability, max_probes, objective_weights)
+        self.probabilistic_probing_neighborhood(
+            k,
+            problem,
+            &timer,
+            is_deterministic,
+            probing_probability,
+            max_probes,
+            objective_weights,
+        )
     }
 
     fn neighborhood(
@@ -279,7 +289,7 @@ impl<const D: usize> SIMSModifiable<D> for VecEncodedSolution<D> {
                 self.create_residual_problem(removal_candidates, problem, is_deterministic)
             {
                 let neighborhood_iter =
-                    residual_problem.solve::<NdTreeSolutionSet<ResidualSolution<D>, D>>();
+                    residual_problem.solve::<NdTreeSolutionSet<ResidualSolution<D>, D>>(timer);
                 residual_solutions.extend(neighborhood_iter);
             }
             if timer.is_expired() {
@@ -346,6 +356,13 @@ impl<const D: usize> SIMSModifiable<D> for VecEncodedSolution<D> {
     }
 }
 
+// Implement EncodedSolution trait
+impl<const D: usize> crate::solution::EncodedSolution<D> for VecEncodedSolution<D> {
+    fn timestamp(&self) -> Duration {
+        self.timestamp
+    }
+}
+
 impl<const D: usize> VecEncodedSolution<D> {
     /// Generate a random feasible solution (choose element randomly, then choose image randomly from those that contain the element iff it is not already covered by another image)
     ///
@@ -399,6 +416,7 @@ impl<const D: usize> VecEncodedSolution<D> {
             objectives: [0; D],
             clear_parts_counts,
             element_coverage: part_coverage_counts,
+            timestamp: Duration::new(0, 0), // Initial solutions have timestamp 0
         };
         sims_solution.compute_objectives(problem);
         sims_solution
@@ -834,6 +852,9 @@ impl<const D: usize> MergeableWithResidual<D> for VecEncodedSolution<D> {
             .for_each(|image_index| {
                 self.add_image(image_index, problem);
             });
+
+        // Inherit timestamp from ResidualSolution
+        self.timestamp = residual_solution.timestamp;
     }
 }
 

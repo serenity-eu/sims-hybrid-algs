@@ -1,3 +1,8 @@
+from __future__ import annotations
+
+from datetime import timedelta
+from typing import Optional, overload, Literal, Any
+
 """
 Type stubs for sims-problem
 
@@ -13,11 +18,6 @@ Key Functions:
 - solve_with_pls: Solves using Pareto Local Search (heuristic, fast)
 - solve_with_milp: Solves using Mixed Integer Linear Programming (exact, slower)
 """
-
-from __future__ import annotations
-
-from typing import Optional, Any
-from datetime import timedelta
 
 class SimsDiscreteProblem:
     """
@@ -417,6 +417,55 @@ class Solution:
         ...
 
 
+class SolvingResult:
+    """
+    Results from solving a SIMS problem instance.
+    
+    Contains the final Pareto-optimal solutions, all explored solutions during
+    the search process, and optionally a binary trace archive.
+    
+    Attributes:
+        final_solutions: List of final Pareto-optimal solutions found
+        explored_solutions: List of all solutions explored during the search
+        trace: Optional binary trace archive of the optimization process
+    """
+    
+    # Properties (can be read and written)
+    final_solutions: list[Solution]
+    explored_solutions: list[Solution]
+    trace: Optional[bytes]
+    
+    def __new__(
+        cls,
+        final_solutions: list[Solution],
+        explored_solutions: list[Solution]
+    ) -> SolvingResult:
+        """
+        Create a new SolvingResult without trace.
+        
+        Args:
+            final_solutions: Final Pareto-optimal solutions
+            explored_solutions: All explored solutions during search
+        """
+        ...
+    
+    @staticmethod
+    def with_trace(
+        final_solutions: list[Solution],
+        explored_solutions: list[Solution],
+        trace: bytes
+    ) -> SolvingResult:
+        """
+        Create a new SolvingResult with trace archive.
+        
+        Args:
+            final_solutions: Final Pareto-optimal solutions
+            explored_solutions: All explored solutions during search
+            trace: Binary trace archive of optimization process
+        """
+        ...
+
+
 class MilpConfig:
     """
     Configuration class for MILP solver parameters.
@@ -505,6 +554,7 @@ class PlsConfig:
         ...
 
 
+@overload
 def solve_with_pls(
     sims_instance: SimsDiscreteProblem,
     objectives: list[str] = ["min_cost", "cloud_coverage"],
@@ -516,17 +566,45 @@ def solve_with_pls(
     initial_population_size: int = 100,
     neighborhood_size_min: int = 1,
     neighborhood_size_max: int = 6,
-) -> list[Solution]:
+    *,
+    trace: Literal[False]
+) -> list[Solution]: ...
+
+@overload
+def solve_with_pls(
+    sims_instance: SimsDiscreteProblem,
+    objectives: list[str] = ["min_cost", "cloud_coverage"],
+    plots: bool = False,
+    plot_output_path: Optional[str] = None,
+    timeout: timedelta = timedelta(seconds=240),
+    max_iterations: int = 50000,
+    is_deterministic: bool = False,
+    initial_population_size: int = 100,
+    neighborhood_size_min: int = 1,
+    neighborhood_size_max: int = 6,
+    *,
+    trace: Literal[True] = True
+) -> SolvingResult: ...
+
+def solve_with_pls(
+    sims_instance: SimsDiscreteProblem,
+    objectives: list[str] = ["min_cost", "cloud_coverage"],
+    plots: bool = False,
+    plot_output_path: Optional[str] = None,
+    timeout: timedelta = timedelta(seconds=240),
+    max_iterations: int = 50000,
+    is_deterministic: bool = False,
+    initial_population_size: int = 100,
+    neighborhood_size_min: int = 1,
+    neighborhood_size_max: int = 6,
+    trace: bool = True
+) -> SolvingResult:
     """
     Solve the SIMS problem using Pareto Local Search (heuristic algorithm).
     
     This is a fast heuristic algorithm that finds good approximate Pareto-optimal solutions.
     Supports both 2D optimization (cost + cloud coverage) and 4D optimization 
     (cost + cloud coverage + resolution + incidence angle).
-    
-    The function has two overloads:
-    1. plots=False (default): No plotting, plot_output_path is ignored
-    2. plots=True: Plotting enabled, plot_output_path can specify custom path
     
     Args:
         sims_instance: The SIMS problem instance to solve
@@ -544,33 +622,39 @@ def solve_with_pls(
         initial_population_size: Size of initial random population
         neighborhood_size_min: Minimum neighborhood size for local search
         neighborhood_size_max: Maximum neighborhood size for local search
+        trace: Whether to generate optimization trace archive (default True)
         
     Returns:
-        List of non-dominated solutions found by the algorithm
+        When trace=True (default): SolvingResult containing solutions and trace
+        When trace=False: List of non-dominated solutions only (for backward compatibility)
         
     Raises:
         ValueError: If invalid objectives are specified or other parameter validation fails
         
     Examples:
-        # Basic 2D optimization (cost + cloud coverage)
-        solutions = solve_with_pls(problem)
+        # Basic 2D optimization with trace (default)
+        result = solve_with_pls(problem)
+        solutions = result.final_solutions
         
-        # 4D optimization with all objectives
-        solutions = solve_with_pls(
+        # Get trace archive
+        result = solve_with_pls(problem, trace=True)
+        if result.trace:
+            with open("trace.gz", "wb") as f:
+                f.write(result.trace)
+        
+        # Backward compatible: no trace, just solutions
+        solutions = solve_with_pls(problem, trace=False)
+        
+        # 4D optimization with trace
+        result = solve_with_pls(
             problem,
             objectives=["min_cost", "cloud_coverage", "min_resolution", "max_incidence_angle"],
             timeout=timedelta(seconds=60),
             max_iterations=10000
         )
         
-        # Deterministic run for testing
-        solutions = solve_with_pls(problem, is_deterministic=True)
-        
-        # Generate plots with default naming
-        solutions = solve_with_pls(problem, plots=True)
-        
         # Generate plots with custom output path
-        solutions = solve_with_pls(
+        result = solve_with_pls(
             problem, 
             plots=True, 
             plot_output_path="my_pareto_front.svg"
@@ -578,6 +662,34 @@ def solve_with_pls(
     """
     ...
 
+
+@overload
+def solve_with_milp(
+    sims_instance: SimsDiscreteProblem,
+    objectives: list[str] = ["min_cost", "cloud_coverage"],
+    grid_points: int = 50,
+    timeout: timedelta = timedelta(seconds=300),
+    bypass_coefficient: bool = True,
+    early_exit: bool = True,
+    flag_array: bool = True,
+    solver_name: str = "cbc",
+    *,
+    trace: Literal[False]
+) -> list[Solution]: ...
+
+@overload
+def solve_with_milp(
+    sims_instance: SimsDiscreteProblem,
+    objectives: list[str] = ["min_cost", "cloud_coverage"],
+    grid_points: int = 50,
+    timeout: timedelta = timedelta(seconds=300),
+    bypass_coefficient: bool = True,
+    early_exit: bool = True,
+    flag_array: bool = True,
+    solver_name: str = "cbc",
+    *,
+    trace: Literal[True] = True
+) -> SolvingResult: ...
 
 def solve_with_milp(
     sims_instance: SimsDiscreteProblem,
@@ -588,7 +700,8 @@ def solve_with_milp(
     early_exit: bool = True,
     flag_array: bool = True,
     solver_name: str = "cbc",
-) -> list[Solution]:
+    trace: bool = True
+) -> SolvingResult:
     """
     Solve the SIMS problem using Mixed Integer Linear Programming with AUGMECON (exact algorithm).
     
@@ -608,19 +721,25 @@ def solve_with_milp(
         early_exit: Enable early exit when no improvements are found
         flag_array: Enable flag array optimization for constraint handling
         solver_name: MILP solver to use ("cbc" is currently supported)
+        trace: Whether to generate optimization trace archive (default True)
         
     Returns:
-        List of Pareto-optimal solutions found by the algorithm
+        When trace=True (default): SolvingResult containing solutions (no trace for MILP yet)
+        When trace=False: List of Pareto-optimal solutions only (for backward compatibility)
         
     Raises:
         ValueError: If invalid objectives are specified or solver setup fails
         
     Examples:
-        # Basic 2D MILP optimization
-        solutions = solve_with_milp(problem, grid_points=25, timeout=timedelta(seconds=120))
+        # Basic 2D MILP optimization with result structure (default)
+        result = solve_with_milp(problem, grid_points=25, timeout=timedelta(seconds=120))
+        solutions = result.final_solutions
+        
+        # Backward compatible: no trace, just solutions
+        solutions = solve_with_milp(problem, trace=False)
         
         # High-resolution 4D optimization
-        solutions = solve_with_milp(
+        result = solve_with_milp(
             problem,
             objectives=["min_cost", "cloud_coverage", "min_resolution", "max_incidence_angle"],
             grid_points=100,
@@ -630,13 +749,36 @@ def solve_with_milp(
     ...
 
 
+@overload
 def solve_with_hybrid(
     sims_instance: SimsDiscreteProblem,
     milp_config: MilpConfig,
     pls_config: PlsConfig,
     ratio: tuple[int, int],
     timeout: timedelta = timedelta(seconds=300),
-) -> list[Solution]:
+    *,
+    trace: Literal[False]
+) -> list[Solution]: ...
+
+@overload
+def solve_with_hybrid(
+    sims_instance: SimsDiscreteProblem,
+    milp_config: MilpConfig,
+    pls_config: PlsConfig,
+    ratio: tuple[int, int],
+    timeout: timedelta = timedelta(seconds=300),
+    *,
+    trace: Literal[True] = True
+) -> SolvingResult: ...
+
+def solve_with_hybrid(
+    sims_instance: SimsDiscreteProblem,
+    milp_config: MilpConfig,
+    pls_config: PlsConfig,
+    ratio: tuple[int, int],
+    timeout: timedelta = timedelta(seconds=300),
+    trace: bool = True
+) -> SolvingResult:
     """
     Solve the SIMS problem using a hybrid approach: MILP first, then PLS with MILP solutions as initial population.
     
@@ -654,29 +796,33 @@ def solve_with_hybrid(
                For example, (30, 70) means 30% MILP time, 70% PLS time; (50, 50) means equal 50%/50% split
         timeout: Total timeout for the entire hybrid algorithm. This will be split between 
                 MILP and PLS phases according to the ratio parameter.
+        trace: Whether to generate optimization trace archive (default True, but not yet implemented for hybrid)
     
     Returns:
-        List of solutions found by the hybrid algorithm, combining both MILP and PLS results
+        When trace=True (default): SolvingResult containing solutions (no trace for hybrid yet)
+        When trace=False: List of solutions only (for backward compatibility)
         
     Raises:
         ValueError: If ratio values don't sum to 100, either value is non-positive,
                    configurations are invalid, or MILP and PLS objectives don't match
         
     Examples:
-        # Balanced hybrid approach with 5-minute timeout
-        milp_cfg = MilpConfig(objectives=["min_cost", "cloud_coverage"], grid_points=30)
-        pls_cfg = PlsConfig(objectives=["min_cost", "cloud_coverage"], max_iterations=10000)
-        solutions = solve_with_hybrid(problem, milp_cfg, pls_cfg, (50, 50), timeout=timedelta(seconds=300))
+        # Balanced hybrid approach with result structure (default)
+        result = solve_with_hybrid(problem, milp_cfg, pls_cfg, (50, 50), timeout=timedelta(seconds=300))
+        solutions = result.final_solutions
+        
+        # Backward compatible: no trace, just solutions
+        solutions = solve_with_hybrid(problem, milp_cfg, pls_cfg, (50, 50), trace=False)
         
         # MILP-heavy approach for high accuracy with 10-minute timeout
         milp_cfg = MilpConfig(grid_points=50)
         pls_cfg = PlsConfig(max_iterations=5000) 
-        solutions = solve_with_hybrid(problem, milp_cfg, pls_cfg, (75, 25), timeout=timedelta(seconds=600))
+        result = solve_with_hybrid(problem, milp_cfg, pls_cfg, (75, 25), timeout=timedelta(seconds=600))
         
         # PLS-heavy approach for exploration with 2-minute timeout
         milp_cfg = MilpConfig(grid_points=20)
         pls_cfg = PlsConfig(max_iterations=20000)
-        solutions = solve_with_hybrid(problem, milp_cfg, pls_cfg, (20, 80), timeout=timedelta(seconds=120))
+        result = solve_with_hybrid(problem, milp_cfg, pls_cfg, (20, 80), timeout=timedelta(seconds=120))
     
     Note:
         - Both MILP and PLS configs must use the same objectives list
@@ -685,6 +831,7 @@ def solve_with_hybrid(
         - The hybrid approach typically finds more diverse solutions than either method alone
         - MILP timeout = timeout * (ratio[0] / 100)
         - PLS timeout = timeout * (ratio[1] / 100)
+        - Trace generation is not yet implemented for hybrid algorithm
     """
     ...
 
@@ -693,6 +840,7 @@ def solve_with_hybrid(
 __all__ = [
     "SimsDiscreteProblem",
     "Solution",
+    "SolvingResult",
     "MilpConfig", 
     "PlsConfig",
     "solve_with_pls",
