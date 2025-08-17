@@ -1,51 +1,33 @@
 use log::debug;
 use pls::objectives::ObjectiveType;
 use pls::problem::Problem;
-use pls::solution::ImageSet;
-use pls::solution_impl::bitset_encoded_solution::BitsetEncodedSolution;
+use pls::solution::{bitset_encoded_solution::BitsetEncodedSolution, EncodedSolution};
 
 use crate::solution::Solution;
 
-/// Wrapper for PLS solutions that includes timestamp information for conversion
-pub struct PlsSolutionWithTimestamp<'a, T: ImageSet<D>, const D: usize> {
-    pub solution: &'a T,
-    pub timestamp_us: u64,
-    pub problem: &'a Problem<T, D>,
-}
-
-impl<'a, T: ImageSet<D>, const D: usize> PlsSolutionWithTimestamp<'a, T, D> {
-    pub fn new(solution: &'a T, timestamp_us: u64, problem: &'a Problem<T, D>) -> Self {
-        Self {
-            solution,
-            timestamp_us,
-            problem,
-        }
-    }
-}
-
 /// Helper function to extract objective values by type from solution
-fn extract_objective_values<T: ImageSet<D> + std::fmt::Debug, const D: usize>(
+fn extract_objective_values<const D: usize>(
     objectives: &[u64],
-    problem: &Problem<T, D>,
-) -> (i32, i32, Option<i32>, Option<i32>) {
-    let mut cost = 0i32;
-    let mut cloudy_area = 0i32;
-    let mut min_resolutions_sum: Option<i32> = None;
-    let mut max_incidence_angle: Option<i32> = None;
+    problem: &Problem<BitsetEncodedSolution<D>, D>,
+) -> (u64, u64, Option<u64>, Option<u64>) {
+    let mut cost = 0u64;
+    let mut cloudy_area = 0u64;
+    let mut min_resolutions_sum: Option<u64> = None;
+    let mut max_incidence_angle: Option<u64> = None;
 
     for (i, objective_type) in problem.objectives.iter().enumerate() {
         match objective_type {
             ObjectiveType::TotalCost => {
-                cost = objectives[i] as i32;
+                cost = objectives[i];
             }
             ObjectiveType::CloudyArea => {
-                cloudy_area = objectives[i] as i32;
+                cloudy_area = objectives[i];
             }
             ObjectiveType::MinResolution => {
-                min_resolutions_sum = Some(objectives[i] as i32);
+                min_resolutions_sum = Some(objectives[i]);
             }
             ObjectiveType::MaxIncidenceAngle => {
-                max_incidence_angle = Some(objectives[i] as i32);
+                max_incidence_angle = Some(objectives[i]);
             }
             _ => panic!(
                 "Unsupported objective type: {:?} at index {}",
@@ -58,11 +40,20 @@ fn extract_objective_values<T: ImageSet<D> + std::fmt::Debug, const D: usize>(
 }
 
 /// Convert 2D PLS BitsetEncodedSolution to Python Solution
-impl<'a> From<PlsSolutionWithTimestamp<'a, BitsetEncodedSolution<2>, 2>> for Solution {
-    fn from(val: PlsSolutionWithTimestamp<'a, BitsetEncodedSolution<2>, 2>) -> Self {
-        let pls_solution = val.solution;
-        let timestamp_us = val.timestamp_us;
-        let problem = val.problem;
+impl
+    From<(
+        &BitsetEncodedSolution<2>,
+        &Problem<BitsetEncodedSolution<2>, 2>,
+    )> for Solution
+{
+    fn from(
+        val: (
+            &BitsetEncodedSolution<2>,
+            &Problem<BitsetEncodedSolution<2>, 2>,
+        ),
+    ) -> Self {
+        let (pls_solution, problem) = val;
+        let timestamp_us = pls_solution.timestamp().as_micros() as u64;
 
         // Debug logging: Show raw PLS solution data
         let selected_images: Vec<usize> = pls_solution.selected_images().collect();
@@ -92,11 +83,20 @@ impl<'a> From<PlsSolutionWithTimestamp<'a, BitsetEncodedSolution<2>, 2>> for Sol
 }
 
 /// Convert 3D PLS BitsetEncodedSolution to Python Solution
-impl<'a> From<PlsSolutionWithTimestamp<'a, BitsetEncodedSolution<3>, 3>> for Solution {
-    fn from(val: PlsSolutionWithTimestamp<'a, BitsetEncodedSolution<3>, 3>) -> Self {
-        let pls_solution = val.solution;
-        let timestamp_us = val.timestamp_us;
-        let problem = val.problem;
+impl
+    From<(
+        &BitsetEncodedSolution<3>,
+        &Problem<BitsetEncodedSolution<3>, 3>,
+    )> for Solution
+{
+    fn from(
+        val: (
+            &BitsetEncodedSolution<3>,
+            &Problem<BitsetEncodedSolution<3>, 3>,
+        ),
+    ) -> Self {
+        let (pls_solution, problem) = val;
+        let timestamp_us = pls_solution.timestamp().as_micros() as u64;
 
         // Debug logging: Show raw PLS solution data
         let selected_images: Vec<usize> = pls_solution.selected_images().collect();
@@ -123,14 +123,21 @@ impl<'a> From<PlsSolutionWithTimestamp<'a, BitsetEncodedSolution<3>, 3>> for Sol
     }
 }
 
-/// Convert 4D PLS BitsetEncodedSolution to Python Solution
-impl<'a> From<PlsSolutionWithTimestamp<'a, BitsetEncodedSolution<4>, 4>> for Solution {
-    fn from(val: PlsSolutionWithTimestamp<'a, BitsetEncodedSolution<4>, 4>) -> Self {
-        let pls_solution = val.solution;
-        let timestamp_us = val.timestamp_us;
-        let problem = val.problem;
-
-        // Debug logging: Show raw PLS solution data
+/// Convert 4D PLS BitsetEncodedSolution to Python Solution  
+impl
+    From<(
+        &BitsetEncodedSolution<4>,
+        &Problem<BitsetEncodedSolution<4>, 4>,
+    )> for Solution
+{
+    fn from(
+        val: (
+            &BitsetEncodedSolution<4>,
+            &Problem<BitsetEncodedSolution<4>, 4>,
+        ),
+    ) -> Self {
+        let (pls_solution, problem) = val;
+        let timestamp_us = pls_solution.timestamp().as_micros() as u64; // Debug logging: Show raw PLS solution data
         let selected_images: Vec<usize> = pls_solution.selected_images().collect();
         debug!(
             "Converting 4D PLS solution: {} selected images, objectives: {:?}",

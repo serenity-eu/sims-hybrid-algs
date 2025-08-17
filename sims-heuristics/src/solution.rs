@@ -112,10 +112,10 @@ pub trait SIMSModifiable<const D: usize>: SIMSCore<D> {
 }
 
 /// Combined trait for full encoded solutions (`VecEncodedSolution` and `BitsetEncodedSolution`)
-pub trait EncodedSolution<const D: usize>: SIMSCore<D> + SIMSModifiable<D> {}
-
-/// Automatic implementation for types that implement all required traits
-impl<T, const D: usize> EncodedSolution<D> for T where T: SIMSCore<D> + SIMSModifiable<D> {}
+pub trait EncodedSolution<const D: usize>: SIMSCore<D> + SIMSModifiable<D> {
+    /// Get the timestamp when this solution was created/found
+    fn timestamp(&self) -> std::time::Duration;
+}
 
 /// Trait for solutions that can work with residual problems
 pub trait MergeableWithResidual<const D: usize>: EncodedSolution<D> {

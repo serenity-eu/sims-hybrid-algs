@@ -5,7 +5,7 @@ use fixedbitset::FixedBitSet;
 use pareto::{HasObjectives, MoSolution, Random};
 use rand::SeedableRng;
 use rand::{Rng, seq::IteratorRandom};
-use std::{collections::BinaryHeap, fmt::Debug, hash::Hash};
+use std::{collections::BinaryHeap, fmt::Debug, hash::Hash, time::Duration};
 
 use crate::objectives::{self, SolutionEvaluator};
 use crate::probabilistic_probing_neighborhood::{
@@ -27,6 +27,7 @@ pub struct BitsetEncodedSolution<const D: usize> {
     pub objectives: pareto::Objectives<D>,
     pub clear_parts_counts: Vec<usize>,
     pub element_coverage: Vec<usize>,
+    pub timestamp: Duration,
 }
 
 // Iterator types for BitsetEncodedSolution - leverage FixedBitSet's built-in iterators
@@ -210,7 +211,7 @@ impl<const D: usize> SIMSModifiable<D> for BitsetEncodedSolution<D> {
                 self.create_residual_problem(removal_candidates, problem, is_deterministic)
             {
                 let neighborhood_iter =
-                    residual_problem.solve::<NdTreeSolutionSet<ResidualSolution<D>, D>>();
+                    residual_problem.solve::<NdTreeSolutionSet<ResidualSolution<D>, D>>(timer);
                 residual_solutions.extend(neighborhood_iter.into_iter());
             }
             if timer.is_expired() {
@@ -277,6 +278,13 @@ impl<const D: usize> SIMSModifiable<D> for BitsetEncodedSolution<D> {
     }
 }
 
+// Implement EncodedSolution trait
+impl<const D: usize> crate::solution::EncodedSolution<D> for BitsetEncodedSolution<D> {
+    fn timestamp(&self) -> Duration {
+        self.timestamp
+    }
+}
+
 impl<const D: usize> BitsetEncodedSolution<D> {
     /// Creates a `BitsetEncodedSolution` from a list of selected image indices.
     #[must_use]
@@ -286,6 +294,7 @@ impl<const D: usize> BitsetEncodedSolution<D> {
             objectives: [0; D],
             clear_parts_counts: vec![0; problem.universe.len()],
             element_coverage: vec![0; problem.universe.len()],
+            timestamp: Duration::new(0, 0), // Initial solutions have timestamp 0
         };
 
         for &image_index in selected_images_vec {
@@ -344,6 +353,7 @@ impl<const D: usize> BitsetEncodedSolution<D> {
             objectives: [0; D],
             clear_parts_counts,
             element_coverage: part_coverage_counts,
+            timestamp: Duration::new(0, 0), // Initial solutions have timestamp 0
         };
         sims_solution.compute_objectives(problem);
         sims_solution
@@ -793,11 +803,15 @@ impl<const D: usize> MergeableWithResidual<D> for BitsetEncodedSolution<D> {
             .for_each(|image_index| {
                 self.add_image(image_index, problem);
             });
+
+        // Inherit timestamp from ResidualSolution
+        self.timestamp = residual_solution.timestamp;
     }
 }
 
 // Implementation of ProbabilisticProbingNeighborhood trait for BitsetEncodedSolution
 impl<const D: usize> ProbabilisticProbingNeighborhood<D> for BitsetEncodedSolution<D> {
+    #[allow(clippy::too_many_lines)]
     fn probabilistic_probing_neighborhood(
         &self,
         k: u32,
@@ -879,12 +893,17 @@ impl<const D: usize> ProbabilisticProbingNeighborhood<D> for BitsetEncodedSoluti
             };
 
             if images_to_remove.is_empty() {
-                log::trace!("No images selected for removal in probe {}", probes_attempted);
+                log::trace!("No images selected for removal in probe {probes_attempted}");
                 probes_attempted += 1;
                 continue;
             }
 
-            log::trace!("Probe {}: removing {} images: {:?}", probes_attempted, images_to_remove.len(), images_to_remove);
+            log::trace!(
+                "Probe {}: removing {} images: {:?}",
+                probes_attempted,
+                images_to_remove.len(),
+                images_to_remove
+            );
 
             // Apply probabilistic acceptance based on objective space improvements
             let should_explore = if is_deterministic {
@@ -895,18 +914,26 @@ impl<const D: usize> ProbabilisticProbingNeighborhood<D> for BitsetEncodedSoluti
             };
 
             if should_explore {
-                log::trace!("Probe {}: exploring with {} images to remove", probes_attempted, images_to_remove.len());
-                
+                log::trace!(
+                    "Probe {}: exploring with {} images to remove",
+                    probes_attempted,
+                    images_to_remove.len()
+                );
+
                 // Generate new solutions directly by modifying current solution
                 let generated_solutions =
                     self.generate_neighbor_solutions(&images_to_remove, problem, &config, &mut rng);
 
-                log::trace!("Probe {}: generated {} candidate solutions", probes_attempted, generated_solutions.len());
+                log::trace!(
+                    "Probe {}: generated {} candidate solutions",
+                    probes_attempted,
+                    generated_solutions.len()
+                );
 
                 // Strict validation and filtering of generated solutions
                 let mut valid_count = 0;
                 let mut invalid_count = 0;
-                
+
                 for solution in generated_solutions {
                     // Early check: verify all elements are covered (quick check)
                     let uncovered_count = self.find_uncovered_elements(&solution, problem).len();
@@ -915,7 +942,7 @@ impl<const D: usize> ProbabilisticProbingNeighborhood<D> for BitsetEncodedSoluti
                         invalid_count += 1;
                         continue;
                     }
-                    
+
                     // Full validation and acceptance check
                     if solution.is_valid(problem)
                         && self.should_accept_solution(&solution, &config, problem)
@@ -927,8 +954,10 @@ impl<const D: usize> ProbabilisticProbingNeighborhood<D> for BitsetEncodedSoluti
                         invalid_count += 1;
                     }
                 }
-                
-                log::trace!("Probe {}: {} valid, {} invalid solutions", probes_attempted, valid_count, invalid_count);
+
+                log::trace!(
+                    "Probe {probes_attempted}: {valid_count} valid, {invalid_count} invalid solutions"
+                );
             }
 
             probes_attempted += 1;
@@ -955,7 +984,9 @@ impl<const D: usize> ProbabilisticProbingNeighborhood<D> for BitsetEncodedSoluti
 
         // Log warning if no valid solutions were generated
         if filtered_solutions.is_empty() && probes_attempted > 0 {
-            log::warn!("Probabilistic probing failed to generate any valid solutions after {probes_attempted} probes");
+            log::warn!(
+                "Probabilistic probing failed to generate any valid solutions after {probes_attempted} probes"
+            );
         }
 
         filtered_solutions
@@ -972,8 +1003,12 @@ impl<const D: usize> BitsetEncodedSolution<D> {
         config: &ProbingConfig<D>,
         rng: &mut rand::rngs::StdRng,
     ) -> Vec<Self> {
-        log::trace!("Generating solutions by removing {} images: {:?}", images_to_remove.len(), images_to_remove);
-        
+        log::trace!(
+            "Generating solutions by removing {} images: {:?}",
+            images_to_remove.len(),
+            images_to_remove
+        );
+
         let mut generated_solutions = Vec::new();
 
         // Create a base solution by removing specified images
@@ -984,7 +1019,11 @@ impl<const D: usize> BitsetEncodedSolution<D> {
 
         // Find uncovered elements after removal
         let uncovered_after_removal = self.find_uncovered_elements(&base_solution, problem);
-        log::trace!("After removing {} images, {} elements are uncovered", images_to_remove.len(), uncovered_after_removal.len());
+        log::trace!(
+            "After removing {} images, {} elements are uncovered",
+            images_to_remove.len(),
+            uncovered_after_removal.len()
+        );
 
         // Generate multiple variants by ensuring complete coverage
         let max_variants = config.max_probes.min(10); // Reduced variants for debugging
@@ -997,25 +1036,33 @@ impl<const D: usize> BitsetEncodedSolution<D> {
 
             // If no elements are uncovered, the base solution is complete
             if uncovered_elements.is_empty() {
-                log::trace!("Variant {}: base solution already complete", variant_idx);
+                log::trace!("Variant {variant_idx}: base solution already complete");
                 if candidate.is_valid(problem)
                     && candidate.selected_images().collect::<Vec<_>>()
                         != self.selected_images().collect::<Vec<_>>()
                 {
                     generated_solutions.push(candidate);
-                    log::trace!("Variant {}: added complete base solution", variant_idx);
+                    log::trace!("Variant {variant_idx}: added complete base solution");
                 }
                 continue;
             }
 
-            log::trace!("Variant {}: {} elements need coverage", variant_idx, uncovered_elements.len());
+            log::trace!(
+                "Variant {}: {} elements need coverage",
+                variant_idx,
+                uncovered_elements.len()
+            );
 
             // ENSURE complete coverage by selecting images to cover ALL uncovered elements
             let covering_images =
                 self.ensure_complete_coverage(&uncovered_elements, problem, config, rng);
 
-            log::trace!("Variant {}: coverage algorithm selected {} images: {:?}", 
-                       variant_idx, covering_images.len(), covering_images);
+            log::trace!(
+                "Variant {}: coverage algorithm selected {} images: {:?}",
+                variant_idx,
+                covering_images.len(),
+                covering_images
+            );
 
             // Add selected images to create complete solution
             for &image_idx in &covering_images {
@@ -1026,32 +1073,49 @@ impl<const D: usize> BitsetEncodedSolution<D> {
 
             // Verify solution is complete and valid before adding
             let final_uncovered = self.find_uncovered_elements(&candidate, problem);
-            log::trace!("Variant {}: after adding {} images, {} elements remain uncovered", 
-                       variant_idx, covering_images.len(), final_uncovered.len());
-            
-            if final_uncovered.is_empty() && candidate.is_valid(problem)
+            log::trace!(
+                "Variant {}: after adding {} images, {} elements remain uncovered",
+                variant_idx,
+                covering_images.len(),
+                final_uncovered.len()
+            );
+
+            if final_uncovered.is_empty()
+                && candidate.is_valid(problem)
                 && candidate.selected_images().collect::<Vec<_>>()
                     != self.selected_images().collect::<Vec<_>>()
             {
                 generated_solutions.push(candidate);
-                log::trace!("Variant {}: successfully generated valid solution", variant_idx);
+                log::trace!("Variant {variant_idx}: successfully generated valid solution");
             } else {
                 // Log detailed failure information
-                log::trace!("Variant {}: FAILED - uncovered: {}, valid: {}, different: {}", 
-                           variant_idx, 
-                           final_uncovered.len(),
-                           candidate.is_valid(problem),
-                           candidate.selected_images().collect::<Vec<_>>() != self.selected_images().collect::<Vec<_>>());
-                           
+                log::trace!(
+                    "Variant {}: FAILED - uncovered: {}, valid: {}, different: {}",
+                    variant_idx,
+                    final_uncovered.len(),
+                    candidate.is_valid(problem),
+                    candidate.selected_images().collect::<Vec<_>>()
+                        != self.selected_images().collect::<Vec<_>>()
+                );
+
                 if !final_uncovered.is_empty() {
-                    log::trace!("Variant {}: remaining uncovered elements: {:?}", 
-                               variant_idx, 
-                               if final_uncovered.len() <= 10 { format!("{:?}", final_uncovered) } else { format!("{:?}...", &final_uncovered[..10]) });
+                    log::trace!(
+                        "Variant {variant_idx}: remaining uncovered elements: {:?}",
+                        if final_uncovered.len() <= 10 {
+                            format!("{final_uncovered:?}")
+                        } else {
+                            format!("{:?}...", &final_uncovered[..10])
+                        }
+                    );
                 }
             }
         }
 
-        log::trace!("Generated {} complete solutions from {} variants", generated_solutions.len(), max_variants);
+        log::trace!(
+            "Generated {} complete solutions from {} variants",
+            generated_solutions.len(),
+            max_variants
+        );
         generated_solutions
     }
 
@@ -1078,6 +1142,7 @@ impl<const D: usize> BitsetEncodedSolution<D> {
     }
 
     /// Ensure complete coverage of all uncovered elements using a greedy + probabilistic approach
+    #[allow(clippy::too_many_lines)]
     fn ensure_complete_coverage(
         &self,
         uncovered_elements: &[usize],
@@ -1088,10 +1153,17 @@ impl<const D: usize> BitsetEncodedSolution<D> {
         if uncovered_elements.is_empty() {
             return Vec::new();
         }
-        
-        log::trace!("Starting coverage for {} uncovered elements: {:?}", uncovered_elements.len(), 
-                   if uncovered_elements.len() <= 10 { format!("{:?}", uncovered_elements) } else { format!("{:?}...", &uncovered_elements[..10]) });
-        
+
+        log::trace!(
+            "Starting coverage for {} uncovered elements: {:?}",
+            uncovered_elements.len(),
+            if uncovered_elements.len() <= 10 {
+                format!("{uncovered_elements:?}")
+            } else {
+                format!("{:?}...", &uncovered_elements[..10])
+            }
+        );
+
         let mut selected_images = Vec::new();
         let mut remaining_uncovered = uncovered_elements.to_vec();
         let mut iteration_count = 0;
@@ -1099,7 +1171,7 @@ impl<const D: usize> BitsetEncodedSolution<D> {
 
         while !remaining_uncovered.is_empty() && iteration_count < max_iterations {
             iteration_count += 1;
-            
+
             // Find images that can cover remaining uncovered elements
             let mut covering_candidates = Vec::new();
 
@@ -1108,14 +1180,14 @@ impl<const D: usize> BitsetEncodedSolution<D> {
                 if selected_images.contains(&img_idx) {
                     continue;
                 }
-                
+
                 let covered_elements: Vec<usize> = image
                     .parts
                     .iter()
                     .filter(|&&part| remaining_uncovered.contains(&part))
                     .copied()
                     .collect();
-                
+
                 let coverage_count = covered_elements.len();
 
                 if coverage_count > 0 {
@@ -1129,7 +1201,8 @@ impl<const D: usize> BitsetEncodedSolution<D> {
                         if let Some(delta) = obj_deltas.first() {
                             for (i, &delta_val) in delta.scaled_deltas.iter().enumerate() {
                                 // Small objective influence compared to coverage
-                                score += weights[i] * (-f64::from(delta_val) / config.temperature.max(1.0)).exp();
+                                score += weights[i]
+                                    * (-f64::from(delta_val) / config.temperature.max(1.0)).exp();
                             }
                         }
                     }
@@ -1139,9 +1212,15 @@ impl<const D: usize> BitsetEncodedSolution<D> {
             }
 
             if covering_candidates.is_empty() {
-                log::error!("No covering images found for {} remaining uncovered elements: {:?}", 
-                           remaining_uncovered.len(), 
-                           if remaining_uncovered.len() <= 20 { format!("{:?}", remaining_uncovered) } else { format!("{:?}...", &remaining_uncovered[..20]) });
+                log::error!(
+                    "No covering images found for {} remaining uncovered elements: {:?}",
+                    remaining_uncovered.len(),
+                    if remaining_uncovered.len() <= 20 {
+                        format!("{remaining_uncovered:?}")
+                    } else {
+                        format!("{:?}...", &remaining_uncovered[..20])
+                    }
+                );
                 break; // This should not happen in valid problems
             }
 
@@ -1150,44 +1229,68 @@ impl<const D: usize> BitsetEncodedSolution<D> {
                 .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
             // Use more conservative selection for reliability
-            let selected_idx = if remaining_uncovered.len() > 10 || iteration_count > max_iterations / 2 {
-                // For many uncovered elements or late iterations, use pure greedy
-                0
-            } else if rand::random::<f64>() < config.probing_probability * 0.5 {
-                // Reduced probability for more reliable coverage
-                let selection_pool_size = covering_candidates.len().min(2); // Very small pool
-                rng.random_range(0..selection_pool_size)
-            } else {
-                // Greedy selection (best coverage)
-                0
-            };
+            let selected_idx =
+                if remaining_uncovered.len() > 10 || iteration_count > max_iterations / 2 {
+                    // For many uncovered elements or late iterations, use pure greedy
+                    0
+                } else if rand::random::<f64>() < config.probing_probability * 0.5 {
+                    // Reduced probability for more reliable coverage
+                    let selection_pool_size = covering_candidates.len().min(2); // Very small pool
+                    rng.random_range(0..selection_pool_size)
+                } else {
+                    // Greedy selection (best coverage)
+                    0
+                };
 
-            let (selected, _, coverage_count, covered_elements) = &covering_candidates[selected_idx];
+            let (selected, _, coverage_count, covered_elements) =
+                &covering_candidates[selected_idx];
 
             selected_images.push(*selected);
 
             // Remove covered elements from remaining uncovered
             let initial_uncovered_count = remaining_uncovered.len();
             remaining_uncovered.retain(|&elem| !covered_elements.contains(&elem));
-            
+
             // Verify progress
             let progress = initial_uncovered_count - remaining_uncovered.len();
             if progress == 0 {
-                log::warn!("No progress in iteration {}, image {} should cover {} elements but didn't", 
-                          iteration_count, selected, coverage_count);
+                log::warn!(
+                    "No progress in iteration {iteration_count}, image {selected} should cover {coverage_count} elements but didn't"
+                );
                 break; // Prevent infinite loop
             }
-            
-            log::trace!("Iteration {}: selected image {} covers {} elements, {} elements remain", 
-                       iteration_count, selected, progress, remaining_uncovered.len());
+
+            log::trace!(
+                "Iteration {}: selected image {} covers {} elements, {} elements remain",
+                iteration_count,
+                selected,
+                progress,
+                remaining_uncovered.len()
+            );
         }
 
-        if !remaining_uncovered.is_empty() {
-            log::error!("COVERAGE FAILURE: {} elements remain uncovered after {} iterations. Selected {} images: {:?}", 
-                       remaining_uncovered.len(), iteration_count, selected_images.len(), selected_images);
-            log::error!("Uncovered elements: {:?}", if remaining_uncovered.len() <= 20 { format!("{:?}", remaining_uncovered) } else { format!("{:?}...", &remaining_uncovered[..20]) });
+        if remaining_uncovered.is_empty() {
+            log::trace!(
+                "Coverage successful: {} images selected after {} iterations",
+                selected_images.len(),
+                iteration_count
+            );
         } else {
-            log::trace!("Coverage successful: {} images selected after {} iterations", selected_images.len(), iteration_count);
+            log::error!(
+                "COVERAGE FAILURE: {} elements remain uncovered after {} iterations. Selected {} images: {:?}",
+                remaining_uncovered.len(),
+                iteration_count,
+                selected_images.len(),
+                selected_images
+            );
+            log::error!(
+                "Uncovered elements: {:?}",
+                if remaining_uncovered.len() <= 20 {
+                    format!("{remaining_uncovered:?}")
+                } else {
+                    format!("{:?}...", &remaining_uncovered[..20])
+                }
+            );
         }
 
         selected_images

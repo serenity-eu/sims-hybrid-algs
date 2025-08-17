@@ -21,15 +21,15 @@ pub struct Solution {
     #[pyo3(get, set)]
     pub selected_images: HashSet<usize>,
     #[pyo3(get, set)]
-    pub cost: i32,
+    pub cost: u64,
     #[pyo3(get, set)]
-    pub cloudy_area: i32,
+    pub cloudy_area: u64,
     #[pyo3(get, set)]
     pub timestamp: Duration, // Using Duration for timedelta compatibility
     #[pyo3(get, set)]
-    pub max_incidence_angle: Option<i32>,
+    pub max_incidence_angle: Option<u64>,
     #[pyo3(get, set)]
-    pub min_resolutions_sum: Option<i32>,
+    pub min_resolutions_sum: Option<u64>,
 }
 
 impl PartialEq for Solution {
@@ -61,11 +61,11 @@ impl Solution {
     #[staticmethod]
     pub fn create(
         selected_images: Vec<usize>,
-        cost: i32,
-        cloudy_area: i32,
+        cost: u64,
+        cloudy_area: u64,
         timestamp_us: u64,
-        max_incidence_angle: Option<i32>,
-        min_resolutions_sum: Option<i32>,
+        max_incidence_angle: Option<u64>,
+        min_resolutions_sum: Option<u64>,
     ) -> Self {
         Self {
             selected_images: selected_images.into_iter().collect(),
@@ -155,16 +155,16 @@ impl Solution {
     }
 
     /// Compute the objectives for this solution
-    fn compute_objectives(&self, problem: &SimsDiscreteProblem) -> PyResult<(i32, i32, i32, i32)> {
+    fn compute_objectives(&self, problem: &SimsDiscreteProblem) -> PyResult<(u64, u64, u64, u64)> {
         // Total cost
-        let total_cost: i32 = self
+        let total_cost: u64 = self
             .selected_images
             .iter()
             .map(|&i| {
                 if i >= problem.num_images {
                     0 // Handle out of bounds gracefully
                 } else {
-                    problem.costs[i]
+                    problem.costs[i] as u64
                 }
             })
             .sum();
@@ -183,9 +183,9 @@ impl Solution {
         }
 
         // Calculate cloudy area (areas in universe that are not clear)
-        let cloudy_area: i32 = (0..problem.universe)
+        let cloudy_area: u64 = (0..problem.universe)
             .filter(|&u| !clear_parts.contains(&u))
-            .map(|u| problem.areas[u])
+            .map(|u| problem.areas[u] as u64)
             .sum();
 
         // Max incidence angle
@@ -193,17 +193,17 @@ impl Solution {
             .selected_images
             .iter()
             .filter(|&&i| i < problem.num_images)
-            .map(|&i| problem.incidence_angle[i])
+            .map(|&i| problem.incidence_angle[i] as u64)
             .max()
             .unwrap_or(0);
 
         // Min resolutions sum
-        let min_resolutions_sum: i32 = (0..problem.universe)
+        let min_resolutions_sum: u64 = (0..problem.universe)
             .map(|u| {
                 self.selected_images
                     .iter()
                     .filter(|&&i| i < problem.num_images && problem.images[i].contains(&u))
-                    .map(|&i| problem.resolution[i])
+                    .map(|&i| problem.resolution[i] as u64)
                     .min()
                     .unwrap_or(0)
             })
@@ -227,12 +227,12 @@ impl Solution {
 
         let max_angle_valid = self
             .max_incidence_angle
-            .map(|stored| stored == computed_max_angle || stored == -1)
+            .map(|stored| stored == computed_max_angle || stored == u64::MAX)
             .unwrap_or(true);
 
         let min_res_valid = self
             .min_resolutions_sum
-            .map(|stored| stored == computed_min_res || stored == -1)
+            .map(|stored| stored == computed_min_res || stored == u64::MAX)
             .unwrap_or(true);
 
         Ok(cost_valid && cloudy_area_valid && max_angle_valid && min_res_valid)
@@ -240,32 +240,31 @@ impl Solution {
 
     /// Fix/recompute the objectives based on the problem instance
     fn fix_objectives(&mut self, problem: &SimsDiscreteProblem) -> PyResult<()> {
-        if self.cost < 0 || self.cloudy_area < 0 {
-            let (computed_cost, computed_cloudy_area, computed_max_angle, computed_min_res) =
-                self.compute_objectives(problem)?;
+        let (computed_cost, computed_cloudy_area, computed_max_angle, computed_min_res) =
+            self.compute_objectives(problem)?;
 
-            if self.cost != computed_cost || self.cost < 0 {
-                println!("Fixing cost from {} to {}", self.cost, computed_cost);
-                self.cost = computed_cost;
-            }
-
-            if self.cloudy_area != computed_cloudy_area || self.cloudy_area < 0 {
-                println!(
-                    "Fixing cloudy area from {} to {}",
-                    self.cloudy_area, computed_cloudy_area
-                );
-                self.cloudy_area = computed_cloudy_area;
-            }
-
-            // Update optional objectives if they were invalid (-1)
-            if self.max_incidence_angle.is_none_or(|x| x == -1) {
-                self.max_incidence_angle = Some(computed_max_angle);
-            }
-
-            if self.min_resolutions_sum.is_none_or(|x| x == -1) {
-                self.min_resolutions_sum = Some(computed_min_res);
-            }
+        if self.cost != computed_cost {
+            println!("Fixing cost from {} to {}", self.cost, computed_cost);
+            self.cost = computed_cost;
         }
+
+        if self.cloudy_area != computed_cloudy_area {
+            println!(
+                "Fixing cloudy area from {} to {}",
+                self.cloudy_area, computed_cloudy_area
+            );
+            self.cloudy_area = computed_cloudy_area;
+        }
+
+        // Update optional objectives if they were invalid (u64::MAX)
+        if self.max_incidence_angle.is_none_or(|x| x == u64::MAX) {
+            self.max_incidence_angle = Some(computed_max_angle);
+        }
+
+        if self.min_resolutions_sum.is_none_or(|x| x == u64::MAX) {
+            self.min_resolutions_sum = Some(computed_min_res);
+        }
+
         Ok(())
     }
 }
@@ -281,6 +280,9 @@ pub struct SolvingResult {
     /// All solutions explored during the search process
     #[pyo3(get, set)]
     pub explored_solutions: Vec<Solution>,
+    /// Binary trace archive of the optimization process (None if trace=False)
+    #[pyo3(get, set)]
+    pub trace: Option<Vec<u8>>,
 }
 
 #[pymethods]
@@ -290,6 +292,20 @@ impl SolvingResult {
         Self {
             final_solutions,
             explored_solutions,
+            trace: None,
+        }
+    }
+
+    #[staticmethod]
+    pub fn with_trace(
+        final_solutions: Vec<Solution>,
+        explored_solutions: Vec<Solution>,
+        trace: Vec<u8>,
+    ) -> Self {
+        Self {
+            final_solutions,
+            explored_solutions,
+            trace: Some(trace),
         }
     }
 }

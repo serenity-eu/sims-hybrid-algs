@@ -3,6 +3,7 @@ pub mod conversion;
 pub mod problem;
 pub mod solution;
 pub mod solver;
+pub mod trace;
 
 // Re-export the main types
 pub use problem::SimsDiscreteProblem;
