@@ -54,11 +54,13 @@
     clippy::cast_possible_wrap,
     reason = "Legacy code style, extensive refactor needed"
 )]
+pub mod examples;
 pub mod explored_solutions_data;
 pub mod objectives;
 pub mod pareto_local_search;
 #[cfg(feature = "plotting")]
 pub mod plotting;
+pub mod probabilistic_probing_neighborhood;
 pub mod problem;
 pub mod residual_problem;
 pub mod residual_solution;

@@ -5,6 +5,7 @@ Multi-Algorithm Benchmark Script
 This script runs comprehensive benchmarks on SIMS solvers with support for multiple algorithms:
 - Hybrid SIMS solver (MILP + PLS with configurable ratios)
 - Pure Pareto Local Search (PLS)
+- Pure MILP solver with epsilon-constraint method
 
 Features:
 - Subcommand architecture for different algorithms
@@ -26,6 +27,9 @@ Usage:
     
     # Pure PLS algorithm with validation disabled for speed
     python benchmark.py pls --instances-dir tests/data --max-iterations 100000 --no-validate-solutions
+    
+    # Pure MILP algorithm with epsilon-constraint method
+    python benchmark.py milp --instances-dir tests/data --grid-points 100 --solver-name gurobi --validate-solutions
     
     # Quick validation test on small instances
     python benchmark.py pls --size 30 --iterations 1 --timeout 10.0 --validate-solutions
@@ -919,7 +923,7 @@ class BenchmarkRunner(ABC):
             self.console.print(f"🔍 DEBUG: JSONL file exists: {jsonl_file.exists()}")
             
             if jsonl_file.exists():
-                self.console.print(f"🔍 DEBUG: Found JSONL file, starting to process...")
+                self.console.print("🔍 DEBUG: Found JSONL file, starting to process...")
                 
                 # Load the corresponding instance to compute objectives
                 instance_file = self.instances_dir / f"{instance_name}.dzn"
@@ -929,7 +933,7 @@ class BenchmarkRunner(ABC):
                 import sims_problem
                 try:
                     problem = sims_problem.SimsDiscreteProblem.from_dzn(str(instance_file))
-                    self.console.print(f"🔍 DEBUG: Loaded problem instance successfully")
+                    self.console.print("🔍 DEBUG: Loaded problem instance successfully")
                 except Exception as e:
                     raise RuntimeError(f"Failed to load instance {instance_file}: {e}")
                 
@@ -2397,6 +2401,623 @@ class PlsBenchmarkRunner(BenchmarkRunner):
         return self._create_3d_visualization_base(instance_name, instance_results)
 
 
+class MilpBenchmarkRunner(BenchmarkRunner):
+    """MILP-specific benchmark runner."""
+    
+    def __init__(self, instances_dir: Path, output_dir: Path, iterations: int = 10, grid_points: int = 50, 
+                 use_tui: bool = False, size_limit: Optional[int] = None, name_filter: Optional[str] = None, 
+                 timeout: float = 300.0, validate_solutions: bool = True, bypass_coefficient: bool = True,
+                 early_exit: bool = True, flag_array: bool = True, solver_name: str = "cbc"):
+        super().__init__(instances_dir, output_dir, iterations, use_tui, size_limit, name_filter, timeout, validate_solutions)
+        self.grid_points = grid_points
+        self.bypass_coefficient = bypass_coefficient
+        self.early_exit = early_exit
+        self.flag_array = flag_array
+        self.solver_name = solver_name
+    
+    def get_algorithm_name(self) -> str:
+        """Get the name of the algorithm for this runner."""
+        return "MILP"
+    
+    def get_visualization_filename_suffix(self) -> str:
+        """Get the filename suffix for visualizations."""
+        return "milp"
+    
+    def _create_explored_solution_detail(self, result: BenchmarkResult, cost: float, cloudy: float, incidence: float) -> str:
+        """Create hover detail text for explored solutions (MILP doesn't use explored solutions)."""
+        return (
+            f"Instance: {result.instance_name}<br>"
+            f"Iteration: {result.iteration}<br>"
+            f"Type: MILP Solution<br>"
+            f"Cost: {cost}<br>"
+            f"Cloudy Area: {cloudy}<br>"
+            f"Max Incidence Angle: {incidence}<br>"
+            f"Runtime: {result.total_runtime_seconds:.2f}s<br>"
+            f"Grid Points: {self.grid_points}"
+        )
+    
+    def _create_final_solution_detail(self, result: BenchmarkResult, cost: float, cloudy: float, incidence: float) -> str:
+        """Create hover detail text for final solutions."""
+        return (
+            f"Instance: {result.instance_name}<br>"
+            f"Iteration: {result.iteration}<br>"
+            f"Type: MILP Pareto Solution<br>"
+            f"Cost: {cost}<br>"
+            f"Cloudy Area: {cloudy}<br>"
+            f"Max Incidence Angle: {incidence}<br>"
+            f"Runtime: {result.total_runtime_seconds:.2f}s<br>"
+            f"Grid Points: {self.grid_points}<br>"
+            f"Solver: {self.solver_name}"
+        )
+    
+    def load_instance(self, instance_file: Path) -> sims_problem.SimsDiscreteProblem:
+        """Load a SIMS problem instance from .dzn file."""
+        try:
+            return sims_problem.SimsDiscreteProblem.from_dzn(str(instance_file))
+        except Exception as e:
+            raise RuntimeError(f"Failed to load instance {instance_file}: {e}")
+    
+    def run_milp_solver(
+        self, 
+        instance: sims_problem.SimsDiscreteProblem,
+        timeout: timedelta = timedelta(seconds=300)
+    ) -> list[Any]:
+        """Run MILP solver and return list of Solution objects."""
+        return sims_problem.solve_with_milp(
+            instance,
+            objectives=["min_cost", "cloud_coverage", "max_incidence_angle"],
+            grid_points=self.grid_points,
+            timeout=timeout,
+            bypass_coefficient=self.bypass_coefficient,
+            early_exit=self.early_exit,
+            flag_array=self.flag_array,
+            solver_name=self.solver_name
+        )
+    
+    def run_single_benchmark(
+        self, 
+        instance: sims_problem.SimsDiscreteProblem,
+        instance_name: str,
+        iteration: int,
+        *args
+    ) -> BenchmarkResult:
+        """Run a single MILP benchmark and collect results."""
+        # MILP doesn't use additional args like ratio, so we ignore them
+        result = BenchmarkResult()
+        result.instance_name = instance_name
+        result.iteration = iteration
+        result.ratio = (100, 0)  # Pure MILP
+        
+        try:
+            start_time = time.time()
+            solutions = self.run_milp_solver(instance, timedelta(seconds=self.timeout))
+            result.total_runtime_seconds = time.time() - start_time
+            result.milp_runtime_seconds = result.total_runtime_seconds
+            result.pls_runtime_seconds = 0.0
+            
+            # Convert solutions to the expected format
+            result.final_solutions = solutions
+            result.explored_solutions = []  # MILP doesn't provide explored solutions
+            result.num_final_solutions = len(solutions)
+            result.num_explored_solutions = 0
+            result.milp_solutions = solutions  # Store MILP solutions separately
+            result.num_milp_solutions = len(solutions)
+
+            print(f"DEBUG: MILP SOLUTIONS COUNT: {result.num_milp_solutions}")
+            
+            # Validate solutions and Pareto front
+            if result.final_solutions and self.validate_solutions and self.validator:
+                validation_report = self.validator.validate_benchmark_result(result, instance)
+                result.validation_results = validation_report
+                
+                # Log validation issues if any
+                if not validation_report.overall_valid:
+                    self.console.print(f"[yellow]⚠️  Validation issues found for {instance_name} iter={iteration}")
+                    
+                    # Log invalid solutions
+                    if validation_report.summary.invalid_solutions > 0:
+                        self.console.print(f"   - {validation_report.summary.invalid_solutions} invalid solutions")
+                    
+                    # Log Pareto front issues
+                    if not validation_report.pareto_validation.is_valid_pareto:
+                        dominated_count = len(validation_report.pareto_validation.dominated_solutions)
+                        self.console.print(f"   - {dominated_count} dominated solutions in Pareto front")
+                
+                # Log warnings
+                if validation_report.summary.solutions_with_warnings > 0:
+                    self.console.print(f"[blue]ℹ️  {validation_report.summary.solutions_with_warnings} solutions have warnings")
+            
+        except Exception as e:
+            result.error = str(e)
+            
+        return result
+    
+    def run_benchmarks(self):
+        """Run MILP benchmarks with optional TUI progress tracking."""
+        if self.use_tui:
+            self._run_benchmarks_with_tui()
+        else:
+            self._run_benchmarks_simple()
+    
+    def _run_benchmarks_simple(self):
+        """Run MILP benchmarks with simple CLI output."""
+        total_runs = len(self.instance_files) * self.iterations
+        current_run = 0
+        
+        print(f"Starting MILP benchmark with {len(self.instance_files)} instances, {self.iterations} iterations each")
+        print(f"Total runs: {total_runs}")
+        print(f"Grid points per run: {self.grid_points}")
+        print(f"Solver: {self.solver_name}")
+        print("=" * 80)
+        
+        for instance_idx, instance_file in enumerate(self.instance_files):
+            instance_name = instance_file.stem
+            print(f"\nProcessing instance {instance_idx + 1}/{len(self.instance_files)}: {instance_name}")
+            
+            try:
+                instance = self.load_instance(instance_file)
+                print(f"  ✓ Loaded instance: {instance.num_images} images, {instance.universe} universe elements")
+            except Exception as e:
+                print(f"  ❌ Failed to load {instance_file}: {e}")
+                continue
+            
+            # Track instance start position for per-instance saving
+            instance_start_idx = len(self.results)
+            
+            for iteration in range(self.iterations):
+                current_run += 1
+                progress_pct = (current_run / total_runs) * 100
+                
+                print(f"  [{current_run:3d}/{total_runs}] ({progress_pct:5.1f}%) Iteration {iteration + 1} - ", end="", flush=True)
+                
+                result = self.run_single_benchmark(instance, instance_name, iteration)
+                
+                self.results.append(result)
+                
+                if result.error:
+                    print(f"FAILED ({result.total_runtime_seconds:.1f}s) - {result.error}")
+                else:
+                    print(f"SUCCESS ({result.total_runtime_seconds:.1f}s) - {result.num_final_solutions} solutions")
+            
+            # Save results for this instance
+            instance_results = self.results[instance_start_idx:]
+            self.save_instance_results(instance_name, instance_results)
+        
+        print("\n" + "=" * 80)
+        print("MILP benchmark completed!")
+    
+    def _run_benchmarks_with_tui(self):
+        """Run MILP benchmarks with TUI progress tracking."""
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TextColumn("•"),
+            TimeElapsedColumn(),
+            TextColumn("•"),
+            TimeRemainingColumn(),
+            console=self.console,
+            expand=True
+        ) as progress:
+            
+            main_task = progress.add_task(
+                f"[bold blue]MILP Benchmarking {len(self.instance_files)} instances", 
+                total=len(self.instance_files)
+            )
+            
+            iteration_task = progress.add_task(
+                "[bold green]Iterations", 
+                total=self.iterations,
+                visible=False
+            )
+            
+            current_task = progress.add_task(
+                "[bold white]Current Run", 
+                total=1,
+                visible=False
+            )
+            
+            for instance_idx, instance_file in enumerate(self.instance_files):
+                instance_name = instance_file.stem
+                
+                progress.update(
+                    main_task, 
+                    description=f"[bold blue]Instance: {instance_name}",
+                    completed=instance_idx
+                )
+                
+                progress.update(iteration_task, completed=0, visible=True)
+                
+                try:
+                    instance = self.load_instance(instance_file)
+                except Exception as e:
+                    progress.console.print(f"[red]❌ Failed to load {instance_file}: {e}")
+                    continue
+                
+                # Track instance start position for per-instance saving
+                instance_start_idx = len(self.results)
+                
+                for iteration in range(self.iterations):
+                    progress.update(
+                        iteration_task,
+                        description=f"[bold green]Iteration {iteration + 1}/{self.iterations}",
+                        completed=iteration
+                    )
+                    
+                    progress.update(current_task, completed=0, visible=True, 
+                                  description=f"[bold white]Running MILP (grid: {self.grid_points})")
+                    
+                    result = self.run_single_benchmark(instance, instance_name, iteration)
+                    
+                    self.results.append(result)
+                    
+                    progress.update(current_task, completed=1)
+                    
+                    # Show result in console
+                    if result.error:
+                        progress.console.print(f"[red]❌ {instance_name} iter={iteration + 1}: {result.error}")
+                    else:
+                        progress.console.print(f"[green]✅ {instance_name} iter={iteration + 1}: {result.num_final_solutions} solutions ({result.total_runtime_seconds:.1f}s)")
+                
+                progress.update(iteration_task, completed=self.iterations, visible=False)
+                progress.update(current_task, visible=False)
+                
+                # Save results for this instance
+                instance_results = self.results[instance_start_idx:]
+                self.save_instance_results(instance_name, instance_results)
+                
+            progress.update(main_task, completed=len(self.instance_files))
+    
+    def calculate_summary_statistics(self, results: list[BenchmarkResult]) -> BenchmarkSummaryStatistics:
+        """Calculate summary statistics for MILP results."""
+        
+        # Filter successful results
+        successful_results: list[BenchmarkResult] = [r for r in results if r.error is None]
+        failed_results = [r for r in results if r.error is not None]
+        
+        # Get unique instance names
+        instance_names = list(set(r.instance_name for r in results))
+        
+        benchmark_info = BenchmarkInfo(
+            timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            instances_tested=len(instance_names),
+            total_runs=len(results),
+            successful_runs=len(successful_results),
+            failed_runs=len(failed_results),
+            algorithm="MILP"
+        )
+        
+        # Initialize collections
+        performance_by_instance: dict[str, PerformanceByInstance] = {}
+        overall_statistics: Optional[OverallStatistics] = None
+        
+        if successful_results:
+            # Performance by instance
+            for instance_name in instance_names:
+                instance_results = [r for r in successful_results if r.instance_name == instance_name]
+                if instance_results:
+                    performance_by_instance[instance_name] = PerformanceByInstance(
+                        num_runs=len(instance_results),
+                        avg_runtime=statistics.mean([r.total_runtime_seconds for r in instance_results]),
+                        avg_solutions=statistics.mean([r.num_final_solutions for r in instance_results]),
+                        std_runtime=statistics.stdev([r.total_runtime_seconds for r in instance_results]) if len(instance_results) > 1 else 0,
+                        min_runtime=min([r.total_runtime_seconds for r in instance_results]),
+                        max_runtime=max([r.total_runtime_seconds for r in instance_results]),
+                        min_solutions=min([r.num_final_solutions for r in instance_results]),
+                        max_solutions=max([r.num_final_solutions for r in instance_results])
+                    )
+            
+            # Overall statistics
+            overall_statistics = OverallStatistics(
+                avg_runtime=statistics.mean([r.total_runtime_seconds for r in successful_results]),
+                avg_solutions=statistics.mean([r.num_final_solutions for r in successful_results]),
+                total_runtime=sum([r.total_runtime_seconds for r in successful_results]),
+                min_solutions=min([r.num_final_solutions for r in successful_results]),
+                max_solutions=max([r.num_final_solutions for r in successful_results])
+            )
+        else:
+            # Default overall statistics if no successful results
+            overall_statistics = OverallStatistics(
+                avg_runtime=0.0,
+                avg_solutions=0.0,
+                total_runtime=0.0
+            )
+        
+        # Add validation statistics
+        validation_stats = self._calculate_validation_statistics(successful_results) if successful_results else {}
+        
+        return BenchmarkSummaryStatistics(
+            benchmark_info=benchmark_info,
+            overall_statistics=overall_statistics,
+            performance_by_instance=performance_by_instance,
+            validation_statistics=validation_stats
+        )
+    
+    def create_summary_statistics(self) -> BenchmarkSummaryStatistics:
+        """Create summary statistics for all MILP results."""
+        return self.calculate_summary_statistics(self.results)
+    
+    def save_results(self):
+        """Save MILP benchmark results to files."""
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        finished_at = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Save detailed results
+        detailed_file = self.output_dir / f"milp_detailed_{finished_at}.json"
+        with open(detailed_file, 'w') as f:
+            json.dump(
+                [result.to_dict() for result in self.results],
+                f,
+                indent=2,
+                default=str
+            )
+        
+        # Create and save summary statistics
+        summary = self.create_summary_statistics()
+        summary_file = self.output_dir / f"milp_summary_{finished_at}.json"
+        with open(summary_file, 'w') as f:
+            json.dump(summary.to_dict(), f, indent=2, default=str)
+        
+        # Create comprehensive 3D visualization
+        self.create_comprehensive_3d_visualization()
+        
+        self.console.print("\n[green]All MILP results saved:")
+        self.console.print(f"  Detailed: {detailed_file}")
+        self.console.print(f"  Summary:  {summary_file}")
+    
+    def create_comprehensive_3d_visualization(self) -> bool:
+        """Create comprehensive 3D visualization for all instances."""
+        try:
+            finished_at = datetime.now().strftime("%Y%m%d_%H%M%S")
+            viz_file = self.output_dir / f"milp_comprehensive_3d_{finished_at}.html"
+            
+            self.console.print("[blue]📊 Creating comprehensive 3D visualization...")
+            
+            # Group results by instance for separate plotting
+            instance_groups: dict[str, list[BenchmarkResult]] = {}
+            for result in self.results:
+                if result.error is None:  # Only include successful results
+                    if result.instance_name not in instance_groups:
+                        instance_groups[result.instance_name] = []
+                    instance_groups[result.instance_name].append(result)
+            
+            if not instance_groups:
+                self.console.print("[yellow]⚠️  No successful results to visualize")
+                return False
+            
+            # Create subplots for multiple instances
+            from plotly.subplots import make_subplots
+            
+            num_instances = len(instance_groups)
+            fig = make_subplots(
+                rows=1, 
+                cols=num_instances,
+                subplot_titles=list(instance_groups.keys()),
+                specs=[[{"type": "scatter3d"} for _ in range(num_instances)]]
+            )
+            
+            for col_idx, (instance_name, instance_results) in enumerate(instance_groups.items(), 1):
+                self._add_instance_to_subplot(fig, instance_results, instance_name, col_idx)
+            
+            fig.update_layout(
+                title=f"MILP Algorithm - 3D Pareto Fronts (Grid: {self.grid_points}, Solver: {self.solver_name})",
+                scene=dict(
+                    xaxis_title="Cost",
+                    yaxis_title="Cloudy Area",
+                    zaxis_title="Max Incidence Angle"
+                ),
+                showlegend=True,
+                height=600
+            )
+            
+            fig.write_html(str(viz_file))
+            self.console.print(f"[green]✅ 3D visualization saved: {viz_file}")
+            return True
+            
+        except Exception as e:
+            self.console.print(f"[red]❌ Failed to create 3D visualization: {e}")
+            return False
+    
+    def _add_instance_to_subplot(self, fig, instance_results: list[BenchmarkResult], instance_name: str, col_idx: int):
+        """Add instance data to subplot."""
+        import plotly.graph_objects as go
+        
+        # Collect all solutions from all iterations for this instance
+        all_costs = []
+        all_cloudy = []
+        all_incidence = []
+        hover_texts = []
+        
+        for result in instance_results:
+            if result.final_solutions:
+                for solution in result.final_solutions:
+                    all_costs.append(solution.cost)
+                    all_cloudy.append(solution.cloudy_area)
+                    all_incidence.append(solution.max_incidence_angle or 0)
+                    hover_texts.append(self._create_final_solution_detail(result, 
+                                                                         solution.cost,
+                                                                         solution.cloudy_area,
+                                                                         solution.max_incidence_angle or 0))
+        
+        if all_costs:
+            fig.add_trace(
+                go.Scatter3d(
+                    x=all_costs,
+                    y=all_cloudy,
+                    z=all_incidence,
+                    mode='markers',
+                    marker=dict(
+                        size=6,
+                        color='red',
+                        symbol='circle'
+                    ),
+                    name=f"{instance_name} MILP",
+                    text=hover_texts,
+                    hovertemplate='%{text}<extra></extra>',
+                    showlegend=True
+                ),
+                row=1, col=col_idx
+            )
+    
+    def save_instance_summary_statistics(self, instance_name: str, instance_results: list[BenchmarkResult]) -> BenchmarkSummaryStatistics:
+        """Calculate and save summary statistics for a single instance with MILP-specific information."""
+        
+        # Filter successful results
+        successful_results: list[BenchmarkResult] = [r for r in instance_results if r.error is None]
+        failed_results = [r for r in instance_results if r.error is not None]
+        
+        benchmark_info = BenchmarkInfo(
+            timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            instances_tested=1,
+            total_runs=len(instance_results),
+            successful_runs=len(successful_results),
+            failed_runs=len(failed_results),
+            algorithm="MILP"
+        )
+        
+        # Initialize collections
+        performance_by_instance: dict[str, PerformanceByInstance] = {}
+        overall_statistics: Optional[OverallStatistics] = None
+        
+        if successful_results:
+            # Performance for this single instance
+            performance_by_instance[instance_name] = PerformanceByInstance(
+                num_runs=len(successful_results),
+                avg_runtime=statistics.mean([r.total_runtime_seconds for r in successful_results]),
+                avg_solutions=statistics.mean([r.num_final_solutions for r in successful_results]),
+                std_runtime=statistics.stdev([r.total_runtime_seconds for r in successful_results]) if len(successful_results) > 1 else 0,
+                min_runtime=min([r.total_runtime_seconds for r in successful_results]),
+                max_runtime=max([r.total_runtime_seconds for r in successful_results]),
+                min_solutions=min([r.num_final_solutions for r in successful_results]),
+                max_solutions=max([r.num_final_solutions for r in successful_results])
+            )
+            
+            # Overall statistics for this instance
+            overall_statistics = OverallStatistics(
+                avg_runtime=statistics.mean([r.total_runtime_seconds for r in successful_results]),
+                avg_solutions=statistics.mean([r.num_final_solutions for r in successful_results]),
+                total_runtime=sum([r.total_runtime_seconds for r in successful_results]),
+                min_solutions=min([r.num_final_solutions for r in successful_results]),
+                max_solutions=max([r.num_final_solutions for r in successful_results])
+            )
+        else:
+            # Default overall statistics if no successful results
+            overall_statistics = OverallStatistics(
+                avg_runtime=0.0,
+                avg_solutions=0.0,
+                total_runtime=0.0
+            )
+        
+        # Add validation statistics
+        validation_stats = self._calculate_validation_statistics(successful_results)
+        
+        return BenchmarkSummaryStatistics(
+            benchmark_info=benchmark_info,
+            overall_statistics=overall_statistics,
+            performance_by_instance=performance_by_instance,
+            validation_statistics=validation_stats
+        )
+    
+    def create_instance_3d_visualization(self, instance_name: str, instance_results: list[BenchmarkResult]) -> bool:
+        """Create 3D visualization for a single instance using the base implementation."""
+        return self._create_3d_visualization_base(instance_name, instance_results)
+    
+    def create_instance_summary_statistics(self, instance_name: str, instance_results: list[BenchmarkResult]) -> BenchmarkSummaryStatistics:
+        """Create summary statistics for a single instance with MILP-specific information."""
+        return self.save_instance_summary_statistics(instance_name, instance_results)
+    
+    def print_summary(self):
+        """Print comprehensive benchmark summary with MILP-specific information."""
+        summary = self.create_summary_statistics()
+        
+        self.console.print("\n" + "="*80)
+        self.console.print("[bold blue]📊 MILP Benchmark Summary")
+        self.console.print("="*80)
+        
+        # Basic info
+        info = summary.benchmark_info
+        self.console.print(f"[bold]Algorithm:[/bold] {info.algorithm}")
+        self.console.print(f"[bold]Grid Points:[/bold] {self.grid_points}")
+        self.console.print(f"[bold]Solver:[/bold] {self.solver_name}")
+        self.console.print(f"[bold]Instances Tested:[/bold] {info.instances_tested}")
+        self.console.print(f"[bold]Total Runs:[/bold] {info.total_runs}")
+        self.console.print(f"[bold]Successful Runs:[/bold] {info.successful_runs}")
+        self.console.print(f"[bold]Failed Runs:[/bold] {info.failed_runs}")
+        
+        success_rate = (info.successful_runs / info.total_runs * 100) if info.total_runs > 0 else 0
+        self.console.print(f"[bold]Success Rate:[/bold] {success_rate:.1f}%")
+        
+        # Overall performance
+        if summary.overall_statistics and info.successful_runs > 0:
+            stats = summary.overall_statistics
+            self.console.print("\n[bold blue]⚡ Overall Performance")
+            self.console.print(f"  Average Runtime: {stats.avg_runtime:.2f}s")
+            self.console.print(f"  Total Runtime: {stats.total_runtime:.2f}s")
+            self.console.print(f"  Average Solutions: {stats.avg_solutions:.1f}")
+            self.console.print(f"  Solution Range: {stats.min_solutions}-{stats.max_solutions}")
+        
+        # Performance by instance
+        if summary.performance_by_instance:
+            self.console.print("\n[bold blue]📋 Performance by Instance")
+            for instance_name, perf in summary.performance_by_instance.items():
+                self.console.print(f"  [bold]{instance_name}:[/bold]")
+                self.console.print(f"    Runtime: {perf.avg_runtime:.2f}s ± {perf.std_runtime:.2f}s ({perf.min_runtime:.2f}-{perf.max_runtime:.2f}s)")
+                self.console.print(f"    Solutions: {perf.avg_solutions:.1f} ({perf.min_solutions}-{perf.max_solutions})")
+                self.console.print(f"    Runs: {perf.num_runs}")
+        
+        # Validation results
+        if self.validate_solutions:
+            successful_results: list[BenchmarkResult] = [r for r in self.results if r.error is None]
+            if successful_results:
+                self.print_validation_summary(successful_results)
+        
+        self.console.print("="*80)
+
+
+def run_milp_benchmark(args):
+    """Run MILP algorithm benchmark."""
+    if not args.instances_dir.exists():
+        print(f"Error: Instances directory {args.instances_dir} does not exist")
+        return 1
+    
+    # Determine validation setting
+    validate_solutions = True  # Default
+    if hasattr(args, 'no_validate_solutions') and args.no_validate_solutions:
+        validate_solutions = False
+    elif hasattr(args, 'validate_solutions') and args.validate_solutions:
+        validate_solutions = True
+    
+    try:
+        runner = MilpBenchmarkRunner(
+            args.instances_dir, 
+            args.output_dir, 
+            args.iterations,
+            args.grid_points,
+            args.tui,
+            args.size,
+            getattr(args, 'filter', None),
+            args.timeout,
+            validate_solutions,
+            args.bypass_coefficient,
+            args.early_exit,
+            args.flag_array,
+            args.solver_name
+        )
+        runner.run_benchmarks()
+        runner.save_results()
+        runner.print_summary()
+        return 0
+        
+    except KeyboardInterrupt:
+        print("\nMILP Benchmark interrupted by user")
+        return 1
+    except Exception as e:
+        print(f"Error running MILP benchmark: {e}")
+        return 1
+
+
 def run_hybrid_benchmark(args):
     """Run hybrid algorithm benchmark."""
     if not args.instances_dir.exists():
@@ -2574,6 +3195,72 @@ def main():
         help="Maximum number of PLS iterations per run (default: 50000)"
     )
     pls_parser.set_defaults(func=run_pls_benchmark)
+    
+    # MILP algorithm subcommand
+    milp_parser = subparsers.add_parser(
+        'milp',
+        help='Benchmark pure MILP solver using epsilon-constraint method',
+        description='Run benchmarks on pure MILP solver with 3 objectives (cost, cloud_coverage, max_incidence_angle)'
+    )
+    add_common_args(milp_parser)
+    milp_parser.add_argument(
+        "--grid-points",
+        type=int,
+        default=50,
+        help="Number of grid points for epsilon-constraint method (default: 50)"
+    )
+    milp_parser.add_argument(
+        "--bypass-coefficient",
+        action="store_true",
+        default=True,
+        help="Use bypass coefficient optimization (default: enabled)"
+    )
+    milp_parser.add_argument(
+        "--no-bypass-coefficient",
+        action="store_true",
+        help="Disable bypass coefficient optimization"
+    )
+    milp_parser.add_argument(
+        "--early-exit",
+        action="store_true",
+        default=True,
+        help="Enable early exit optimization (default: enabled)"
+    )
+    milp_parser.add_argument(
+        "--no-early-exit",
+        action="store_true",
+        help="Disable early exit optimization"
+    )
+    milp_parser.add_argument(
+        "--flag-array",
+        action="store_true",
+        default=True,
+        help="Use flag array optimization (default: enabled)"
+    )
+    milp_parser.add_argument(
+        "--no-flag-array",
+        action="store_true",
+        help="Disable flag array optimization"
+    )
+    milp_parser.add_argument(
+        "--solver-name",
+        type=str,
+        default="cbc",
+        choices=["cbc", "gurobi", "cplex", "scip"],
+        help="MILP solver to use (default: cbc)"
+    )
+    
+    # Handle conflicting flags for MILP parser
+    def process_milp_args(args):
+        if args.no_bypass_coefficient:
+            args.bypass_coefficient = False
+        if args.no_early_exit:
+            args.early_exit = False
+        if args.no_flag_array:
+            args.flag_array = False
+        return args
+    
+    milp_parser.set_defaults(func=lambda args: run_milp_benchmark(process_milp_args(args)))
     
     # Parse arguments
     args = parser.parse_args()

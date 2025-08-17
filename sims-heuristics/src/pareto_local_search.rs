@@ -10,6 +10,7 @@ use tracing::{debug_span, info_span, instrument};
 
 use crate::{
     explored_solutions_data::ExploredSolutionsData,
+    probabilistic_probing_neighborhood::ProbabilisticProbingNeighborhood,
     problem::Problem,
     solution::{EncodedSolution, ImageSet},
     timer::Timer,
@@ -50,7 +51,7 @@ struct IterationMetrics {
 
 pub struct ParetoLocalSearch<'a, T, S, const D: usize>
 where
-    T: ImageSet<D> + EncodedSolution<D>,
+    T: ImageSet<D> + EncodedSolution<D> + ProbabilisticProbingNeighborhood<D>,
     S: ParetoFront<'a, T> + Clone,
 {
     /// Reference to problem instance
@@ -81,7 +82,7 @@ pub enum StepStatus {
 
 impl<'a, T, S, const D: usize> ParetoLocalSearch<'a, T, S, D>
 where
-    T: ImageSet<D> + EncodedSolution<D>,
+    T: ImageSet<D> + EncodedSolution<D> + ProbabilisticProbingNeighborhood<D>,
     S: ParetoFront<'a, T> + Clone + FromIterator<T> + IntoIterator<Item = T>,
 {
     pub fn new(
@@ -263,7 +264,8 @@ where
             return false;
         }
 
-        self.explored_solutions.register(iteration, neighbor, timer.elapsed());
+        self.explored_solutions
+            .register(iteration, neighbor, timer.elapsed());
 
         tracing::trace!("Evaluating new neighbor");
 
@@ -289,13 +291,7 @@ where
 
     #[instrument(
         level = "trace",
-        skip(
-            self,
-            neighbor,
-            current_solution,
-            step_stats,
-            auxiliary_population
-        ),
+        skip(self, neighbor, current_solution, step_stats, auxiliary_population),
         fields(neighbor_index, iteration)
     )]
     fn evaluate_neighbor(
