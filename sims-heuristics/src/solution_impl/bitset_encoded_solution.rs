@@ -8,6 +8,9 @@ use rand::{Rng, seq::IteratorRandom};
 use std::{collections::BinaryHeap, fmt::Debug, hash::Hash};
 
 use crate::objectives::{self, SolutionEvaluator};
+use crate::probabilistic_probing_neighborhood::{
+    ObjectiveBasedSelector, ProbabilisticProbingNeighborhood, ProbingConfig,
+};
 use crate::problem::{ComparableImage, ImageObjectiveDeltas, Problem, ScaledObjectiveDeltas};
 use crate::residual_problem::ResidualProblem;
 use crate::residual_solution::ResidualSolution;
@@ -170,7 +173,7 @@ impl<const D: usize> SIMSModifiable<D> for BitsetEncodedSolution<D> {
         // Create a timer for the neighborhood method
         let timer = Timer::start(std::time::Duration::from_secs(60)); // 1 minute default
 
-        // Use the existing neighborhood method with default parameters
+        // Use the probabilistic probing neighborhood method with default parameters
         let k = 1; // Default value for local search
         let is_deterministic = true;
 
@@ -790,5 +793,503 @@ impl<const D: usize> MergeableWithResidual<D> for BitsetEncodedSolution<D> {
             .for_each(|image_index| {
                 self.add_image(image_index, problem);
             });
+    }
+}
+
+// Implementation of ProbabilisticProbingNeighborhood trait for BitsetEncodedSolution
+impl<const D: usize> ProbabilisticProbingNeighborhood<D> for BitsetEncodedSolution<D> {
+    fn probabilistic_probing_neighborhood(
+        &self,
+        k: u32,
+        problem: &Problem<Self, D>,
+        timer: &Timer,
+        is_deterministic: bool,
+        probing_probability: f64,
+        max_probes: usize,
+        objective_weights: Option<&[f64; D]>,
+    ) -> Vec<Self> {
+        // Create probing configuration
+        let config = ProbingConfig {
+            probing_probability,
+            max_probes,
+            objective_weights: objective_weights.copied(),
+            temperature: 1.0,
+            improvement_threshold: 0.01,
+        };
+
+        // Initialize random number generator
+        let mut rng = if is_deterministic {
+            rand::rngs::StdRng::seed_from_u64(42)
+        } else {
+            rand::rngs::StdRng::seed_from_u64(rand::random())
+        };
+
+        let mut neighborhood_solutions = Vec::new();
+        let mut probes_attempted = 0;
+
+        // Generate candidate moves based on k-opt strategy
+        let removal_candidates = if k == 1 {
+            // Single image removal - select probabilistically from selected images
+            self.selected_images()
+                .filter(|&selected_image| {
+                    // Only consider images that can be safely removed
+                    self.is_replaceable(selected_image, problem)
+                        && selected_image < problem.images.len()
+                })
+                .collect::<Vec<_>>()
+        } else {
+            // Multi-image removal - use worst selected images as candidates
+            self.worst_selected_images(problem, is_deterministic)
+                .into_iter()
+                .filter(|&image_idx| image_idx < problem.images.len())
+                .collect()
+        };
+
+        // Early return if no valid candidates
+        if removal_candidates.is_empty() {
+            log::debug!("No valid removal candidates found for probabilistic probing");
+            return Vec::new();
+        }
+
+        // Calculate objective deltas for candidates to guide probabilistic selection
+        let candidate_deltas: Vec<(usize, ScaledObjectiveDeltas<D>)> = removal_candidates
+            .iter()
+            .map(|&image_index| {
+                let deltas =
+                    self.scaled_image_objective_deltas_impl(std::iter::once(image_index), problem);
+                (image_index, deltas.into_iter().next().unwrap())
+            })
+            .collect();
+
+        // Create objective-based selector for probabilistic probing
+        let selector = ObjectiveBasedSelector::new(candidate_deltas, config.clone());
+
+        while probes_attempted < max_probes && !timer.is_expired() {
+            // Probabilistically select images to remove based on objective improvements
+            let images_to_remove = if k == 1 {
+                selector.select_candidates(&mut rng, 1)
+            } else {
+                // For k > 1, select combination of images
+                let selected_indices = selector.select_candidates(&mut rng, k as usize);
+                selected_indices
+                    .into_iter()
+                    .combinations(k as usize)
+                    .next()
+                    .unwrap_or_default()
+            };
+
+            if images_to_remove.is_empty() {
+                log::trace!("No images selected for removal in probe {}", probes_attempted);
+                probes_attempted += 1;
+                continue;
+            }
+
+            log::trace!("Probe {}: removing {} images: {:?}", probes_attempted, images_to_remove.len(), images_to_remove);
+
+            // Apply probabilistic acceptance based on objective space improvements
+            let should_explore = if is_deterministic {
+                probes_attempted < max_probes / 2 // Explore first half deterministically
+            } else {
+                let random_value = rand::random::<f64>();
+                random_value < probing_probability
+            };
+
+            if should_explore {
+                log::trace!("Probe {}: exploring with {} images to remove", probes_attempted, images_to_remove.len());
+                
+                // Generate new solutions directly by modifying current solution
+                let generated_solutions =
+                    self.generate_neighbor_solutions(&images_to_remove, problem, &config, &mut rng);
+
+                log::trace!("Probe {}: generated {} candidate solutions", probes_attempted, generated_solutions.len());
+
+                // Strict validation and filtering of generated solutions
+                let mut valid_count = 0;
+                let mut invalid_count = 0;
+                
+                for solution in generated_solutions {
+                    // Early check: verify all elements are covered (quick check)
+                    let uncovered_count = self.find_uncovered_elements(&solution, problem).len();
+                    if uncovered_count > 0 {
+                        log::trace!("Rejecting solution with {uncovered_count} uncovered elements");
+                        invalid_count += 1;
+                        continue;
+                    }
+                    
+                    // Full validation and acceptance check
+                    if solution.is_valid(problem)
+                        && self.should_accept_solution(&solution, &config, problem)
+                    {
+                        neighborhood_solutions.push(solution);
+                        valid_count += 1;
+                    } else {
+                        log::trace!("Solution failed validation or acceptance criteria");
+                        invalid_count += 1;
+                    }
+                }
+                
+                log::trace!("Probe {}: {} valid, {} invalid solutions", probes_attempted, valid_count, invalid_count);
+            }
+
+            probes_attempted += 1;
+
+            // Early termination if enough good solutions found
+            if neighborhood_solutions.len() >= max_probes / 2 {
+                break;
+            }
+        }
+
+        // Apply additional filtering based on diversity in objective space
+        // Note: All solutions in neighborhood_solutions are already validated via is_valid()
+        let initial_solution_count = neighborhood_solutions.len();
+        let filtered_solutions =
+            self.filter_diverse_solutions(neighborhood_solutions, problem, &config);
+
+        log::debug!(
+            "Probabilistic probing: {} valid solutions from {} probes ({:.1}% success rate), {} filtered for diversity",
+            initial_solution_count,
+            probes_attempted,
+            (initial_solution_count as f64 / probes_attempted as f64) * 100.0,
+            filtered_solutions.len()
+        );
+
+        // Log warning if no valid solutions were generated
+        if filtered_solutions.is_empty() && probes_attempted > 0 {
+            log::warn!("Probabilistic probing failed to generate any valid solutions after {probes_attempted} probes");
+        }
+
+        filtered_solutions
+    }
+}
+
+// Helper methods for probabilistic probing implementation
+impl<const D: usize> BitsetEncodedSolution<D> {
+    /// Generate neighbor solutions directly by removing specified images and adding new ones
+    fn generate_neighbor_solutions(
+        &self,
+        images_to_remove: &[usize],
+        problem: &Problem<Self, D>,
+        config: &ProbingConfig<D>,
+        rng: &mut rand::rngs::StdRng,
+    ) -> Vec<Self> {
+        log::trace!("Generating solutions by removing {} images: {:?}", images_to_remove.len(), images_to_remove);
+        
+        let mut generated_solutions = Vec::new();
+
+        // Create a base solution by removing specified images
+        let mut base_solution = self.clone();
+        for &image_idx in images_to_remove {
+            base_solution.remove_image(image_idx, problem);
+        }
+
+        // Find uncovered elements after removal
+        let uncovered_after_removal = self.find_uncovered_elements(&base_solution, problem);
+        log::trace!("After removing {} images, {} elements are uncovered", images_to_remove.len(), uncovered_after_removal.len());
+
+        // Generate multiple variants by ensuring complete coverage
+        let max_variants = config.max_probes.min(10); // Reduced variants for debugging
+
+        for variant_idx in 0..max_variants {
+            let mut candidate = base_solution.clone();
+
+            // Find uncovered elements for this variant
+            let uncovered_elements = self.find_uncovered_elements(&candidate, problem);
+
+            // If no elements are uncovered, the base solution is complete
+            if uncovered_elements.is_empty() {
+                log::trace!("Variant {}: base solution already complete", variant_idx);
+                if candidate.is_valid(problem)
+                    && candidate.selected_images().collect::<Vec<_>>()
+                        != self.selected_images().collect::<Vec<_>>()
+                {
+                    generated_solutions.push(candidate);
+                    log::trace!("Variant {}: added complete base solution", variant_idx);
+                }
+                continue;
+            }
+
+            log::trace!("Variant {}: {} elements need coverage", variant_idx, uncovered_elements.len());
+
+            // ENSURE complete coverage by selecting images to cover ALL uncovered elements
+            let covering_images =
+                self.ensure_complete_coverage(&uncovered_elements, problem, config, rng);
+
+            log::trace!("Variant {}: coverage algorithm selected {} images: {:?}", 
+                       variant_idx, covering_images.len(), covering_images);
+
+            // Add selected images to create complete solution
+            for &image_idx in &covering_images {
+                if !candidate.is_image_selected(image_idx) {
+                    candidate.add_image(image_idx, problem);
+                }
+            }
+
+            // Verify solution is complete and valid before adding
+            let final_uncovered = self.find_uncovered_elements(&candidate, problem);
+            log::trace!("Variant {}: after adding {} images, {} elements remain uncovered", 
+                       variant_idx, covering_images.len(), final_uncovered.len());
+            
+            if final_uncovered.is_empty() && candidate.is_valid(problem)
+                && candidate.selected_images().collect::<Vec<_>>()
+                    != self.selected_images().collect::<Vec<_>>()
+            {
+                generated_solutions.push(candidate);
+                log::trace!("Variant {}: successfully generated valid solution", variant_idx);
+            } else {
+                // Log detailed failure information
+                log::trace!("Variant {}: FAILED - uncovered: {}, valid: {}, different: {}", 
+                           variant_idx, 
+                           final_uncovered.len(),
+                           candidate.is_valid(problem),
+                           candidate.selected_images().collect::<Vec<_>>() != self.selected_images().collect::<Vec<_>>());
+                           
+                if !final_uncovered.is_empty() {
+                    log::trace!("Variant {}: remaining uncovered elements: {:?}", 
+                               variant_idx, 
+                               if final_uncovered.len() <= 10 { format!("{:?}", final_uncovered) } else { format!("{:?}...", &final_uncovered[..10]) });
+                }
+            }
+        }
+
+        log::trace!("Generated {} complete solutions from {} variants", generated_solutions.len(), max_variants);
+        generated_solutions
+    }
+
+    /// Find elements that are not covered by the current solution
+    #[allow(clippy::unused_self)]
+    fn find_uncovered_elements(&self, solution: &Self, problem: &Problem<Self, D>) -> Vec<usize> {
+        let mut covered = vec![false; problem.universe.len()];
+
+        // Mark covered elements
+        for image_idx in solution.selected_images() {
+            for &element in &problem.images[image_idx].parts {
+                if element < covered.len() {
+                    covered[element] = true;
+                }
+            }
+        }
+
+        // Return uncovered elements
+        covered
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, &is_covered)| if is_covered { None } else { Some(idx) })
+            .collect()
+    }
+
+    /// Ensure complete coverage of all uncovered elements using a greedy + probabilistic approach
+    fn ensure_complete_coverage(
+        &self,
+        uncovered_elements: &[usize],
+        problem: &Problem<Self, D>,
+        config: &ProbingConfig<D>,
+        rng: &mut rand::rngs::StdRng,
+    ) -> Vec<usize> {
+        if uncovered_elements.is_empty() {
+            return Vec::new();
+        }
+        
+        log::trace!("Starting coverage for {} uncovered elements: {:?}", uncovered_elements.len(), 
+                   if uncovered_elements.len() <= 10 { format!("{:?}", uncovered_elements) } else { format!("{:?}...", &uncovered_elements[..10]) });
+        
+        let mut selected_images = Vec::new();
+        let mut remaining_uncovered = uncovered_elements.to_vec();
+        let mut iteration_count = 0;
+        let max_iterations = uncovered_elements.len() * 3; // Increased max iterations
+
+        while !remaining_uncovered.is_empty() && iteration_count < max_iterations {
+            iteration_count += 1;
+            
+            // Find images that can cover remaining uncovered elements
+            let mut covering_candidates = Vec::new();
+
+            for (img_idx, image) in problem.images.iter().enumerate() {
+                // Skip already selected images
+                if selected_images.contains(&img_idx) {
+                    continue;
+                }
+                
+                let covered_elements: Vec<usize> = image
+                    .parts
+                    .iter()
+                    .filter(|&&part| remaining_uncovered.contains(&part))
+                    .copied()
+                    .collect();
+                
+                let coverage_count = covered_elements.len();
+
+                if coverage_count > 0 {
+                    // Prioritize coverage count heavily
+                    let mut score = (coverage_count as f64) * 1000.0; // Base score heavily weighted on coverage
+
+                    // Add small objective preference (secondary priority)
+                    if let Some(weights) = &config.objective_weights {
+                        let obj_deltas = self
+                            .scaled_image_objective_deltas_impl(std::iter::once(img_idx), problem);
+                        if let Some(delta) = obj_deltas.first() {
+                            for (i, &delta_val) in delta.scaled_deltas.iter().enumerate() {
+                                // Small objective influence compared to coverage
+                                score += weights[i] * (-f64::from(delta_val) / config.temperature.max(1.0)).exp();
+                            }
+                        }
+                    }
+
+                    covering_candidates.push((img_idx, score, coverage_count, covered_elements));
+                }
+            }
+
+            if covering_candidates.is_empty() {
+                log::error!("No covering images found for {} remaining uncovered elements: {:?}", 
+                           remaining_uncovered.len(), 
+                           if remaining_uncovered.len() <= 20 { format!("{:?}", remaining_uncovered) } else { format!("{:?}...", &remaining_uncovered[..20]) });
+                break; // This should not happen in valid problems
+            }
+
+            // Sort by score (higher is better) - coverage count dominates
+            covering_candidates
+                .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+            // Use more conservative selection for reliability
+            let selected_idx = if remaining_uncovered.len() > 10 || iteration_count > max_iterations / 2 {
+                // For many uncovered elements or late iterations, use pure greedy
+                0
+            } else if rand::random::<f64>() < config.probing_probability * 0.5 {
+                // Reduced probability for more reliable coverage
+                let selection_pool_size = covering_candidates.len().min(2); // Very small pool
+                rng.random_range(0..selection_pool_size)
+            } else {
+                // Greedy selection (best coverage)
+                0
+            };
+
+            let (selected, _, coverage_count, covered_elements) = &covering_candidates[selected_idx];
+
+            selected_images.push(*selected);
+
+            // Remove covered elements from remaining uncovered
+            let initial_uncovered_count = remaining_uncovered.len();
+            remaining_uncovered.retain(|&elem| !covered_elements.contains(&elem));
+            
+            // Verify progress
+            let progress = initial_uncovered_count - remaining_uncovered.len();
+            if progress == 0 {
+                log::warn!("No progress in iteration {}, image {} should cover {} elements but didn't", 
+                          iteration_count, selected, coverage_count);
+                break; // Prevent infinite loop
+            }
+            
+            log::trace!("Iteration {}: selected image {} covers {} elements, {} elements remain", 
+                       iteration_count, selected, progress, remaining_uncovered.len());
+        }
+
+        if !remaining_uncovered.is_empty() {
+            log::error!("COVERAGE FAILURE: {} elements remain uncovered after {} iterations. Selected {} images: {:?}", 
+                       remaining_uncovered.len(), iteration_count, selected_images.len(), selected_images);
+            log::error!("Uncovered elements: {:?}", if remaining_uncovered.len() <= 20 { format!("{:?}", remaining_uncovered) } else { format!("{:?}...", &remaining_uncovered[..20]) });
+        } else {
+            log::trace!("Coverage successful: {} images selected after {} iterations", selected_images.len(), iteration_count);
+        }
+
+        selected_images
+    }
+    /// Determine if a solution should be accepted based on objective improvements
+    fn should_accept_solution(
+        &self,
+        candidate: &Self,
+        config: &ProbingConfig<D>,
+        problem: &Problem<Self, D>,
+    ) -> bool {
+        // Calculate objective improvements
+        let mut improvement_score = 0.0;
+        let weights = config.objective_weights.as_ref();
+
+        for i in 0..D {
+            let current_obj = self.calculate_objective(i, problem) as f64;
+            let candidate_obj = candidate.calculate_objective(i, problem) as f64;
+            let improvement = (current_obj - candidate_obj) / current_obj.max(1.0);
+
+            let weight = weights.map_or(1.0, |w| w[i]);
+            improvement_score += weight * improvement;
+        }
+
+        improvement_score >= config.improvement_threshold
+    }
+
+    /// Filter solutions to maintain diversity in objective space
+    #[allow(clippy::unused_self)]
+    fn filter_diverse_solutions(
+        &self,
+        mut solutions: Vec<Self>,
+        problem: &Problem<Self, D>,
+        config: &ProbingConfig<D>,
+    ) -> Vec<Self> {
+        if solutions.len() <= 1 {
+            return solutions;
+        }
+
+        // Sort by overall objective quality
+        solutions.sort_by(|a, b| {
+            let score_a = Self::calculate_solution_score(a, problem, config);
+            let score_b = Self::calculate_solution_score(b, problem, config);
+            score_b
+                .partial_cmp(&score_a)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // Keep top solutions while maintaining diversity
+        let mut filtered = Vec::new();
+        let diversity_threshold = 0.1; // Minimum objective space distance
+
+        for solution in solutions {
+            if filtered.is_empty()
+                || filtered.iter().all(|existing| {
+                    Self::objective_distance(&solution, existing, problem) >= diversity_threshold
+                })
+            {
+                filtered.push(solution);
+
+                // Limit number of solutions to prevent explosion
+                if filtered.len() >= config.max_probes / 4 {
+                    break;
+                }
+            }
+        }
+
+        filtered
+    }
+
+    /// Calculate overall quality score for a solution
+    fn calculate_solution_score(
+        solution: &Self,
+        problem: &Problem<Self, D>,
+        config: &ProbingConfig<D>,
+    ) -> f64 {
+        let mut score = 0.0;
+        let weights = config.objective_weights.as_ref();
+
+        for i in 0..D {
+            let obj_value = solution.calculate_objective(i, problem) as f64;
+            let weight = weights.map_or(1.0, |w| w[i]);
+            score += weight * (1.0 / (1.0 + obj_value)); // Minimize objectives
+        }
+
+        score
+    }
+
+    /// Calculate distance between two solutions in objective space
+    fn objective_distance(solution1: &Self, solution2: &Self, problem: &Problem<Self, D>) -> f64 {
+        let mut distance = 0.0;
+
+        for i in 0..D {
+            let obj1 = solution1.calculate_objective(i, problem) as f64;
+            let obj2 = solution2.calculate_objective(i, problem) as f64;
+            let max_obj = problem.max_objectives[i] as f64;
+
+            // Normalized distance
+            let normalized_diff = (obj1 - obj2).abs() / max_obj.max(1.0);
+            distance += normalized_diff * normalized_diff;
+        }
+
+        distance.sqrt()
     }
 }

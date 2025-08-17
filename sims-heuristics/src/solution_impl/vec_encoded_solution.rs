@@ -6,6 +6,7 @@ use rand::{Rng, seq::IteratorRandom};
 use std::{collections::BinaryHeap, fmt::Debug, hash::Hash, vec};
 
 use crate::objectives::{self, SolutionEvaluator};
+use crate::probabilistic_probing_neighborhood::ProbabilisticProbingNeighborhood;
 use crate::problem::{ComparableImage, ImageObjectiveDeltas, Problem, ScaledObjectiveDeltas};
 use crate::residual_problem::ResidualProblem;
 use crate::residual_solution::ResidualSolution;
@@ -238,11 +239,14 @@ impl<const D: usize> SIMSModifiable<D> for VecEncodedSolution<D> {
         // Create a timer for the neighborhood method
         let timer = Timer::start(std::time::Duration::from_secs(60)); // 1 minute default
 
-        // Use the existing neighborhood method with default parameters
+        // Use the probabilistic probing neighborhood method with default parameters
         let k = 1; // Default value for local search
         let is_deterministic = true;
+        let probing_probability = 0.7; // Default probing probability
+        let max_probes = 50; // Default maximum probes
+        let objective_weights = None; // Use equal weights by default
 
-        self.neighborhood(k, problem, &timer, is_deterministic)
+        self.probabilistic_probing_neighborhood(k, problem, &timer, is_deterministic, probing_probability, max_probes, objective_weights)
     }
 
     fn neighborhood(
@@ -843,3 +847,7 @@ impl<const D: usize> SolutionEvaluator<D> for VecEncodedSolution<D> {
         &self.element_coverage
     }
 }
+
+// Implement ProbabilisticProbingNeighborhood trait for VecEncodedSolution
+// Uses the default implementation which falls back to the regular neighborhood method
+impl<const D: usize> ProbabilisticProbingNeighborhood<D> for VecEncodedSolution<D> {}
