@@ -96,11 +96,12 @@ class TestInstanceData:
     
     def test_resolution_data_available(self):
         """Test that resolution data is available in test instances."""
-        import os
+        from pathlib import Path
         
-        test_file = "/home/hlvlad/code/serenity/sims-hybrid-algs/sims-problem/tests/data/lagos_nigeria_30.dzn"
+        # Use relative path from test file location
+        test_file = Path(__file__).parent.parent.parent / "sims-problem" / "tests" / "data" / "lagos_nigeria_30.dzn"
         
-        if os.path.exists(test_file):
+        if test_file.exists():
             with open(test_file, 'r') as f:
                 content = f.read()
                 assert "resolution =" in content, "Test file should contain resolution data"
@@ -110,11 +111,12 @@ class TestInstanceData:
     
     def test_minizinc_model_has_4_objectives(self):
         """Test that MiniZinc model defines 4 objectives."""
-        import os
+        from pathlib import Path
         
-        mzn_file = "/home/hlvlad/code/serenity/sims-hybrid-algs/sims-solvers/sims_solvers/mzn_models/mosaic_cloud2.mzn"
+        # Use relative path from test file location
+        mzn_file = Path(__file__).parent.parent / "sims_solvers" / "mzn_models" / "mosaic_cloud2.mzn"
         
-        if os.path.exists(mzn_file):
+        if mzn_file.exists():
             with open(mzn_file, 'r') as f:
                 content = f.read()
                 assert "array[1..4] of var int: objs;" in content, "Model should define 4 objectives"
