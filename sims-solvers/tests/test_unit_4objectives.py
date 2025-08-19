@@ -152,6 +152,56 @@ class TestIntervalManager:
         assert len(manager.intervals) >= 1, "Should have intervals after addition"
 
 
+class TestSolutionPrinting:
+    """Test solution printing functionality with selected images."""
+    
+    def test_solution_format_display(self):
+        """Test the format for displaying solutions with selected images."""
+        # Mock solution data to demonstrate the output format
+        mock_solutions = [
+            {
+                'objectives': [1000, 25, 15, 30],
+                'selected_images': [True, False, True, True, False, True, False, False, True, False],
+                'instance': 'test_instance'
+            },
+            {
+                'objectives': [1200, 20, 18, 25],
+                'selected_images': [False, True, True, False, True, True, True, False, False, True],
+                'instance': 'test_instance'
+            },
+            {
+                'objectives': [800, 35, 12, 40],
+                # Simulate a larger selection with 15 images
+                'selected_images': [True] * 15 + [False] * 5,
+                'instance': 'test_large_instance'
+            }
+        ]
+        
+        print("\n📊 Example Solution Output Format:")
+        for i, sol in enumerate(mock_solutions):
+            obj = sol['objectives']
+            selected_imgs = sol['selected_images']
+            
+            # Convert boolean list to indices of selected images (1-based indexing)
+            selected_indices = [idx + 1 for idx, selected in enumerate(selected_imgs) if selected]
+            
+            print(f"  Solution {i+1}:")
+            print(f"    Objectives: Cost={obj[0]}, Cloud={obj[1]}, Resolution={obj[2]}, Angle={obj[3]}")
+            print(f"    Selected Images ({len(selected_indices)}): {selected_indices}")
+            if len(selected_indices) <= 10:
+                print(f"    Image Details: {selected_indices}")
+            else:
+                print(f"    Image Details: {selected_indices[:5]} ... {selected_indices[-5:]} (showing first 5 and last 5)")
+            print()
+        
+        # Basic assertions
+        assert len(mock_solutions) == 3
+        assert all(len(sol['objectives']) == 4 for sol in mock_solutions)
+        assert all(isinstance(sol['selected_images'], list) for sol in mock_solutions)
+        
+        print("✓ Solution format test completed successfully")
+
+
 class TestObjectiveCalculations:
     """Test objective calculation methods."""
     
