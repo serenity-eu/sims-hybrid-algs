@@ -14,6 +14,7 @@ dynamic = ["version"]
 dependencies = [
     "plotly>=6.2.0",
     "rich>=14.1.0",
+    "sims-solvers",
 ]
 
 [project.optional-dependencies]
@@ -30,6 +31,9 @@ dev = [
 
 [tool.uv]
 cache-keys = [{file = "pyproject.toml"}, {file = "Cargo.toml"}, {file = "**/*.rs"}, {file = "../sims-heuristics/Cargo.toml"}, {file = "../sims-heuristics/**/*.rs"}]
+
+[tool.uv.sources]
+sims-solvers = { path = "../sims-solvers" }
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
