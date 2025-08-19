@@ -1,0 +1,19 @@
+# Rustfmt configuration for AUGMECON-RS
+# This configuration helps ensure consistent code formatting
+# Note: Many advanced import organization features require nightly rustfmt
+
+# General formatting
+edition = "2021"
+max_width = 100
+hard_tabs = false
+tab_spaces = 4
+
+# Other formatting options
+newline_style = "Unix"
+remove_nested_parens = true
+
+# Import and use statement formatting (stable features only)
+reorder_imports = true
+reorder_modules = true
+use_field_init_shorthand = true
+use_try_shorthand = true

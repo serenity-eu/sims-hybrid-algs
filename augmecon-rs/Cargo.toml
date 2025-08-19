@@ -1,0 +1,71 @@
+[package]
+name = "augmecon"
+version = "0.1.0"
+edition = "2021"
+authors = ["AUGMECON-RS Contributors"]
+description = "A fast, efficient AUGMECON implementation for multi-objective optimization in Rust"
+documentation = "https://docs.rs/augmecon"
+homepage = "https://github.com/your-username/augmecon-rs"
+repository = "https://github.com/your-username/augmecon-rs"
+license = "MIT"
+readme = "README.md"
+keywords = [
+    "optimization",
+    "multi-objective",
+    "augmecon",
+    "pareto",
+    "mathematical-programming",
+]
+categories = ["science", "algorithms", "mathematics"]
+autobins = false
+
+[lib]
+name = "augmecon"
+path = "src/lib.rs"
+
+[dependencies]
+good_lp = { git="https://github.com/hlvlad/good_lp", branch = "main", features = ["coin_cbc", "microlp", "lpsolve", "highs"] }
+coin_cbc = "0.1.8"
+calamine = "0.30.0"
+itertools = "0.14.0"
+log = "0.4.27"
+env_logger = "0.11.8"
+serde = { version = "1.0.219", features = ["derive"] }
+thiserror = "2.0.15"
+anyhow = "1.0.99"
+num_cpus = "1.17.0"
+rayon = "1.11.0"
+
+[dev-dependencies]
+approx = "0.5.1"
+criterion = { version = "0.7.0", features = ["html_reports"] }
+
+[[example]]
+name = "basic_production_simple"
+path = "examples/basic_production_simple.rs"
+
+[[example]]
+name = "basic_production"
+path = "examples/basic_production.rs"
+
+[[example]]
+name = "portfolio_optimization"
+path = "examples/portfolio_optimization.rs"
+
+[lints.clippy]
+# Enable comprehensive linting for all targets
+all = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 } 
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+
+# Specific lint configuration (higher priority overrides)
+cognitive_complexity = "warn"
+missing_docs_in_private_items = "allow"
+module_name_repetitions = "allow"
+too_many_arguments = "allow"
+too_many_lines = "allow"
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
