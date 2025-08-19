@@ -1,16 +1,13 @@
 import pytest
-import sys
-import os
 from pathlib import Path
-
-# Add the sims-solvers directory to the Python path
-sims_solvers_path = Path(__file__).parent.parent
-sys.path.insert(0, str(sims_solvers_path))
 
 # Test configuration
 TIMEOUT_SECONDS = 60
-TEST_INSTANCES_DIR = "/home/hlvlad/code/serenity/sims-hybrid-algs/sims-problem/tests/data"
-MZN_MODEL_PATH = "/home/hlvlad/code/serenity/sims-hybrid-algs/sims-solvers/sims_solvers/mzn_models/mosaic_cloud2.mzn"
+
+# Use relative paths from the sims-solvers directory
+sims_solvers_dir = Path(__file__).parent.parent
+TEST_INSTANCES_DIR = str(sims_solvers_dir.parent / "sims-problem" / "tests" / "data")
+MZN_MODEL_PATH = str(sims_solvers_dir / "sims_solvers" / "mzn_models" / "mosaic_cloud2.mzn")
 
 # Test instances to use
 TEST_INSTANCES_30 = [
