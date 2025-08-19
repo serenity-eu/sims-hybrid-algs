@@ -12,7 +12,6 @@ class CoverageGridPoint(FrontGeneratorStrategy):
     """
     def __init__(self, solver, timer):
         super().__init__(solver, timer)
-        self.check_number_of_objectives()
         self.constraint_objectives_lhs = None
         self.constraint_objectives = [0] * (len(self.solver.model.objectives) - 1)
         self.is_a_minimization_model_originally = False
@@ -23,14 +22,13 @@ class CoverageGridPoint(FrontGeneratorStrategy):
         return False
 
     def solve(self):
-        # get the best and worst values for each objective, in the case of 2 objectives, it will return the extreme
-        # points of the Pareto front
+        # get the best and worst values for each objective
         yield from self.get_best_worst_values()
         # convert problem to maximization problem
         self.convert_model_to_maximization()
         # declare the model
         self.set_augmecon2_objective_model()
-        # Initializes the loop control variable
+        # Initializes the loop control variable for all constraint objectives (all except the first one)
         ef_array = []
         for i in range(1, len(self.nadir_objectives_values)):
             ef_array.append(self.nadir_objectives_values[i])
@@ -41,20 +39,45 @@ class CoverageGridPoint(FrontGeneratorStrategy):
             objs_solution_values = solutions['objs']
             str_objs_solution_values = Saugmecon.convert_solution_value_to_str(objs_solution_values)
             previous_solutions.add(str_objs_solution_values)
-        min_interval = min(self.nadir_objectives_values[1], self.best_objective_values[1])
-        max_interval = max(self.nadir_objectives_values[1], self.best_objective_values[1])
-        ef_interval = IntervalManager(min_interval+1, max_interval-1)
+        
+        # Create interval managers for each constraint objective (starting from objective 1, not 0)
+        ef_intervals = []
+        for i in range(1, len(self.nadir_objectives_values)):
+            min_interval = min(self.nadir_objectives_values[i], self.best_objective_values[i])
+            max_interval = max(self.nadir_objectives_values[i], self.best_objective_values[i])
+            ef_intervals.append(IntervalManager(min_interval+1, max_interval-1))
 
-        if len(self.solver.model.objectives) == 2:
-            ef_array[0] = int((self.best_objective_values[1] + self.nadir_objectives_values[1]) / 2)
-        yield from self.coverage_loop(ef_array, previous_solutions, previous_solution_information, ef_interval)
+        # Initialize ef_array with middle points for all constraint objectives
+        for i in range(len(ef_array)):
+            ef_array[i] = int((self.best_objective_values[i+1] + self.nadir_objectives_values[i+1]) / 2)
+        
+        yield from self.coverage_loop(ef_array, previous_solutions, previous_solution_information, ef_intervals)
 
-    def coverage_loop(self, ef_array, previous_solutions, previous_solution_information, ef_interval):
-        while ef_array[0] <= self.best_objective_values[1]:
+    def coverage_loop(self, ef_array, previous_solutions, previous_solution_information, ef_intervals):
+        # For multi-objective, continue while any constraint objective has valid intervals
+        iteration_count = 0
+        max_iterations = 1000  # Safety limit to prevent infinite loops
+        
+        while (any(len(interval.intervals) > 0 for interval in ef_intervals) and 
+               iteration_count < max_iterations):
             yield from self.coverage_most_inner_loop(ef_array, previous_solutions, previous_solution_information,
-                                                     ef_interval)
+                                                     ef_intervals)
+            iteration_count += 1
+            
+            # Update ef_array to next valid point from intervals
+            updated = False
+            for i, interval_manager in enumerate(ef_intervals):
+                if len(interval_manager.intervals) > 0:
+                    largest_interval = interval_manager.find_largest_interval()
+                    if largest_interval is not None:
+                        ef_array[i] = int((largest_interval[0] + largest_interval[1]) / 2)
+                        updated = True
+                        break
+            
+            if not updated:
+                break
 
-    def coverage_most_inner_loop(self, ef_array, previous_solutions, previous_solution_information, ef_interval):
+    def coverage_most_inner_loop(self, ef_array, previous_solutions, previous_solution_information, ef_intervals):
         gamma = 1  # with the value of 1, the algorithm will find the whole Pareto front if run enough time
         previous_solution_relaxation, previous_solution_values = \
             Saugmecon.search_previous_solutions_relaxation(ef_array, previous_solution_information, min_sense=False)
@@ -102,8 +125,9 @@ class CoverageGridPoint(FrontGeneratorStrategy):
                         calculated_cloud_uncovered = self.solver.model.calculate_cloud_uncovered(formatted_solution["solution_values"])
                         if calculated_cloud_uncovered != abs(one_solution[1]):
                             print(f"Cloud covered error. Expected: {one_solution[1]}, calculated: {calculated_cloud_uncovered}")
+        # Update all constraint objectives
         for i in range(len(self.constraint_objectives)):
-            self.adjust_parameter_ef_array(gamma, i, ef_array, one_solution, ef_interval)
+            self.adjust_parameter_ef_array(gamma, i, ef_array, one_solution, ef_intervals[i])
 
     def adjust_parameter_ef_array(self, gamma, id_constraint_objective, ef_array, one_solution, ef_interval):
         # check if the list one_solution is empty
@@ -135,13 +159,36 @@ class CoverageGridPoint(FrontGeneratorStrategy):
             self.solver.change_objective_sense(i)
 
     def get_best_worst_values(self):
-        if len(self.solver.model.objectives) == 2:
-            all_solutions = self.get_best_worst_for_2obj_lexicographically()
-            for formatted_solution in all_solutions:
-                if formatted_solution is not None:
-                    yield formatted_solution
-                else:
-                    raise TimeoutError()
+        """Get extreme points by optimizing each objective individually for any number of objectives."""
+        num_objectives = len(self.solver.model.objectives)
+        self.best_objective_values = [0] * num_objectives
+        self.nadir_objectives_values = [0] * num_objectives
+        formatted_solutions = []
+        
+        # For each objective, find its extreme value (ideal point)
+        for i in range(num_objectives):
+            formatted_solution, objective_val = self.optimize_single_objectives(self.model_optimization_sense, i)
+            if formatted_solution is not None and objective_val is not None:
+                self.best_objective_values[i] = int(objective_val)
+                formatted_solutions.append(formatted_solution)
+                self.front_solutions.append(formatted_solution)
+                
+                # For nadir calculation, use the worst values from other objectives when optimizing objective i
+                obj_values = formatted_solution['objs']
+                for j in range(num_objectives):
+                    if i != j:
+                        # Update nadir if this is worse than current nadir for objective j
+                        if self.nadir_objectives_values[j] == 0 or obj_values[j] > self.nadir_objectives_values[j]:
+                            self.nadir_objectives_values[j] = obj_values[j]
+            else:
+                raise TimeoutError(f"Timeout while optimizing objective {i}")
+        
+        # Yield all found extreme solutions
+        for formatted_solution in formatted_solutions:
+            if formatted_solution is not None:
+                yield formatted_solution
+            else:
+                raise TimeoutError()
 
     def set_augmecon2_objective_model(self):
         self.constraint_objectives_lhs = self.solver.build_objective_e_constraint_augmecon2(
@@ -154,10 +201,6 @@ class CoverageGridPoint(FrontGeneratorStrategy):
                 self.solver.remove_constraint(self.constraint_objectives[i])
             self.constraint_objectives[i] = self.solver.add_constraints_eq(self.constraint_objectives_lhs[i],
                                                                            ef_array[i])
-
-    def check_number_of_objectives(self):
-        if len(self.solver.model.objectives) > 2:
-            raise ValueError("This implementation only works for 2 objectives.")
 
     def always_add_new_solutions_to_front(self):
         return False
