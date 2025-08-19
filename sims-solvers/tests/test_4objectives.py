@@ -557,7 +557,7 @@ class TestDirectGurobiModel4Objectives:
         
         if os.path.exists(test_file):
             config = self._create_gurobi_direct_config(instance_name)
-            config.solver_timeout_sec = 30  # Shorter timeout for tests
+            config.solver_timeout_sec = 180  # 3 minutes timeout
             
             # Parse real DZN data
             dzn_data = self.parse_simple_dzn_data(test_file)
@@ -575,12 +575,9 @@ class TestDirectGurobiModel4Objectives:
             # Solve and collect solutions
             solutions = []
             solution_count = 0
-            max_solutions = 5  # Limit for test performance
             
             try:
                 for solution in solver.solve():
-                    if solution_count >= max_solutions:
-                        break
                     
                     if solution is not None:
                         # Get objective values from solution
@@ -652,7 +649,7 @@ class TestDirectGurobiModel4Objectives:
         
         if os.path.exists(test_file):
             config = self._create_gurobi_direct_config("lagos_nigeria_30")
-            config.solver_timeout_sec = 45  # Slightly longer for quality test
+            config.solver_timeout_sec = 180  # 3 minutes timeout for quality test
             
             # Parse real DZN data
             dzn_data = self.parse_simple_dzn_data(test_file)
@@ -668,12 +665,10 @@ class TestDirectGurobiModel4Objectives:
             solutions = []
             solution_details = []  # Store full solution info for detailed output
             solution_count = 0
-            max_solutions = 8  # More solutions for quality analysis
+            # No max_solutions limit - let it run until timeout
             
             try:
                 for solution in solver.solve():
-                    if solution_count >= max_solutions:
-                        break
                     
                     if solution is not None:
                         obj_values = solution["objs"]
@@ -746,7 +741,7 @@ class TestDirectGurobiModel4Objectives:
         
         if os.path.exists(test_file):
             config = self._create_gurobi_direct_config("rio_de_janeiro_30")
-            config.solver_timeout_sec = 20  # Quick feasibility test
+            config.solver_timeout_sec = 180  # 3 minutes timeout
             
             # Parse real DZN data
             dzn_data = self.parse_simple_dzn_data(test_file)
