@@ -135,6 +135,7 @@ impl PlsConfig {
     max_iterations=50000,
     is_deterministic=false,
     initial_population_size=100,
+    initial_population=None,
     neighborhood_size_min=1,
     neighborhood_size_max=6,
     trace=true
@@ -148,6 +149,7 @@ pub fn solve_with_pls(
     max_iterations: usize,
     is_deterministic: bool,
     initial_population_size: usize,
+    initial_population: Option<Vec<crate::solution::Solution>>,
     neighborhood_size_min: u32,
     neighborhood_size_max: u32,
     trace: bool,
@@ -181,8 +183,12 @@ pub fn solve_with_pls(
     }
 
     let timeout_seconds = timeout.as_secs_f64();
+    let initial_pop_info = match &initial_population {
+        Some(pop) => format!("provided {} solutions", pop.len()),
+        None => format!("random generation size {}", initial_population_size),
+    };
     info!(
-        "Starting PLS algorithm with {} objectives: {objectives:?}, plots: {plots}, timeout: {timeout_seconds}s, max_iterations: {max_iterations}, deterministic: {is_deterministic}, population_size: {initial_population_size}, neighborhood: {neighborhood_size_min}..{neighborhood_size_max}",
+        "Starting PLS algorithm with {} objectives: {objectives:?}, plots: {plots}, timeout: {timeout_seconds}s, max_iterations: {max_iterations}, deterministic: {is_deterministic}, initial_population: {initial_pop_info}, neighborhood: {neighborhood_size_min}..{neighborhood_size_max}",
         objectives.len()
     );
 
@@ -256,13 +262,26 @@ pub fn solve_with_pls(
 
             // Create initial population manually for 2D
             let mut initial_solution_set = BTreeSolutionSet::new("initial_2d_solutions");
-            for _ in 0..initial_population_size {
-                let random_solution = if is_deterministic {
-                    BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
-                } else {
-                    BitsetEncodedSolution::random(&pls_problem)
-                };
-                initial_solution_set.try_insert(&random_solution);
+            
+            if let Some(provided_population) = &initial_population {
+                // Use provided initial population
+                info!("Using provided initial population of {} solutions for 2D PLS", provided_population.len());
+                for solution in provided_population {
+                    let selected_images: Vec<usize> = solution.selected_images.iter().cloned().collect();
+                    let pls_solution = BitsetEncodedSolution::from_selected_images(&selected_images, &pls_problem);
+                    initial_solution_set.try_insert(&pls_solution);
+                }
+            } else {
+                // Generate random initial population
+                info!("Generating random initial population of {} solutions for 2D PLS", initial_population_size);
+                for _ in 0..initial_population_size {
+                    let random_solution = if is_deterministic {
+                        BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
+                    } else {
+                        BitsetEncodedSolution::random(&pls_problem)
+                    };
+                    initial_solution_set.try_insert(&random_solution);
+                }
             }
 
             // Create and run 2D PLS
@@ -401,13 +420,26 @@ pub fn solve_with_pls(
             // Create initial population manually for 3D using ND-Tree
             let mut initial_solution_set: NdTreeSolutionSet<BitsetEncodedSolution<3>, 3> =
                 NdTreeSolutionSet::new("initial_3d_solutions");
-            for _ in 0..initial_population_size {
-                let random_solution = if is_deterministic {
-                    BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
-                } else {
-                    BitsetEncodedSolution::random(&pls_problem)
-                };
-                initial_solution_set.try_insert(&random_solution);
+            
+            if let Some(provided_population) = &initial_population {
+                // Use provided initial population
+                info!("Using provided initial population of {} solutions for 3D PLS", provided_population.len());
+                for solution in provided_population {
+                    let selected_images: Vec<usize> = solution.selected_images.iter().cloned().collect();
+                    let pls_solution = BitsetEncodedSolution::from_selected_images(&selected_images, &pls_problem);
+                    initial_solution_set.try_insert(&pls_solution);
+                }
+            } else {
+                // Generate random initial population
+                info!("Generating random initial population of {} solutions for 3D PLS", initial_population_size);
+                for _ in 0..initial_population_size {
+                    let random_solution = if is_deterministic {
+                        BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
+                    } else {
+                        BitsetEncodedSolution::random(&pls_problem)
+                    };
+                    initial_solution_set.try_insert(&random_solution);
+                }
             }
 
             // Create and run 3D PLS
@@ -551,13 +583,26 @@ pub fn solve_with_pls(
             // Create initial population manually for 4D using ND-Tree
             let mut initial_solution_set: NdTreeSolutionSet<BitsetEncodedSolution<4>, 4> =
                 NdTreeSolutionSet::new("initial_4d_solutions");
-            for _ in 0..initial_population_size {
-                let random_solution = if is_deterministic {
-                    BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
-                } else {
-                    BitsetEncodedSolution::random(&pls_problem)
-                };
-                initial_solution_set.try_insert(&random_solution);
+            
+            if let Some(provided_population) = &initial_population {
+                // Use provided initial population
+                info!("Using provided initial population of {} solutions for 4D PLS", provided_population.len());
+                for solution in provided_population {
+                    let selected_images: Vec<usize> = solution.selected_images.iter().cloned().collect();
+                    let pls_solution = BitsetEncodedSolution::from_selected_images(&selected_images, &pls_problem);
+                    initial_solution_set.try_insert(&pls_solution);
+                }
+            } else {
+                // Generate random initial population
+                info!("Generating random initial population of {} solutions for 4D PLS", initial_population_size);
+                for _ in 0..initial_population_size {
+                    let random_solution = if is_deterministic {
+                        BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
+                    } else {
+                        BitsetEncodedSolution::random(&pls_problem)
+                    };
+                    initial_solution_set.try_insert(&random_solution);
+                }
             }
 
             // Create and run 4D PLS
@@ -960,6 +1005,7 @@ pub fn solve_with_hybrid(
             pls_config.max_iterations,
             pls_config.is_deterministic,
             pls_config.initial_population_size,
+            None, // No initial population provided
             pls_config.neighborhood_size_min,
             pls_config.neighborhood_size_max,
             false, // No trace for internal hybrid calls
@@ -1013,6 +1059,7 @@ pub fn solve_with_hybrid(
             pls_config.max_iterations,
             pls_config.is_deterministic,
             pls_config.initial_population_size,
+            None, // No initial population provided
             pls_config.neighborhood_size_min,
             pls_config.neighborhood_size_max,
             false, // No trace for internal hybrid calls
