@@ -20,6 +20,7 @@ dependencies = [
     "pymoo==0.6.1.5",
     "shapely==2.1.1",
     "minizinc[dzn]==0.10.0",
+    "pytest>=8.4.1",
 ]
 
 [project.scripts]
