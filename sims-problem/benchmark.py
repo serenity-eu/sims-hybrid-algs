@@ -652,6 +652,21 @@ class BenchmarkRunner(ABC):
         
         return costs, cloudy_areas, incidence_angles
     
+    def extract_solution_objectives_4d(self, solutions: list[Solution]) -> tuple[list[float], list[float], list[float], list[float]]:
+        """Extract all four objectives from solutions data for 4D problems."""
+        costs = []
+        cloudy_areas = []
+        resolutions = []
+        incidence_angles = []
+        
+        for solution in solutions:
+            costs.append(solution.cost)
+            cloudy_areas.append(solution.cloudy_area)
+            resolutions.append(solution.min_resolutions_sum if solution.min_resolutions_sum is not None else 0)
+            incidence_angles.append(solution.max_incidence_angle if solution.max_incidence_angle is not None else 0)
+        
+        return costs, cloudy_areas, resolutions, incidence_angles
+    
     def extract_solution_timestamps(self, solutions: list[Solution]) -> list[timedelta]:
         """Extract timestamps from solutions data."""
         timestamps = []
@@ -925,18 +940,10 @@ class BenchmarkRunner(ABC):
         if instance_name:
             import json  # Import here to avoid issues with error handling
             
-            # Debug: Print directory structure
-            self.console.print(f"🔍 DEBUG: instances_dir = {self.instances_dir}")
-            self.console.print(f"🔍 DEBUG: instances_dir.parent = {self.instances_dir.parent}")
-            
             # Fix path construction - instances_dir is already tests/data, so go up to project root
             jsonl_file = self.instances_dir.parent.parent / "tests" / "data" / "manuels_results" / f"{instance_name}.jsonl"
-            self.console.print(f"🔍 DEBUG: Looking for JSONL at: {jsonl_file}")
-            self.console.print(f"🔍 DEBUG: JSONL file exists: {jsonl_file.exists()}")
             
             if jsonl_file.exists():
-                self.console.print("🔍 DEBUG: Found JSONL file, starting to process...")
-                
                 # Load the corresponding instance to compute objectives
                 instance_file = self.instances_dir / f"{instance_name}.dzn"
                 if not instance_file.exists():
@@ -945,7 +952,6 @@ class BenchmarkRunner(ABC):
                 import sims_problem
                 try:
                     problem = sims_problem.SimsDiscreteProblem.from_dzn(str(instance_file))
-                    self.console.print("🔍 DEBUG: Loaded problem instance successfully")
                 except Exception as e:
                     raise RuntimeError(f"Failed to load instance {instance_file}: {e}")
                 
@@ -1010,20 +1016,13 @@ class BenchmarkRunner(ABC):
                 except IOError as e:
                     raise IOError(f"Failed to read JSONL file {jsonl_file}: {e}")
             else:
-                # Only log missing JSONL file, don't raise error (it's optional)
-                self.console.print(f"ℹ️ No JSONL reference file found for {instance_name} at {jsonl_file}")
-                
-                # Debug: List what files are actually in the manuels_results directory
                 manuels_dir = self.instances_dir / "manuels_results"
                 if manuels_dir.exists():
                     available_files = list(manuels_dir.glob("*.jsonl"))
-                    self.console.print(f"🔍 DEBUG: Available JSONL files in {manuels_dir}:")
                     for f in available_files:
                         self.console.print(f"   - {f.name}")
                 else:
-                    self.console.print(f"🔍 DEBUG: Manuels results directory does not exist: {manuels_dir}")
-        
-        self.console.print(f"🔍 DEBUG: Final JSONL counts - costs: {len(all_jsonl_costs)}, areas: {len(all_jsonl_cloudy_areas)}, angles: {len(all_jsonl_incidence_angles)}")
+                    self.console.print(f"🔍 ERROR: Manuels results directory does not exist: {manuels_dir}")
         
         # Calculate normalized timestamps for coloring (combine all timestamps)
         all_timestamps = all_explored_timestamps + all_final_timestamps
@@ -3546,8 +3545,189 @@ class GurobiBenchmarkRunner(BenchmarkRunner):
         self.console.print(f"[green]Summary saved to: {summary_file}")
     
     def create_instance_3d_visualization(self, instance_name: str, instance_results: list[BenchmarkResult]) -> bool:
-        """Create 3D visualization for a single instance."""
-        return self._create_3d_visualization_base(instance_name, instance_results)
+        """Create 3D visualization for a single instance - for 4D problems, create 3 plots."""
+        return self._create_4d_visualization_multiple_plots(instance_name, instance_results)
+    
+    def _create_4d_visualization_multiple_plots(self, instance_name: str, instance_results: list[BenchmarkResult]) -> bool:
+        """Create 3 different 3D plots for 4-objective problems, showing different objective combinations."""
+        # Filter successful results
+        successful_results = [r for r in instance_results if not r.error and r.final_solutions]
+        
+        if not successful_results:
+            self.console.print(f"❌ No successful results for {instance_name} to visualize")
+            return False
+        
+        self.console.print(f"📊 Creating 3 different 3D visualizations for 4-objective instance {instance_name}...")
+        
+        # Check if plotly is available 
+        try:
+            import plotly.graph_objects as go
+        except ImportError:
+            self.console.print("❌ Plotly not available for creating plots")
+            return False
+        
+        # Define the 3 objective combinations to visualize
+        combinations = [
+            {
+                'indices': (0, 1, 2),  # Cost, Cloud, Resolution
+                'labels': ('Cost (minimize)', 'Cloudy Area Coverage (minimize)', 'Resolution Sum (minimize)'),
+                'suffix': 'cost_cloud_resolution'
+            },
+            {
+                'indices': (0, 1, 3),  # Cost, Cloud, Incidence Angle
+                'labels': ('Cost (minimize)', 'Cloudy Area Coverage (minimize)', 'Max Incidence Angle (minimize)'),
+                'suffix': 'cost_cloud_angle'
+            },
+            {
+                'indices': (0, 2, 3),  # Cost, Resolution, Incidence Angle
+                'labels': ('Cost (minimize)', 'Resolution Sum (minimize)', 'Max Incidence Angle (minimize)'),
+                'suffix': 'cost_resolution_angle'
+            }
+        ]
+        
+        success_count = 0
+        
+        for combo in combinations:
+            try:
+                if self._create_single_4d_plot(instance_name, successful_results, combo):
+                    success_count += 1
+            except Exception as e:
+                self.console.print(f"❌ Failed to create plot {combo['suffix']}: {e}")
+        
+        if success_count > 0:
+            self.console.print(f"✓ Created {success_count}/3 4D visualization plots for {instance_name}")
+            return True
+        else:
+            self.console.print(f"❌ Failed to create any 4D visualization plots for {instance_name}")
+            return False
+    
+    def _create_single_4d_plot(self, instance_name: str, successful_results: list[BenchmarkResult], combo: dict) -> bool:
+        """Create a single 3D plot for specific objective combination."""
+        import plotly.graph_objects as go
+        
+        # Collect data for all solutions
+        all_final_objectives = []
+        final_solution_details = []
+        final_norm_timestamps = []
+        
+        for result in successful_results:
+            if result.final_solutions:
+                objectives_4d = self.extract_solution_objectives_4d(result.final_solutions)
+                timestamps = self.extract_solution_timestamps(result.final_solutions)
+                
+                # Normalize timestamps for this result
+                if timestamps:
+                    min_time = min(timestamps)
+                    max_time = max(timestamps)
+                    time_range = max_time - min_time
+                    if time_range.total_seconds() > 0:
+                        norm_timestamps = [(t - min_time).total_seconds() / time_range.total_seconds() for t in timestamps]
+                    else:
+                        norm_timestamps = [0.5] * len(timestamps)
+                else:
+                    norm_timestamps = []
+                
+                # Create details for hover text
+                for i, sol in enumerate(result.final_solutions):
+                    detail = self._create_final_solution_detail(result, objectives_4d[0][i], objectives_4d[1][i], objectives_4d[3][i])
+                    final_solution_details.append(detail)
+                
+                all_final_objectives.append(objectives_4d)
+                final_norm_timestamps.extend(norm_timestamps)
+        
+        if not all_final_objectives:
+            self.console.print(f"❌ No solutions found for {instance_name} - {combo['suffix']}")
+            return False
+        
+        # Combine all objectives from all results
+        combined_objectives = [[], [], [], []]
+        for obj_set in all_final_objectives:
+            for i in range(4):
+                combined_objectives[i].extend(obj_set[i])
+        
+        # Extract the 3 objectives for this combination
+        x_data = combined_objectives[combo['indices'][0]]
+        y_data = combined_objectives[combo['indices'][1]]
+        z_data = combined_objectives[combo['indices'][2]]
+        
+        # Create the plot
+        fig = go.Figure()
+        
+        # Add final Pareto solutions
+        fig.add_trace(go.Scatter3d(
+            x=x_data,
+            y=y_data,
+            z=z_data,
+            mode='markers',
+            marker=dict(
+                size=6,
+                color=final_norm_timestamps,
+                colorscale='Rainbow_r',
+                colorbar=dict(title="Solution Time", x=0.92),
+                opacity=0.9,
+                line=dict(color='black', width=1),
+                symbol='circle'
+            ),
+            text=final_solution_details,
+            hovertemplate='%{text}<extra></extra>',
+            name=f'⭐ Gurobi Pareto Solutions ({len(x_data)})',
+            legendgroup='final'
+        ))
+        
+        # Update layout
+        fig.update_layout(
+            title=dict(
+                text=f'{self.get_algorithm_name()} Benchmark Results - {instance_name}<br>'
+                     f'<sub>3D plot: {combo["labels"][0]} vs {combo["labels"][1]} vs {combo["labels"][2]}</sub>',
+                x=0.5,
+                font=dict(size=16)
+            ),
+            scene=dict(
+                xaxis=dict(title=combo['labels'][0], tickfont=dict(size=12)),
+                yaxis=dict(title=combo['labels'][1], tickfont=dict(size=12)),
+                zaxis=dict(title=combo['labels'][2], tickfont=dict(size=12)),
+                camera=dict(eye=dict(x=1.5, y=1.5, z=1.5))
+            ),
+            width=1200,
+            height=800,
+            margin=dict(l=0, r=0, b=0, t=100)
+        )
+        
+        # Add statistics annotation
+        annotation_text = (
+            f"📊 {instance_name} - {combo['suffix'].replace('_', ' ').title()}:<br>"
+            f"• Total Solutions: {len(x_data)}<br>"
+            f"• Successful Runs: {len(successful_results)}<br>"
+        )
+        
+        if x_data:
+            annotation_text += (
+                f"• {combo['labels'][0].split(' ')[0]} Range: {min(x_data):.1f} - {max(x_data):.1f}<br>"
+                f"• {combo['labels'][1].split(' ')[0]} Range: {min(y_data):.1f} - {max(y_data):.1f}<br>"
+                f"• {combo['labels'][2].split(' ')[0]} Range: {min(z_data):.1f} - {max(z_data):.1f}<br>"
+            )
+        
+        annotation_text += f"• Avg Runtime: {statistics.mean([r.total_runtime_seconds for r in successful_results]):.2f}s"
+        
+        fig.add_annotation(
+            text=annotation_text,
+            xref="paper", yref="paper",
+            x=0.02, y=0.98,
+            showarrow=False,
+            align="left",
+            bgcolor="rgba(255, 255, 255, 0.9)",
+            bordercolor="black",
+            borderwidth=1,
+            font=dict(size=11)
+        )
+        
+        # Save visualization
+        finished_at = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_file = self.output_dir / f"{instance_name}_{self.get_visualization_filename_suffix()}_{combo['suffix']}_3d_{finished_at}.html"
+        fig.write_html(output_file)
+        
+        self.console.print(f"✓ 3D visualization saved: {output_file}")
+        return True
     
     def create_instance_summary_statistics(self, instance_name: str, instance_results: list[BenchmarkResult]) -> BenchmarkSummaryStatistics:
         """Create summary statistics for a single instance."""
