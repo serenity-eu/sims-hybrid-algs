@@ -65,6 +65,23 @@ from rich import box
 from sims_problem import Solution
 
 @dataclass
+class SolverResult:
+    """Dataclass for individual solver results."""
+    solutions: list = field(default_factory=list)
+    num_solutions: int = 0
+    runtime_seconds: float = 0.0
+    error: str = ""
+    
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary format."""
+        return {
+            "solutions": self.solutions,
+            "num_solutions": self.num_solutions,
+            "runtime_seconds": self.runtime_seconds,
+            "error": self.error
+        }
+
+@dataclass
 class ValidationResult:
     """Dataclass for individual solution validation results."""
     is_valid: bool
@@ -547,7 +564,7 @@ class SolutionValidator:
 class BenchmarkRunner(ABC):
     """Abstract base class for benchmark runners."""
     
-    def __init__(self, instances_dir: Path, output_dir: Path, iterations: int = 1, use_tui: bool = False, size_limit: Optional[int] = None, name_filter: Optional[str] = None, timeout: float = 300.0, validate_solutions: bool = True):
+    def __init__(self, instances_dir: Path, output_dir: Path, iterations: int = 1, use_tui: bool = False, size_limit: Optional[int] = None, name_filter: Optional[str] = None, timeout: float = 300.0, validate_solutions: bool = True, include_perfect: bool = False):
         self.instances_dir = instances_dir
         self.output_dir = output_dir
         self.iterations = iterations
@@ -556,6 +573,7 @@ class BenchmarkRunner(ABC):
         self.name_filter = name_filter
         self.timeout = timeout
         self.validate_solutions = validate_solutions
+        self.include_perfect = include_perfect
         self.console = Console()
         self.validator = SolutionValidator(self.console) if validate_solutions else None
         
@@ -885,7 +903,7 @@ class BenchmarkRunner(ABC):
         
         Returns:
             Tuple of (explored_data, final_data, jsonl_data, all_timestamps_range) where each data is
-            (costs, cloudy_areas, incidence_angles, timestamps, solution_details)
+            (costs, cloudy_areas, incidence_angles, timestamps, solution_details, colors, solver_types)
         """
         # Collect all explored solutions and final solutions
         all_explored_costs = []
@@ -893,18 +911,28 @@ class BenchmarkRunner(ABC):
         all_explored_incidence_angles = []
         all_explored_timestamps = []
         explored_solution_details = []
+        explored_colors = []
+        explored_solver_types = []
         
         all_final_costs = []
         all_final_cloudy_areas = []
         all_final_incidence_angles = []
         all_final_timestamps = []
         final_solution_details = []
+        final_colors = []
+        final_solver_types = []
         
         # Collect JSONL solutions data
         all_jsonl_costs = []
         all_jsonl_cloudy_areas = []
         all_jsonl_incidence_angles = []
         jsonl_solution_details = []
+        
+        # Determine algorithm type for coloring
+        algorithm_name = self.get_algorithm_name().lower()
+        is_hybrid = 'hybrid' in algorithm_name
+        is_gurobi = 'gurobi' in algorithm_name
+        is_pls = 'pls' in algorithm_name and not is_hybrid
         
         for result in successful_results:
             # Process explored solutions
@@ -917,12 +945,27 @@ class BenchmarkRunner(ABC):
                 all_explored_incidence_angles.extend(exp_incidence_angles)
                 all_explored_timestamps.extend(exp_timestamps)
                 
+                # Color explored solutions based on algorithm type
+                if is_pls:
+                    exp_colors = ['blue'] * len(exp_costs)
+                    exp_types = ['PLS'] * len(exp_costs)
+                elif is_gurobi and not is_hybrid:
+                    exp_colors = ['red'] * len(exp_costs)
+                    exp_types = ['Gurobi'] * len(exp_costs)
+                else:
+                    exp_colors = ['purple'] * len(exp_costs)  # Hybrid or other
+                    exp_types = ['Mixed'] * len(exp_costs)
+                
+                explored_colors.extend(exp_colors)
+                explored_solver_types.extend(exp_types)
+                
                 # Create hover details for explored solutions
-                for (cost, cloudy, incidence) in zip(exp_costs, exp_cloudy_areas, exp_incidence_angles):
+                for i, (cost, cloudy, incidence) in enumerate(zip(exp_costs, exp_cloudy_areas, exp_incidence_angles)):
                     detail = self._create_explored_solution_detail(result, cost, cloudy, incidence)
+                    detail += f"<br>Solver: {exp_types[i]}"
                     explored_solution_details.append(detail)
             
-            # Process final solutions
+            # Process final solutions - distinguish MILP vs PLS for hybrid algorithms
             final_costs, final_cloudy_areas, final_incidence_angles = self.extract_solution_objectives(result.final_solutions)
             final_timestamps = self.extract_solution_timestamps(result.final_solutions)
             
@@ -931,13 +974,42 @@ class BenchmarkRunner(ABC):
             all_final_incidence_angles.extend(final_incidence_angles)
             all_final_timestamps.extend(final_timestamps)
             
+            # Color final solutions based on algorithm and whether they're from MILP
+            if is_hybrid and result.milp_solutions:
+                # For hybrid algorithms, check if solutions are in milp_solutions
+                milp_costs, milp_cloudy, milp_incidence = self.extract_solution_objectives(result.milp_solutions)
+                milp_coords = set(zip(milp_costs, milp_cloudy, milp_incidence))
+                
+                for i, (cost, cloudy, incidence) in enumerate(zip(final_costs, final_cloudy_areas, final_incidence_angles)):
+                    if (cost, cloudy, incidence) in milp_coords:
+                        final_colors.append('red')
+                        final_solver_types.append('Gurobi')
+                    else:
+                        final_colors.append('blue')
+                        final_solver_types.append('PLS')
+            else:
+                # For non-hybrid algorithms, color all solutions based on algorithm type
+                if is_pls:
+                    colors = ['blue'] * len(final_costs)
+                    types = ['PLS'] * len(final_costs)
+                elif is_gurobi:
+                    colors = ['red'] * len(final_costs)
+                    types = ['Gurobi'] * len(final_costs)
+                else:
+                    colors = ['purple'] * len(final_costs)  # Other MILP solvers
+                    types = ['MILP'] * len(final_costs)
+                
+                final_colors.extend(colors)
+                final_solver_types.extend(types)
+            
             # Create hover details for final solutions
             for i, (cost, cloudy, incidence) in enumerate(zip(final_costs, final_cloudy_areas, final_incidence_angles)):
                 detail = self._create_final_solution_detail(result, cost, cloudy, incidence)
+                detail += f"<br>Solver: {final_solver_types[i]}"
                 final_solution_details.append(detail)
         
-        # Load and process JSONL solutions if instance name is provided
-        if instance_name:
+        # Load and process JSONL solutions if instance name is provided and include_perfect is enabled
+        if instance_name and self.include_perfect:
             import json  # Import here to avoid issues with error handling
             
             # Fix path construction - instances_dir is already tests/data, so go up to project root
@@ -1046,9 +1118,9 @@ class BenchmarkRunner(ABC):
         jsonl_norm_timestamps = [0.5] * len(all_jsonl_costs)
         
         explored_data = (all_explored_costs, all_explored_cloudy_areas, all_explored_incidence_angles, 
-                        explored_norm_timestamps, explored_solution_details)
+                        explored_norm_timestamps, explored_solution_details, explored_colors, explored_solver_types)
         final_data = (all_final_costs, all_final_cloudy_areas, all_final_incidence_angles, 
-                     final_norm_timestamps, final_solution_details)
+                     final_norm_timestamps, final_solution_details, final_colors, final_solver_types)
         jsonl_data = (all_jsonl_costs, all_jsonl_cloudy_areas, all_jsonl_incidence_angles,
                      jsonl_norm_timestamps, jsonl_solution_details)
         
@@ -1102,8 +1174,35 @@ class BenchmarkRunner(ABC):
         
         # Collect visualization data
         explored_data, final_data, jsonl_data, timestamp_range = self._collect_visualization_data(successful_results, instance_name)
-        all_explored_costs, all_explored_cloudy_areas, all_explored_incidence_angles, explored_norm_timestamps, explored_solution_details = explored_data
-        all_final_costs, all_final_cloudy_areas, all_final_incidence_angles, final_norm_timestamps, final_solution_details = final_data
+        
+        # Unpack data with new color information (backward compatible)
+        if len(explored_data) >= 7:
+            all_explored_costs, all_explored_cloudy_areas, all_explored_incidence_angles, explored_norm_timestamps, explored_solution_details, explored_colors, explored_solver_types = explored_data
+        else:
+            # Fallback for compatibility
+            all_explored_costs, all_explored_cloudy_areas, all_explored_incidence_angles, explored_norm_timestamps, explored_solution_details = explored_data[:5]
+            explored_colors = ['gray'] * len(all_explored_costs)
+            explored_solver_types = ['Unknown'] * len(all_explored_costs)
+            
+        if len(final_data) >= 7:
+            all_final_costs, all_final_cloudy_areas, all_final_incidence_angles, final_norm_timestamps, final_solution_details, final_colors, final_solver_types = final_data
+        else:
+            # Fallback for compatibility
+            all_final_costs, all_final_cloudy_areas, all_final_incidence_angles, final_norm_timestamps, final_solution_details = final_data[:5]
+            # Default colors based on algorithm type
+            algorithm_name = self.get_algorithm_name().lower()
+            if 'pls' in algorithm_name and 'hybrid' not in algorithm_name:
+                default_color = 'blue'
+                default_type = 'PLS'
+            elif 'gurobi' in algorithm_name:
+                default_color = 'red'
+                default_type = 'Gurobi'
+            else:
+                default_color = 'purple'
+                default_type = 'MILP'
+            final_colors = [default_color] * len(all_final_costs)
+            final_solver_types = [default_type] * len(all_final_costs)
+            
         all_jsonl_costs, all_jsonl_cloudy_areas, all_jsonl_incidence_angles, jsonl_norm_timestamps, jsonl_solution_details = jsonl_data
         
         if not all_final_costs and not all_explored_costs and not all_jsonl_costs:
@@ -1128,8 +1227,7 @@ class BenchmarkRunner(ABC):
                 mode='markers',
                 marker=dict(
                     size=2,
-                    color=explored_norm_timestamps,
-                    colorscale='Rainbow_r',  # Reversed colorscale: early=yellow, late=purple
+                    color=explored_colors,
                     opacity=0.4,
                     line=dict(color='black', width=0.5),
                     symbol='x'
@@ -1140,7 +1238,7 @@ class BenchmarkRunner(ABC):
                 legendgroup='explored'
             ))
         
-        # Final Pareto solutions (Circle markers)
+        # Final Pareto solutions (Circle markers) - colored by solver type
         if all_final_costs:
             traces.append(go.Scatter3d(
                 x=all_final_costs,
@@ -1149,9 +1247,7 @@ class BenchmarkRunner(ABC):
                 mode='markers',
                 marker=dict(
                     size=4,
-                    color=final_norm_timestamps,
-                    colorscale='Rainbow_r',  # Reversed colorscale: early=yellow, late=purple
-                    colorbar=dict(title="Final Time", x=0.92),
+                    color=final_colors,
                     opacity=0.9,
                     line=dict(color='black', width=1),
                     symbol='circle'
@@ -1257,8 +1353,8 @@ class BenchmarkRunner(ABC):
 class HybridBenchmarkRunner(BenchmarkRunner):
     """Hybrid algorithm benchmark runner with TUI progress tracking."""
     
-    def __init__(self, instances_dir: Path, output_dir: Path, iterations: int = 1, ratio_step: int = 10, use_tui: bool = False, size_limit: Optional[int] = None, name_filter: Optional[str] = None, timeout: float = 300.0, validate_solutions: bool = True):
-        super().__init__(instances_dir, output_dir, iterations, use_tui, size_limit, name_filter, timeout, validate_solutions)
+    def __init__(self, instances_dir: Path, output_dir: Path, iterations: int = 1, ratio_step: int = 10, use_tui: bool = False, size_limit: Optional[int] = None, name_filter: Optional[str] = None, timeout: float = 300.0, validate_solutions: bool = True, include_perfect: bool = False):
+        super().__init__(instances_dir, output_dir, iterations, use_tui, size_limit, name_filter, timeout, validate_solutions, include_perfect)
         
         # Generate ratio configurations (MILP%, PLS%)
         self.ratios = [(i, 100-i) for i in range(100, -1, -ratio_step)]
@@ -1906,8 +2002,8 @@ class HybridBenchmarkRunner(BenchmarkRunner):
 class PlsBenchmarkRunner(BenchmarkRunner):
     """PLS-specific benchmark runner."""
     
-    def __init__(self, instances_dir: Path, output_dir: Path, iterations: int = 10, max_iterations: int = 50000, use_tui: bool = False, size_limit: Optional[int] = None, name_filter: Optional[str] = None, timeout: float = 300.0, validate_solutions: bool = True):
-        super().__init__(instances_dir, output_dir, iterations, use_tui, size_limit, name_filter, timeout, validate_solutions)
+    def __init__(self, instances_dir: Path, output_dir: Path, iterations: int = 10, max_iterations: int = 50000, use_tui: bool = False, size_limit: Optional[int] = None, name_filter: Optional[str] = None, timeout: float = 300.0, validate_solutions: bool = True, include_perfect: bool = False):
+        super().__init__(instances_dir, output_dir, iterations, use_tui, size_limit, name_filter, timeout, validate_solutions, include_perfect)
         self.max_iterations = max_iterations
     
     def get_algorithm_name(self) -> str:
@@ -1957,7 +2053,7 @@ class PlsBenchmarkRunner(BenchmarkRunner):
         """Run pure PLS solver and return SolvingResult."""
         return sims_problem.solve_with_pls(
             instance,
-            objectives=["min_cost", "cloud_coverage", "max_incidence_angle"],
+            objectives=["min_cost", "cloud_coverage", "min_resolution", "max_incidence_angle"],
             plots=False,
             plot_output_path=None,
             timeout=timeout,
@@ -2431,8 +2527,8 @@ class MilpBenchmarkRunner(BenchmarkRunner):
     def __init__(self, instances_dir: Path, output_dir: Path, iterations: int = 10, grid_points: int = 50, 
                  use_tui: bool = False, size_limit: Optional[int] = None, name_filter: Optional[str] = None, 
                  timeout: float = 300.0, validate_solutions: bool = True, bypass_coefficient: bool = True,
-                 early_exit: bool = True, flag_array: bool = True, solver_name: str = "cbc"):
-        super().__init__(instances_dir, output_dir, iterations, use_tui, size_limit, name_filter, timeout, validate_solutions)
+                 early_exit: bool = True, flag_array: bool = True, solver_name: str = "cbc", include_perfect: bool = False):
+        super().__init__(instances_dir, output_dir, iterations, use_tui, size_limit, name_filter, timeout, validate_solutions, include_perfect)
         self.grid_points = grid_points
         self.bypass_coefficient = bypass_coefficient
         self.early_exit = early_exit
@@ -3012,8 +3108,8 @@ class GurobiBenchmarkRunner(BenchmarkRunner):
     def __init__(self, instances_dir: Path, output_dir: Path, iterations: int = 10, 
                  use_tui: bool = False, size_limit: Optional[int] = None, name_filter: Optional[str] = None, 
                  timeout: float = 300.0, validate_solutions: bool = True, solver_name: str = "gurobi",
-                 front_strategy: str = "saugmecon"):
-        super().__init__(instances_dir, output_dir, iterations, use_tui, size_limit, name_filter, timeout, validate_solutions)
+                 front_strategy: str = "saugmecon", include_perfect: bool = False):
+        super().__init__(instances_dir, output_dir, iterations, use_tui, size_limit, name_filter, timeout, validate_solutions, include_perfect)
         self.solver_name = solver_name
         self.front_strategy = front_strategy
         
@@ -3549,7 +3645,7 @@ class GurobiBenchmarkRunner(BenchmarkRunner):
         return self._create_4d_visualization_multiple_plots(instance_name, instance_results)
     
     def _create_4d_visualization_multiple_plots(self, instance_name: str, instance_results: list[BenchmarkResult]) -> bool:
-        """Create 3 different 3D plots for 4-objective problems, showing different objective combinations."""
+        """Create a single HTML with 3 subplots showing different objective combinations for 4D problems."""
         # Filter successful results
         successful_results = [r for r in instance_results if not r.error and r.final_solutions]
         
@@ -3557,11 +3653,12 @@ class GurobiBenchmarkRunner(BenchmarkRunner):
             self.console.print(f"❌ No successful results for {instance_name} to visualize")
             return False
         
-        self.console.print(f"📊 Creating 3 different 3D visualizations for 4-objective instance {instance_name}...")
+        self.console.print(f"📊 Creating combined 4D visualization with 3 subplots for {instance_name}...")
         
         # Check if plotly is available 
         try:
             import plotly.graph_objects as go
+            from plotly.subplots import make_subplots
         except ImportError:
             self.console.print("❌ Plotly not available for creating plots")
             return False
@@ -3571,34 +3668,172 @@ class GurobiBenchmarkRunner(BenchmarkRunner):
             {
                 'indices': (0, 1, 2),  # Cost, Cloud, Resolution
                 'labels': ('Cost (minimize)', 'Cloudy Area Coverage (minimize)', 'Resolution Sum (minimize)'),
-                'suffix': 'cost_cloud_resolution'
+                'suffix': 'cost_cloud_resolution',
+                'title': 'Cost vs Cloud vs Resolution'
             },
             {
                 'indices': (0, 1, 3),  # Cost, Cloud, Incidence Angle
                 'labels': ('Cost (minimize)', 'Cloudy Area Coverage (minimize)', 'Max Incidence Angle (minimize)'),
-                'suffix': 'cost_cloud_angle'
+                'suffix': 'cost_cloud_angle',
+                'title': 'Cost vs Cloud vs Incidence Angle'
             },
             {
                 'indices': (0, 2, 3),  # Cost, Resolution, Incidence Angle
                 'labels': ('Cost (minimize)', 'Resolution Sum (minimize)', 'Max Incidence Angle (minimize)'),
-                'suffix': 'cost_resolution_angle'
+                'suffix': 'cost_resolution_angle',
+                'title': 'Cost vs Resolution vs Incidence Angle'
             }
         ]
         
-        success_count = 0
-        
-        for combo in combinations:
-            try:
-                if self._create_single_4d_plot(instance_name, successful_results, combo):
-                    success_count += 1
-            except Exception as e:
-                self.console.print(f"❌ Failed to create plot {combo['suffix']}: {e}")
-        
-        if success_count > 0:
-            self.console.print(f"✓ Created {success_count}/3 4D visualization plots for {instance_name}")
+        try:
+            # Create subplots with 3D scenes in a row
+            fig = make_subplots(
+                rows=1, cols=3,
+                specs=[[{'type': 'scene'}, {'type': 'scene'}, {'type': 'scene'}]],
+                subplot_titles=[combo['title'] for combo in combinations],
+                horizontal_spacing=0.05
+            )
+            
+            # Collect data once for all plots
+            all_final_objectives = []
+            final_solution_details = []
+            final_norm_timestamps = []
+            
+            for result in successful_results:
+                if result.final_solutions:
+                    objectives_4d = self.extract_solution_objectives_4d(result.final_solutions)
+                    timestamps = self.extract_solution_timestamps(result.final_solutions)
+                    
+                    # Normalize timestamps for this result
+                    if timestamps:
+                        min_time = min(timestamps)
+                        max_time = max(timestamps)
+                        time_range = max_time - min_time
+                        if time_range.total_seconds() > 0:
+                            norm_timestamps = [(t - min_time).total_seconds() / time_range.total_seconds() for t in timestamps]
+                        else:
+                            norm_timestamps = [0.5] * len(timestamps)
+                    else:
+                        norm_timestamps = []
+                    
+                    # Create details for hover text
+                    for i, sol in enumerate(result.final_solutions):
+                        detail = self._create_final_solution_detail(result, objectives_4d[0][i], objectives_4d[1][i], objectives_4d[3][i])
+                        final_solution_details.append(detail)
+                    
+                    all_final_objectives.append(objectives_4d)
+                    final_norm_timestamps.extend(norm_timestamps)
+            
+            if not all_final_objectives:
+                self.console.print(f"❌ No solutions found for {instance_name}")
+                return False
+            
+            # Combine all objectives from all results
+            combined_objectives = [[], [], [], []]
+            for obj_set in all_final_objectives:
+                for i in range(4):
+                    combined_objectives[i].extend(obj_set[i])
+            
+            # Add traces for each subplot
+            for col_idx, combo in enumerate(combinations, 1):
+                # Extract the 3 objectives for this combination
+                x_data = combined_objectives[combo['indices'][0]]
+                y_data = combined_objectives[combo['indices'][1]]
+                z_data = combined_objectives[combo['indices'][2]]
+                
+                # Add final Pareto solutions
+                fig.add_trace(
+                    go.Scatter3d(
+                        x=x_data,
+                        y=y_data,
+                        z=z_data,
+                        mode='markers',
+                        marker=dict(
+                            size=5,
+                            color=final_norm_timestamps,
+                            colorscale='Rainbow_r',
+                            opacity=0.8,
+                            line=dict(color='black', width=0.5),
+                            symbol='circle'
+                        ),
+                        text=final_solution_details,
+                        hovertemplate='%{text}<extra></extra>',
+                        name=f'Solutions ({len(x_data)})',
+                        legendgroup=f'final_{col_idx}',
+                        showlegend=(col_idx == 1)  # Only show legend for first plot
+                    ),
+                    row=1, col=col_idx
+                )
+                
+                # Update scene for this subplot
+                scene_attr = f'scene{col_idx}' if col_idx > 1 else 'scene'
+                fig.update_layout(**{
+                    scene_attr: dict(
+                        xaxis=dict(title=combo['labels'][0], titlefont=dict(size=10), tickfont=dict(size=8)),
+                        yaxis=dict(title=combo['labels'][1], titlefont=dict(size=10), tickfont=dict(size=8)),
+                        zaxis=dict(title=combo['labels'][2], titlefont=dict(size=10), tickfont=dict(size=8)),
+                        camera=dict(eye=dict(x=1.3, y=1.3, z=1.3)),
+                        aspectmode='cube'
+                    )
+                })
+            
+            # Update overall layout
+            fig.update_layout(
+                title=dict(
+                    text=f'{self.get_algorithm_name()} - {instance_name}: 4D Pareto Front Analysis<br>'
+                         f'<sub>Three 3D projections showing different objective combinations ({len(combined_objectives[0])} solutions)</sub>',
+                    x=0.5,
+                    font=dict(size=16)
+                ),
+                width=1800,
+                height=600,
+                margin=dict(l=0, r=0, b=0, t=100),
+                showlegend=True,
+                legend=dict(
+                    x=0.02,
+                    y=0.98,
+                    bgcolor="rgba(255, 255, 255, 0.9)",
+                    bordercolor="black",
+                    borderwidth=1
+                )
+            )
+            
+            # Add statistics annotation
+            annotation_text = (
+                f"📊 {instance_name} Statistics:<br>"
+                f"• Total Solutions: {len(combined_objectives[0])}<br>"
+                f"• Successful Runs: {len(successful_results)}<br>"
+                f"• Avg Runtime: {statistics.mean([r.total_runtime_seconds for r in successful_results]):.2f}s<br>"
+                f"• Objective Ranges:<br>"
+            )
+            
+            objective_names = ['Cost', 'Cloud Coverage', 'Resolution Sum', 'Incidence Angle']
+            for i in range(4):
+                if combined_objectives[i]:
+                    annotation_text += f"  - {objective_names[i]}: {min(combined_objectives[i]):.0f} - {max(combined_objectives[i]):.0f}<br>"
+            
+            fig.add_annotation(
+                text=annotation_text,
+                xref="paper", yref="paper",
+                x=0.98, y=0.98,
+                showarrow=False,
+                align="left",
+                bgcolor="rgba(255, 255, 255, 0.9)",
+                bordercolor="black",
+                borderwidth=1,
+                font=dict(size=10)
+            )
+            
+            # Save visualization
+            finished_at = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_file = self.output_dir / f"{instance_name}_{self.get_visualization_filename_suffix()}_4d_combined_{finished_at}.html"
+            fig.write_html(output_file)
+            
+            self.console.print(f"✓ Combined 4D visualization saved: {output_file}")
             return True
-        else:
-            self.console.print(f"❌ Failed to create any 4D visualization plots for {instance_name}")
+            
+        except Exception as e:
+            self.console.print(f"❌ Failed to create combined 4D visualization: {e}")
             return False
     
     def _create_single_4d_plot(self, instance_name: str, successful_results: list[BenchmarkResult], combo: dict) -> bool:
@@ -3847,6 +4082,445 @@ class GurobiBenchmarkRunner(BenchmarkRunner):
         self.console.print("="*80)
 
 
+class GurobiHybridBenchmarkRunner(GurobiBenchmarkRunner):
+    """Hybrid benchmark runner that combines Gurobi MILP solver with PLS algorithm."""
+    
+    def __init__(self, instances_dir: Path, output_dir: Path, iterations: int,
+                 tui: bool, size: Optional[int], filter_str: Optional[str],
+                 timeout: int, validate_solutions: bool, solver_name: str,
+                 front_strategy: str, ratio_step: int, include_perfect: bool = False):
+        """Initialize Gurobi Hybrid benchmark runner.
+        
+        Args:
+            instances_dir: Directory containing problem instances
+            output_dir: Directory to save results
+            iterations: Number of iterations per instance
+            tui: Whether to use text UI
+            size: Filter instances by size
+            filter_str: Filter instances by name pattern
+            timeout: Total timeout in seconds
+            validate_solutions: Whether to validate solutions
+            solver_name: Gurobi solver name
+            front_strategy: Front generation strategy
+            ratio_step: Step size for ratio configurations
+            include_perfect: Whether to include perfect solutions from JSONL
+        """
+        super().__init__(instances_dir, output_dir, iterations, tui, size, filter_str, timeout, validate_solutions, include_perfect=include_perfect)
+        self.solver_name = solver_name
+        self.front_strategy = front_strategy
+        self.ratio_step = ratio_step
+        self.ratio_configs = [(i, 100-i) for i in range(100, -1, -ratio_step)]
+        
+    def get_algorithm_name(self) -> str:
+        """Get algorithm name for display."""
+        return f"Gurobi-Hybrid (step={self.ratio_step})"
+    
+    def get_visualization_filename_suffix(self) -> str:
+        """Get the filename suffix for visualizations."""
+        return f"gurobi_hybrid_{self.ratio_step}"
+    
+    def run_single_benchmark(
+        self, 
+        instance: sims_problem.SimsDiscreteProblem,
+        instance_name: str,
+        iteration: int,
+        *args
+    ) -> BenchmarkResult:
+        """Run a single hybrid benchmark combining Gurobi MILP with PLS."""
+        import time
+        
+        # Find the corresponding .dzn file
+        dzn_file = None
+        for potential_file in self.instance_files:
+            if potential_file.stem == instance_name:
+                dzn_file = potential_file
+                break
+        
+        if dzn_file is None:
+            raise RuntimeError(f"Could not find .dzn file for instance {instance_name}")
+        
+        if self.use_tui:
+            self.console.print(f"  Solving {instance_name} with Gurobi-Hybrid...")
+        
+        start_time = time.time()
+        
+        try:
+            # Run hybrid solver
+            result_data = self.run_gurobi_hybrid_solver(dzn_file, self.timeout)
+            
+            runtime = time.time() - start_time
+            solutions = result_data.solutions
+            
+            # Solutions are already Solution objects, no conversion needed
+            benchmark_solutions = solutions
+            
+            if self.use_tui:
+                self.console.print(f"    Found {len(benchmark_solutions)} solutions in {runtime:.2f}s")
+            
+            # Create BenchmarkResult
+            result = BenchmarkResult()
+            result.instance_name = instance_name
+            result.iteration = iteration
+            result.final_solutions = benchmark_solutions
+            result.explored_solutions = []
+            result.num_final_solutions = len(benchmark_solutions)
+            result.num_explored_solutions = 0
+            result.total_runtime_seconds = runtime
+            result.milp_runtime_seconds = runtime * 0.5  # Rough estimate
+            result.pls_runtime_seconds = runtime * 0.5   # Rough estimate
+            result.ratio = (50, 50)  # Hybrid ratio
+            result.error = result_data.error
+            
+            # Validate solutions if requested
+            if benchmark_solutions and self.validate_solutions and self.validator:
+                validation_report = self.validator.validate_benchmark_result(result, instance)
+                result.validation_results = validation_report
+                
+                if not validation_report.overall_valid:
+                    self.console.print(f"[yellow]⚠️  Validation issues found for {instance_name} iter={iteration}")
+            
+            return result
+            
+        except Exception as e:
+            runtime = time.time() - start_time
+            error_msg = f"Gurobi hybrid solver error: {str(e)}"
+            
+            if self.use_tui:
+                self.console.print(f"    [red]Error: {error_msg}[/red]")
+            
+            # Create error result
+            result = BenchmarkResult()
+            result.instance_name = instance_name
+            result.iteration = iteration
+            result.final_solutions = []
+            result.explored_solutions = []
+            result.num_final_solutions = 0
+            result.num_explored_solutions = 0
+            result.total_runtime_seconds = runtime
+            result.milp_runtime_seconds = 0
+            result.pls_runtime_seconds = 0
+            result.ratio = (50, 50)
+            result.error = error_msg
+            
+            return result
+    
+    def run_gurobi_solver(self, instance_file: Path, timeout: int) -> SolverResult:
+        """Run Gurobi MILP solver on an instance.
+        
+        Args:
+            instance_file: Path to instance file
+            timeout: Timeout in seconds
+            
+        Returns:
+            SolverResult with Gurobi solver results
+        """
+        import time
+        start_time = time.time()
+        
+        # Import inside the method to avoid module loading issues
+        try:
+            from sims_solvers.main import build_model, build_solver
+            from sims_solvers.Instances.InstanceSIMS import InstanceSIMS
+        except ImportError as e:
+            return SolverResult(
+                solutions=[],
+                num_solutions=0,
+                runtime_seconds=time.time() - start_time,
+                error=f"Failed to import sims_solvers modules: {e}"
+            )
+        
+        try:
+            if self.use_tui:
+                self.console.print(f"      Running Gurobi solver for {timeout}s")
+            
+            # Parse DZN data and create InstanceSIMS
+            dzn_data = self.parse_dzn_data(instance_file)
+            instance = InstanceSIMS(dzn_data)
+            
+            # Create configuration for solver
+            config = self.create_gurobi_config(instance_file.stem, instance_file)
+            config.solver_timeout_sec = timeout
+            
+            # Build model and solver using the correct approach
+            model = build_model(instance, config)
+            solver, pareto_front = build_solver(model, instance, config, {})
+            
+            # Collect solutions from solver
+            gurobi_solutions = []
+            try:
+                for solution in solver.solve():
+                    if solution is not None:
+                        # Convert to expected format
+                        if hasattr(solution, 'objs'):
+                            objs = solution.objs
+                        elif hasattr(solution, 'objectives'):
+                            objs = solution.objectives
+                        else:
+                            continue
+                            
+                        solution_values = getattr(solution, 'solution_values', [])
+                        
+                        # Convert to Solution object
+                        try:
+                            import sims_problem
+                            sol_obj = sims_problem.Solution.create(
+                                selected_images=solution_values,
+                                cost=int(objs[0]) if len(objs) > 0 else 0,
+                                cloudy_area=int(objs[1]) if len(objs) > 1 else 0,
+                                min_resolutions_sum=int(objs[2]) if len(objs) > 2 else 0,
+                                max_incidence_angle=int(objs[3]) if len(objs) > 3 else 0,
+                                timestamp_us=0
+                            )
+                            gurobi_solutions.append(sol_obj)
+                        except Exception as e:
+                            if self.use_tui:
+                                self.console.print(f"[yellow]Warning: Could not convert Gurobi solution: {e}[/yellow]")
+                        
+                    # Check timeout
+                    if time.time() - start_time >= timeout:
+                        break
+                        
+            except Exception as solver_error:
+                return SolverResult(
+                    solutions=gurobi_solutions,
+                    num_solutions=len(gurobi_solutions),
+                    runtime_seconds=time.time() - start_time,
+                    error=f"Gurobi solver error: {solver_error}"
+                )
+            
+            return SolverResult(
+                solutions=gurobi_solutions,
+                num_solutions=len(gurobi_solutions),
+                runtime_seconds=time.time() - start_time,
+                error=""
+            )
+            
+        except Exception as e:
+            return SolverResult(
+                solutions=[],
+                num_solutions=0,
+                runtime_seconds=time.time() - start_time,
+                error=f"Gurobi setup error: {e}"
+            )
+
+    def run_gurobi_hybrid_solver(self, instance_file: Path, timeout: int) -> SolverResult:
+        """Run Gurobi hybrid solver on an instance with multiple ratio configurations.
+        
+        Args:
+            instance_file: Path to instance file
+            timeout: Total timeout in seconds
+            
+        Returns:
+            SolverResult with hybrid solver results
+        """
+        import time
+        start_time = time.time()
+        
+        all_solutions = set()
+        best_solutions = []  # Now contains Solution objects
+        total_configs = len(self.ratio_configs)
+        config_timeout = timeout // total_configs if total_configs > 0 else timeout
+        error_messages = []
+        
+        if self.use_tui:
+            self.console.print(f"  Running {total_configs} ratio configs with {config_timeout}s each")
+        
+        for i, (gurobi_ratio, pls_ratio) in enumerate(self.ratio_configs):
+            if self.use_tui:
+                self.console.print(f"    Config {i+1}/{total_configs}: Gurobi {gurobi_ratio}% + PLS {pls_ratio}%")
+            
+            # Track MILP solutions for this config to pass to PLS
+            milp_population = []
+            
+            try:
+                # Phase 1: Gurobi MILP
+                if gurobi_ratio > 0:
+                    gurobi_time = config_timeout * (gurobi_ratio / 100.0)
+                    
+                    # Run Gurobi solver
+                    gurobi_result = self.run_gurobi_solver(instance_file, int(gurobi_time))
+                    
+                    if gurobi_result.error:
+                        error_messages.append(f"Gurobi config {i+1}: {gurobi_result.error}")
+                    
+                    # Add Gurobi solutions (already Solution objects)
+                    for sol in gurobi_result.solutions:
+                        # Extract objectives from Solution object
+                        objectives = [sol.cost, sol.cloudy_area, sol.min_resolutions_sum, sol.max_incidence_angle]
+                        sol_tuple = tuple(objectives)
+                        if sol_tuple not in all_solutions:
+                            all_solutions.add(sol_tuple)
+                            best_solutions.append(sol)  # Add Solution object directly
+                        
+                        # Add to PLS initial population (already a Solution object)
+                        milp_population.append(sol)
+                
+                # Phase 2: PLS 
+                if pls_ratio > 0:
+                    pls_time = config_timeout * (pls_ratio / 100.0)
+                    
+                    # Run PLS solver with MILP solutions as initial population
+                    pls_result = self.run_pls_solver(instance_file, int(pls_time), initial_population=milp_population if milp_population else None)
+                    
+                    if pls_result.error:
+                        error_messages.append(f"PLS config {i+1}: {pls_result.error}")
+                    
+                    # Add PLS solutions (already Solution objects)
+                    for sol in pls_result.solutions:
+                        try:
+                            # Create objective tuple from Solution attributes for 4-objective problem
+                            objectives = [sol.cost, sol.cloudy_area, sol.min_resolutions_sum, sol.max_incidence_angle]
+                            sol_tuple = tuple(objectives)
+                            
+                            if sol_tuple not in all_solutions:
+                                all_solutions.add(sol_tuple)
+                                best_solutions.append(sol)  # Add Solution object directly
+                                    
+                        except AttributeError as e:
+                            error_msg = f"Could not extract objectives from PLS solution: {e}"
+                            error_messages.append(error_msg)
+                            if self.use_tui:
+                                self.console.print(f"        Warning: {error_msg}")
+                            continue
+                                
+            except Exception as e:
+                error_msg = f"Error in config {i+1}: {e}"
+                error_messages.append(error_msg)
+                if self.use_tui:
+                    self.console.print(f"      {error_msg}")
+                continue
+        
+        return SolverResult(
+            solutions=best_solutions,
+            num_solutions=len(best_solutions),
+            runtime_seconds=time.time() - start_time,
+            error="; ".join(error_messages) if error_messages else ""
+        )
+    
+    def run_pls_solver(self, instance_file: Path, timeout: int, initial_population=None) -> SolverResult:
+        """Run PLS solver using existing infrastructure.
+        
+        Args:
+            instance_file: Path to instance file
+            timeout: Timeout in seconds
+            initial_population: List of Solution objects to use as initial population
+            
+        Returns:
+            SolverResult with PLS solver results
+        """
+        import time
+        start_time = time.time()
+        
+        try:
+            import sims_problem
+            
+            if self.use_tui:
+                self.console.print(f"      Running PLS solver for {timeout}s")
+            
+            # Load problem instance using correct API
+            problem = sims_problem.SimsDiscreteProblem.from_dzn(str(instance_file))
+            
+            # Run PLS solver with correct parameter format
+            from datetime import timedelta
+            solving_result = sims_problem.solve_with_pls(
+                problem,
+                objectives=["min_cost", "cloud_coverage", "min_resolution", "max_incidence_angle"],
+                plots=False,
+                plot_output_path=None,
+                timeout=timedelta(seconds=timeout),
+                max_iterations=10000,
+                is_deterministic=False,
+                initial_population_size=100,
+                initial_population=initial_population,
+                neighborhood_size_min=1,
+                neighborhood_size_max=6,
+                trace=False
+            )
+            
+            return SolverResult(
+                solutions=solving_result.final_solutions,
+                num_solutions=len(solving_result.final_solutions),
+                runtime_seconds=time.time() - start_time,
+                error=""
+            )
+            
+        except Exception as e:
+            return SolverResult(
+                solutions=[],
+                num_solutions=0,
+                runtime_seconds=time.time() - start_time,
+                error=f"PLS solver error: {e}"
+            )
+    
+    def _create_visualization(self, successful_results: list[BenchmarkResult], output_path: Path):
+        """Create visualization for Gurobi hybrid results."""
+        # Check if we have 4D problems
+        if successful_results:
+            # Check number of objectives from first solution
+            first_result = successful_results[0]
+            if first_result.solutions and len(first_result.solutions[0].objectives) == 4:
+                # Get instance name from first result
+                instance_name = first_result.instance_name if hasattr(first_result, 'instance_name') else "unknown_instance"
+                self._create_4d_visualization_multiple_plots(instance_name, successful_results)
+            else:
+                # Fall back to regular visualization
+                super()._create_visualization(successful_results, output_path)
+    
+    def print_summary(self):
+        """Print comprehensive Gurobi hybrid benchmark summary."""
+        summary = self.create_summary_statistics()
+        
+        self.console.print("\n" + "="*80)
+        self.console.print(f"[bold blue]📊 {self.get_algorithm_name()} Benchmark Summary")
+        self.console.print("="*80)
+        
+        # Basic info
+        info = summary.benchmark_info
+        self.console.print(f"[bold]Algorithm:[/bold] {info.algorithm}")
+        self.console.print(f"[bold]Solver:[/bold] {self.solver_name}")
+        self.console.print(f"[bold]Front Strategy:[/bold] {self.front_strategy}")
+        self.console.print(f"[bold]Ratio Step:[/bold] {self.ratio_step}%")
+        self.console.print(f"[bold]Ratio Configs:[/bold] {len(self.ratio_configs)}")
+        self.console.print(f"[bold]Instances Tested:[/bold] {info.instances_tested}")
+        self.console.print(f"[bold]Total Runs:[/bold] {info.total_runs}")
+        self.console.print(f"[bold]Successful Runs:[/bold] {info.successful_runs}")
+        self.console.print(f"[bold]Failed Runs:[/bold] {info.failed_runs}")
+        
+        success_rate = (info.successful_runs / info.total_runs * 100) if info.total_runs > 0 else 0
+        self.console.print(f"[bold]Success Rate:[/bold] {success_rate:.1f}%")
+        
+        # Show ratio configurations
+        self.console.print("\n[bold blue]🔄 Ratio Configurations")
+        for i, (gurobi_ratio, pls_ratio) in enumerate(self.ratio_configs):
+            self.console.print(f"  Config {i+1}: Gurobi {gurobi_ratio}% + PLS {pls_ratio}%")
+        
+        # Overall performance
+        if summary.overall_statistics and info.successful_runs > 0:
+            stats = summary.overall_statistics
+            self.console.print("\n[bold blue]⚡ Overall Performance")
+            self.console.print(f"  Average Runtime: {stats.avg_runtime:.2f}s")
+            self.console.print(f"  Total Runtime: {stats.total_runtime:.2f}s")
+            self.console.print(f"  Average Solutions: {stats.avg_solutions:.1f}")
+            self.console.print(f"  Solution Range: {stats.min_solutions}-{stats.max_solutions}")
+        
+        # Performance by instance
+        if summary.performance_by_instance:
+            self.console.print("\n[bold blue]📋 Performance by Instance")
+            for instance_name, perf in summary.performance_by_instance.items():
+                self.console.print(f"  [bold]{instance_name}:[/bold]")
+                self.console.print(f"    Runtime: {perf.avg_runtime:.2f}s ± {perf.std_runtime:.2f}s ({perf.min_runtime:.2f}-{perf.max_runtime:.2f}s)")
+                self.console.print(f"    Solutions: {perf.avg_solutions:.1f} ({perf.min_solutions}-{perf.max_solutions})")
+                self.console.print(f"    Runs: {perf.num_runs}")
+        
+        # Validation results
+        if self.validate_solutions:
+            successful_results: list[BenchmarkResult] = [r for r in self.results if r.error is None]
+            if successful_results:
+                self.print_validation_summary(successful_results)
+        
+        self.console.print("="*80)
+
+
 def run_milp_benchmark(args):
     """Run MILP algorithm benchmark."""
     if not args.instances_dir.exists():
@@ -3874,7 +4548,8 @@ def run_milp_benchmark(args):
             args.bypass_coefficient,
             args.early_exit,
             args.flag_array,
-            args.solver_name
+            args.solver_name,
+            getattr(args, 'include_perfect', False)
         )
         runner.run_benchmarks()
         runner.save_results()
@@ -3913,7 +4588,8 @@ def run_gurobi_benchmark(args):
             args.timeout,
             validate_solutions,
             args.solver_name,
-            args.front_strategy
+            args.front_strategy,
+            getattr(args, 'include_perfect', False)
         )
         runner.run_benchmarks()
         runner.save_results()
@@ -3953,7 +4629,8 @@ def run_hybrid_benchmark(args):
             args.size,
             getattr(args, 'filter', None),
             args.timeout,
-            validate_solutions
+            validate_solutions,
+            getattr(args, 'include_perfect', False)
         )
         runner.run_benchmarks()
         runner.save_results()
@@ -3991,7 +4668,8 @@ def run_pls_benchmark(args):
             args.size,
             getattr(args, 'filter', None),
             args.timeout,
-            validate_solutions
+            validate_solutions,
+            getattr(args, 'include_perfect', False)
         )
         runner.run_benchmarks()
         runner.save_results()
@@ -4003,6 +4681,49 @@ def run_pls_benchmark(args):
         return 1
     except Exception as e:
         print(f"Error running PLS benchmark: {e}")
+        return 1
+
+
+def run_gurobi_hybrid_benchmark(args):
+    """Run Gurobi hybrid algorithm benchmark."""
+    if not args.instances_dir.exists():
+        print(f"Error: Instances directory {args.instances_dir} does not exist")
+        return 1
+    
+    # Determine validation setting
+    validate_solutions = True  # Default
+    if hasattr(args, 'no_validate_solutions') and args.no_validate_solutions:
+        validate_solutions = False
+    elif hasattr(args, 'validate_solutions') and args.validate_solutions:
+        validate_solutions = True
+    
+    try:
+        runner = GurobiHybridBenchmarkRunner(
+            args.instances_dir, 
+            args.output_dir, 
+            args.iterations,
+            args.tui,
+            getattr(args, 'size', None),
+            getattr(args, 'filter', None),
+            args.timeout,
+            validate_solutions,
+            args.solver_name,
+            args.front_strategy,
+            args.ratio_step,
+            getattr(args, 'include_perfect', False)
+        )
+        runner.run_benchmarks()
+        runner.save_results()
+        runner.print_summary()
+        return 0
+        
+    except KeyboardInterrupt:
+        print("\nGurobi Hybrid Benchmark interrupted by user")
+        return 1
+    except Exception as e:
+        print(f"Error running Gurobi hybrid benchmark: {e}")
+        import traceback
+        traceback.print_exc()
         return 1
 
 
@@ -4076,6 +4797,11 @@ def main():
             "--no-validate-solutions",
             action="store_true",
             help="Disable solution validation (default: validation enabled)"
+        )
+        subparser.add_argument(
+            "--include-perfect",
+            action="store_true",
+            help="Include perfect solutions from JSONL files in visualizations"
         )
     
     # Hybrid algorithm subcommand
@@ -4196,6 +4922,35 @@ def main():
         help="Front generation strategy to use (default: saugmecon)"
     )
     gurobi_parser.set_defaults(func=run_gurobi_benchmark)
+    
+    # Gurobi hybrid algorithm subcommand
+    gurobi_hybrid_parser = subparsers.add_parser(
+        'gurobi-hybrid',
+        help='Benchmark Gurobi+PLS hybrid solver using sims-solvers with 4 objectives',
+        description='Run benchmarks on Gurobi+PLS hybrid solver with 4 objectives (cost, cloud_coverage, resolution, incidence_angle) using sims-solvers and PLS in combination'
+    )
+    add_common_args(gurobi_hybrid_parser)
+    gurobi_hybrid_parser.add_argument(
+        "--solver-name",
+        type=str,
+        default="gurobi",
+        choices=["gurobi"],
+        help="Gurobi solver to use (currently only gurobi supported)"
+    )
+    gurobi_hybrid_parser.add_argument(
+        "--front-strategy",
+        type=str,
+        default="saugmecon",
+        choices=["saugmecon", "gpba-a"],
+        help="Front generation strategy for Gurobi phase (default: saugmecon)"
+    )
+    gurobi_hybrid_parser.add_argument(
+        "--ratio-step",
+        type=int,
+        default=50,
+        help="Step size for ratio configurations (default: 50, meaning 100/0, 50/50, 0/100)"
+    )
+    gurobi_hybrid_parser.set_defaults(func=run_gurobi_hybrid_benchmark)
     
     # Parse arguments
     args = parser.parse_args()

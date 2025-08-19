@@ -564,11 +564,12 @@ def solve_with_pls(
     max_iterations: int = 50000,
     is_deterministic: bool = False,
     initial_population_size: int = 100,
+    initial_population: Optional[list[Solution]] = None,
     neighborhood_size_min: int = 1,
     neighborhood_size_max: int = 6,
     *,
     trace: Literal[False]
-) -> list[Solution]: ...
+) -> SolvingResult: ...
 
 @overload
 def solve_with_pls(
@@ -580,6 +581,7 @@ def solve_with_pls(
     max_iterations: int = 50000,
     is_deterministic: bool = False,
     initial_population_size: int = 100,
+    initial_population: Optional[list[Solution]] = None,
     neighborhood_size_min: int = 1,
     neighborhood_size_max: int = 6,
     *,
@@ -595,6 +597,7 @@ def solve_with_pls(
     max_iterations: int = 50000,
     is_deterministic: bool = False,
     initial_population_size: int = 100,
+    initial_population: Optional[list[Solution]] = None,
     neighborhood_size_min: int = 1,
     neighborhood_size_max: int = 6,
     trace: bool = True
@@ -619,7 +622,10 @@ def solve_with_pls(
         timeout: Maximum runtime as timedelta
         max_iterations: Maximum number of algorithm iterations
         is_deterministic: Whether to use deterministic random seed for reproducible results
-        initial_population_size: Size of initial random population
+        initial_population_size: Size of initial random population (used only if initial_population is None)
+        initial_population: Optional list of Solution objects to use as initial population.
+            If provided, these solutions will be used to initialize the search.
+            If None, random solutions will be generated using initial_population_size.
         neighborhood_size_min: Minimum neighborhood size for local search
         neighborhood_size_max: Maximum neighborhood size for local search
         trace: Whether to generate optimization trace archive (default True)
