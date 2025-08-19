@@ -3007,6 +3007,666 @@ class MilpBenchmarkRunner(BenchmarkRunner):
         self.console.print("="*80)
 
 
+class GurobiBenchmarkRunner(BenchmarkRunner):
+    """Gurobi-based benchmark runner using solve_milp method from sims-solvers."""
+    
+    def __init__(self, instances_dir: Path, output_dir: Path, iterations: int = 10, 
+                 use_tui: bool = False, size_limit: Optional[int] = None, name_filter: Optional[str] = None, 
+                 timeout: float = 300.0, validate_solutions: bool = True, solver_name: str = "gurobi",
+                 front_strategy: str = "saugmecon"):
+        super().__init__(instances_dir, output_dir, iterations, use_tui, size_limit, name_filter, timeout, validate_solutions)
+        self.solver_name = solver_name
+        self.front_strategy = front_strategy
+        
+        # Import sims-solvers modules
+        try:
+            import sys
+            from pathlib import Path
+            # Add sims-solvers to path
+            sims_solvers_path = Path(__file__).parent.parent / "sims-solvers"
+            if str(sims_solvers_path) not in sys.path:
+                sys.path.insert(0, str(sims_solvers_path))
+            
+            from sims_solvers.solve import solve_milp
+            from sims_solvers.Config import Config
+            from sims_solvers.solve import MZN_MODEL_PATH
+            from sims_solvers.Instances.InstanceSIMS import InstanceSIMS
+            self.solve_milp = solve_milp
+            self.Config = Config
+            self.MZN_MODEL_PATH = MZN_MODEL_PATH
+            self.InstanceSIMS = InstanceSIMS
+        except ImportError as e:
+            raise ImportError(f"Failed to import sims-solvers modules: {e}")
+    
+    def get_algorithm_name(self) -> str:
+        """Get the name of the algorithm for this runner."""
+        return f"Gurobi-{self.front_strategy.upper()}"
+    
+    def get_visualization_filename_suffix(self) -> str:
+        """Get the filename suffix for visualizations."""
+        return f"gurobi_{self.front_strategy}"
+    
+    def _create_explored_solution_detail(self, result: BenchmarkResult, cost: float, cloudy: float, incidence: float) -> str:
+        """Create hover detail text for explored solutions."""
+        return (
+            f"Instance: {result.instance_name}<br>"
+            f"Iteration: {result.iteration}<br>"
+            f"Type: Gurobi Solution<br>"
+            f"Cost: {cost}<br>"
+            f"Cloudy Area: {cloudy}<br>"
+            f"Max Incidence Angle: {incidence}<br>"
+            f"Runtime: {result.total_runtime_seconds:.2f}s<br>"
+            f"Solver: {self.solver_name}<br>"
+            f"Strategy: {self.front_strategy}"
+        )
+    
+    def _create_final_solution_detail(self, result: BenchmarkResult, cost: float, cloudy: float, incidence: float) -> str:
+        """Create hover detail text for final solutions."""
+        return (
+            f"Instance: {result.instance_name}<br>"
+            f"Iteration: {result.iteration}<br>"
+            f"Type: Gurobi Pareto Solution<br>"
+            f"Cost: {cost}<br>"
+            f"Cloudy Area: {cloudy}<br>"
+            f"Max Incidence Angle: {incidence}<br>"
+            f"Runtime: {result.total_runtime_seconds:.2f}s<br>"
+            f"Solver: {self.solver_name}<br>"
+            f"Strategy: {self.front_strategy}"
+        )
+    
+    def load_instance(self, instance_file: Path) -> sims_problem.SimsDiscreteProblem:
+        """Load a SIMS problem instance from .dzn file."""
+        try:
+            return sims_problem.SimsDiscreteProblem.from_dzn(str(instance_file))
+        except Exception as e:
+            raise RuntimeError(f"Failed to load instance {instance_file}: {e}")
+    
+    def parse_dzn_data(self, dzn_file_path: Path) -> dict:
+        """Parse DZN file data for InstanceSIMS."""
+        data = {}
+        
+        with open(dzn_file_path, 'r') as f:
+            content = f.read()
+        
+        # Simple parsing for basic data structures
+        import re
+        
+        # Parse arrays
+        def parse_array(pattern, content):
+            match = re.search(pattern, content, re.DOTALL)
+            if match:
+                array_str = match.group(1)
+                # Remove brackets and split by comma, then convert to appropriate type
+                items = [item.strip() for item in array_str.strip('[]').split(',')]
+                return [float(item) if '.' in item else int(item) for item in items if item.strip()]
+            return []
+        
+        # Parse set arrays (for images and clouds)
+        def parse_set_array(pattern, content):
+            match = re.search(pattern, content, re.DOTALL)
+            if match:
+                array_str = match.group(1)
+                sets = []
+                # Find all sets in the array
+                set_matches = re.findall(r'\{([^}]*)\}', array_str)
+                for set_match in set_matches:
+                    if set_match.strip():
+                        # Convert to set of integers (1-indexed in DZN, will be corrected later)
+                        elements = [int(x.strip()) for x in set_match.split(',') if x.strip()]
+                        sets.append(set(elements))
+                    else:
+                        sets.append(set())
+                return sets
+            return []
+        
+        # Extract data
+        data['costs'] = parse_array(r'costs\s*=\s*\[([^\]]+)\]', content)
+        data['areas'] = parse_array(r'areas\s*=\s*\[([^\]]+)\]', content)
+        data['resolution'] = parse_array(r'resolution\s*=\s*\[([^\]]+)\]', content)
+        data['incidence_angle'] = parse_array(r'incidence_angle\s*=\s*\[([^\]]+)\]', content)
+        
+        data['images'] = parse_set_array(r'images\s*=\s*\[([^\]]+)\]', content)
+        data['clouds'] = parse_set_array(r'clouds\s*=\s*\[([^\]]+)\]', content)
+        
+        # Extract max_cloud_area
+        match = re.search(r'max_cloud_area\s*=\s*(\d+)', content)
+        data['max_cloud_area'] = int(match.group(1)) if match else 0
+        
+        return data
+    
+    def create_gurobi_config(self, instance_name: str, dzn_file: Path):
+        """Create Gurobi configuration for solve_milp."""
+        import tempfile
+        
+        # Create temporary directory for output
+        temp_dir = tempfile.mkdtemp()
+        
+        config = self.Config(
+            minizinc_data=False,  # Use direct Gurobi model instead of MiniZinc
+            instance_name=instance_name,
+            data_sets_folder=dzn_file.parent,
+            input_mzn=self.MZN_MODEL_PATH,  # Required but not used for direct Gurobi
+            dzn_dir=dzn_file.parent,
+            solver_name=self.solver_name,
+            problem_name="sims",
+            front_strategy=self.front_strategy,
+            solver_timeout_sec=int(self.timeout),
+            summary_filename=Path(temp_dir) / f"{instance_name}_summary.csv",
+            solver_search_strategy="free_search",
+            fzn_optimisation_level=1,
+            cores=1,
+            threads=1
+        )
+        return config
+    
+    def convert_solutions_to_benchmark_format(self, solver_solutions: list) -> list[sims_problem.Solution]:
+        """Convert solutions from solve_milp format to benchmark format."""
+        benchmark_solutions = []
+        
+        for i, sol_data in enumerate(solver_solutions):
+            if sol_data is None:
+                continue
+                
+            # Extract objective values and solution values
+            if hasattr(sol_data, 'solution') and hasattr(sol_data.solution, 'objs'):
+                # MinizincResultFormat style
+                objs = sol_data.solution.objs
+                solution_values = sol_data.solution.solution_values
+            elif isinstance(sol_data, dict):
+                # Dictionary style
+                objs = sol_data.get("objs", [])
+                solution_values = sol_data.get("solution_values", [])
+            else:
+                # Direct solution object
+                objs = getattr(sol_data, 'objs', [])
+                solution_values = getattr(sol_data, 'solution_values', [])
+            
+            # Ensure we have the right number of objectives (4 for SIMS)
+            if len(objs) < 4:
+                # Pad with default values if missing
+                while len(objs) < 4:
+                    objs.append(0)
+            
+            # Convert boolean list to indices of selected images (1-based indexing)
+            if isinstance(solution_values, list) and len(solution_values) > 0:
+                if isinstance(solution_values[0], bool):
+                    # Boolean array - convert to set of selected indices
+                    selected_images = {idx + 1 for idx, selected in enumerate(solution_values) if selected}
+                else:
+                    # Assume it's already indices
+                    selected_images = set(solution_values)
+            else:
+                selected_images = set()
+            
+            # Create benchmark Solution object
+            # Convert set to list for Solution.create()
+            selected_images_list = list(selected_images)
+            
+            # Convert timedelta to microseconds
+            timestamp_us = int(i * 100_000)  # 0.1 seconds in microseconds
+            
+            benchmark_solution = Solution.create(
+                selected_images=selected_images_list,
+                cost=int(objs[0]) if len(objs) > 0 else 0,
+                cloudy_area=int(objs[1]) if len(objs) > 1 else 0,
+                timestamp_us=timestamp_us,
+                max_incidence_angle=int(objs[3]) if len(objs) >= 4 and objs[3] is not None else (
+                    int(objs[2]) if len(objs) > 2 and objs[2] is not None else None
+                ),
+                min_resolutions_sum=int(objs[2]) if len(objs) >= 4 and objs[2] is not None else None
+            )
+            
+            benchmark_solutions.append(benchmark_solution)
+        
+        return benchmark_solutions
+    
+    def run_single_benchmark(
+        self, 
+        instance: sims_problem.SimsDiscreteProblem,
+        instance_name: str,
+        iteration: int,
+        *args
+    ) -> BenchmarkResult:
+        """Run a single Gurobi benchmark and collect results."""
+        result = BenchmarkResult()
+        result.instance_name = instance_name
+        result.iteration = iteration
+        result.ratio = (0, 100)  # Pure Gurobi MILP
+        
+        try:
+            # Find the corresponding .dzn file
+            dzn_file = None
+            for potential_file in self.instance_files:
+                if potential_file.stem == instance_name:
+                    dzn_file = potential_file
+                    break
+            
+            if dzn_file is None:
+                raise RuntimeError(f"Could not find .dzn file for instance {instance_name}")
+            
+            # Parse DZN data and create InstanceSIMS
+            dzn_data = self.parse_dzn_data(dzn_file)
+            
+            # Create configuration for solver
+            config = self.create_gurobi_config(instance_name, dzn_file)
+            
+            # Capture solutions during solve_milp
+            captured_solutions = []
+            
+            # Build the solver pipeline using InstanceSIMS data
+            from sims_solvers.main import build_model, build_solver
+            from sims_solvers.Instances.InstanceSIMS import InstanceSIMS
+            
+            start_time = time.time()
+            
+            # Create InstanceSIMS from parsed data
+            sims_instance = InstanceSIMS(dzn_data)
+            
+            # Build model and solver using the SIMS instance
+            model = build_model(sims_instance, config)
+            solver, pareto_front = build_solver(model, sims_instance, config, {})
+            
+            # Collect solutions
+            try:
+                for solution in solver.solve():
+                    if solution is not None:
+                        captured_solutions.append(solution)
+            except Exception as e:
+                print(f"Warning: Error during solving: {e}")
+            
+            result.total_runtime_seconds = time.time() - start_time
+            result.milp_runtime_seconds = result.total_runtime_seconds
+            result.pls_runtime_seconds = 0.0
+            
+            # Convert solutions to benchmark format
+            benchmark_solutions = self.convert_solutions_to_benchmark_format(captured_solutions)
+            
+            result.final_solutions = benchmark_solutions
+            result.explored_solutions = []  # Gurobi doesn't track explored solutions the same way
+            result.num_final_solutions = len(benchmark_solutions)
+            result.num_explored_solutions = 0
+            result.milp_solutions = benchmark_solutions
+            result.num_milp_solutions = len(benchmark_solutions)
+            
+            print(f"DEBUG: GUROBI SOLUTIONS COUNT: {result.num_milp_solutions}")
+            
+            # Validate solutions and Pareto front
+            if result.final_solutions and self.validate_solutions and self.validator:
+                validation_report = self.validator.validate_benchmark_result(result, instance)
+                result.validation_results = validation_report
+                
+                # Log validation issues if any
+                if not validation_report.overall_valid:
+                    self.console.print(f"[yellow]⚠️  Validation issues found for {instance_name} iter={iteration}")
+                    
+                    # Log invalid solutions
+                    if validation_report.summary.invalid_solutions > 0:
+                        self.console.print(f"   - {validation_report.summary.invalid_solutions} invalid solutions")
+                    
+                    # Log dominated solutions
+                    if not validation_report.pareto_validation.is_valid_pareto:
+                        dominated_count = len(validation_report.pareto_validation.dominated_solutions)
+                        self.console.print(f"   - {dominated_count} dominated solutions in Pareto front")
+        
+        except Exception as e:
+            result.error = str(e)
+            print(f"Error in Gurobi benchmark for {instance_name}: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        return result
+    
+    def run_benchmarks(self):
+        """Run all Gurobi benchmarks."""
+        if self.use_tui:
+            self._run_benchmarks_with_tui()
+        else:
+            self._run_benchmarks_simple()
+    
+    def _run_benchmarks_simple(self):
+        """Run Gurobi benchmarks with simple CLI output."""
+        total_runs = len(self.instance_files) * self.iterations
+        current_run = 0
+        
+        print(f"Starting Gurobi benchmark with {len(self.instance_files)} instances, {self.iterations} iterations each")
+        print(f"Total runs: {total_runs}")
+        print(f"Solver: {self.solver_name}")
+        print(f"Strategy: {self.front_strategy}")
+        print("=" * 80)
+        
+        for instance_idx, instance_file in enumerate(self.instance_files):
+            instance_name = instance_file.stem
+            print(f"\nProcessing instance {instance_idx + 1}/{len(self.instance_files)}: {instance_name}")
+            
+            try:
+                instance = self.load_instance(instance_file)
+                print(f"  ✓ Loaded instance: {instance.num_images} images, {instance.universe} universe elements")
+            except Exception as e:
+                print(f"  ❌ Failed to load {instance_file}: {e}")
+                continue
+            
+            # Track instance start position for per-instance saving
+            instance_start_idx = len(self.results)
+            
+            for iteration in range(self.iterations):
+                current_run += 1
+                progress_pct = (current_run / total_runs) * 100
+                
+                print(f"    Iteration {iteration + 1}/{self.iterations} (Run {current_run}/{total_runs}, {progress_pct:.1f}%)")
+                
+                try:
+                    result = self.run_single_benchmark(instance, instance_name, iteration)
+                    self.results.append(result)
+                    
+                    if result.error:
+                        print(f"      ❌ Failed: {result.error}")
+                    else:
+                        print(f"      ✓ Success: {result.num_final_solutions} solutions in {result.total_runtime_seconds:.2f}s")
+                        
+                except KeyboardInterrupt:
+                    print(f"\n  ⏹️  Interrupted during {instance_name}")
+                    raise
+                except Exception as e:
+                    print(f"      ❌ Error: {e}")
+                    # Create error result
+                    error_result = BenchmarkResult()
+                    error_result.instance_name = instance_name
+                    error_result.iteration = iteration
+                    error_result.error = str(e)
+                    self.results.append(error_result)
+            
+            # Save results for this instance
+            instance_results = self.results[instance_start_idx:]
+            if instance_results:
+                self.save_instance_results(instance_name, instance_results)
+        
+        print("\n✓ Completed all benchmark runs!")
+    
+    def _run_benchmarks_with_tui(self):
+        """Run benchmarks with TUI (reuse base implementation)."""
+        # For TUI, we can use the base implementation since it's generic
+        total_runs = len(self.instance_files) * self.iterations
+        
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TextColumn("•"),
+            TimeElapsedColumn(),
+            TextColumn("•"),
+            TimeRemainingColumn(),
+            console=self.console
+        ) as progress:
+            
+            # Create main task
+            main_task = progress.add_task("Running Gurobi Benchmarks", total=total_runs)
+            
+            for instance_idx, instance_file in enumerate(self.instance_files):
+                instance_name = instance_file.stem
+                
+                try:
+                    instance = self.load_instance(instance_file)
+                except Exception as e:
+                    self.console.print(f"[red]Failed to load {instance_file}: {e}")
+                    continue
+                
+                # Track instance start position for per-instance saving
+                instance_start_idx = len(self.results)
+                
+                for iteration in range(self.iterations):
+                    progress.update(main_task, description=f"[bold blue]Instance: {instance_name} | Iteration: {iteration + 1}")
+                    
+                    try:
+                        result = self.run_single_benchmark(instance, instance_name, iteration)
+                        self.results.append(result)
+                        
+                    except KeyboardInterrupt:
+                        progress.update(main_task, description="[red]Interrupted by user")
+                        raise
+                    except Exception as e:
+                        # Create error result
+                        error_result = BenchmarkResult()
+                        error_result.instance_name = instance_name
+                        error_result.iteration = iteration
+                        error_result.error = str(e)
+                        self.results.append(error_result)
+                    
+                    progress.advance(main_task)
+                
+                # Save results for this instance
+                instance_results = self.results[instance_start_idx:]
+                if instance_results:
+                    self.save_instance_results(instance_name, instance_results)
+    
+    def create_summary_statistics(self) -> BenchmarkSummaryStatistics:
+        """Create summary statistics for Gurobi benchmarks."""
+        # Filter successful results
+        successful_results: list[BenchmarkResult] = [r for r in self.results if r.error is None]
+        failed_results = [r for r in self.results if r.error is not None]
+        
+        # Calculate overall statistics
+        overall_stats = None
+        if successful_results:
+            runtimes = [r.total_runtime_seconds for r in successful_results]
+            solution_counts = [r.num_final_solutions for r in successful_results]
+            
+            overall_stats = OverallStatistics(
+                avg_runtime=statistics.mean(runtimes),
+                avg_solutions=statistics.mean(solution_counts),
+                total_runtime=sum(runtimes),
+                min_solutions=min(solution_counts),
+                max_solutions=max(solution_counts)
+            )
+        
+        # Calculate performance by instance
+        performance_by_instance = {}
+        instances = set(r.instance_name for r in successful_results)
+        
+        for instance_name in instances:
+            instance_results = [r for r in successful_results if r.instance_name == instance_name]
+            if instance_results:
+                instance_runtimes = [r.total_runtime_seconds for r in instance_results]
+                instance_solutions = [r.num_final_solutions for r in instance_results]
+                
+                performance_by_instance[instance_name] = PerformanceByInstance(
+                    num_runs=len(instance_results),
+                    avg_runtime=statistics.mean(instance_runtimes),
+                    std_runtime=statistics.stdev(instance_runtimes) if len(instance_runtimes) > 1 else 0.0,
+                    min_runtime=min(instance_runtimes),
+                    max_runtime=max(instance_runtimes),
+                    avg_solutions=statistics.mean(instance_solutions),
+                    min_solutions=min(instance_solutions),
+                    max_solutions=max(instance_solutions)
+                )
+        
+        # Calculate validation statistics
+        validation_stats = {}
+        if self.validate_solutions and successful_results:
+            results_with_validation = [r for r in successful_results if hasattr(r, 'validation_results') and r.validation_results]
+            
+            if results_with_validation:
+                total_solutions = sum(r.num_final_solutions for r in results_with_validation)
+                total_invalid = sum(len(getattr(r.validation_results, 'invalid_solutions', [])) for r in results_with_validation)
+                
+                validation_stats = {
+                    'total_solutions': total_solutions,
+                    'total_invalid_solutions': total_invalid,
+                    'validation_rate': len(results_with_validation) / len(successful_results) * 100,
+                    'overall_valid_rate': (total_solutions - total_invalid) / total_solutions * 100 if total_solutions > 0 else 0
+                }
+        
+        # Create benchmark info
+        from datetime import datetime
+        info = BenchmarkInfo(
+            timestamp=datetime.now().isoformat(),
+            algorithm=self.get_algorithm_name(),
+            instances_tested=len(set(r.instance_name for r in self.results)),
+            total_runs=len(self.results),
+            successful_runs=len(successful_results),
+            failed_runs=len(failed_results)
+        )
+        
+        return BenchmarkSummaryStatistics(
+            benchmark_info=info,
+            overall_statistics=overall_stats or OverallStatistics(0.0, 0.0, 0.0),
+            performance_by_instance=performance_by_instance,
+            validation_statistics=validation_stats
+        )
+    
+    def save_results(self):
+        """Save Gurobi benchmark results."""
+        finished_at = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Save main results file
+        results_file = self.output_dir / f"gurobi_{self.front_strategy}_results_{finished_at}.json"
+        
+        results_data = {
+            "algorithm": self.get_algorithm_name(),
+            "solver": self.solver_name,
+            "front_strategy": self.front_strategy,
+            "finished_at": finished_at,
+            "instances": len(set(r.instance_name for r in self.results)),
+            "total_runs": len(self.results),
+            "results": [result.to_dict() for result in self.results]
+        }
+        
+        with open(results_file, 'w') as f:
+            json.dump(results_data, f, indent=2, default=str)
+        
+        self.console.print(f"\n[green]Results saved to: {results_file}")
+        
+        # Also save summary statistics
+        summary = self.create_summary_statistics()
+        summary_file = self.output_dir / f"gurobi_{self.front_strategy}_summary_{finished_at}.json"
+        
+        with open(summary_file, 'w') as f:
+            json.dump(summary.to_dict(), f, indent=2, default=str)
+        
+        self.console.print(f"[green]Summary saved to: {summary_file}")
+    
+    def create_instance_3d_visualization(self, instance_name: str, instance_results: list[BenchmarkResult]) -> bool:
+        """Create 3D visualization for a single instance."""
+        return self._create_3d_visualization_base(instance_name, instance_results)
+    
+    def create_instance_summary_statistics(self, instance_name: str, instance_results: list[BenchmarkResult]) -> BenchmarkSummaryStatistics:
+        """Create summary statistics for a single instance."""
+        # Filter successful results for this instance
+        successful_results = [r for r in instance_results if not r.error]
+        
+        if not successful_results:
+            # Create minimal summary for failed instance
+            from datetime import datetime
+            info = BenchmarkInfo(
+                timestamp=datetime.now().isoformat(),
+                algorithm=self.get_algorithm_name(),
+                instances_tested=1,
+                total_runs=len(instance_results),
+                successful_runs=0,
+                failed_runs=len(instance_results)
+            )
+            return BenchmarkSummaryStatistics(
+                benchmark_info=info,
+                overall_statistics=OverallStatistics(0.0, 0.0, 0.0),
+                performance_by_instance={},
+                validation_statistics={}
+            )
+        
+        # Calculate instance performance
+        runtimes = [r.total_runtime_seconds for r in successful_results]
+        solution_counts = [r.num_final_solutions for r in successful_results]
+        
+        overall_stats = OverallStatistics(
+            avg_runtime=statistics.mean(runtimes),
+            avg_solutions=statistics.mean(solution_counts),
+            total_runtime=sum(runtimes),
+            min_solutions=min(solution_counts),
+            max_solutions=max(solution_counts)
+        )
+        
+        # Single instance performance
+        performance_by_instance = {
+            instance_name: PerformanceByInstance(
+                num_runs=len(successful_results),
+                avg_runtime=statistics.mean(runtimes),
+                std_runtime=statistics.stdev(runtimes) if len(runtimes) > 1 else 0.0,
+                min_runtime=min(runtimes),
+                max_runtime=max(runtimes),
+                avg_solutions=statistics.mean(solution_counts),
+                min_solutions=min(solution_counts),
+                max_solutions=max(solution_counts)
+            )
+        }
+        
+        # Validation statistics
+        validation_stats = self._calculate_validation_statistics(successful_results)
+        
+        # Create benchmark info
+        from datetime import datetime
+        info = BenchmarkInfo(
+            timestamp=datetime.now().isoformat(),
+            algorithm=self.get_algorithm_name(),
+            instances_tested=1,
+            total_runs=len(instance_results),
+            successful_runs=len(successful_results),
+            failed_runs=len(instance_results) - len(successful_results)
+        )
+        
+        return BenchmarkSummaryStatistics(
+            benchmark_info=info,
+            overall_statistics=overall_stats,
+            performance_by_instance=performance_by_instance,
+            validation_statistics=validation_stats
+        )
+    
+    def print_summary(self):
+        """Print comprehensive benchmark summary."""
+        summary = self.create_summary_statistics()
+        
+        self.console.print("\n" + "="*80)
+        self.console.print(f"[bold blue]📊 {self.get_algorithm_name()} Benchmark Summary")
+        self.console.print("="*80)
+        
+        # Basic info
+        info = summary.benchmark_info
+        self.console.print(f"[bold]Algorithm:[/bold] {info.algorithm}")
+        self.console.print(f"[bold]Solver:[/bold] {self.solver_name}")
+        self.console.print(f"[bold]Front Strategy:[/bold] {self.front_strategy}")
+        self.console.print(f"[bold]Instances Tested:[/bold] {info.instances_tested}")
+        self.console.print(f"[bold]Total Runs:[/bold] {info.total_runs}")
+        self.console.print(f"[bold]Successful Runs:[/bold] {info.successful_runs}")
+        self.console.print(f"[bold]Failed Runs:[/bold] {info.failed_runs}")
+        
+        success_rate = (info.successful_runs / info.total_runs * 100) if info.total_runs > 0 else 0
+        self.console.print(f"[bold]Success Rate:[/bold] {success_rate:.1f}%")
+        
+        # Overall performance
+        if summary.overall_statistics and info.successful_runs > 0:
+            stats = summary.overall_statistics
+            self.console.print("\n[bold blue]⚡ Overall Performance")
+            self.console.print(f"  Average Runtime: {stats.avg_runtime:.2f}s")
+            self.console.print(f"  Total Runtime: {stats.total_runtime:.2f}s")
+            self.console.print(f"  Average Solutions: {stats.avg_solutions:.1f}")
+            self.console.print(f"  Solution Range: {stats.min_solutions}-{stats.max_solutions}")
+        
+        # Performance by instance
+        if summary.performance_by_instance:
+            self.console.print("\n[bold blue]📋 Performance by Instance")
+            for instance_name, perf in summary.performance_by_instance.items():
+                self.console.print(f"  [bold]{instance_name}:[/bold]")
+                self.console.print(f"    Runtime: {perf.avg_runtime:.2f}s ± {perf.std_runtime:.2f}s ({perf.min_runtime:.2f}-{perf.max_runtime:.2f}s)")
+                self.console.print(f"    Solutions: {perf.avg_solutions:.1f} ({perf.min_solutions}-{perf.max_solutions})")
+                self.console.print(f"    Runs: {perf.num_runs}")
+        
+        # Validation results
+        if self.validate_solutions:
+            successful_results: list[BenchmarkResult] = [r for r in self.results if r.error is None]
+            if successful_results:
+                self.print_validation_summary(successful_results)
+        
+        self.console.print("="*80)
+
+
 def run_milp_benchmark(args):
     """Run MILP algorithm benchmark."""
     if not args.instances_dir.exists():
@@ -3046,6 +3706,47 @@ def run_milp_benchmark(args):
         return 1
     except Exception as e:
         print(f"Error running MILP benchmark: {e}")
+        return 1
+
+
+def run_gurobi_benchmark(args):
+    """Run Gurobi algorithm benchmark."""
+    if not args.instances_dir.exists():
+        print(f"Error: Instances directory {args.instances_dir} does not exist")
+        return 1
+    
+    # Determine validation setting
+    validate_solutions = True  # Default
+    if hasattr(args, 'no_validate_solutions') and args.no_validate_solutions:
+        validate_solutions = False
+    elif hasattr(args, 'validate_solutions') and args.validate_solutions:
+        validate_solutions = True
+    
+    try:
+        runner = GurobiBenchmarkRunner(
+            args.instances_dir, 
+            args.output_dir, 
+            args.iterations,
+            args.tui,
+            getattr(args, 'size', None),
+            getattr(args, 'filter', None),
+            args.timeout,
+            validate_solutions,
+            args.solver_name,
+            args.front_strategy
+        )
+        runner.run_benchmarks()
+        runner.save_results()
+        runner.print_summary()
+        return 0
+        
+    except KeyboardInterrupt:
+        print("\nGurobi Benchmark interrupted by user")
+        return 1
+    except Exception as e:
+        print(f"Error running Gurobi benchmark: {e}")
+        import traceback
+        traceback.print_exc()
         return 1
 
 
@@ -3292,6 +3993,29 @@ def main():
         return args
     
     milp_parser.set_defaults(func=lambda args: run_milp_benchmark(process_milp_args(args)))
+    
+    # Gurobi algorithm subcommand
+    gurobi_parser = subparsers.add_parser(
+        'gurobi',
+        help='Benchmark pure Gurobi solver using sims-solvers with 4 objectives',
+        description='Run benchmarks on pure Gurobi solver with 4 objectives (cost, cloud_coverage, resolution, incidence_angle) using sims-solvers'
+    )
+    add_common_args(gurobi_parser)
+    gurobi_parser.add_argument(
+        "--solver-name",
+        type=str,
+        default="gurobi",
+        choices=["gurobi"],
+        help="Solver to use (currently only gurobi supported)"
+    )
+    gurobi_parser.add_argument(
+        "--front-strategy",
+        type=str,
+        default="saugmecon",
+        choices=["saugmecon", "gpba-a"],
+        help="Front generation strategy to use (default: saugmecon)"
+    )
+    gurobi_parser.set_defaults(func=run_gurobi_benchmark)
     
     # Parse arguments
     args = parser.parse_args()
