@@ -1,0 +1,24 @@
+# Global clippy configuration for augmecon-rs
+# This applies to all targets: lib, examples, tests, benchmarks
+
+# Cognitive complexity threshold
+cognitive-complexity-threshold = 30
+
+# Documentation lints
+doc-valid-idents = ["GitHub", "AUGMECON", "API", "APIs", "HTTP", "JSON", "XML", "CLI", "CPU", "GPU"]
+
+# Suppress some pedantic lints that might be too strict
+avoid-breaking-exported-api = false
+
+# Allow certain patterns common in mathematical libraries
+allow-expect-in-tests = true
+allow-unwrap-in-tests = true
+
+# Threshold for too many arguments
+too-many-arguments-threshold = 8
+
+# Threshold for too many lines
+too-many-lines-threshold = 150
+
+# Allow certain mathematical naming conventions
+allowed-scripts = ["Latin", "Greek"]

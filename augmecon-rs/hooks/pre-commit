@@ -1,0 +1,48 @@
+#!/bin/bash
+
+# Pre-commit hook for Rust projects
+# This hook runs cargo fmt, check, and clippy before allowing commits
+
+set -e
+
+echo "Running pre-commit checks..."
+
+# Check if we're in a Rust project
+if [ ! -f "Cargo.toml" ]; then
+    echo "Error: Cargo.toml not found. This hook is designed for Rust projects."
+    exit 1
+fi
+
+# Run cargo fmt to automatically format code
+echo "🔍 Formatting code..."
+cargo fmt
+
+# Check if formatting made any changes and stage them
+if ! git diff --quiet --exit-code; then
+    echo "📝 Code was reformatted. Staging formatting changes..."
+    # Stage only Rust files that were modified by formatting
+    git add $(git diff --name-only --diff-filter=M | grep -E '\.(rs)$' || true)
+    echo "✅ Formatting changes staged and will be included in commit!"
+else
+    echo "✅ Code was already properly formatted!"
+fi
+
+# Run cargo check to ensure code compiles
+echo "🔍 Checking if code compiles..."
+if ! cargo check --quiet; then
+    echo "❌ Compilation check failed!"
+    echo "Please fix compilation errors before committing."
+    exit 1
+fi
+echo "✅ Compilation check passed!"
+
+# Run cargo clippy to check for lints
+echo "🔍 Running clippy checks..."
+if ! cargo clippy --quiet -- -D warnings; then
+    echo "❌ Clippy check failed!"
+    echo "Please fix clippy warnings before committing."
+    exit 1
+fi
+echo "✅ Clippy check passed!"
+
+echo "🎉 All pre-commit checks passed! Proceeding with commit..."
