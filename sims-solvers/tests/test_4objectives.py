@@ -1,3 +1,29 @@
+"""
+Test module for 4-objective SIMS solver functionality.
+
+This module contains comprehensive tests for the 4-objective extension of the SIMS solver,
+including direct Gurobi model tests that parse real DZN data and generate actual solutions.
+
+Key Features Tested:
+- 4-objective model construction and validation
+- Real data parsing from DZN files (Lagos Nigeria, Rio de Janeiro, Tokyo Bay)
+- Pareto front generation with actual solving
+- Solution feasibility validation
+- Detailed solution output including:
+  * Objective values for all 4 objectives (Cost, Cloud Coverage, Resolution, Incidence Angle)
+  * Selected satellite images for each solution
+  * Image count and selection details
+  * Pareto dominance analysis
+
+Output Format:
+Each solution displays:
+- Objectives: Cost=X, Cloud=Y, Resolution=Z, Angle=W
+- Selected Images (count): [image_id_1, image_id_2, ...]
+- Detailed image breakdown for large selections
+
+The tests use minizinc_data=False to bypass MiniZinc and test the direct Gurobi model implementation.
+"""
+
 import pytest
 import sys
 from pathlib import Path
@@ -11,7 +37,7 @@ sys.path.insert(0, str(sims_solvers_path))
 from sims_solvers.Config import Config
 from sims_solvers.main import build_instance, build_model, build_solver
 from sims_solvers.solve import solve_milp
-from tests.conftest import TEST_INSTANCES_30, TEST_INSTANCES_50, TEST_INSTANCES_DIR, MZN_MODEL_PATH
+from tests.conftest import TEST_INSTANCES_30
 
 
 class TestGurobiModel4Objectives:
@@ -561,13 +587,17 @@ class TestDirectGurobiModel4Objectives:
                         obj_values = solution["objs"]
                         assert len(obj_values) == 4, f"Expected 4 objective values, got {len(obj_values)}"
                         
+                        # Get selected images from solution
+                        selected_images = solution["solution_values"]
+                        
                         # Verify objective values are valid
                         assert all(isinstance(val, (int, float)) for val in obj_values), "All objectives should be numeric"
                         assert all(val >= 0 for val in obj_values), "All objectives should be non-negative"
                         
-                        # Store solution
+                        # Store solution with both objectives and selected images
                         solutions.append({
                             'objectives': obj_values,
+                            'selected_images': selected_images,
                             'instance': instance_name
                         })
                         
@@ -601,7 +631,14 @@ class TestDirectGurobiModel4Objectives:
             print(f"✓ Generated {len(solutions)} solutions for {instance_name}")
             for i, sol in enumerate(solutions):
                 obj = sol['objectives']
-                print(f"  Solution {i+1}: Cost={obj[0]}, Cloud={obj[1]}, Resolution={obj[2]}, Angle={obj[3]}")
+                selected_imgs = sol['selected_images']
+                
+                # Convert boolean list to indices of selected images (1-based indexing)
+                selected_indices = [idx + 1 for idx, selected in enumerate(selected_imgs) if selected]
+                
+                print(f"  Solution {i+1}:")
+                print(f"    Objectives: Cost={obj[0]}, Cloud={obj[1]}, Resolution={obj[2]}, Angle={obj[3]}")
+                print(f"    Selected Images ({len(selected_indices)}): {selected_indices}")
         
         else:
             pytest.skip(f"Test file {test_file} not found")
@@ -629,6 +666,7 @@ class TestDirectGurobiModel4Objectives:
             
             # Solve and collect solutions for analysis
             solutions = []
+            solution_details = []  # Store full solution info for detailed output
             solution_count = 0
             max_solutions = 8  # More solutions for quality analysis
             
@@ -639,9 +677,14 @@ class TestDirectGurobiModel4Objectives:
                     
                     if solution is not None:
                         obj_values = solution["objs"]
+                        selected_images = solution["solution_values"]
                         assert len(obj_values) == 4
                         
                         solutions.append(obj_values)
+                        solution_details.append({
+                            'objectives': obj_values,
+                            'selected_images': selected_images
+                        })
                         solution_count += 1
                     
             except Exception as e:
@@ -676,6 +719,20 @@ class TestDirectGurobiModel4Objectives:
                     obj_values = [sol[obj_idx] for sol in solutions]
                     obj_range = max(obj_values) - min(obj_values)
                     print(f"  Objective {obj_idx}: range = {obj_range} (min={min(obj_values)}, max={max(obj_values)})")
+            
+            # Print detailed solution information
+            print("\n📊 Detailed Solutions for Lagos Nigeria:")
+            for i, sol_detail in enumerate(solution_details):
+                obj = sol_detail['objectives']
+                selected_imgs = sol_detail['selected_images']
+                
+                # Convert boolean list to indices of selected images (1-based indexing)
+                selected_indices = [idx + 1 for idx, selected in enumerate(selected_imgs) if selected]
+                
+                print(f"  Pareto Solution {i+1}:")
+                print(f"    Objectives: Cost={obj[0]}, Cloud={obj[1]}, Resolution={obj[2]}, Angle={obj[3]}")
+                print(f"    Selected Images ({len(selected_indices)}): {selected_indices}")
+                print()
         
         else:
             pytest.skip(f"Test file {test_file} not found")
@@ -716,8 +773,16 @@ class TestDirectGurobiModel4Objectives:
                         
                         # Test that solution covers all elements (basic SIMS constraint)
                         num_elements = len(dzn_data['areas'])
-                        print(f"✓ Feasible solution: {len(selected_images)} images selected for {num_elements} elements")
+                        
+                        # Convert boolean list to indices of selected images (1-based indexing)
+                        selected_indices = [idx + 1 for idx, selected in enumerate(selected_images) if selected]
+                        
+                        print("✓ Feasible solution for Rio de Janeiro:")
+                        print(f"  Total images available: {len(selected_images)}")
+                        print(f"  Images selected: {len(selected_indices)}")
+                        print(f"  Elements to cover: {num_elements}")
                         print(f"  Objectives: Cost={obj_values[0]}, Cloud={obj_values[1]}, Resolution={obj_values[2]}, Angle={obj_values[3]}")
+                        print(f"  Selected Image IDs: {selected_indices}")
                         
                         # Only test first solution for feasibility
                         break
