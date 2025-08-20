@@ -4161,6 +4161,79 @@ class GurobiHybridBenchmarkRunner(GurobiBenchmarkRunner):
             
             return result
     
+    def run_benchmarks(self):
+        """Run Gurobi hybrid benchmarks with multiple ratio configurations."""
+        if self.use_tui:
+            self._run_hybrid_benchmarks_with_tui()
+        else:
+            self._run_hybrid_benchmarks_simple()
+    
+    def _run_hybrid_benchmarks_simple(self):
+        """Run Gurobi hybrid benchmarks with simple CLI output."""
+        total_runs = len(self.instance_files) * self.iterations * len(self.ratio_configs)
+        current_run = 0
+        
+        print(f"Starting Gurobi Hybrid benchmark with {len(self.instance_files)} instances, {self.iterations} iterations each, {len(self.ratio_configs)} ratio configs")
+        print(f"Total runs: {total_runs}")
+        print(f"Ratio configs: {[f'{r[0]}:{r[1]}' for r in self.ratio_configs]}")
+        print("=" * 80)
+        
+        for instance_idx, instance_file in enumerate(self.instance_files):
+            print(f"\nProcessing instance {instance_idx + 1}/{len(self.instance_files)}: {instance_file.stem}")
+            
+            try:
+                instance = self.load_instance(instance_file)
+                instance_name = instance_file.stem
+                print(f"  ✓ Loaded instance: {instance.num_images} images")
+                
+                # Run multiple iterations for this instance
+                for iteration in range(self.iterations):
+                    print(f"    Iteration {iteration + 1}/{self.iterations}")
+                    
+                    # Run multiple ratio configurations
+                    for ratio_idx, ratio in enumerate(self.ratio_configs):
+                        current_run += 1
+                        progress = (current_run / total_runs) * 100
+                        print(f"      Ratio {ratio[0]}:{ratio[1]} (Run {current_run}/{total_runs}, {progress:.1f}%)")
+                        
+                        result = self.run_single_benchmark(instance, instance_name, iteration, ratio)
+                        self.results.append(result)
+                        
+                        if result.error:
+                            print(f"        ❌ Error: {result.error}")
+                        else:
+                            print(f"        ✓ Success: {result.num_final_solutions} solutions in {result.total_runtime_seconds:.2f}s")
+                
+                # Create visualization for this instance if requested
+                instance_results = [r for r in self.results if r.instance_name == instance_name]
+                if instance_results and not all(r.error for r in instance_results):
+                    self.create_instance_3d_visualization(instance_name, instance_results)
+                
+                # Save results for this instance
+                self.save_instance_results(instance_name, instance_results)
+                
+            except Exception as e:
+                print(f"  ❌ Failed to load or process {instance_file.stem}: {e}")
+                # Create error results for all ratios and iterations
+                for iteration in range(self.iterations):
+                    for ratio in self.ratio_configs:
+                        current_run += 1
+                        error_result = BenchmarkResult()
+                        error_result.instance_name = instance_file.stem
+                        error_result.iteration = iteration
+                        error_result.ratio = ratio
+                        error_result.error = str(e)
+                        self.results.append(error_result)
+        
+        # Save final summary
+        self.save_results()
+        
+    def _run_hybrid_benchmarks_with_tui(self):
+        """Run Gurobi hybrid benchmarks with TUI progress tracking."""
+        # Similar to simple but with rich progress bars
+        # For now, fall back to simple method
+        self._run_hybrid_benchmarks_simple()
+    
     def run_gurobi_solver(self, instance_file: Path, timeout: int) -> SolverResult:
         """Run Gurobi MILP solver on an instance.
         
