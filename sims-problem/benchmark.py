@@ -3645,7 +3645,7 @@ class GurobiBenchmarkRunner(BenchmarkRunner):
         return self._create_4d_visualization_multiple_plots(instance_name, instance_results)
     
     def _create_4d_visualization_multiple_plots(self, instance_name: str, instance_results: list[BenchmarkResult]) -> bool:
-        """Create a single HTML with 3 subplots showing different objective combinations for 4D problems."""
+        """Create separate 4D visualizations for each ratio configuration."""
         # Filter successful results
         successful_results = [r for r in instance_results if not r.error and r.final_solutions]
         
@@ -3653,7 +3653,24 @@ class GurobiBenchmarkRunner(BenchmarkRunner):
             self.console.print(f"❌ No successful results for {instance_name} to visualize")
             return False
         
-        self.console.print(f"📊 Creating combined 4D visualization with 3 subplots for {instance_name}...")
+        # Group results by ratio configuration
+        results_by_ratio = {}
+        for result in successful_results:
+            ratio_key = f"{result.ratio[0]}_{result.ratio[1]}"
+            if ratio_key not in results_by_ratio:
+                results_by_ratio[ratio_key] = []
+            results_by_ratio[ratio_key].append(result)
+        
+        all_created = True
+        for ratio_key, ratio_results in results_by_ratio.items():
+            self.console.print(f"📊 Creating 4D visualization for {instance_name} ratio {ratio_key}...")
+            if not self._create_4d_visualization_for_ratio(instance_name, ratio_results, ratio_key):
+                all_created = False
+        
+        return all_created
+    
+    def _create_4d_visualization_for_ratio(self, instance_name: str, ratio_results: list[BenchmarkResult], ratio_key: str) -> bool:
+        """Create a single HTML with 3 subplots showing different objective combinations for 4D problems for one ratio."""
         
         # Check if plotly is available 
         try:
@@ -3694,76 +3711,83 @@ class GurobiBenchmarkRunner(BenchmarkRunner):
                 horizontal_spacing=0.05
             )
             
-            # Collect data once for all plots
-            all_final_objectives = []
-            final_solution_details = []
-            final_norm_timestamps = []
+            # Collect and process visualization data using the enhanced method
+            explored_data, final_data, jsonl_data, timestamp_range = self._collect_visualization_data(ratio_results)
             
-            for result in successful_results:
-                if result.final_solutions:
-                    objectives_4d = self.extract_solution_objectives_4d(result.final_solutions)
-                    timestamps = self.extract_solution_timestamps(result.final_solutions)
-                    
-                    # Normalize timestamps for this result
-                    if timestamps:
-                        min_time = min(timestamps)
-                        max_time = max(timestamps)
-                        time_range = max_time - min_time
-                        if time_range.total_seconds() > 0:
-                            norm_timestamps = [(t - min_time).total_seconds() / time_range.total_seconds() for t in timestamps]
-                        else:
-                            norm_timestamps = [0.5] * len(timestamps)
-                    else:
-                        norm_timestamps = []
-                    
-                    # Create details for hover text
-                    for i, sol in enumerate(result.final_solutions):
-                        detail = self._create_final_solution_detail(result, objectives_4d[0][i], objectives_4d[1][i], objectives_4d[3][i])
-                        final_solution_details.append(detail)
-                    
-                    all_final_objectives.append(objectives_4d)
-                    final_norm_timestamps.extend(norm_timestamps)
+            # Unpack final data
+            if len(final_data) >= 7:
+                final_costs, final_cloudy_areas, final_incidence_angles, final_norm_timestamps, final_solution_details, final_colors, final_solver_types = final_data
+            else:
+                # Fallback for compatibility
+                final_costs, final_cloudy_areas, final_incidence_angles, final_norm_timestamps, final_solution_details = final_data[:5]
+                final_colors = ['red'] * len(final_costs)  # Default to red for Gurobi
+                final_solver_types = ['Gurobi'] * len(final_costs)
             
-            if not all_final_objectives:
-                self.console.print(f"❌ No solutions found for {instance_name}")
+            # Extract 4D objectives
+            final_objectives_4d = self.extract_solution_objectives_4d([sol for result in ratio_results for sol in result.final_solutions])
+            
+            if not final_objectives_4d or not final_objectives_4d[0]:
+                self.console.print(f"❌ No 4D solutions found for {instance_name} ratio {ratio_key}")
                 return False
-            
-            # Combine all objectives from all results
-            combined_objectives = [[], [], [], []]
-            for obj_set in all_final_objectives:
-                for i in range(4):
-                    combined_objectives[i].extend(obj_set[i])
             
             # Add traces for each subplot
             for col_idx, combo in enumerate(combinations, 1):
                 # Extract the 3 objectives for this combination
-                x_data = combined_objectives[combo['indices'][0]]
-                y_data = combined_objectives[combo['indices'][1]]
-                z_data = combined_objectives[combo['indices'][2]]
+                x_data = final_objectives_4d[combo['indices'][0]]
+                y_data = final_objectives_4d[combo['indices'][1]]
+                z_data = final_objectives_4d[combo['indices'][2]]
                 
-                # Add final Pareto solutions
-                fig.add_trace(
-                    go.Scatter3d(
-                        x=x_data,
-                        y=y_data,
-                        z=z_data,
-                        mode='markers',
-                        marker=dict(
-                            size=5,
-                            color=final_norm_timestamps,
-                            colorscale='Rainbow_r',
-                            opacity=0.8,
-                            line=dict(color='black', width=0.5),
-                            symbol='circle'
+                # Separate solutions by solver type for different symbols and colors
+                gurobi_indices = [i for i, solver_type in enumerate(final_solver_types) if solver_type == 'Gurobi']
+                pls_indices = [i for i, solver_type in enumerate(final_solver_types) if solver_type == 'PLS']
+                
+                # Add Gurobi solutions as red diamonds
+                if gurobi_indices:
+                    fig.add_trace(
+                        go.Scatter3d(
+                            x=[x_data[i] for i in gurobi_indices],
+                            y=[y_data[i] for i in gurobi_indices],
+                            z=[z_data[i] for i in gurobi_indices],
+                            mode='markers',
+                            marker=dict(
+                                size=6,
+                                color='red',
+                                opacity=0.8,
+                                line=dict(color='black', width=0.5),
+                                symbol='diamond'
+                            ),
+                            text=[final_solution_details[i] for i in gurobi_indices],
+                            hovertemplate='%{text}<extra></extra>',
+                            name=f'Gurobi Solutions ({len(gurobi_indices)})',
+                            legendgroup=f'gurobi_{col_idx}',
+                            showlegend=(col_idx == 1)  # Only show legend for first plot
                         ),
-                        text=final_solution_details,
-                        hovertemplate='%{text}<extra></extra>',
-                        name=f'Solutions ({len(x_data)})',
-                        legendgroup=f'final_{col_idx}',
-                        showlegend=(col_idx == 1)  # Only show legend for first plot
-                    ),
-                    row=1, col=col_idx
-                )
+                        row=1, col=col_idx
+                    )
+                
+                # Add PLS solutions as blue circles
+                if pls_indices:
+                    fig.add_trace(
+                        go.Scatter3d(
+                            x=[x_data[i] for i in pls_indices],
+                            y=[y_data[i] for i in pls_indices],
+                            z=[z_data[i] for i in pls_indices],
+                            mode='markers',
+                            marker=dict(
+                                size=5,
+                                color='blue',
+                                opacity=0.8,
+                                line=dict(color='black', width=0.5),
+                                symbol='circle'
+                            ),
+                            text=[final_solution_details[i] for i in pls_indices],
+                            hovertemplate='%{text}<extra></extra>',
+                            name=f'PLS Solutions ({len(pls_indices)})',
+                            legendgroup=f'pls_{col_idx}',
+                            showlegend=(col_idx == 1)  # Only show legend for first plot
+                        ),
+                        row=1, col=col_idx
+                    )
                 
                 # Update scene for this subplot
                 scene_attr = f'scene{col_idx}' if col_idx > 1 else 'scene'
@@ -3777,11 +3801,14 @@ class GurobiBenchmarkRunner(BenchmarkRunner):
                     )
                 })
             
+            # Get ratio for title
+            ratio = ratio_results[0].ratio if ratio_results else (0, 0)
+            
             # Update overall layout
             fig.update_layout(
                 title=dict(
-                    text=f'{self.get_algorithm_name()} - {instance_name}: 4D Pareto Front Analysis<br>'
-                         f'<sub>Three 3D projections showing different objective combinations ({len(combined_objectives[0])} solutions)</sub>',
+                    text=f'{self.get_algorithm_name()} - {instance_name} (Ratio {ratio[0]}:{ratio[1]}): 4D Pareto Front Analysis<br>'
+                         f'<sub>Three 3D projections showing different objective combinations ({len(final_objectives_4d[0])} solutions)</sub>',
                     x=0.5,
                     font=dict(size=16)
                 ),
@@ -3800,17 +3827,17 @@ class GurobiBenchmarkRunner(BenchmarkRunner):
             
             # Add statistics annotation
             annotation_text = (
-                f"📊 {instance_name} Statistics:<br>"
-                f"• Total Solutions: {len(combined_objectives[0])}<br>"
-                f"• Successful Runs: {len(successful_results)}<br>"
-                f"• Avg Runtime: {statistics.mean([r.total_runtime_seconds for r in successful_results]):.2f}s<br>"
+                f"📊 {instance_name} (Ratio {ratio[0]}:{ratio[1]}) Statistics:<br>"
+                f"• Total Solutions: {len(final_objectives_4d[0])}<br>"
+                f"• Successful Runs: {len(ratio_results)}<br>"
+                f"• Avg Runtime: {statistics.mean([r.total_runtime_seconds for r in ratio_results]):.2f}s<br>"
                 f"• Objective Ranges:<br>"
             )
             
             objective_names = ['Cost', 'Cloud Coverage', 'Resolution Sum', 'Incidence Angle']
             for i in range(4):
-                if combined_objectives[i]:
-                    annotation_text += f"  - {objective_names[i]}: {min(combined_objectives[i]):.0f} - {max(combined_objectives[i]):.0f}<br>"
+                if final_objectives_4d[i]:
+                    annotation_text += f"  - {objective_names[i]}: {min(final_objectives_4d[i]):.0f} - {max(final_objectives_4d[i]):.0f}<br>"
             
             fig.add_annotation(
                 text=annotation_text,
@@ -3824,145 +3851,18 @@ class GurobiBenchmarkRunner(BenchmarkRunner):
                 font=dict(size=10)
             )
             
-            # Save visualization
+            # Save visualization with ratio in filename
             finished_at = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_file = self.output_dir / f"{instance_name}_{self.get_visualization_filename_suffix()}_4d_combined_{finished_at}.html"
+            output_file = self.output_dir / f"{instance_name}_{self.get_visualization_filename_suffix()}_4d_ratio_{ratio_key}_{finished_at}.html"
             fig.write_html(output_file)
             
-            self.console.print(f"✓ Combined 4D visualization saved: {output_file}")
+            self.console.print(f"✓ 4D visualization saved for ratio {ratio[0]}:{ratio[1]}: {output_file}")
             return True
             
         except Exception as e:
-            self.console.print(f"❌ Failed to create combined 4D visualization: {e}")
+            self.console.print(f"❌ Failed to create 4D visualization for ratio {ratio_key}: {e}")
             return False
     
-    def _create_single_4d_plot(self, instance_name: str, successful_results: list[BenchmarkResult], combo: dict) -> bool:
-        """Create a single 3D plot for specific objective combination."""
-        import plotly.graph_objects as go
-        
-        # Collect data for all solutions
-        all_final_objectives = []
-        final_solution_details = []
-        final_norm_timestamps = []
-        
-        for result in successful_results:
-            if result.final_solutions:
-                objectives_4d = self.extract_solution_objectives_4d(result.final_solutions)
-                timestamps = self.extract_solution_timestamps(result.final_solutions)
-                
-                # Normalize timestamps for this result
-                if timestamps:
-                    min_time = min(timestamps)
-                    max_time = max(timestamps)
-                    time_range = max_time - min_time
-                    if time_range.total_seconds() > 0:
-                        norm_timestamps = [(t - min_time).total_seconds() / time_range.total_seconds() for t in timestamps]
-                    else:
-                        norm_timestamps = [0.5] * len(timestamps)
-                else:
-                    norm_timestamps = []
-                
-                # Create details for hover text
-                for i, sol in enumerate(result.final_solutions):
-                    detail = self._create_final_solution_detail(result, objectives_4d[0][i], objectives_4d[1][i], objectives_4d[3][i])
-                    final_solution_details.append(detail)
-                
-                all_final_objectives.append(objectives_4d)
-                final_norm_timestamps.extend(norm_timestamps)
-        
-        if not all_final_objectives:
-            self.console.print(f"❌ No solutions found for {instance_name} - {combo['suffix']}")
-            return False
-        
-        # Combine all objectives from all results
-        combined_objectives = [[], [], [], []]
-        for obj_set in all_final_objectives:
-            for i in range(4):
-                combined_objectives[i].extend(obj_set[i])
-        
-        # Extract the 3 objectives for this combination
-        x_data = combined_objectives[combo['indices'][0]]
-        y_data = combined_objectives[combo['indices'][1]]
-        z_data = combined_objectives[combo['indices'][2]]
-        
-        # Create the plot
-        fig = go.Figure()
-        
-        # Add final Pareto solutions
-        fig.add_trace(go.Scatter3d(
-            x=x_data,
-            y=y_data,
-            z=z_data,
-            mode='markers',
-            marker=dict(
-                size=6,
-                color=final_norm_timestamps,
-                colorscale='Rainbow_r',
-                colorbar=dict(title="Solution Time", x=0.92),
-                opacity=0.9,
-                line=dict(color='black', width=1),
-                symbol='circle'
-            ),
-            text=final_solution_details,
-            hovertemplate='%{text}<extra></extra>',
-            name=f'⭐ Gurobi Pareto Solutions ({len(x_data)})',
-            legendgroup='final'
-        ))
-        
-        # Update layout
-        fig.update_layout(
-            title=dict(
-                text=f'{self.get_algorithm_name()} Benchmark Results - {instance_name}<br>'
-                     f'<sub>3D plot: {combo["labels"][0]} vs {combo["labels"][1]} vs {combo["labels"][2]}</sub>',
-                x=0.5,
-                font=dict(size=16)
-            ),
-            scene=dict(
-                xaxis=dict(title=dict(text=combo['labels'][0]), tickfont=dict(size=12)),
-                yaxis=dict(title=dict(text=combo['labels'][1]), tickfont=dict(size=12)),
-                zaxis=dict(title=dict(text=combo['labels'][2]), tickfont=dict(size=12)),
-                camera=dict(eye=dict(x=1.5, y=1.5, z=1.5))
-            ),
-            width=1200,
-            height=800,
-            margin=dict(l=0, r=0, b=0, t=100)
-        )
-        
-        # Add statistics annotation
-        annotation_text = (
-            f"📊 {instance_name} - {combo['suffix'].replace('_', ' ').title()}:<br>"
-            f"• Total Solutions: {len(x_data)}<br>"
-            f"• Successful Runs: {len(successful_results)}<br>"
-        )
-        
-        if x_data:
-            annotation_text += (
-                f"• {combo['labels'][0].split(' ')[0]} Range: {min(x_data):.1f} - {max(x_data):.1f}<br>"
-                f"• {combo['labels'][1].split(' ')[0]} Range: {min(y_data):.1f} - {max(y_data):.1f}<br>"
-                f"• {combo['labels'][2].split(' ')[0]} Range: {min(z_data):.1f} - {max(z_data):.1f}<br>"
-            )
-        
-        annotation_text += f"• Avg Runtime: {statistics.mean([r.total_runtime_seconds for r in successful_results]):.2f}s"
-        
-        fig.add_annotation(
-            text=annotation_text,
-            xref="paper", yref="paper",
-            x=0.02, y=0.98,
-            showarrow=False,
-            align="left",
-            bgcolor="rgba(255, 255, 255, 0.9)",
-            bordercolor="black",
-            borderwidth=1,
-            font=dict(size=11)
-        )
-        
-        # Save visualization
-        finished_at = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_file = self.output_dir / f"{instance_name}_{self.get_visualization_filename_suffix()}_{combo['suffix']}_3d_{finished_at}.html"
-        fig.write_html(output_file)
-        
-        self.console.print(f"✓ 3D visualization saved: {output_file}")
-        return True
     
     def create_instance_summary_statistics(self, instance_name: str, instance_results: list[BenchmarkResult]) -> BenchmarkSummaryStatistics:
         """Create summary statistics for a single instance."""
@@ -4348,7 +4248,7 @@ class GurobiHybridBenchmarkRunner(GurobiBenchmarkRunner):
                 if gurobi_ratio > 0:
                     gurobi_time = config_timeout * (gurobi_ratio / 100.0)
 
-                    self.console.print(f"  Running Gurobi solver for {gurobi_time}s (config {i+1}/{total_configs})")
+                    print(f"  Running Gurobi solver for {gurobi_time}s (config {i+1}/{total_configs})")
                     
                     # Run Gurobi solver
                     gurobi_result = self.run_gurobi_solver(instance_file, int(gurobi_time))
@@ -4374,7 +4274,7 @@ class GurobiHybridBenchmarkRunner(GurobiBenchmarkRunner):
                 if pls_ratio > 0:
                     pls_time = config_timeout * (pls_ratio / 100.0)
                     
-                    self.console.print(f"  Running PLS solver for {pls_time}s (config {i+1}/{total_configs})")
+                    print(f"  Running PLS solver for {pls_time}s (config {i+1}/{total_configs})")
 
                     # Run PLS solver with MILP solutions as initial population
                     pls_result = self.run_pls_solver(instance_file, int(pls_time), initial_population=milp_population if milp_population else None)
@@ -4407,19 +4307,6 @@ class GurobiHybridBenchmarkRunner(GurobiBenchmarkRunner):
                     self.console.print(f"      {error_msg}")
                 continue
         
-        # If we have no solutions at all, try a fallback PLS-only run
-        if not best_solutions and self.use_tui:
-            self.console.print("[yellow]No solutions from hybrid configs, trying PLS-only fallback[/yellow]")
-            try:
-                fallback_result = self.run_pls_solver(instance_file, min(60, timeout))  # 1 minute fallback
-                if fallback_result.solutions:
-                    best_solutions.extend(fallback_result.solutions)
-                    if self.use_tui:
-                        self.console.print(f"    [green]Fallback PLS found {len(fallback_result.solutions)} solutions[/green]")
-                if fallback_result.error:
-                    error_messages.append(f"Fallback PLS: {fallback_result.error}")
-            except Exception as e:
-                error_messages.append(f"Fallback PLS failed: {e}")
         
         return SolverResult(
             solutions=best_solutions,
