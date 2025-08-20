@@ -1290,9 +1290,9 @@ class BenchmarkRunner(ABC):
                 font=dict(size=16)
             ),
             scene=dict(
-                xaxis=dict(title='Cost (minimize)', tickfont=dict(size=12)),
-                yaxis=dict(title='Cloudy Area Coverage (minimize)', tickfont=dict(size=12)),
-                zaxis=dict(title='Max Incidence Angle (minimize)', tickfont=dict(size=12)),
+                xaxis=dict(title=dict(text='Cost (minimize)'), tickfont=dict(size=12)),
+                yaxis=dict(title=dict(text='Cloudy Area Coverage (minimize)'), tickfont=dict(size=12)),
+                zaxis=dict(title=dict(text='Max Incidence Angle (minimize)'), tickfont=dict(size=12)),
                 camera=dict(eye=dict(x=1.5, y=1.5, z=1.5))
             ),
             width=1200,
@@ -3769,9 +3769,9 @@ class GurobiBenchmarkRunner(BenchmarkRunner):
                 scene_attr = f'scene{col_idx}' if col_idx > 1 else 'scene'
                 fig.update_layout(**{
                     scene_attr: dict(
-                        xaxis=dict(title=combo['labels'][0], titlefont=dict(size=10), tickfont=dict(size=8)),
-                        yaxis=dict(title=combo['labels'][1], titlefont=dict(size=10), tickfont=dict(size=8)),
-                        zaxis=dict(title=combo['labels'][2], titlefont=dict(size=10), tickfont=dict(size=8)),
+                        xaxis=dict(title=dict(text=combo['labels'][0], font=dict(size=10)), tickfont=dict(size=8)),
+                        yaxis=dict(title=dict(text=combo['labels'][1], font=dict(size=10)), tickfont=dict(size=8)),
+                        zaxis=dict(title=dict(text=combo['labels'][2], font=dict(size=10)), tickfont=dict(size=8)),
                         camera=dict(eye=dict(x=1.3, y=1.3, z=1.3)),
                         aspectmode='cube'
                     )
@@ -3918,9 +3918,9 @@ class GurobiBenchmarkRunner(BenchmarkRunner):
                 font=dict(size=16)
             ),
             scene=dict(
-                xaxis=dict(title=combo['labels'][0], tickfont=dict(size=12)),
-                yaxis=dict(title=combo['labels'][1], tickfont=dict(size=12)),
-                zaxis=dict(title=combo['labels'][2], tickfont=dict(size=12)),
+                xaxis=dict(title=dict(text=combo['labels'][0]), tickfont=dict(size=12)),
+                yaxis=dict(title=dict(text=combo['labels'][1]), tickfont=dict(size=12)),
+                zaxis=dict(title=dict(text=combo['labels'][2]), tickfont=dict(size=12)),
                 camera=dict(eye=dict(x=1.5, y=1.5, z=1.5))
             ),
             width=1200,
