@@ -4104,6 +4104,10 @@ class GurobiHybridBenchmarkRunner(GurobiBenchmarkRunner):
             # Solutions are already Solution objects, no conversion needed
             benchmark_solutions = solutions
             
+            # Check for suspicious results and fail completely
+            if result_data.error and "Suspicious:" in result_data.error:
+                raise RuntimeError(f"Detected artificial/fake solutions: {result_data.error}")
+            
             if self.use_tui:
                 if benchmark_solutions:
                     self.console.print(f"    Found {len(benchmark_solutions)} solutions in {runtime:.2f}s")
@@ -4126,16 +4130,16 @@ class GurobiHybridBenchmarkRunner(GurobiBenchmarkRunner):
                 result.milp_solutions = result_data.milp_solutions
                 result.num_milp_solutions = len(result_data.milp_solutions)
             else:
-                # Fallback: assume solutions from ratio split
-                milp_count = int(len(benchmark_solutions) * ratio[0] / 100)
-                result.milp_solutions = benchmark_solutions[:milp_count] if milp_count > 0 else []
-                result.num_milp_solutions = milp_count
+                # No fallback - if MILP solver failed, we should know about it
+                result.milp_solutions = []
+                result.num_milp_solutions = 0
             
             result.num_final_solutions = len(benchmark_solutions)
             result.num_explored_solutions = 0
             result.total_runtime_seconds = runtime
-            result.milp_runtime_seconds = runtime * ratio[0] / 100  # Proportional estimate
-            result.pls_runtime_seconds = runtime * ratio[1] / 100   # Proportional estimate
+            # Set actual measured runtimes if available, otherwise set to 0
+            result.milp_runtime_seconds = getattr(result_data, 'milp_runtime_seconds', 0)
+            result.pls_runtime_seconds = getattr(result_data, 'pls_runtime_seconds', 0)
             result.ratio = ratio  # Use the actual ratio parameter
             # Only set error if we have no solutions - partial success is okay
             result.error = result_data.error if not benchmark_solutions else ""
@@ -4374,6 +4378,8 @@ class GurobiHybridBenchmarkRunner(GurobiBenchmarkRunner):
         
         # Track MILP solutions for this config to pass to PLS
         milp_population = []
+        milp_runtime = 0
+        pls_runtime = 0
         
         try:
             # Phase 1: Gurobi MILP
@@ -4383,7 +4389,9 @@ class GurobiHybridBenchmarkRunner(GurobiBenchmarkRunner):
                 if self.use_tui:
                     self.console.print(f"    Running Gurobi solver for {gurobi_time:.1f}s")
                 
+                milp_start_time = time.time()
                 gurobi_result = self.run_gurobi_solver(instance_file, int(gurobi_time))
+                milp_runtime = time.time() - milp_start_time
                 
                 if gurobi_result.solutions:
                     milp_solutions.extend(gurobi_result.solutions)  # Store MILP solutions
@@ -4410,7 +4418,9 @@ class GurobiHybridBenchmarkRunner(GurobiBenchmarkRunner):
                 if self.use_tui:
                     self.console.print(f"    Running PLS solver for {pls_time:.1f}s")
                 
+                pls_start_time = time.time()
                 pls_result = self.run_pls_solver(instance_file, int(pls_time), milp_population)
+                pls_runtime = time.time() - pls_start_time
                 
                 if pls_result.solutions:
                     for sol in pls_result.solutions:
@@ -4433,6 +4443,10 @@ class GurobiHybridBenchmarkRunner(GurobiBenchmarkRunner):
         
         runtime = time.time() - start_time
         
+        # Sanity check: if we have too many solutions, something is wrong
+        if len(best_solutions) > 2000:
+            error_messages.append(f"Suspicious: Found {len(best_solutions)} solutions, which seems artificially high")
+        
         # Create result with MILP solutions tracked separately
         result = SolverResult(
             solutions=best_solutions,
@@ -4440,8 +4454,10 @@ class GurobiHybridBenchmarkRunner(GurobiBenchmarkRunner):
             error="; ".join(error_messages) if error_messages else None
         )
         
-        # Add MILP solutions as a custom attribute
+        # Add MILP solutions and actual runtimes as custom attributes
         result.milp_solutions = milp_solutions
+        result.milp_runtime_seconds = milp_runtime
+        result.pls_runtime_seconds = pls_runtime
         
         return result
     
