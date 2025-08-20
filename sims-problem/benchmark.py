@@ -3680,33 +3680,44 @@ class GurobiBenchmarkRunner(BenchmarkRunner):
             self.console.print("❌ Plotly not available for creating plots")
             return False
         
-        # Define the 3 objective combinations to visualize
+        # Define the 4 objective combinations to visualize
         combinations = [
             {
                 'indices': (0, 1, 2),  # Cost, Cloud, Resolution
                 'labels': ('Cost (minimize)', 'Cloudy Area Coverage (minimize)', 'Resolution Sum (minimize)'),
                 'suffix': 'cost_cloud_resolution',
-                'title': 'Cost vs Cloud vs Resolution'
+                'title': 'Cost vs Cloud vs Resolution',
+                'row': 1, 'col': 1
             },
             {
                 'indices': (0, 1, 3),  # Cost, Cloud, Incidence Angle
                 'labels': ('Cost (minimize)', 'Cloudy Area Coverage (minimize)', 'Max Incidence Angle (minimize)'),
                 'suffix': 'cost_cloud_angle',
-                'title': 'Cost vs Cloud vs Incidence Angle'
+                'title': 'Cost vs Cloud vs Incidence Angle',
+                'row': 1, 'col': 2
             },
             {
                 'indices': (0, 2, 3),  # Cost, Resolution, Incidence Angle
                 'labels': ('Cost (minimize)', 'Resolution Sum (minimize)', 'Max Incidence Angle (minimize)'),
                 'suffix': 'cost_resolution_angle',
-                'title': 'Cost vs Resolution vs Incidence Angle'
+                'title': 'Cost vs Resolution vs Incidence Angle',
+                'row': 2, 'col': 1
+            },
+            {
+                'indices': (1, 2, 3),  # Cloud, Resolution, Incidence Angle
+                'labels': ('Cloudy Area Coverage (minimize)', 'Resolution Sum (minimize)', 'Max Incidence Angle (minimize)'),
+                'suffix': 'cloud_resolution_angle',
+                'title': 'Cloud vs Resolution vs Incidence Angle',
+                'row': 2, 'col': 2
             }
         ]
         
         try:
-            # Create subplots with 3D scenes in a row
+            # Create subplots with 3D scenes in a 2x2 grid
             fig = make_subplots(
-                rows=1, cols=3,
-                specs=[[{'type': 'scene'}, {'type': 'scene'}, {'type': 'scene'}]],
+                rows=2, cols=2,
+                specs=[[{'type': 'scene'}, {'type': 'scene'}], 
+                       [{'type': 'scene'}, {'type': 'scene'}]],
                 subplot_titles=[combo['title'] for combo in combinations],
                 horizontal_spacing=0.05
             )
@@ -3718,10 +3729,28 @@ class GurobiBenchmarkRunner(BenchmarkRunner):
             if len(final_data) >= 7:
                 final_costs, final_cloudy_areas, final_incidence_angles, final_norm_timestamps, final_solution_details, final_colors, final_solver_types = final_data
             else:
-                # Fallback for compatibility
+                # Fallback for compatibility - should not happen with hybrid solver
                 final_costs, final_cloudy_areas, final_incidence_angles, final_norm_timestamps, final_solution_details = final_data[:5]
-                final_colors = ['red'] * len(final_costs)  # Default to red for Gurobi
-                final_solver_types = ['Gurobi'] * len(final_costs)
+                self.console.print(f"⚠️ Warning: Using fallback coloring for {instance_name} ratio {ratio_key}")
+                # For hybrid solver, try to determine based on milp_solutions
+                final_colors = []
+                final_solver_types = []
+                for result in ratio_results:
+                    result_final_costs, result_final_cloudy, result_final_incidence = self.extract_solution_objectives(result.final_solutions)
+                    if result.milp_solutions:
+                        milp_costs, milp_cloudy, milp_incidence = self.extract_solution_objectives(result.milp_solutions)
+                        milp_coords = set(zip(milp_costs, milp_cloudy, milp_incidence))
+                        for cost, cloudy, incidence in zip(result_final_costs, result_final_cloudy, result_final_incidence):
+                            if (cost, cloudy, incidence) in milp_coords:
+                                final_colors.append('red')
+                                final_solver_types.append('Gurobi')
+                            else:
+                                final_colors.append('blue')
+                                final_solver_types.append('PLS')
+                    else:
+                        # No MILP solutions available, assume all are from the primary solver
+                        final_colors.extend(['red'] * len(result_final_costs))
+                        final_solver_types.extend(['Gurobi'] * len(result_final_costs))
             
             # Extract 4D objectives
             final_objectives_4d = self.extract_solution_objectives_4d([sol for result in ratio_results for sol in result.final_solutions])
@@ -3731,15 +3760,23 @@ class GurobiBenchmarkRunner(BenchmarkRunner):
                 return False
             
             # Add traces for each subplot
-            for col_idx, combo in enumerate(combinations, 1):
+            for combo in combinations:
                 # Extract the 3 objectives for this combination
                 x_data = final_objectives_4d[combo['indices'][0]]
                 y_data = final_objectives_4d[combo['indices'][1]]
                 z_data = final_objectives_4d[combo['indices'][2]]
                 
+                # Debug: Print solver type distribution
+                solver_type_counts = {}
+                for solver_type in final_solver_types:
+                    solver_type_counts[solver_type] = solver_type_counts.get(solver_type, 0) + 1
+                print(f"Debug: Solver types in {instance_name} ratio {ratio_key}: {solver_type_counts}")
+                
                 # Separate solutions by solver type for different symbols and colors
                 gurobi_indices = [i for i, solver_type in enumerate(final_solver_types) if solver_type == 'Gurobi']
                 pls_indices = [i for i, solver_type in enumerate(final_solver_types) if solver_type == 'PLS']
+                
+                print(f"Debug: Found {len(gurobi_indices)} Gurobi solutions, {len(pls_indices)} PLS solutions")
                 
                 # Add Gurobi solutions as red diamonds
                 if gurobi_indices:
@@ -3759,10 +3796,10 @@ class GurobiBenchmarkRunner(BenchmarkRunner):
                             text=[final_solution_details[i] for i in gurobi_indices],
                             hovertemplate='%{text}<extra></extra>',
                             name=f'Gurobi Solutions ({len(gurobi_indices)})',
-                            legendgroup=f'gurobi_{col_idx}',
-                            showlegend=(col_idx == 1)  # Only show legend for first plot
+                            legendgroup='gurobi',
+                            showlegend=(combo == combinations[0])  # Only show legend for first plot
                         ),
-                        row=1, col=col_idx
+                        row=combo['row'], col=combo['col']
                     )
                 
                 # Add PLS solutions as blue circles
@@ -3783,14 +3820,15 @@ class GurobiBenchmarkRunner(BenchmarkRunner):
                             text=[final_solution_details[i] for i in pls_indices],
                             hovertemplate='%{text}<extra></extra>',
                             name=f'PLS Solutions ({len(pls_indices)})',
-                            legendgroup=f'pls_{col_idx}',
-                            showlegend=(col_idx == 1)  # Only show legend for first plot
+                            legendgroup='pls',
+                            showlegend=(combo == combinations[0])  # Only show legend for first plot
                         ),
-                        row=1, col=col_idx
+                        row=combo['row'], col=combo['col']
                     )
                 
                 # Update scene for this subplot
-                scene_attr = f'scene{col_idx}' if col_idx > 1 else 'scene'
+                scene_num = (combo['row'] - 1) * 2 + combo['col']
+                scene_attr = f'scene{scene_num}' if scene_num > 1 else 'scene'
                 fig.update_layout(**{
                     scene_attr: dict(
                         xaxis=dict(title=dict(text=combo['labels'][0], font=dict(size=10)), tickfont=dict(size=8)),
@@ -3808,13 +3846,13 @@ class GurobiBenchmarkRunner(BenchmarkRunner):
             fig.update_layout(
                 title=dict(
                     text=f'{self.get_algorithm_name()} - {instance_name} (Ratio {ratio[0]}:{ratio[1]}): 4D Pareto Front Analysis<br>'
-                         f'<sub>Three 3D projections showing different objective combinations ({len(final_objectives_4d[0])} solutions)</sub>',
+                         f'<sub>Four 3D projections showing different objective combinations ({len(final_objectives_4d[0])} solutions)</sub>',
                     x=0.5,
                     font=dict(size=16)
                 ),
-                width=1800,
-                height=600,
-                margin=dict(l=0, r=0, b=0, t=100),
+                width=1600,
+                height=1000,
+                margin=dict(l=50, r=50, b=50, t=120),
                 showlegend=True,
                 legend=dict(
                     x=0.02,
@@ -4269,6 +4307,8 @@ class GurobiHybridBenchmarkRunner(GurobiBenchmarkRunner):
                         
                         # Add to PLS initial population (already a Solution object)
                         milp_population.append(sol)
+                    
+                    print(f"    Found {len(gurobi_result.solutions)} Gurobi solutions in {gurobi_result.runtime_seconds:.2f}s")
                 
                 # Phase 2: PLS 
                 if pls_ratio > 0:
