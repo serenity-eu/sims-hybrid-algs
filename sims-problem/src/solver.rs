@@ -264,12 +264,25 @@ pub fn solve_with_pls(
             let mut initial_solution_set = BTreeSolutionSet::new("initial_2d_solutions");
             
             if let Some(provided_population) = &initial_population {
-                // Use provided initial population
-                info!("Using provided initial population of {} solutions for 2D PLS", provided_population.len());
-                for solution in provided_population {
-                    let selected_images: Vec<usize> = solution.selected_images.iter().cloned().collect();
-                    let pls_solution = BitsetEncodedSolution::from_selected_images(&selected_images, &pls_problem);
-                    initial_solution_set.try_insert(&pls_solution);
+                if !provided_population.is_empty() {
+                    // Use provided initial population
+                    info!("Using provided initial population of {} solutions for 2D PLS", provided_population.len());
+                    for solution in provided_population {
+                        let selected_images: Vec<usize> = solution.selected_images.iter().cloned().collect();
+                        let pls_solution = BitsetEncodedSolution::from_selected_images(&selected_images, &pls_problem);
+                        initial_solution_set.try_insert(&pls_solution);
+                    }
+                } else {
+                    // Provided population is empty, generate random population
+                    info!("Provided initial population is empty, generating random initial population of {} solutions for 2D PLS", initial_population_size);
+                    for _ in 0..initial_population_size {
+                        let random_solution = if is_deterministic {
+                            BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
+                        } else {
+                            BitsetEncodedSolution::random(&pls_problem)
+                        };
+                        initial_solution_set.try_insert(&random_solution);
+                    }
                 }
             } else {
                 // Generate random initial population
@@ -422,12 +435,25 @@ pub fn solve_with_pls(
                 NdTreeSolutionSet::new("initial_3d_solutions");
             
             if let Some(provided_population) = &initial_population {
-                // Use provided initial population
-                info!("Using provided initial population of {} solutions for 3D PLS", provided_population.len());
-                for solution in provided_population {
-                    let selected_images: Vec<usize> = solution.selected_images.iter().cloned().collect();
-                    let pls_solution = BitsetEncodedSolution::from_selected_images(&selected_images, &pls_problem);
-                    initial_solution_set.try_insert(&pls_solution);
+                if !provided_population.is_empty() {
+                    // Use provided initial population
+                    info!("Using provided initial population of {} solutions for 3D PLS", provided_population.len());
+                    for solution in provided_population {
+                        let selected_images: Vec<usize> = solution.selected_images.iter().cloned().collect();
+                        let pls_solution = BitsetEncodedSolution::from_selected_images(&selected_images, &pls_problem);
+                        initial_solution_set.try_insert(&pls_solution);
+                    }
+                } else {
+                    // Provided population is empty, generate random population
+                    info!("Provided initial population is empty, generating random initial population of {} solutions for 3D PLS", initial_population_size);
+                    for _ in 0..initial_population_size {
+                        let random_solution = if is_deterministic {
+                            BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
+                        } else {
+                            BitsetEncodedSolution::random(&pls_problem)
+                        };
+                        initial_solution_set.try_insert(&random_solution);
+                    }
                 }
             } else {
                 // Generate random initial population
@@ -585,12 +611,25 @@ pub fn solve_with_pls(
                 NdTreeSolutionSet::new("initial_4d_solutions");
             
             if let Some(provided_population) = &initial_population {
-                // Use provided initial population
-                info!("Using provided initial population of {} solutions for 4D PLS", provided_population.len());
-                for solution in provided_population {
-                    let selected_images: Vec<usize> = solution.selected_images.iter().cloned().collect();
-                    let pls_solution = BitsetEncodedSolution::from_selected_images(&selected_images, &pls_problem);
-                    initial_solution_set.try_insert(&pls_solution);
+                if !provided_population.is_empty() {
+                    // Use provided initial population
+                    info!("Using provided initial population of {} solutions for 4D PLS", provided_population.len());
+                    for solution in provided_population {
+                        let selected_images: Vec<usize> = solution.selected_images.iter().cloned().collect();
+                        let pls_solution = BitsetEncodedSolution::from_selected_images(&selected_images, &pls_problem);
+                        initial_solution_set.try_insert(&pls_solution);
+                    }
+                } else {
+                    // Provided population is empty, generate random population
+                    info!("Provided initial population is empty, generating random initial population of {} solutions for 4D PLS", initial_population_size);
+                    for _ in 0..initial_population_size {
+                        let random_solution = if is_deterministic {
+                            BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
+                        } else {
+                            BitsetEncodedSolution::random(&pls_problem)
+                        };
+                        initial_solution_set.try_insert(&random_solution);
+                    }
                 }
             } else {
                 // Generate random initial population

@@ -4062,7 +4062,7 @@ class GurobiHybridBenchmarkRunner(GurobiBenchmarkRunner):
         instance: sims_problem.SimsDiscreteProblem,
         instance_name: str,
         iteration: int,
-        *args
+        ratio: tuple[int, int]
     ) -> BenchmarkResult:
         """Run a single hybrid benchmark combining Gurobi MILP with PLS."""
         import time
@@ -4078,13 +4078,13 @@ class GurobiHybridBenchmarkRunner(GurobiBenchmarkRunner):
             raise RuntimeError(f"Could not find .dzn file for instance {instance_name}")
         
         if self.use_tui:
-            self.console.print(f"  Solving {instance_name} with Gurobi-Hybrid...")
+            self.console.print(f"  Solving {instance_name} with Gurobi-Hybrid (ratio {ratio[0]}:{ratio[1]})...")
         
         start_time = time.time()
         
         try:
-            # Run hybrid solver
-            result_data = self.run_gurobi_hybrid_solver(dzn_file, self.timeout)
+            # Run hybrid solver with the specified ratio
+            result_data = self.run_gurobi_hybrid_solver(dzn_file, self.timeout, ratio)
             
             runtime = time.time() - start_time
             solutions = result_data.solutions
@@ -4108,12 +4108,23 @@ class GurobiHybridBenchmarkRunner(GurobiBenchmarkRunner):
             result.iteration = iteration
             result.final_solutions = benchmark_solutions
             result.explored_solutions = []
+            
+            # Set MILP solutions for proper visualization coloring
+            if hasattr(result_data, 'milp_solutions') and result_data.milp_solutions:
+                result.milp_solutions = result_data.milp_solutions
+                result.num_milp_solutions = len(result_data.milp_solutions)
+            else:
+                # Fallback: assume solutions from ratio split
+                milp_count = int(len(benchmark_solutions) * ratio[0] / 100)
+                result.milp_solutions = benchmark_solutions[:milp_count] if milp_count > 0 else []
+                result.num_milp_solutions = milp_count
+            
             result.num_final_solutions = len(benchmark_solutions)
             result.num_explored_solutions = 0
             result.total_runtime_seconds = runtime
-            result.milp_runtime_seconds = runtime * 0.5  # Rough estimate
-            result.pls_runtime_seconds = runtime * 0.5   # Rough estimate
-            result.ratio = (50, 50)  # Hybrid ratio
+            result.milp_runtime_seconds = runtime * ratio[0] / 100  # Proportional estimate
+            result.pls_runtime_seconds = runtime * ratio[1] / 100   # Proportional estimate
+            result.ratio = ratio  # Use the actual ratio parameter
             # Only set error if we have no solutions - partial success is okay
             result.error = result_data.error if not benchmark_solutions else ""
             
@@ -4252,108 +4263,102 @@ class GurobiHybridBenchmarkRunner(GurobiBenchmarkRunner):
                 error=error_msg
             )
 
-    def run_gurobi_hybrid_solver(self, instance_file: Path, timeout: int) -> SolverResult:
-        """Run Gurobi hybrid solver on an instance with multiple ratio configurations.
+    def run_gurobi_hybrid_solver(self, instance_file: Path, timeout: int, ratio: tuple[int, int]) -> SolverResult:
+        """Run Gurobi hybrid solver on an instance with a specific ratio configuration.
         
         Args:
             instance_file: Path to instance file
             timeout: Total timeout in seconds
+            ratio: Tuple of (gurobi_percentage, pls_percentage)
             
         Returns:
-            SolverResult with hybrid solver results
+            SolverResult with hybrid solver results for the specific ratio
         """
         import time
         start_time = time.time()
         
         all_solutions = set()
-        best_solutions = []  # Now contains Solution objects
-        total_configs = len(self.ratio_configs)
-        config_timeout = timeout // total_configs if total_configs > 0 else timeout
+        best_solutions = []  # Contains Solution objects
         error_messages = []
+        milp_solutions = []  # Track MILP solutions separately
+        
+        gurobi_ratio, pls_ratio = ratio
         
         if self.use_tui:
-            self.console.print(f"  Running {total_configs} ratio configs with {config_timeout}s each")
+            self.console.print(f"  Running ratio config: Gurobi {gurobi_ratio}% + PLS {pls_ratio}%")
         
-        for i, (gurobi_ratio, pls_ratio) in enumerate(self.ratio_configs):
-            if self.use_tui:
-                self.console.print(f"    Config {i+1}/{total_configs}: Gurobi {gurobi_ratio}% + PLS {pls_ratio}%")
-            
-            # Track MILP solutions for this config to pass to PLS
-            milp_population = []
-            
-            try:
-                # Phase 1: Gurobi MILP
-                if gurobi_ratio > 0:
-                    gurobi_time = config_timeout * (gurobi_ratio / 100.0)
+        # Track MILP solutions for this config to pass to PLS
+        milp_population = []
+        
+        try:
+            # Phase 1: Gurobi MILP
+            if gurobi_ratio > 0:
+                gurobi_time = timeout * (gurobi_ratio / 100.0)
 
-                    print(f"  Running Gurobi solver for {gurobi_time}s (config {i+1}/{total_configs})")
-                    
-                    # Run Gurobi solver
-                    gurobi_result = self.run_gurobi_solver(instance_file, int(gurobi_time))
-                    
-                    if gurobi_result.error:
-                        error_messages.append(f"Gurobi config {i+1}: {gurobi_result.error}")
-                        if self.use_tui:
-                            self.console.print(f"      [yellow]Gurobi failed for config {i+1}, continuing with PLS only[/yellow]")
-                    
-                    # Add Gurobi solutions (already Solution objects) even if there was an error
+                if self.use_tui:
+                    self.console.print(f"    Running Gurobi solver for {gurobi_time:.1f}s")
+                
+                gurobi_result = self.run_gurobi_solver(instance_file, int(gurobi_time))
+                
+                if gurobi_result.solutions:
+                    milp_solutions.extend(gurobi_result.solutions)  # Store MILP solutions
+                    milp_population.extend(gurobi_result.solutions)
                     for sol in gurobi_result.solutions:
-                        # Extract objectives from Solution object
-                        objectives = [sol.cost, sol.cloudy_area, sol.min_resolutions_sum, sol.max_incidence_angle]
-                        sol_tuple = tuple(objectives)
+                        sol_tuple = self.solution_to_tuple(sol)
                         if sol_tuple not in all_solutions:
                             all_solutions.add(sol_tuple)
-                            best_solutions.append(sol)  # Add Solution object directly
-                        
-                        # Add to PLS initial population (already a Solution object)
-                        milp_population.append(sol)
+                            best_solutions.append(sol)
                     
-                    print(f"    Found {len(gurobi_result.solutions)} Gurobi solutions in {gurobi_result.runtime_seconds:.2f}s")
+                    if self.use_tui:
+                        self.console.print(f"    Gurobi found {len(gurobi_result.solutions)} solutions")
+                else:
+                    if self.use_tui:
+                        self.console.print(f"    Gurobi found no solutions")
                 
-                # Phase 2: PLS 
-                if pls_ratio > 0:
-                    pls_time = config_timeout * (pls_ratio / 100.0)
-                    
-                    print(f"  Running PLS solver for {pls_time}s (config {i+1}/{total_configs})")
-
-                    # Run PLS solver with MILP solutions as initial population
-                    pls_result = self.run_pls_solver(instance_file, int(pls_time), initial_population=milp_population if milp_population else None)
-                    
-                    if pls_result.error:
-                        error_messages.append(f"PLS config {i+1}: {pls_result.error}")
-                    
-                    # Add PLS solutions (already Solution objects)
-                    for sol in pls_result.solutions:
-                        try:
-                            # Create objective tuple from Solution attributes for 4-objective problem
-                            objectives = [sol.cost, sol.cloudy_area, sol.min_resolutions_sum, sol.max_incidence_angle]
-                            sol_tuple = tuple(objectives)
-                            
-                            if sol_tuple not in all_solutions:
-                                all_solutions.add(sol_tuple)
-                                best_solutions.append(sol)  # Add Solution object directly
-                                    
-                        except AttributeError as e:
-                            error_msg = f"Could not extract objectives from PLS solution: {e}"
-                            error_messages.append(error_msg)
-                            if self.use_tui:
-                                self.console.print(f"        Warning: {error_msg}")
-                            continue
-                                
-            except Exception as e:
-                error_msg = f"Error in config {i+1}: {e}"
-                error_messages.append(error_msg)
+                if gurobi_result.error:
+                    error_messages.append(f"Gurobi: {gurobi_result.error}")
+            
+            # Phase 2: PLS
+            if pls_ratio > 0:
+                pls_time = timeout * (pls_ratio / 100.0)
+                
                 if self.use_tui:
-                    self.console.print(f"      {error_msg}")
-                continue
+                    self.console.print(f"    Running PLS solver for {pls_time:.1f}s")
+                
+                pls_result = self.run_pls_solver(instance_file, int(pls_time), milp_population)
+                
+                if pls_result.solutions:
+                    for sol in pls_result.solutions:
+                        sol_tuple = self.solution_to_tuple(sol)
+                        if sol_tuple not in all_solutions:
+                            all_solutions.add(sol_tuple)
+                            best_solutions.append(sol)
+                    
+                    if self.use_tui:
+                        self.console.print(f"    PLS found {len(pls_result.solutions)} new solutions")
+                else:
+                    if self.use_tui:
+                        self.console.print(f"    PLS found no new solutions")
+                
+                if pls_result.error:
+                    error_messages.append(f"PLS: {pls_result.error}")
+                    
+        except Exception as e:
+            error_messages.append(f"Hybrid solver error: {str(e)}")
         
+        runtime = time.time() - start_time
         
-        return SolverResult(
+        # Create result with MILP solutions tracked separately
+        result = SolverResult(
             solutions=best_solutions,
-            num_solutions=len(best_solutions),
-            runtime_seconds=time.time() - start_time,
-            error="; ".join(error_messages) if error_messages else ""
+            runtime_seconds=runtime,
+            error="; ".join(error_messages) if error_messages else None
         )
+        
+        # Add MILP solutions as a custom attribute
+        result.milp_solutions = milp_solutions
+        
+        return result
     
     def run_pls_solver(self, instance_file: Path, timeout: int, initial_population=None) -> SolverResult:
         """Run PLS solver using existing infrastructure.
