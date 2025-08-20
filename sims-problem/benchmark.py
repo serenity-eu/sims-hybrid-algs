@@ -4155,9 +4155,16 @@ class GurobiHybridBenchmarkRunner(GurobiBenchmarkRunner):
             benchmark_solutions = solutions
             
             if self.use_tui:
-                self.console.print(f"    Found {len(benchmark_solutions)} solutions in {runtime:.2f}s")
+                if benchmark_solutions:
+                    self.console.print(f"    Found {len(benchmark_solutions)} solutions in {runtime:.2f}s")
+                    if result_data.error:
+                        self.console.print(f"    [yellow]With warnings: {result_data.error}[/yellow]")
+                else:
+                    self.console.print(f"    [red]No solutions found in {runtime:.2f}s[/red]")
+                    if result_data.error:
+                        self.console.print(f"    [red]Errors: {result_data.error}[/red]")
             
-            # Create BenchmarkResult
+            # Create BenchmarkResult - include partial results even if there are errors
             result = BenchmarkResult()
             result.instance_name = instance_name
             result.iteration = iteration
@@ -4169,7 +4176,8 @@ class GurobiHybridBenchmarkRunner(GurobiBenchmarkRunner):
             result.milp_runtime_seconds = runtime * 0.5  # Rough estimate
             result.pls_runtime_seconds = runtime * 0.5   # Rough estimate
             result.ratio = (50, 50)  # Hybrid ratio
-            result.error = result_data.error
+            # Only set error if we have no solutions - partial success is okay
+            result.error = result_data.error if not benchmark_solutions else ""
             
             # Validate solutions if requested
             if benchmark_solutions and self.validate_solutions and self.validator:
@@ -4281,11 +4289,13 @@ class GurobiHybridBenchmarkRunner(GurobiBenchmarkRunner):
                         break
                         
             except Exception as solver_error:
+                # Still return any solutions we collected before the error
+                error_msg = f"Gurobi solver error: {solver_error}" if str(solver_error) else "Gurobi solver encountered an unknown error"
                 return SolverResult(
                     solutions=gurobi_solutions,
                     num_solutions=len(gurobi_solutions),
                     runtime_seconds=time.time() - start_time,
-                    error=f"Gurobi solver error: {solver_error}"
+                    error=error_msg
                 )
             
             return SolverResult(
@@ -4296,11 +4306,12 @@ class GurobiHybridBenchmarkRunner(GurobiBenchmarkRunner):
             )
             
         except Exception as e:
+            error_msg = f"Gurobi setup error: {e}" if str(e) else "Gurobi setup encountered an unknown error"
             return SolverResult(
                 solutions=[],
                 num_solutions=0,
                 runtime_seconds=time.time() - start_time,
-                error=f"Gurobi setup error: {e}"
+                error=error_msg
             )
 
     def run_gurobi_hybrid_solver(self, instance_file: Path, timeout: int) -> SolverResult:
@@ -4342,8 +4353,10 @@ class GurobiHybridBenchmarkRunner(GurobiBenchmarkRunner):
                     
                     if gurobi_result.error:
                         error_messages.append(f"Gurobi config {i+1}: {gurobi_result.error}")
+                        if self.use_tui:
+                            self.console.print(f"      [yellow]Gurobi failed for config {i+1}, continuing with PLS only[/yellow]")
                     
-                    # Add Gurobi solutions (already Solution objects)
+                    # Add Gurobi solutions (already Solution objects) even if there was an error
                     for sol in gurobi_result.solutions:
                         # Extract objectives from Solution object
                         objectives = [sol.cost, sol.cloudy_area, sol.min_resolutions_sum, sol.max_incidence_angle]
@@ -4389,6 +4402,20 @@ class GurobiHybridBenchmarkRunner(GurobiBenchmarkRunner):
                 if self.use_tui:
                     self.console.print(f"      {error_msg}")
                 continue
+        
+        # If we have no solutions at all, try a fallback PLS-only run
+        if not best_solutions and self.use_tui:
+            self.console.print("[yellow]No solutions from hybrid configs, trying PLS-only fallback[/yellow]")
+            try:
+                fallback_result = self.run_pls_solver(instance_file, min(60, timeout))  # 1 minute fallback
+                if fallback_result.solutions:
+                    best_solutions.extend(fallback_result.solutions)
+                    if self.use_tui:
+                        self.console.print(f"    [green]Fallback PLS found {len(fallback_result.solutions)} solutions[/green]")
+                if fallback_result.error:
+                    error_messages.append(f"Fallback PLS: {fallback_result.error}")
+            except Exception as e:
+                error_messages.append(f"Fallback PLS failed: {e}")
         
         return SolverResult(
             solutions=best_solutions,
