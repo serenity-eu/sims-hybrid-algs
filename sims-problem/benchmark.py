@@ -4347,6 +4347,8 @@ class GurobiHybridBenchmarkRunner(GurobiBenchmarkRunner):
                 # Phase 1: Gurobi MILP
                 if gurobi_ratio > 0:
                     gurobi_time = config_timeout * (gurobi_ratio / 100.0)
+
+                    self.console.print(f"  Running Gurobi solver for {gurobi_time}s (config {i+1}/{total_configs})")
                     
                     # Run Gurobi solver
                     gurobi_result = self.run_gurobi_solver(instance_file, int(gurobi_time))
@@ -4372,6 +4374,8 @@ class GurobiHybridBenchmarkRunner(GurobiBenchmarkRunner):
                 if pls_ratio > 0:
                     pls_time = config_timeout * (pls_ratio / 100.0)
                     
+                    self.console.print(f"  Running PLS solver for {pls_time}s (config {i+1}/{total_configs})")
+
                     # Run PLS solver with MILP solutions as initial population
                     pls_result = self.run_pls_solver(instance_file, int(pls_time), initial_population=milp_population if milp_population else None)
                     
