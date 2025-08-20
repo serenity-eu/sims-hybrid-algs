@@ -4057,6 +4057,18 @@ class GurobiHybridBenchmarkRunner(GurobiBenchmarkRunner):
         """Get the filename suffix for visualizations."""
         return f"gurobi_hybrid_{self.ratio_step}"
     
+    def solution_to_tuple(self, solution):
+        """Convert solution to tuple of objectives for deduplication."""
+        if hasattr(solution, 'objectives'):
+            return tuple(solution.objectives)
+        elif hasattr(solution, 'objs'):
+            return tuple(solution.objs)
+        else:
+            # Fallback for other solution formats
+            return tuple([solution.cost, solution.cloudy_area, 
+                         getattr(solution, 'max_incidence_angle', 0),
+                         getattr(solution, 'min_resolutions_sum', 0)])
+    
     def run_single_benchmark(
         self, 
         instance: sims_problem.SimsDiscreteProblem,
@@ -4840,20 +4852,20 @@ def main():
             help="Include perfect solutions from JSONL files in visualizations"
         )
     
-    # Hybrid algorithm subcommand
-    hybrid_parser = subparsers.add_parser(
-        'hybrid',
-        help='Benchmark hybrid SIMS solver with different MILP/PLS ratios',
-        description='Run benchmarks on hybrid solver testing different MILP/PLS ratio configurations'
-    )
-    add_common_args(hybrid_parser)
-    hybrid_parser.add_argument(
-        "--ratio-step",
-        type=int,
-        default=10,
-        help="Step size for ratio configurations (default: 10, gives ratios 100:0, 90:10, ..., 0:100)"
-    )
-    hybrid_parser.set_defaults(func=run_hybrid_benchmark)
+    # Hybrid algorithm subcommand - COMMENTED OUT FOR NOW
+    # hybrid_parser = subparsers.add_parser(
+    #     'hybrid',
+    #     help='Benchmark hybrid SIMS solver with different MILP/PLS ratios',
+    #     description='Run benchmarks on hybrid solver testing different MILP/PLS ratio configurations'
+    # )
+    # add_common_args(hybrid_parser)
+    # hybrid_parser.add_argument(
+    #     "--ratio-step",
+    #     type=int,
+    #     default=10,
+    #     help="Step size for ratio configurations (default: 10, gives ratios 100:0, 90:10, ..., 0:100)"
+    # )
+    # hybrid_parser.set_defaults(func=run_hybrid_benchmark)
     
     # PLS algorithm subcommand
     pls_parser = subparsers.add_parser(
