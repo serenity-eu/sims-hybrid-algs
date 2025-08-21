@@ -12,7 +12,7 @@ pub enum Solver {
     Default,
     /// COIN-OR CBC solver - open source MILP solver
     CoinCbc,
-    /// HiGHS solver - high performance linear programming solver
+    /// `HiGHS` solver - high performance linear programming solver
     HiGHS,
 }
 
@@ -32,9 +32,8 @@ impl Solver {
     #[must_use]
     pub const fn supports_parameters(self) -> bool {
         match self {
-            Solver::Default => false,
-            Solver::CoinCbc => true,
-            Solver::HiGHS => false, // HiGHS doesn't support generic parameters
+            Self::CoinCbc => true,
+            Self::Default | Self::HiGHS => false, // HiGHS doesn't support generic parameters
         }
     }
 }
