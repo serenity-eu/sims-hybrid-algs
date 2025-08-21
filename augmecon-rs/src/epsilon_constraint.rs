@@ -28,7 +28,7 @@ use crate::{
     error::{AugmeconError, Result},
     model::MultiObjectiveProblem,
     options::Options,
-    solution::Solution,
+    solution::{self, Solution},
 };
 use good_lp::{
     constraint, variable, Expression, Solution as GoodLpSolution, SolverModel, WithTimeLimit,
@@ -212,13 +212,13 @@ impl<'a> EpsilonConstraintBuilder<'a> {
 
         match self.options.solver {
             crate::solver_enum::Solver::Default => {
-                self.solve_with_default_solver_impl(prob_vars, augmented_primary, direction, slack_vars, penalty_sum, epsilon_augmentation)
+                Ok(self.solve_with_default_solver_impl(prob_vars, &augmented_primary, *direction, &slack_vars, &penalty_sum, epsilon_augmentation))
             }
             crate::solver_enum::Solver::CoinCbc => {
-                self.solve_with_coin_cbc_solver_impl(prob_vars, augmented_primary, direction, slack_vars, penalty_sum, epsilon_augmentation)
+                Ok(self.solve_with_coin_cbc_solver_impl(prob_vars, &augmented_primary, *direction, &slack_vars, &penalty_sum, epsilon_augmentation))
             }
             crate::solver_enum::Solver::HiGHS => {
-                self.solve_with_highs_solver_impl(prob_vars, augmented_primary, direction, slack_vars, penalty_sum, epsilon_augmentation)
+                Ok(self.solve_with_highs_solver_impl(prob_vars, &augmented_primary, *direction, &slack_vars, &penalty_sum, epsilon_augmentation))
             }
         }
     }
@@ -266,13 +266,13 @@ impl<'a> EpsilonConstraintBuilder<'a> {
 
         match self.options.solver {
             crate::solver_enum::Solver::Default => {
-                self.solve_with_slack_default_solver_impl(prob_vars, augmented_primary, direction, slack_vars, penalty_sum, epsilon_augmentation, timeout)
+                Ok(self.solve_with_slack_default_solver_impl(prob_vars, &augmented_primary, *direction, &slack_vars, &penalty_sum, epsilon_augmentation, timeout))
             }
             crate::solver_enum::Solver::CoinCbc => {
-                self.solve_with_slack_coin_cbc_solver_impl(prob_vars, augmented_primary, direction, slack_vars, penalty_sum, epsilon_augmentation, timeout)
+                Ok(self.solve_with_slack_coin_cbc_solver_impl(prob_vars, &augmented_primary, *direction, &slack_vars, &penalty_sum, epsilon_augmentation, timeout))
             }
             crate::solver_enum::Solver::HiGHS => {
-                self.solve_with_slack_highs_solver_impl(prob_vars, augmented_primary, direction, slack_vars, penalty_sum, epsilon_augmentation, timeout)
+                Ok(self.solve_with_slack_highs_solver_impl(prob_vars, &augmented_primary, *direction, &slack_vars, &penalty_sum, epsilon_augmentation, timeout))
             }
         }
     }
@@ -475,12 +475,12 @@ impl<'a> EpsilonConstraintBuilder<'a> {
     fn solve_with_default_solver_impl(
         &self,
         prob_vars: good_lp::ProblemVariables,
-        augmented_primary: Expression,
-        direction: &crate::model::ObjectiveDirection,
-        slack_vars: HashMap<usize, good_lp::Variable>,
-        penalty_sum: Expression,
+        augmented_primary: &Expression,
+        direction: crate::model::ObjectiveDirection,
+        slack_vars: &HashMap<usize, good_lp::Variable>,
+        penalty_sum: &Expression,
         epsilon_augmentation: f64,
-    ) -> Result<Option<Solution>> {
+    ) -> std::option::Option<solution::Solution> {
         let problem = match direction {
             crate::model::ObjectiveDirection::Minimize => {
                 prob_vars.minimise(augmented_primary.clone())
@@ -506,7 +506,7 @@ impl<'a> EpsilonConstraintBuilder<'a> {
         }
 
         // Add constraints
-        self.add_constraints_to_model(&mut model, &slack_vars);
+        self.add_constraints_to_model(&mut model, slack_vars);
 
         // Solve the problem
         log::debug!(
@@ -516,12 +516,12 @@ impl<'a> EpsilonConstraintBuilder<'a> {
 
         match model.solve() {
             Ok(solution) => {
-                let sol = self.extract_solution(&solution, &penalty_sum, &augmented_primary, epsilon_augmentation, &slack_vars);
-                Ok(Some(sol))
+                let sol = self.extract_solution(&solution, penalty_sum, augmented_primary, epsilon_augmentation, slack_vars);
+                Some(sol)
             }
             Err(e) => {
                 log::debug!("Epsilon-constraint problem failed: {e:?}");
-                Ok(None)
+                None
             }
         }
     }
@@ -530,12 +530,12 @@ impl<'a> EpsilonConstraintBuilder<'a> {
     fn solve_with_coin_cbc_solver_impl(
         &self,
         prob_vars: good_lp::ProblemVariables,
-        augmented_primary: Expression,
-        direction: &crate::model::ObjectiveDirection,
-        slack_vars: HashMap<usize, good_lp::Variable>,
-        penalty_sum: Expression,
+        augmented_primary: &Expression,
+        direction: crate::model::ObjectiveDirection,
+        slack_vars: &HashMap<usize, good_lp::Variable>,
+        penalty_sum: &Expression,
         epsilon_augmentation: f64,
-    ) -> Result<Option<Solution>> {
+    ) -> std::option::Option<solution::Solution> {
         let problem = match direction {
             crate::model::ObjectiveDirection::Minimize => {
                 prob_vars.minimise(augmented_primary.clone())
@@ -561,7 +561,7 @@ impl<'a> EpsilonConstraintBuilder<'a> {
         }
 
         // Add constraints
-        self.add_constraints_to_model(&mut model, &slack_vars);
+        self.add_constraints_to_model(&mut model, slack_vars);
 
         // Solve the problem
         log::debug!(
@@ -571,26 +571,26 @@ impl<'a> EpsilonConstraintBuilder<'a> {
 
         match model.solve() {
             Ok(solution) => {
-                let sol = self.extract_solution(&solution, &penalty_sum, &augmented_primary, epsilon_augmentation, &slack_vars);
-                Ok(Some(sol))
+                let sol = self.extract_solution(&solution, penalty_sum, augmented_primary, epsilon_augmentation, slack_vars);
+                Some(sol)
             }
             Err(e) => {
                 log::debug!("Epsilon-constraint problem failed: {e:?}");
-                Ok(None)
+                None
             }
         }
     }
 
-    /// Solve with HiGHS solver implementation
+    /// Solve with `HiGHS` solver implementation
     fn solve_with_highs_solver_impl(
         &self,
         prob_vars: good_lp::ProblemVariables,
-        augmented_primary: Expression,
-        direction: &crate::model::ObjectiveDirection,
-        slack_vars: HashMap<usize, good_lp::Variable>,
-        penalty_sum: Expression,
+        augmented_primary: &Expression,
+        direction: crate::model::ObjectiveDirection,
+        slack_vars: &HashMap<usize, good_lp::Variable>,
+        penalty_sum: &Expression,
         epsilon_augmentation: f64,
-    ) -> Result<Option<Solution>> {
+    ) -> Option<Solution> {
         let problem = match direction {
             crate::model::ObjectiveDirection::Minimize => {
                 prob_vars.minimise(augmented_primary.clone())
@@ -617,7 +617,7 @@ impl<'a> EpsilonConstraintBuilder<'a> {
         }
 
         // Add constraints
-        self.add_constraints_to_model(&mut model, &slack_vars);
+        self.add_constraints_to_model(&mut model, slack_vars);
 
         // Solve the problem
         log::debug!(
@@ -627,12 +627,12 @@ impl<'a> EpsilonConstraintBuilder<'a> {
 
         match model.solve() {
             Ok(solution) => {
-                let sol = self.extract_solution(&solution, &penalty_sum, &augmented_primary, epsilon_augmentation, &slack_vars);
-                Ok(Some(sol))
+                let sol = self.extract_solution(&solution, penalty_sum, augmented_primary, epsilon_augmentation, slack_vars);
+                Some(sol)
             }
             Err(e) => {
                 log::debug!("Epsilon-constraint problem failed: {e:?}");
-                Ok(None)
+                None
             }
         }
     }
@@ -641,13 +641,13 @@ impl<'a> EpsilonConstraintBuilder<'a> {
     fn solve_with_slack_default_solver_impl(
         &self,
         prob_vars: good_lp::ProblemVariables,
-        augmented_primary: Expression,
-        direction: &crate::model::ObjectiveDirection,
-        slack_vars: HashMap<usize, good_lp::Variable>,
-        penalty_sum: Expression,
+        augmented_primary: &Expression,
+        direction: crate::model::ObjectiveDirection,
+        slack_vars: &HashMap<usize, good_lp::Variable>,
+        penalty_sum: &Expression,
         epsilon_augmentation: f64,
         timeout: Option<Duration>,
-    ) -> Result<Option<SolutionWithSlack>> {
+    ) -> Option<SolutionWithSlack> {
         let problem = match direction {
             crate::model::ObjectiveDirection::Minimize => {
                 prob_vars.minimise(augmented_primary.clone())
@@ -673,7 +673,7 @@ impl<'a> EpsilonConstraintBuilder<'a> {
         }
 
         // Add constraints
-        self.add_constraints_to_model(&mut model, &slack_vars);
+        self.add_constraints_to_model(&mut model, slack_vars);
 
         // Apply timeout if specified
         let final_model = if let Some(timeout_duration) = timeout {
@@ -691,12 +691,12 @@ impl<'a> EpsilonConstraintBuilder<'a> {
 
         match final_model.solve() {
             Ok(solution) => {
-                let sol = self.extract_solution_with_slack(&solution, &penalty_sum, &augmented_primary, epsilon_augmentation, &slack_vars);
-                Ok(Some(sol))
+                let sol = self.extract_solution_with_slack(&solution, penalty_sum, augmented_primary, epsilon_augmentation, slack_vars);
+                Some(sol)
             }
             Err(e) => {
                 log::debug!("Epsilon-constraint problem failed: {e:?}");
-                Ok(None)
+                None
             }
         }
     }
@@ -705,13 +705,13 @@ impl<'a> EpsilonConstraintBuilder<'a> {
     fn solve_with_slack_coin_cbc_solver_impl(
         &self,
         prob_vars: good_lp::ProblemVariables,
-        augmented_primary: Expression,
-        direction: &crate::model::ObjectiveDirection,
-        slack_vars: HashMap<usize, good_lp::Variable>,
-        penalty_sum: Expression,
+        augmented_primary: &Expression,
+        direction: crate::model::ObjectiveDirection,
+        slack_vars: &HashMap<usize, good_lp::Variable>,
+        penalty_sum: &Expression,
         epsilon_augmentation: f64,
         timeout: Option<Duration>,
-    ) -> Result<Option<SolutionWithSlack>> {
+    ) -> Option<SolutionWithSlack> {
         let problem = match direction {
             crate::model::ObjectiveDirection::Minimize => {
                 prob_vars.minimise(augmented_primary.clone())
@@ -737,7 +737,7 @@ impl<'a> EpsilonConstraintBuilder<'a> {
         }
 
         // Add constraints
-        self.add_constraints_to_model(&mut model, &slack_vars);
+        self.add_constraints_to_model(&mut model, slack_vars);
 
         // Apply timeout if specified
         let final_model = if let Some(timeout_duration) = timeout {
@@ -755,27 +755,27 @@ impl<'a> EpsilonConstraintBuilder<'a> {
 
         match final_model.solve() {
             Ok(solution) => {
-                let sol = self.extract_solution_with_slack(&solution, &penalty_sum, &augmented_primary, epsilon_augmentation, &slack_vars);
-                Ok(Some(sol))
+                let sol = self.extract_solution_with_slack(&solution, penalty_sum, augmented_primary, epsilon_augmentation, slack_vars);
+                Some(sol)
             }
             Err(e) => {
                 log::debug!("Epsilon-constraint problem failed: {e:?}");
-                Ok(None)
+                None
             }
         }
     }
 
-    /// Solve with slack - HiGHS solver implementation
+    /// Solve with slack - `HiGHS` solver implementation
     fn solve_with_slack_highs_solver_impl(
         &self,
         prob_vars: good_lp::ProblemVariables,
-        augmented_primary: Expression,
-        direction: &crate::model::ObjectiveDirection,
-        slack_vars: HashMap<usize, good_lp::Variable>,
-        penalty_sum: Expression,
+        augmented_primary: &Expression,
+        direction: crate::model::ObjectiveDirection,
+        slack_vars: &HashMap<usize, good_lp::Variable>,
+        penalty_sum: &Expression,
         epsilon_augmentation: f64,
         timeout: Option<Duration>,
-    ) -> Result<Option<SolutionWithSlack>> {
+    ) -> Option<SolutionWithSlack> {
         let problem = match direction {
             crate::model::ObjectiveDirection::Minimize => {
                 prob_vars.minimise(augmented_primary.clone())
@@ -802,7 +802,7 @@ impl<'a> EpsilonConstraintBuilder<'a> {
         }
 
         // Add constraints
-        self.add_constraints_to_model(&mut model, &slack_vars);
+        self.add_constraints_to_model(&mut model, slack_vars);
 
         // Apply timeout if specified
         let final_model = if let Some(timeout_duration) = timeout {
@@ -820,12 +820,12 @@ impl<'a> EpsilonConstraintBuilder<'a> {
 
         match final_model.solve() {
             Ok(solution) => {
-                let sol = self.extract_solution_with_slack(&solution, &penalty_sum, &augmented_primary, epsilon_augmentation, &slack_vars);
-                Ok(Some(sol))
+                let sol = self.extract_solution_with_slack(&solution, penalty_sum, augmented_primary, epsilon_augmentation, slack_vars);
+                Some(sol)
             }
             Err(e) => {
                 log::debug!("Epsilon-constraint problem failed: {e:?}");
-                Ok(None)
+                None
             }
         }
     }
