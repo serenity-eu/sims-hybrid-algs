@@ -17,8 +17,12 @@ MZN_MODEL_PATH = None
 with resources.as_file(resources.files(mzn_models) / "mosaic_cloud2.mzn") as mzn_model_path:
     MZN_MODEL_PATH = mzn_model_path
 
-def solve_milp(config: Config):
+def solve_milp(config: Config, objectives: list[str] | None = None):
     """Solve the SIMS problem using Mixed Integer Linear Programming (MILP) solver."""
+
+    # If objectives are provided, update the config
+    if objectives is not None:
+        config.objectives = objectives
 
     instance = build_instance(config)
     print("Start computing: " + config.uid())

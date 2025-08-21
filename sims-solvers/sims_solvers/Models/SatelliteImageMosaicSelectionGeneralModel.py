@@ -1,112 +1,159 @@
+from __future__ import annotations
+
 from abc import ABC
 
 from sims_solvers import constants
 from sims_solvers.Models.GenericModel import GenericModel
+from sims_solvers.Instances.InstanceSIMS import InstanceSIMS
+from sims_solvers.Config import Config
 
 
 class SatelliteImageMosaicSelectionGeneralModel(GenericModel, ABC):
-    def __init__(self, instance):
-        # variables
-        self.select_image = None
-        self.cloud_covered = None
-        self.resolution_element = []
-        self.effective_incidence_angle = None
-        self.current_max_incidence_angle = None
-        self.total_area_clouds = None
-        super().__init__(instance)
+    # Model variables (initialized by concrete implementations)
+    # These represent solver-specific variable objects (e.g., gp.Var, cp_model variable, etc.)
+    select_image: object
+    cloud_covered: object
+    resolution_element: list[object] = []
+    effective_incidence_angle: object
+    current_max_incidence_angle: object
+    total_area_clouds: int | None = None
 
-    def problem_name(self):
+    def __init__(self, instance: InstanceSIMS, config: Config | None = None) -> None:
+        # Store config before calling parent
+        self.config: Config | None = config
+        
+        super().__init__(instance)
+    
+    @property
+    def sims_instance(self) -> InstanceSIMS:
+        """Return the instance cast to InstanceSIMS type."""
+        assert isinstance(self.instance, InstanceSIMS), f"Expected InstanceSIMS, got {type(self.instance)}"
+        return self.instance
+
+    def problem_name(self) -> str:  # type: ignore[override]
         return constants.Problem.SATELLITE_IMAGE_SELECTION_PROBLEM.value
 
-    def is_a_minimization_model(self):
+    def is_a_minimization_model(self) -> bool:  # type: ignore[override]
         return True
 
-    def get_nadir_bound_estimation(self):
-        nadir_objectives = [0] * len(self.objectives)
-        nadir_objectives[0] = sum(self.instance.costs)
-        nadir_objectives[1] = sum(self.instance.areas)
-        nadir_objectives[2] = self.get_resolution_nadir_for_ref_point()
-        nadir_objectives[3] = max(self.instance.incidence_angle)
+    def get_nadir_bound_estimation(self) -> list[float]:  # type: ignore[override]
+        # Config must be provided and contain valid objectives
+        if not self.config:
+            raise ValueError("Config is required but was not provided")
+        if not hasattr(self.config, 'objectives'):
+            raise ValueError("Config must contain 'objectives' attribute")
+        
+        objectives_to_use: list[str] = self.config.objectives
+        
+        nadir_objectives: list[float] = []
+        for obj_name in objectives_to_use:
+            match obj_name:
+                case "min_cost":
+                    nadir_objectives.append(float(sum(self.sims_instance.costs)))
+                case "cloud_coverage":
+                    nadir_objectives.append(float(sum(self.sims_instance.areas)))
+                case "min_resolution":
+                    nadir_objectives.append(float(self.get_resolution_nadir_for_ref_point()))
+                case "max_incidence_angle":
+                    nadir_objectives.append(float(max(self.sims_instance.incidence_angle)))
+                case _:
+                    raise ValueError(f"Invalid objective '{obj_name}'. Valid objectives are: min_cost, cloud_coverage, min_resolution, max_incidence_angle")
         return nadir_objectives
 
-    def get_ref_points_for_hypervolume(self):
-        ref_points = [0] * len(self.objectives)
-        ref_points[0] = sum(self.instance.costs) + 1
-        ref_points[1] = sum(self.instance.areas) + 1
-        ref_points[2] = self.get_resolution_nadir_for_ref_point() + 1
-        ref_points[3] = 900
+    def get_ref_points_for_hypervolume(self) -> list[float]:  # type: ignore[override]
+        # Config must be provided and contain valid objectives
+        if not self.config:
+            raise ValueError("Config is required but was not provided")
+        if not hasattr(self.config, 'objectives'):
+            raise ValueError("Config must contain 'objectives' attribute")
+        
+        objectives_to_use: list[str] = self.config.objectives
+        
+        ref_points: list[float] = []
+        for obj_name in objectives_to_use:
+            match obj_name:
+                case "min_cost":
+                    ref_points.append(float(sum(self.sims_instance.costs) + 1))
+                case "cloud_coverage":
+                    ref_points.append(float(sum(self.sims_instance.areas) + 1))
+                case "min_resolution":
+                    ref_points.append(float(self.get_resolution_nadir_for_ref_point() + 1))
+                case "max_incidence_angle":
+                    ref_points.append(900.0)
+                case _:
+                    raise ValueError(f"Invalid objective '{obj_name}'. Valid objectives are: min_cost, cloud_coverage, min_resolution, max_incidence_angle")
         return ref_points
 
-    def get_resolution_nadir_for_ref_point(self):
-        resolution_parts_max = {}
-        for idx, image in enumerate(self.instance.images):
+    def get_resolution_nadir_for_ref_point(self) -> float:
+        resolution_parts_max: dict[int, float] = {}
+        for idx, image in enumerate(self.sims_instance.images):
             for u in image:
                 if u not in resolution_parts_max:
-                    resolution_parts_max[u] = self.instance.resolution[idx]
+                    resolution_parts_max[u] = float(self.sims_instance.resolution[idx])
                 else:
-                    if resolution_parts_max[u] < self.instance.resolution[idx]:
-                        resolution_parts_max[u] = self.instance.resolution[idx]
-        return sum(resolution_parts_max.values())
+                    if resolution_parts_max[u] < self.sims_instance.resolution[idx]:
+                        resolution_parts_max[u] = float(self.sims_instance.resolution[idx])
+        return float(sum(resolution_parts_max.values()))
 
-    def assert_solution(self, solution, selected_images):
+    def assert_solution(self, solution: list[float], selected_images: list[int]) -> None:
         self.assert_is_a_cover(selected_images)
         self.assert_cost(selected_images, solution[0])
         self.assert_cloud_covered(selected_images, solution[1])
         self.assert_resolution(selected_images, solution[2])
         self.assert_incidence_angle(selected_images, solution[3])
 
-    def assert_is_a_cover(self, selected_images):
+    def assert_is_a_cover(self, selected_images: list[int]) -> None:
         # check if it is a cover
-        covered_elements = set()
+        covered_elements: set[int] = set()
         for image in selected_images:
-            for element in self.instance.images[image]:
+            for element in self.sims_instance.images[image]:
                 covered_elements.add(element)
-        assert len(covered_elements) == len(self.instance.areas)
+        assert len(covered_elements) == len(self.sims_instance.areas)
 
-    def assert_cost(self, selected_images, cost):
+    def assert_cost(self, selected_images: list[int], cost: float) -> None:
         total_cost = self.calculate_cost(selected_images)
         assert total_cost == cost
 
-    def calculate_cost(self, selected_images):
-        total_cost = 0
+    def calculate_cost(self, selected_images: list[int]) -> float:
+        total_cost: float = 0.0
         for image in selected_images:
-            total_cost += self.instance.costs[image]
+            total_cost += self.sims_instance.costs[image]
         return total_cost
 
-    def assert_cloud_covered(self, selected_images, cloud_uncovered):
+    def assert_cloud_covered(self, selected_images: list[int], cloud_uncovered: float) -> None:
         calculated_cloud_uncovered = self.calculate_cloud_uncovered(selected_images)
         assert calculated_cloud_uncovered == cloud_uncovered
 
-    def calculate_cloud_uncovered(self, selected_images):
-        total_cloud_covered = 0
-        cloud_covered = set()
+    def calculate_cloud_uncovered(self, selected_images: list[int]) -> float:
+        total_cloud_covered: float = 0.0
+        cloud_covered: set[int] = set()
         for image in selected_images:
-            if image in self.instance.cloud_covered_by_image:
-                for cloud in self.instance.cloud_covered_by_image[image]:
+            if image in self.sims_instance.cloud_covered_by_image:
+                for cloud in self.sims_instance.cloud_covered_by_image[image]:
                     if cloud not in cloud_covered:
                         cloud_covered.add(cloud)
-                        total_cloud_covered += self.instance.clouds_id_area[cloud]
-        total_area_clouds = int(sum(self.instance.clouds_id_area.values()))
+                        total_cloud_covered += self.sims_instance.clouds_id_area[cloud]
+        total_area_clouds: float = float(sum(self.sims_instance.clouds_id_area.values()))
         return total_area_clouds - total_cloud_covered
 
-    def assert_resolution(self, selected_images, resolution):
+    def assert_resolution(self, selected_images: list[int], resolution: float) -> None:
         calculated_total_resolution = self.calculate_resolution(selected_images)
         assert calculated_total_resolution == resolution
 
-    def calculate_resolution(self, selected_images):
-        calculated_total_resolution = 0
-        for element in range(len(self.instance.areas)):
-            element_resolution = max(self.instance.resolution)
+    def calculate_resolution(self, selected_images: list[int]) -> float:
+        calculated_total_resolution: float = 0.0
+        for element in range(len(self.sims_instance.areas)):
+            element_resolution: float = float(max(self.sims_instance.resolution))
             for image in selected_images:
-                if element in self.instance.images[image]:
-                    if self.instance.resolution[image] < element_resolution:
-                        element_resolution = self.instance.resolution[image]
+                if element in self.sims_instance.images[image]:
+                    if self.sims_instance.resolution[image] < element_resolution:
+                        element_resolution = float(self.sims_instance.resolution[image])
             calculated_total_resolution += element_resolution
         return calculated_total_resolution
 
-    def assert_incidence_angle(self, selected_images, incidence_angle):
-        max_incidence_angle = 0
+    def assert_incidence_angle(self, selected_images: list[int], incidence_angle: float) -> None:
+        max_incidence_angle: float = 0.0
         for image in selected_images:
-            if self.instance.incidence_angle[image] > max_incidence_angle:
-                max_incidence_angle = self.instance.incidence_angle[image]
+            if self.sims_instance.incidence_angle[image] > max_incidence_angle:
+                max_incidence_angle = float(self.sims_instance.incidence_angle[image])
         assert max_incidence_angle == incidence_angle

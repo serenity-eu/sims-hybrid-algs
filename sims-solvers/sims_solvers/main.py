@@ -256,7 +256,7 @@ def build_model(instance: InstanceGeneric, config: Config) -> GenericModel:
     problem = instance.problem_name
     if not instance.is_minizinc:
         return get_model_by_problem_and_solver_name_(
-            problem, config.solver_name, instance
+            problem, config.solver_name, instance, config
         )
     else:
         print(
@@ -265,12 +265,12 @@ def build_model(instance: InstanceGeneric, config: Config) -> GenericModel:
         sys.exit(1)
 
 
-def get_model_by_problem_and_solver_name_(problem_name, solver_name, instance):
+def get_model_by_problem_and_solver_name_(problem_name, solver_name, instance, config):
     if problem_name == constants.Problem.SATELLITE_IMAGE_SELECTION_PROBLEM.value:
         if solver_name == "gurobi":
-            return SatelliteImageMosaicSelectionGurobiModel(instance)
+            return SatelliteImageMosaicSelectionGurobiModel(instance, config)
         elif solver_name == "ortools-py":
-            return SatelliteImageMosaicSelectionOrtoolsCPModel(instance)
+            return SatelliteImageMosaicSelectionOrtoolsCPModel(instance, config)
     elif problem_name == constants.Problem.MULTI_OBJECTIVE_KNAPSACK_PROBLEM.value:
         if solver_name == "gurobi":
             return MultiobjectiveKnapsackGurobiModel(instance)

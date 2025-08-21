@@ -12,6 +12,12 @@ class OrtoolsCPModel(GenericModel, ABC):
         self.solution_variables = []
         self.solver_values = []
 
+    @property
+    def ortools_solver_model(self) -> cp_model.CpModel:
+        """Return the solver_model cast to cp_model.CpModel type."""
+        assert isinstance(self.solver_model, cp_model.CpModel), f"Expected cp_model.CpModel, got {type(self.solver_model)}"
+        return self.solver_model
+
     def set_solver_name(self):
         self.solver_name = constants.Solver.ORTOOLS_PY.value
 
