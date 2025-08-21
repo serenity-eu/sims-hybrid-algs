@@ -1,6 +1,5 @@
 import argparse
 import multiprocessing
-import os
 from pathlib import Path
 
 
@@ -24,6 +23,7 @@ class Config:
         fzn_optimisation_level: int,
         cores: int,
         threads: int,
+        objectives: list[str] | None = None,
     ):
         self.minizinc_data: bool = minizinc_data
         self.data_name: str = instance_name
@@ -40,8 +40,10 @@ class Config:
         self.fzn_optimisation_level: int = fzn_optimisation_level
         self.cores: int = cores
         self.threads: int = threads
+        # Default to all 4 objectives if not specified
+        self.objectives: list[str] = objectives or ["min_cost", "cloud_coverage", "min_resolution", "max_incidence_angle"]
 
-    @staticmethod
+    @classmethod
     def from_args(cls) -> "Config":
         parser = argparse.ArgumentParser(
             prog="sims_solvers",
@@ -65,11 +67,10 @@ class Config:
         args.dzn_dir = cls.clean_dir_name(args.dzn_dir)
         return cls(
             minizinc_data=bool(int(args.minizinc_data)),
-            data_name=args.instance_name,
-            data_sets_folder=args.dzn_dir,
-            input_mzn=args.model_mzn,
-            minizinc_model=os.path.basename(args.model_mzn)[:-4],
-            input_dzn=args.dzn_dir + "/" + args.instance_name + ".dzn",
+            instance_name=args.instance_name,
+            data_sets_folder=Path(args.dzn_dir),
+            input_mzn=Path(args.model_mzn),
+            dzn_dir=Path(args.dzn_dir),
             solver_name=args.solver_name,
             problem_name=args.problem_name,
             front_strategy=args.front_strategy,
@@ -78,7 +79,7 @@ class Config:
             solver_search_strategy=args.solver_search_strategy,
             fzn_optimisation_level=args.fzn_optimisation_level,
             cores=args.cores,
-            threads=None,
+            threads=1,
         )
 
     @staticmethod
