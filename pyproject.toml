@@ -19,6 +19,7 @@ dependencies = [
     "numpy>=2.2.6",
     "maturin>=1.9.0",
     "plotly>=6.2.0",
+    "sims-solvers",
 ]
 
 [project.optional-dependencies]

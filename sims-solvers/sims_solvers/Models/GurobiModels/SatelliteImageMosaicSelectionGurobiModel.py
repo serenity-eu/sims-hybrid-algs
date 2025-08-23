@@ -100,7 +100,7 @@ class SatelliteImageMosaicSelectionGurobiModel(GurobiModel, SatelliteImageMosaic
             "cloud_coverage": lambda: self.total_area_clouds - (gp.quicksum(self.cloud_covered[c] * self.area_clouds[c]
                                                               for c in self.clouds_id)),
             "min_resolution": lambda: gp.quicksum(self.resolution_element[e] for e in self.elements),
-            "max_incidence_angle": lambda: self.current_max_incidence_angle
+            "min_max_incidence_angle": lambda: self.current_max_incidence_angle
         }
         
         # Add only the requested objectives
@@ -127,8 +127,8 @@ class SatelliteImageMosaicSelectionGurobiModel(GurobiModel, SatelliteImageMosaic
             if obj_name == "min_resolution":
                 objective_values[i] = self.calculate_resolution(selected_images)
                 break
-            elif obj_name not in ["min_cost", "cloud_coverage", "min_resolution", "max_incidence_angle"]:
-                raise ValueError(f"Invalid objective '{obj_name}'. Valid objectives are: min_cost, cloud_coverage, min_resolution, max_incidence_angle")
+            elif obj_name not in ["min_cost", "cloud_coverage", "min_resolution", "min_max_incidence_angle"]:
+                raise ValueError(f"Invalid objective '{obj_name}'. Valid objectives are: min_cost, cloud_coverage, min_resolution, min_max_incidence_angle")
 
     def add_constraints_to_model(self) -> None:
         # Config must be provided and contain valid objectives
@@ -172,8 +172,8 @@ class SatelliteImageMosaicSelectionGurobiModel(GurobiModel, SatelliteImageMosaic
                                                                  for i in self.images_id
                                                                  if e in self.images[i]))
 
-        # Incidence angle constraints - only add if max_incidence_angle objective is used
-        if "max_incidence_angle" in objectives_to_use:
+        # Incidence angle constraints - only add if min_max_incidence_angle objective is used
+        if "min_max_incidence_angle" in objectives_to_use:
             # The below approach using indicator constraints is faster than the one commented below
             self.constraints.append(self.gurobi_solver_model.addConstrs(((self.select_image[i] == 0) >> (self.effective_incidence_angle[i] == 0)
                                   for i in self.images_id)))

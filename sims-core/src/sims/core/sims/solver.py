@@ -3,7 +3,7 @@ from pathlib import Path
 
 from .problem import ProblemInstance
 from .solver_config import FrontStrategy, SolverType, TwoPhaseSolverConfig
-from .solver_result import SolverResult, TwoPhaseSolverResult
+from .solver_result import Solution, SolverResult, TwoPhaseSolverResult
 from .solvers import gurobi, ortools, pareto_local_search
 
 log = logging.getLogger(Path(__file__).stem)
@@ -15,8 +15,9 @@ def solve(
     problem_path: Path,
     timeout_s: int,
     output_path: Path,
+    objectives: list[str],
     front_strategy: FrontStrategy = FrontStrategy.NON_APLICABLE,
-    initial_population_csv: Path | None = None,
+    initial_population: list[Solution] | None = None,
 ) -> SolverResult:
     match solver_type:
         case SolverType.OR_TOOLS:
@@ -30,10 +31,9 @@ def solve(
         case SolverType.PLS:
             return pareto_local_search.solve(
                 problem_instance,
-                problem_path,
                 timeout_s,
-                output_path,
-                initial_population_csv=initial_population_csv,
+                objectives,
+                initial_population,
             )
         case _:
             raise ValueError(f"Solver type {solver_type} is not supported")
@@ -48,6 +48,7 @@ def solve_with_two_phases(
     problem_path: Path,
     experiment_path: Path,
     solver_config: TwoPhaseSolverConfig,
+    objectives: list[str],
     dry_run: bool = False,
 ) -> TwoPhaseSolverResult:
     exact_solver_result = None
@@ -74,6 +75,7 @@ def solve_with_two_phases(
                 problem_path,
                 exact_solver_time,
                 summary_path,
+                objectives,
                 front_strategy,
             )
 
@@ -90,13 +92,21 @@ def solve_with_two_phases(
         )
 
         if not dry_run:
+            # Convert initial population from CSV if available
+            initial_population = None
+            if ortools_output_path and ortools_output_path.exists():
+                # TODO: Implement CSV to initial population conversion if needed
+                # For now, PLS will start with random initial population
+                pass
+            
             pls_result = solve(
                 SolverType.PLS,
                 problem_instance,
                 problem_path,
                 pls_time,
                 summary_path,
-                initial_population_csv=ortools_output_path,
+                objectives,
+                initial_population=initial_population,
             )
 
         log.info(

@@ -1,48 +1,143 @@
 import logging
-import subprocess
+from datetime import timedelta
 from pathlib import Path
-import os
+from typing import Sequence
+
+try:
+    import sims_problem
+except ImportError:
+    raise ImportError(
+        "sims_problem module not found. Please ensure the sims-problem package is installed."
+    )
 
 from ..problem import ProblemInstance
-from ..solver_result import SolverResult
-from . import _utils
+from ..solver_result import SolverResult, Solution
 
 log = logging.getLogger(Path(__file__).stem)
 
 
 def solve(
     problem_instance: ProblemInstance,
-    problem_path: Path,
     timeout_s: int,
-    output_path: Path,
-    initial_population_csv: Path | None = None,
-):
-    if "PLS_PATH" not in os.environ:
-        raise EnvironmentError(
-            "PLS_PATH environment variable is not set. Please set it to the path of the PLS executable."
-        )
+    objectives: list[str],
+    initial_population: Sequence[Solution] | None = None,
+    initial_population_size: int = 100,
+    max_iterations: int = 50000,
+    neighborhood_size_min: int = 1,
+    neighborhood_size_max: int = 6,
+) -> SolverResult:
+    """
+    Solve the SIMS problem using Pareto Local Search via sims_problem.solve_with_pls.
+    
+    Args:
+        problem_instance: The SIMS problem instance to solve
+        problem_path: Path to the problem file (not used in new implementation)
+        timeout_s: Timeout in seconds
+        output_path: Output path (not used in new implementation) 
+        objectives: List of objectives to optimize
+        initial_population: Initial population of solutions (optional)
+        initial_population_size: Size of initial population when not providing custom initial_population
+        max_iterations: Maximum number of iterations for the PLS algorithm
+        neighborhood_size_min: Minimum neighborhood size for local search
+        neighborhood_size_max: Maximum neighborhood size for local search
+    
+    Returns:
+        SolverResult: The solving result with Pareto front solutions
+    """
+    
+    # Convert timeout to timedelta
+    timeout = timedelta(seconds=timeout_s)
+    
+    # Convert sims-core SimsDiscreteProblem to sims-problem SimsDiscreteProblem
+    sims_problem_instance = sims_problem.SimsDiscreteProblem(
+        num_images=problem_instance.problem.num_images,
+        universe=problem_instance.problem.universe,
+        images=[list(image_set) for image_set in problem_instance.problem.images],
+        costs=problem_instance.problem.costs,
+        clouds=[list(cloud_set) for cloud_set in problem_instance.problem.clouds],
+        areas=problem_instance.problem.areas,
+        resolution=problem_instance.problem.resolution,
+        incidence_angle=problem_instance.problem.incidence_angle,
+        max_cloud_area=problem_instance.problem.max_cloud_area
+    )
 
-    PLS_PATH = Path(os.environ["PLS_PATH"])
-
-    command = [
-        PLS_PATH,
-        "--problem",
-        problem_path,
-        "--output",
-        output_path,
-        "--timeout",
-        f"{timeout_s}s",
-    ]
-    if initial_population_csv is not None:
-        command.extend(["--initial-population", initial_population_csv])
-
-    log.debug(f"Running command: {' '.join(map(str, command))}")
+    if initial_population is not None:
+        # Convert initial population to sims_problem.Solution format
+        initial_population_sims = [
+            sims_problem.Solution.create(
+                selected_images=list(sol.selected_images),
+                cost=sol.cost,
+                cloudy_area=sol.cloudy_area,
+                timestamp_us=sol.timestamp_s.microseconds,  # Convert to microseconds
+                max_incidence_angle=sol.max_incidence_angle,
+                min_resolutions_sum=sol.min_resolutions_sum
+            ) for sol in initial_population
+        ]
+    else:
+        initial_population_sims = None
+    
+    
+    log.debug(f"Solving with sims_problem.solve_with_pls, timeout: {timeout_s}s, objectives: {objectives}")
+    
     try:
-        _utils.run_command(command, log)
-    except subprocess.CalledProcessError as e:
-        log.error(e)
-        log.error(e.stderr)
+        # Call the Rust-based PLS solver
+        solving_result = sims_problem.solve_with_pls(
+            sims_instance=sims_problem_instance,
+            objectives=objectives,
+            plots=False,
+            plot_output_path=None,
+            timeout=timeout,
+            max_iterations=max_iterations,
+            is_deterministic=False,
+            initial_population_size=initial_population_size,
+            initial_population=initial_population_sims,
+            neighborhood_size_min=neighborhood_size_min,
+            neighborhood_size_max=neighborhood_size_max,
+            trace=False
+        )
+    except Exception as e:
+        log.error(f"Error calling sims_problem.solve_with_pls: {e}")
         raise e
-
-    log.debug(f"Reading summary from {output_path}")
-    return SolverResult.from_summary_csv(output_path, problem_instance, no_headers=True)
+    
+    # Convert sims_problem.Solution to sims-core Solution
+    def convert_solution(sims_problem_solution) -> Solution:
+        return Solution(
+            selected_images=frozenset(sims_problem_solution.selected_images),
+            cost=sims_problem_solution.cost,
+            cloudy_area=sims_problem_solution.cloudy_area,
+            timestamp_s=sims_problem_solution.timestamp,
+            max_incidence_angle=sims_problem_solution.max_incidence_angle,
+            min_resolutions_sum=sims_problem_solution.min_resolutions_sum
+        )
+    
+    # Convert solutions
+    pareto_front = [convert_solution(sol) for sol in solving_result.final_solutions]
+    
+    log.debug(f"Found {len(pareto_front)} Pareto-optimal solutions")
+    
+    # Calculate hypervolume for backward compatibility
+    # For now, we'll use a simple estimation based on the problem bounds
+    max_cost = sum(problem_instance.problem.costs) if problem_instance.problem.costs else 1
+    max_cloudy_area = sum(problem_instance.problem.areas) if problem_instance.problem.areas else 1
+    
+    from ..solver_result import compute_hypervolume
+    hypervolume = compute_hypervolume(pareto_front, (max_cost, max_cloudy_area), scaled=True)
+    
+    # Calculate execution time from solutions if available
+    execution_time_sec = 0.0
+    if pareto_front:
+        # Use the maximum timestamp as an approximation of execution time
+        execution_time_sec = max(sol.timestamp_s.total_seconds() for sol in pareto_front)
+    
+    from ..solver_config import SolverType
+    
+    return SolverResult(
+        pareto_front=pareto_front,
+        timeout_sec=timeout_s,
+        execution_time_sec=execution_time_sec,
+        hypervolume=hypervolume,
+        solver_type=SolverType.PLS,
+        problem_instance=problem_instance,
+        front_strategy=None,
+        pareto_front_snapshots=[]
+    )

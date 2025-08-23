@@ -15,10 +15,15 @@ dependencies = [
     "numpy==2.2.6",
     "pymoo==0.6.1.5",
     "shapely==2.1.1",
-    "sims_solvers==0.1.0"
+    "sims-problem",
+    "sims-solvers==0.1.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "ruff==0.11.12"
 ]
+
+[tool.uv.sources]
+sims-problem = { path = "../sims-problem" }
+sims-solvers = { workspace = true }
