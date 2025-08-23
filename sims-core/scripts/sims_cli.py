@@ -13,20 +13,37 @@ Features:
 - Dry-run mode for testing configurations
 
 Usage:
-    # Run hybrid experiment with ratio-step 25 (default)
-    ./scripts/sims_cli.py run-hybrid --experiments-dir /path/to/experiments
+    """
+"""
+SIMS Hybrid Algorithm CLI
 
-    # Run with custom ratio-step
-    ./scripts/sims_cli.py run-hybrid --experiments-dir /path/to/experiments --ratio-step 10
+This script provides command-line interface for running SIMS hybrid experiments
+using test instances from sims-problem/tests/data directory.
 
-    # Run with timeout and instance filtering
-    ./scripts/sims_cli.py run-hybrid --experiments-dir /path/to/experiments --timeout 300 --filter "lagos.*30"
+Features:
+- Hybrid MILP+PLS solving with configurable ratio steps
+- Experiment preparation and solving
+- Results processing and analysis
+- Support for filtering experiments by regex patterns
+- Dry-run mode for testing configurations
 
-    # Dry run to test configuration
-    ./scripts/sims_cli.py run-hybrid --experiments-dir /path/to/experiments --dry-run
-
-    # Prepare experiments from data
-    ./scripts/sims_cli.py prepare --aois-dir /path/to/aois --images-dir /path/to/images --output-dir /path/to/experiments
+Usage:
+    # Run hybrid experiments on all test instances
+    uv run sims_cli.py run-hybrid
+    
+    # Run with custom ratio step
+    uv run sims_cli.py run-hybrid --ratio-step 10
+    
+    # Run on specific instance size
+    uv run sims_cli.py run-hybrid --size 30
+    
+    # Filter specific instances
+    uv run sims_cli.py run-hybrid --filter lagos_nigeria
+    
+    # Process experiment results
+    uv run sims_cli.py process --experiments-dir /path/to/experiments
+"""
+"""
 """
 
 import argparse
@@ -40,10 +57,15 @@ script_dir = Path(__file__).parent
 src_dir = script_dir.parent / "src"
 sys.path.insert(0, str(src_dir))
 
+# Add sims-problem directory to path
+sims_problem_dir = script_dir.parent.parent / "sims-problem"
+sys.path.insert(0, str(sims_problem_dir))
+
 try:
-    from sims.core.sims import experiment
     from sims.core.sims.experiment import Experiment
     from sims.core.sims.solver_config import FrontStrategy, SolverConfig, SolverType
+    from sims.core.sims.problem import ProblemInstance
+    import sims_problem
 except ImportError as e:
     print(f"Error importing sims.core modules: {e}")
     print("Make sure you're running this script from the sims-core directory")
@@ -57,7 +79,7 @@ log = logging.getLogger("sims-cli")
 
 
 def run_hybrid_experiments(
-    experiments_dir: Path,
+    instances_dir: Optional[Path],
     ratio_step: int = 25,
     timeout_s: int = 600,
     solver_type: SolverType = SolverType.GUROBI,
@@ -72,26 +94,30 @@ def run_hybrid_experiments(
     Run hybrid experiments with the specified configuration.
     
     Args:
-        experiments_dir: Directory containing experiment folders
+        instances_dir: Directory containing .dzn instance files (default: sims-problem/tests/data)
         ratio_step: Step size for ratio configurations (default: 25, gives ratios 100:0, 75:25, 50:50, 25:75, 0:100)
         timeout_s: Timeout in seconds for each solver run
         solver_type: Type of solver to use (GUROBI, PLS, OR_TOOLS)
         front_strategy: Front generation strategy (GPBA_A, SAUGMECON, etc.)
         dry_run: If True, only simulate the run without actual execution
         iter_count: Number of iterations per configuration
-        instance_regex: Regex pattern to filter experiments by name
+        instance_regex: Regex pattern to filter instances by name
         skip_solved: Skip already solved experiments
-        results_dir: Directory to save results (if different from experiment dirs)
+        results_dir: Directory to save results (if different from default)
     
     Returns:
         Exit code (0 for success, 1 for error)
     """
-    if not experiments_dir.exists():
-        log.error(f"Experiments directory does not exist: {experiments_dir}")
+    # Use default test data directory if not specified
+    if instances_dir is None:
+        instances_dir = script_dir.parent.parent / "sims-problem" / "tests" / "data"
+    
+    if not instances_dir.exists():
+        log.error(f"Instances directory does not exist: {instances_dir}")
         return 1
     
-    if not experiments_dir.is_dir():
-        log.error(f"Experiments path is not a directory: {experiments_dir}")
+    if not instances_dir.is_dir():
+        log.error(f"Instances path is not a directory: {instances_dir}")
         return 1
     
     # Configure solver for hybrid mode
@@ -109,75 +135,82 @@ def run_hybrid_experiments(
     log.info(f"  Ratio Step: {solver_config.ratio_step}")
     log.info(f"  Dry Run: {dry_run}")
     log.info(f"  Iterations: {iter_count}")
+    log.info(f"  Instances Directory: {instances_dir}")
     
-    # Find experiment directories
-    experiment_dirs = []
+    # Find .dzn instance files
+    dzn_files = []
     if instance_regex is not None:
-        experiment_dirs = [
-            experiment_dir
-            for experiment_dir in experiments_dir.glob(instance_regex)
-            if experiment_dir.is_dir()
+        import re
+        pattern = re.compile(instance_regex)
+        dzn_files = [
+            dzn_file for dzn_file in instances_dir.glob("*.dzn")
+            if pattern.search(dzn_file.stem)
         ]
-        log.info(f'Selected {len(experiment_dirs)} instances matching regex "{instance_regex}": {[d.name for d in experiment_dirs]}')
+        log.info(f'Selected {len(dzn_files)} instances matching regex "{instance_regex}": {[f.stem for f in dzn_files]}')
     else:
-        experiment_dirs = [experiment_dir for experiment_dir in experiments_dir.iterdir() if experiment_dir.is_dir()]
-        log.info(f'Found {len(experiment_dirs)} experiment directories')
+        dzn_files = list(instances_dir.glob("*.dzn"))
+        log.info(f'Found {len(dzn_files)} .dzn instance files')
     
-    if not experiment_dirs:
-        log.warning("No experiment directories found")
+    if not dzn_files:
+        log.warning("No .dzn instance files found")
         return 0
     
-    # Prepare result directories if specified
-    result_dirs = []
-    if results_dir is not None:
-        if results_dir.exists():
-            log.error("Results directory already exists. Remove it before continuing.")
-            return 1
-        
-        results_dir.mkdir(parents=True, exist_ok=True)
-        result_dirs = [results_dir / experiment_dir.name for experiment_dir in experiment_dirs]
-    else:
-        result_dirs = [None for _ in experiment_dirs]
-        # Clean old results if not skipping solved
-        if not skip_solved:
-            for experiment_dir in experiment_dirs:
-                for subdir in experiment_dir.iterdir():
-                    if subdir.is_dir() and subdir.name.startswith("solver_results_"):
-                        log.info(f"Removing old results directory: {subdir}")
-                        if not dry_run:
-                            import shutil
-                            shutil.rmtree(subdir)
+    # Set up results directory
+    if results_dir is None:
+        results_dir = Path.cwd() / "hybrid_results"
     
-    # Run experiments
+    results_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Run experiments for each instance
     success_count = 0
-    for experiment_idx, (experiment_dir, result_dir) in enumerate(zip(experiment_dirs, result_dirs)):
-        log.info(f"~~~~~~ Solving experiment {experiment_dir.name} ({experiment_idx + 1}/{len(experiment_dirs)}) ~~~~~~")
+    for instance_idx, dzn_file in enumerate(dzn_files):
+        instance_name = dzn_file.stem
+        log.info(f"~~~~~~ Processing instance {instance_name} ({instance_idx + 1}/{len(dzn_files)}) ~~~~~~")
         
         try:
             if dry_run:
-                log.info(f"[DRY RUN] Would solve experiment: {experiment_dir.name}")
+                log.info(f"[DRY RUN] Would process instance: {instance_name}")
                 log.info(f"[DRY RUN] Solver config: {solver_config.to_dict()}")
+                log.info(f"[DRY RUN] Instance file: {dzn_file}")
                 success_count += 1
             else:
-                experiment.solve(
-                    experiment_dir=experiment_dir,
-                    result_dir=result_dir,
+                # Load the problem instance
+                problem = sims_problem.SimsDiscreteProblem.from_dzn(str(dzn_file))
+                problem_instance = ProblemInstance(
+                    name=instance_name,
+                    problem=problem,
+                    path=dzn_file
+                )
+                
+                # Create experiment directory for this instance
+                experiment_dir = results_dir / instance_name
+                experiment_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Create experiment and solve
+                exp = Experiment(problem_instance)
+                
+                if skip_solved and exp.is_solved(experiment_dir, solver_config):
+                    log.info(f"Instance {instance_name} is already solved, skipping")
+                    success_count += 1
+                    continue
+                
+                exp.solve(
+                    solver_results_dir=experiment_dir,
                     solver_config=solver_config,
                     dry_run=dry_run,
                     iter_count=iter_count,
-                    skip_solved=skip_solved,
                 )
                 success_count += 1
-                log.info(f"Successfully solved experiment: {experiment_dir.name}")
+                log.info(f"Successfully processed instance: {instance_name}")
         
         except Exception as e:
-            log.error(f"Failed to solve experiment {experiment_dir.name}. Reason: {e}")
+            log.error(f"Failed to process instance {instance_name}. Reason: {e}")
             if log.isEnabledFor(logging.DEBUG):
                 import traceback
                 traceback.print_exc()
     
-    log.info(f"Completed {success_count}/{len(experiment_dirs)} experiments successfully")
-    return 0 if success_count == len(experiment_dirs) else 1
+    log.info(f"Completed {success_count}/{len(dzn_files)} instances successfully")
+    return 0 if success_count == len(dzn_files) else 1
 
 
 def prepare_experiments(
@@ -291,10 +324,10 @@ def main():
     )
     
     hybrid_parser.add_argument(
-        '--experiments-dir',
+        '--instances-dir',
         type=Path,
-        required=True,
-        help='Directory containing experiment folders'
+        default=None,
+        help='Directory containing .dzn instance files (default: sims-problem/tests/data)'
     )
     
     hybrid_parser.add_argument(
@@ -437,7 +470,7 @@ def main():
             front_strategy = FrontStrategy.from_str(args.front_strategy)
             
             return run_hybrid_experiments(
-                experiments_dir=args.experiments_dir,
+                instances_dir=args.instances_dir,
                 ratio_step=args.ratio_step,
                 timeout_s=args.timeout,
                 solver_type=solver_type,
