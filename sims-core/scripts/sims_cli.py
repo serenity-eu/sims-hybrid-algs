@@ -205,7 +205,7 @@ def run_hybrid_experiments(
                         exact_solver_type=solver_type.value,
                         front_strategy=front_strategy,
                         timeout_s=timeout_s,
-                        ratio=ratio
+                        ratio=(ratio, 100-ratio)
                     )
                     
                     # Create results directory for this ratio
