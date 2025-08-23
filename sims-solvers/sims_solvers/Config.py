@@ -41,7 +41,7 @@ class Config:
         self.cores: int = cores
         self.threads: int = threads
         # Default to all 4 objectives if not specified
-        self.objectives: list[str] = objectives or ["min_cost", "cloud_coverage", "min_resolution", "max_incidence_angle"]
+        self.objectives: list[str] = objectives or ["min_cost", "cloud_coverage", "min_resolution", "min_max_incidence_angle"]
 
     @classmethod
     def from_args(cls) -> "Config":

@@ -172,7 +172,7 @@ pub fn solve_with_pls(
         "min_cost",
         "cloud_coverage",
         "min_resolution",
-        "max_incidence_angle",
+        "min_max_incidence_angle",
     ];
     for obj in &objectives {
         if !valid_objectives.contains(&obj.as_str()) {
@@ -244,7 +244,7 @@ pub fn solve_with_pls(
                     "min_cost" => pls::objectives::ObjectiveType::TotalCost,
                     "cloud_coverage" => pls::objectives::ObjectiveType::CloudyArea,
                     "min_resolution" => pls::objectives::ObjectiveType::MinResolution,
-                    "max_incidence_angle" => pls::objectives::ObjectiveType::MaxIncidenceAngle,
+                    "min_max_incidence_angle" => pls::objectives::ObjectiveType::MaxIncidenceAngle,
                     _ => {
                         return Err(PyValueError::new_err(format!(
                             "Unknown objective: {}",
@@ -414,7 +414,7 @@ pub fn solve_with_pls(
                     "min_cost" => pls::objectives::ObjectiveType::TotalCost,
                     "cloud_coverage" => pls::objectives::ObjectiveType::CloudyArea,
                     "min_resolution" => pls::objectives::ObjectiveType::MinResolution,
-                    "max_incidence_angle" => pls::objectives::ObjectiveType::MaxIncidenceAngle,
+                    "min_max_incidence_angle" => pls::objectives::ObjectiveType::MaxIncidenceAngle,
                     _ => {
                         return Err(PyValueError::new_err(format!(
                             "Unknown objective: {}",
@@ -590,7 +590,7 @@ pub fn solve_with_pls(
                     "min_cost" => pls::objectives::ObjectiveType::TotalCost,
                     "cloud_coverage" => pls::objectives::ObjectiveType::CloudyArea,
                     "min_resolution" => pls::objectives::ObjectiveType::MinResolution,
-                    "max_incidence_angle" => pls::objectives::ObjectiveType::MaxIncidenceAngle,
+                    "min_max_incidence_angle" => pls::objectives::ObjectiveType::MaxIncidenceAngle,
                     _ => {
                         return Err(PyValueError::new_err(format!(
                             "Unknown objective: {}",

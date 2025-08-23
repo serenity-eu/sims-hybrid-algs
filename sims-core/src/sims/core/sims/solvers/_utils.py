@@ -1,9 +1,7 @@
-from importlib import resources
 import logging
 import subprocess
 from pathlib import Path
 from subprocess import PIPE, STDOUT, CompletedProcess, Popen
-import sys
 
 import sims_solvers
 from sims_solvers import Config, MZN_MODEL_PATH
@@ -38,6 +36,7 @@ def run_sims_solver(
     summary_path: Path,
     solver_type: SolverType,
     front_strategy: FrontStrategy,
+    objectives: list[str],
 ):
     DZN_DIR = problem_path.parent
 
@@ -48,7 +47,7 @@ def run_sims_solver(
         raise FileNotFoundError(f"Problem file {problem_path} does not exist.")
 
     config = Config(
-        minizinc_data=True,
+        minizinc_data=False,
         instance_name=problem_path.stem,
         data_sets_folder=DZN_DIR,
         input_mzn=MZN_MODEL_PATH,
@@ -62,6 +61,7 @@ def run_sims_solver(
         fzn_optimisation_level=1,
         cores=4,
         threads=8,
+        objectives=objectives,
     )
 
     log.debug("Running command SIMS solver.")

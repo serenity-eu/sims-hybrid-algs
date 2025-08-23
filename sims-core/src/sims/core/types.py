@@ -17,7 +17,7 @@ class ObjectiveType(StrEnum):
 
     MIN_COST = "min_cost"
     MIN_CLOUD_COVER = "min_cloud_cover"
-    MAX_RESOLUTION = "max_resolution"
+    MIN_MAX_RESOLUTION = "min_max_resolution"
     MIN_INCIDENCE_ANGLE = "min_incidence_angle"
 
 

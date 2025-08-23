@@ -570,6 +570,8 @@ class Experiment:
         solver_config.to_json(solver_results_dir / "solver_config.json")
 
         problem_path = self._problem_instance.path
+        if problem_path is None:
+            raise ValueError(f"Problem instance {self._problem_instance.name} has no path set")
 
         ratios = [(ratio, 100 - ratio) for ratio in range(100, -1, -solver_config.ratio_step)]
 
@@ -596,6 +598,7 @@ class Experiment:
                         problem_path,
                         ratio_solver_result_dir,
                         two_phase_solver_config,
+                        objectives=["min_cost", "cloud_coverage", "min_max_incidence_angle"],
                         dry_run=dry_run,
                     )
                 except Exception as e:

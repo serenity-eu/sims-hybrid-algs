@@ -54,10 +54,10 @@ class SatelliteImageMosaicSelectionGeneralModel(GenericModel, ABC):
                     nadir_objectives.append(float(sum(self.sims_instance.areas)))
                 case "min_resolution":
                     nadir_objectives.append(float(self.get_resolution_nadir_for_ref_point()))
-                case "max_incidence_angle":
+                case "min_max_incidence_angle":
                     nadir_objectives.append(float(max(self.sims_instance.incidence_angle)))
                 case _:
-                    raise ValueError(f"Invalid objective '{obj_name}'. Valid objectives are: min_cost, cloud_coverage, min_resolution, max_incidence_angle")
+                    raise ValueError(f"Invalid objective '{obj_name}'. Valid objectives are: min_cost, cloud_coverage, min_resolution, min_max_incidence_angle")
         return nadir_objectives
 
     def get_ref_points_for_hypervolume(self) -> list[float]:  # type: ignore[override]
@@ -78,10 +78,10 @@ class SatelliteImageMosaicSelectionGeneralModel(GenericModel, ABC):
                     ref_points.append(float(sum(self.sims_instance.areas) + 1))
                 case "min_resolution":
                     ref_points.append(float(self.get_resolution_nadir_for_ref_point() + 1))
-                case "max_incidence_angle":
+                case "min_max_incidence_angle":
                     ref_points.append(900.0)
                 case _:
-                    raise ValueError(f"Invalid objective '{obj_name}'. Valid objectives are: min_cost, cloud_coverage, min_resolution, max_incidence_angle")
+                    raise ValueError(f"Invalid objective '{obj_name}'. Valid objectives are: min_cost, cloud_coverage, min_resolution, min_max_incidence_angle")
         return ref_points
 
     def get_resolution_nadir_for_ref_point(self) -> float:
