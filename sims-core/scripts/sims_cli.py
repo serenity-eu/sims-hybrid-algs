@@ -62,8 +62,8 @@ sims_problem_dir = script_dir.parent.parent / "sims-problem"
 sys.path.insert(0, str(sims_problem_dir))
 
 try:
-    from sims.core.sims.experiment import Experiment
-    from sims.core.sims.solver_config import FrontStrategy, SolverConfig, SolverType
+    from sims.core.sims import solver
+    from sims.core.sims.solver_config import FrontStrategy, SolverConfig, SolverType, TwoPhaseSolverConfig
     from sims.core.sims.problem import ProblemInstance
     import sims_problem
 except ImportError as e:
@@ -170,8 +170,11 @@ def run_hybrid_experiments(
         try:
             if dry_run:
                 log.info(f"[DRY RUN] Would process instance: {instance_name}")
-                log.info(f"[DRY RUN] Solver config: {solver_config.to_dict()}")
                 log.info(f"[DRY RUN] Instance file: {dzn_file}")
+                ratios = list(range(100, -1, -ratio_step))
+                log.info(f"[DRY RUN] Would run {len(ratios)} ratio configurations: {ratios}")
+                for ratio in ratios:
+                    log.info(f"[DRY RUN]   Ratio {ratio}:{100-ratio} (MILP:PLS) - timeout {timeout_s}s")
                 success_count += 1
             else:
                 # Load the problem instance
@@ -186,20 +189,45 @@ def run_hybrid_experiments(
                 experiment_dir = results_dir / instance_name
                 experiment_dir.mkdir(parents=True, exist_ok=True)
                 
-                # Create experiment and solve
-                exp = Experiment(problem_instance)
+                # Copy the .dzn file to the experiment directory
+                import shutil
+                dzn_dest = experiment_dir / f"{instance_name}.dzn"
+                shutil.copy2(dzn_file, dzn_dest)
                 
-                if skip_solved and exp.is_solved(experiment_dir, solver_config):
-                    log.info(f"Instance {instance_name} is already solved, skipping")
-                    success_count += 1
-                    continue
+                # Generate ratio configurations and solve directly
+                ratios = list(range(100, -1, -ratio_step))
                 
-                exp.solve(
-                    solver_results_dir=experiment_dir,
-                    solver_config=solver_config,
-                    dry_run=dry_run,
-                    iter_count=iter_count,
-                )
+                for ratio in ratios:
+                    log.info(f"  Running with ratio {ratio}:{100-ratio} (MILP:PLS)")
+                    
+                    # Create solver config for this ratio
+                    two_phase_config = TwoPhaseSolverConfig(
+                        exact_solver_type=solver_type.value,
+                        front_strategy=front_strategy,
+                        timeout_s=timeout_s,
+                        ratio=ratio
+                    )
+                    
+                    # Create results directory for this ratio
+                    ratio_dir = experiment_dir / f"{ratio}_{100-ratio}"
+                    ratio_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    if not dry_run:
+                        try:
+                            solver.solve_with_two_phases(
+                                problem_instance=problem_instance,
+                                problem_path=dzn_dest,
+                                experiment_path=ratio_dir,
+                                solver_config=two_phase_config,
+                                objectives=["min_cost", "cloud_coverage"],
+                                dry_run=dry_run
+                            )
+                            log.info(f"    Ratio {ratio}:{100-ratio} completed successfully")
+                        except Exception as e:
+                            log.error(f"    Ratio {ratio}:{100-ratio} failed: {e}")
+                    else:
+                        log.info(f"    [DRY RUN] Would solve with ratio {ratio}:{100-ratio}")
+                
                 success_count += 1
                 log.info(f"Successfully processed instance: {instance_name}")
         
@@ -278,17 +306,20 @@ def process_results(experiments_dir: Path, output_dir: Path) -> int:
                 continue
             
             try:
+                # TODO: Update this to work with new simplified experiment structure
+                log.warning("Process command not yet updated for simplified experiment structure")
+                log.warning(f"Skipping experiment directory: {experiment_dir.name}")
                 # Check if experiment is solved
-                experiment_obj = Experiment.from_dir(experiment_dir)
-                solver_config = SolverConfig.from_json(experiment_dir / "solver_config.json")
+                # experiment_obj = Experiment.from_dir(experiment_dir)
+                # solver_config = SolverConfig.from_json(experiment_dir / "solver_config.json")
                 
-                if experiment_obj.is_solved(experiment_dir, solver_config):
-                    log.info(f"Processing experiment: {experiment_dir.name}")
-                    experiment_results = experiment_obj.parse_results(experiment_dir=experiment_dir)
-                    experiment_results.process(output_dir=experiments_output_dir)
-                    processed_count += 1
-                else:
-                    log.warning(f"Experiment {experiment_dir.name} is not solved, skipping")
+                # if experiment_obj.is_solved(experiment_dir, solver_config):
+                #     log.info(f"Processing experiment: {experiment_dir.name}")
+                #     experiment_results = experiment_obj.parse_results(experiment_dir=experiment_dir)
+                #     experiment_results.process(output_dir=experiments_output_dir)
+                #     processed_count += 1
+                # else:
+                #     log.warning(f"Experiment {experiment_dir.name} is not solved, skipping")
             
             except Exception as e:
                 log.error(f"Failed to process experiment {experiment_dir.name}: {e}")
