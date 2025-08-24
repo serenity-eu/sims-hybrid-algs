@@ -49,6 +49,7 @@ Usage:
 import argparse
 import logging
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -74,6 +75,45 @@ except ImportError as e:
 
 # Configure logging
 log_format = "%(asctime)s %(name)-10s [%(levelname)-7s] %(message)s"
+
+
+def setup_logging(verbose: bool = False, log_file: Optional[Path] = None):
+    """
+    Configure logging to output to both console and optionally to a file.
+    
+    Args:
+        verbose: Enable debug level logging
+        log_file: Optional path to log file
+    """
+    # Clear existing handlers
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+    
+    # Set base level
+    level = logging.DEBUG if verbose else logging.INFO
+    root_logger.setLevel(level)
+    
+    # Console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(level)
+    console_handler.setFormatter(logging.Formatter(log_format))
+    root_logger.addHandler(console_handler)
+    
+    # File handler (if specified)
+    if log_file:
+        # Create log directory if it doesn't exist
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        file_handler = logging.FileHandler(log_file, mode='w')
+        file_handler.setLevel(logging.DEBUG)  # Always use DEBUG for file
+        file_handler.setFormatter(logging.Formatter(log_format))
+        root_logger.addHandler(file_handler)
+        
+        logging.info(f"Logging to file: {log_file}")
+
+
+# Initial basic configuration (will be reconfigured in main)
 logging.basicConfig(level=logging.ERROR, format=log_format)
 log = logging.getLogger("sims-cli")
 
@@ -429,6 +469,12 @@ def main():
         help='Enable verbose logging'
     )
     
+    hybrid_parser.add_argument(
+        '--log-file',
+        type=Path,
+        help='Save logs to specified file (in addition to console output)'
+    )
+    
     # Prepare experiments command
     prepare_parser = subparsers.add_parser(
         'prepare',
@@ -463,6 +509,18 @@ def main():
         help='Optional satellite data directory'
     )
     
+    prepare_parser.add_argument(
+        '--verbose',
+        action='store_true',
+        help='Enable verbose logging'
+    )
+    
+    prepare_parser.add_argument(
+        '--log-file',
+        type=Path,
+        help='Save logs to specified file (in addition to console output)'
+    )
+    
     # Process results command
     process_parser = subparsers.add_parser(
         'process',
@@ -482,12 +540,25 @@ def main():
         help='Directory to save processed results'
     )
     
+    process_parser.add_argument(
+        '--verbose',
+        action='store_true',
+        help='Enable verbose logging'
+    )
+    
+    process_parser.add_argument(
+        '--log-file',
+        type=Path,
+        help='Save logs to specified file (in addition to console output)'
+    )
+    
     # Parse arguments
     args = parser.parse_args()
     
-    # Configure logging level
-    if hasattr(args, 'verbose') and args.verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
+    # Configure logging
+    verbose = hasattr(args, 'verbose') and args.verbose
+    log_file = getattr(args, 'log_file', None)
+    setup_logging(verbose=verbose, log_file=log_file)
     
     # If no command specified, show help
     if not args.command:
@@ -500,6 +571,13 @@ def main():
             # Convert string enums to proper types
             solver_type = SolverType.from_str(args.solver_type)
             front_strategy = FrontStrategy.from_str(args.front_strategy)
+            
+            # If no log file specified, create one automatically for hybrid experiments
+            if not log_file and not args.dry_run:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                log_file = Path(f"sims_hybrid_{timestamp}.log")
+                setup_logging(verbose=verbose, log_file=log_file)
+                log.info(f"📝 Automatically created log file: {log_file}")
             
             return run_hybrid_experiments(
                 instances_dir=args.instances_dir,
