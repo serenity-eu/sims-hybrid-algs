@@ -293,7 +293,7 @@ class SolverResult:
                 selected_images=frozenset(selected_images),
                 cost=obj_map.get("min_cost", -1),
                 cloudy_area=obj_map.get("cloud_coverage", -1),
-                min_resolutions_sum=obj_map.get("min_resolutions_sum", -1),
+                min_resolutions_sum=obj_map.get("min_resolution", -1),
                 max_incidence_angle=obj_map.get("min_max_incidence_angle", -1),
                 timestamp_s=timedelta(seconds=float(timestamp_s)),
             )
