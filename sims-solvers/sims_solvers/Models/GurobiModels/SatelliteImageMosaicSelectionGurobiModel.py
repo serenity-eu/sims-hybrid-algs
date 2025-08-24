@@ -22,7 +22,7 @@ class SatelliteImageMosaicSelectionGurobiModel(GurobiModel, SatelliteImageMosaic
     current_max_incidence_angle: gp.Var
     auxiliary_variables_for_resolution: list[dict[int, gp.Var] | int] = []
     
-    # Data attributes (initialized by get_data_from_sims_instance)
+    # Data attributes (initialized by get_data_from_instance)
     elements: gp.tuplelist
     areas: gp.tupledict
     images_id: gp.tuplelist
@@ -45,7 +45,7 @@ class SatelliteImageMosaicSelectionGurobiModel(GurobiModel, SatelliteImageMosaic
     def create_model(self) -> gp.Model:
         return gp.Model("SIMSModel")
 
-    def get_data_from_sims_instance(self) -> None:
+    def get_data_from_instance(self) -> None:
         self.elements, self.areas = gp.multidict({i: self.sims_instance.areas[i] for i in range(len(self.sims_instance.areas))})
         self.images_id, self.images, self.costs = gp.multidict({i: [self.sims_instance.images[i], self.sims_instance.costs[i]]
                                                                 for i in range(len(self.sims_instance.images))})

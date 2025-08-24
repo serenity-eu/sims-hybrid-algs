@@ -47,7 +47,7 @@ def run_sims_solver(
         raise FileNotFoundError(f"Problem file {problem_path} does not exist.")
 
     config = Config(
-        minizinc_data=False,
+        minizinc_data=True,
         instance_name=problem_path.stem,
         data_sets_folder=DZN_DIR,
         input_mzn=MZN_MODEL_PATH,
