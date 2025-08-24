@@ -22,16 +22,44 @@ class CoverageGridPoint(FrontGeneratorStrategy):
         return False
 
     def solve(self):
+        """
+        Implements GPBA-A algorithm with objective rotation as described in the paper:
+        'performs a single run for every iteration and for each objective function'
+        """
         # get the best and worst values for each objective
         yield from self.get_best_worst_values()
         # convert problem to maximization problem
         self.convert_model_to_maximization()
-        # declare the model
-        self.set_augmecon2_objective_model()
-        # Initializes the loop control variable for all constraint objectives (all except the first one)
+        
+        num_objectives = len(self.solver.model.objectives)
+        
+        # Run GPBA-A for each objective as the main one (complete objective rotation)
+        for main_obj_index in range(num_objectives):
+            print(f"🎯 GPBA-A: Running iteration {main_obj_index + 1}/{num_objectives} with objective {main_obj_index} as main objective")
+            yield from self.solve_with_main_objective(main_obj_index)
+    
+    def solve_with_main_objective(self, main_obj_index):
+        """
+        Run GPBA-A algorithm with specified objective as the main one.
+        
+        Args:
+            main_obj_index: Index of objective to optimize (others become constraints)
+        """
+        # declare the model with the specified main objective
+        self.set_augmecon2_objective_model(main_obj_index)
+        
+        # Determine constraint objective indices (all except main_obj_index)
+        num_objectives = len(self.solver.model.objectives)
+        constraint_indices = [i for i in range(num_objectives) if i != main_obj_index]
+        
+        # Initializes the loop control variable for all constraint objectives
         ef_array = []
-        for i in range(1, len(self.nadir_objectives_values)):
+        for i in constraint_indices:
             ef_array.append(self.nadir_objectives_values[i])
+        
+        # Update constraint_objectives array to match number of constraint objectives
+        self.constraint_objectives = [0] * len(constraint_indices)
+        
         # save previous solutions
         previous_solutions = set()
         previous_solution_information = []
@@ -40,20 +68,30 @@ class CoverageGridPoint(FrontGeneratorStrategy):
             str_objs_solution_values = Saugmecon.convert_solution_value_to_str(objs_solution_values)
             previous_solutions.add(str_objs_solution_values)
         
-        # Create interval managers for each constraint objective (starting from objective 1, not 0)
+        # Create interval managers for each constraint objective
         ef_intervals = []
-        for i in range(1, len(self.nadir_objectives_values)):
+        for i in constraint_indices:
             min_interval = min(self.nadir_objectives_values[i], self.best_objective_values[i])
             max_interval = max(self.nadir_objectives_values[i], self.best_objective_values[i])
             ef_intervals.append(IntervalManager(min_interval+1, max_interval-1))
 
         # Initialize ef_array with middle points for all constraint objectives
-        for i in range(len(ef_array)):
-            ef_array[i] = int((self.best_objective_values[i+1] + self.nadir_objectives_values[i+1]) / 2)
+        for j, i in enumerate(constraint_indices):
+            ef_array[j] = int((self.best_objective_values[i] + self.nadir_objectives_values[i]) / 2)
         
-        yield from self.coverage_loop(ef_array, previous_solutions, previous_solution_information, ef_intervals)
+        yield from self.coverage_loop(ef_array, previous_solutions, previous_solution_information, ef_intervals, constraint_indices)
 
-    def coverage_loop(self, ef_array, previous_solutions, previous_solution_information, ef_intervals):
+    def coverage_loop(self, ef_array, previous_solutions, previous_solution_information, ef_intervals, constraint_indices):
+        """
+        Main coverage loop for GPBA-A algorithm.
+        
+        Args:
+            ef_array: Array of constraint values
+            previous_solutions: Set of previous solution strings
+            previous_solution_information: List of previous solution information
+            ef_intervals: List of interval managers for constraint objectives
+            constraint_indices: Indices of objectives that are constraints (not main objective)
+        """
         # For multi-objective, continue while any constraint objective has valid intervals
         iteration_count = 0
         max_iterations = 1000  # Safety limit to prevent infinite loops
@@ -61,7 +99,7 @@ class CoverageGridPoint(FrontGeneratorStrategy):
         while (any(len(interval.intervals) > 0 for interval in ef_intervals) and 
                iteration_count < max_iterations):
             yield from self.coverage_most_inner_loop(ef_array, previous_solutions, previous_solution_information,
-                                                     ef_intervals)
+                                                     ef_intervals, constraint_indices)
             iteration_count += 1
             
             # Update ef_array to next valid point from intervals
@@ -77,7 +115,17 @@ class CoverageGridPoint(FrontGeneratorStrategy):
             if not updated:
                 break
 
-    def coverage_most_inner_loop(self, ef_array, previous_solutions, previous_solution_information, ef_intervals):
+    def coverage_most_inner_loop(self, ef_array, previous_solutions, previous_solution_information, ef_intervals, constraint_indices):
+        """
+        Inner loop of coverage algorithm that solves each constraint configuration.
+        
+        Args:
+            ef_array: Array of constraint values
+            previous_solutions: Set of previous solution strings
+            previous_solution_information: List of previous solution information
+            ef_intervals: List of interval managers for constraint objectives
+            constraint_indices: Indices of objectives that are constraints (not main objective)
+        """
         gamma = 1  # with the value of 1, the algorithm will find the whole Pareto front if run enough time
         previous_solution_relaxation, previous_solution_values = \
             Saugmecon.search_previous_solutions_relaxation(ef_array, previous_solution_information, min_sense=False)
@@ -127,16 +175,29 @@ class CoverageGridPoint(FrontGeneratorStrategy):
                             print(f"Cloud covered error. Expected: {one_solution[1]}, calculated: {calculated_cloud_uncovered}")
         # Update all constraint objectives
         for i in range(len(self.constraint_objectives)):
-            self.adjust_parameter_ef_array(gamma, i, ef_array, one_solution, ef_intervals[i])
+            self.adjust_parameter_ef_array(gamma, i, ef_array, one_solution, ef_intervals[i], constraint_indices)
 
-    def adjust_parameter_ef_array(self, gamma, id_constraint_objective, ef_array, one_solution, ef_interval):
+    def adjust_parameter_ef_array(self, gamma, id_constraint_objective, ef_array, one_solution, ef_interval, constraint_indices):
+        """
+        Adjust the ef_array parameter based on the solution found.
+        
+        Args:
+            gamma: Coverage parameter
+            id_constraint_objective: Index in the constraint objective array (0-based)
+            ef_array: Array of constraint values
+            one_solution: Solution found (or empty if infeasible)
+            ef_interval: Interval manager for this constraint objective
+            constraint_indices: Indices of objectives that are constraints (not main objective)
+        """
         # check if the list one_solution is empty
         start_removal = ef_array[id_constraint_objective]
         new_max_interval = start_removal - 1
         if not one_solution:
             end_removal = ef_interval.max_value
         else:
-            end_removal = min(one_solution[id_constraint_objective + 1], ef_interval.max_value)
+            # Map from constraint objective index to actual objective index
+            actual_obj_index = constraint_indices[id_constraint_objective]
+            end_removal = min(one_solution[actual_obj_index], ef_interval.max_value)
         ef_interval.remove_interval(start_removal, end_removal)
         # update max_value
         if end_removal >= ef_interval.max_value:
@@ -145,7 +206,8 @@ class CoverageGridPoint(FrontGeneratorStrategy):
         if max_interval is not None:
             ef_array[id_constraint_objective] = int((max_interval[0] + max_interval[1]) / 2)
         else:
-            ef_array[id_constraint_objective] = self.best_objective_values[id_constraint_objective + 1] + 1
+            actual_obj_index = constraint_indices[id_constraint_objective]
+            ef_array[id_constraint_objective] = self.best_objective_values[actual_obj_index] + 1
 
     def convert_model_to_maximization(self):
         if not self.solver.model.is_a_minimization_model():
@@ -190,9 +252,15 @@ class CoverageGridPoint(FrontGeneratorStrategy):
             else:
                 raise TimeoutError()
 
-    def set_augmecon2_objective_model(self):
+    def set_augmecon2_objective_model(self, main_obj_index=0):
+        """
+        Set up the augmecon2 objective model with specified main objective.
+        
+        Args:
+            main_obj_index: Index of objective to optimize (others become constraints)
+        """
         self.constraint_objectives_lhs = self.solver.build_objective_e_constraint_augmecon2(
-            self.best_objective_values, self.nadir_objectives_values, True)
+            self.best_objective_values, self.nadir_objectives_values, True, main_obj_index)
         self.solver.set_optimization_sense("max")
 
     def update_objective_constraints(self, ef_array):
