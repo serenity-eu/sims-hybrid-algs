@@ -282,6 +282,155 @@ def run_hybrid_experiments(
     return 0 if success_count == len(dzn_files) else 1
 
 
+def run_milp_experiments(
+    instances_dir: Optional[Path],
+    timeout_s: int = 600,
+    solver_type: SolverType = SolverType.GUROBI,
+    front_strategy: FrontStrategy = FrontStrategy.GPBA_A,
+    dry_run: bool = False,
+    iter_count: int = 1,
+    instance_regex: Optional[str] = None,
+    skip_solved: bool = False,
+    results_dir: Optional[Path] = None,
+) -> int:
+    """
+    Run MILP-only experiments (first phase only, no PLS heuristic).
+    
+    This function runs pure MILP optimization using the specified front strategy,
+    which is perfect for testing our objective rotation implementation in GPBA-A.
+    """
+    import sims_problem
+    import re
+    from pathlib import Path
+    
+    # Set default instances directory
+    if instances_dir is None:
+        instances_dir = Path(__file__).parent.parent.parent / "sims-problem" / "tests" / "data"
+    
+    if not instances_dir.exists():
+        log.error(f"Instances directory does not exist: {instances_dir}")
+        return 1
+    
+    # Set default results directory
+    if results_dir is None:
+        results_dir = Path("sims_milp_results")
+    results_dir.mkdir(parents=True, exist_ok=True)
+    
+    log.info("Running MILP-only experiments with configuration:")
+    log.info(f"  Solver Type: {solver_type.value}")
+    log.info(f"  Front Strategy: {front_strategy.value}")
+    log.info(f"  Timeout: {timeout_s}s")
+    log.info(f"  Dry Run: {dry_run}")
+    log.info(f"  Iterations: {iter_count}")
+    log.info(f"  Instances Directory: {instances_dir}")
+    
+    # Find all .dzn files
+    dzn_files = list(instances_dir.glob("*.dzn"))
+    if not dzn_files:
+        log.error(f"No .dzn files found in {instances_dir}")
+        return 1
+    
+    # Filter files if regex pattern provided
+    if instance_regex:
+        pattern = re.compile(instance_regex)
+        dzn_files = [f for f in dzn_files if pattern.search(f.stem)]
+        log.info(f"Selected {len(dzn_files)} instances matching regex \"{instance_regex}\": {[f.stem for f in dzn_files]}")
+    else:
+        log.info(f"Found {len(dzn_files)} instances: {[f.stem for f in dzn_files]}")
+    
+    if not dzn_files:
+        log.warning("No instances to process after filtering")
+        return 0
+    
+    success_count = 0
+    
+    for i, dzn_file in enumerate(dzn_files, 1):
+        instance_name = dzn_file.stem
+        log.info(f"~~~~~~ Processing instance {instance_name} ({i}/{len(dzn_files)}) ~~~~~~")
+        
+        try:
+            if dry_run:
+                log.info(f"[DRY RUN] Would process instance: {instance_name}")
+                log.info(f"[DRY RUN] Instance file: {dzn_file}")
+                log.info(f"[DRY RUN] Would run MILP solver with {front_strategy.value} strategy - timeout {timeout_s}s")
+                success_count += 1
+                continue
+            
+            # Load the problem instance
+            problem = sims_problem.SimsDiscreteProblem.from_dzn(str(dzn_file))
+            problem_instance = ProblemInstance(
+                name=instance_name,
+                problem=problem,
+                path=dzn_file
+            )
+            
+            # Create experiment directory for this instance
+            experiment_dir = results_dir / instance_name
+            experiment_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Copy the .dzn file to the experiment directory
+            import shutil
+            dzn_dest = experiment_dir / f"{instance_name}.dzn"
+            shutil.copy2(dzn_file, dzn_dest)
+            
+            # Create MILP-only solver config (100% MILP, 0% PLS)
+            log.info(f"  Running MILP-only optimization with {front_strategy.value} strategy")
+            
+            # Define objectives for SIMS problem
+            objectives = ["min_cost", "cloud_coverage", "min_max_incidence_angle"]
+            
+            # Execute experiment iterations
+            successful_iterations = 0
+            for iteration in range(iter_count):
+                log.info(f"    Iteration {iteration + 1}/{iter_count}")
+                
+                result_file = experiment_dir / f"milp_result_iter_{iteration + 1}.json"
+                if skip_solved and result_file.exists():
+                    log.info(f"    Skipping solved iteration {iteration + 1}")
+                    successful_iterations += 1  # Count skipped as successful
+                    continue
+                
+                # Run the single-phase MILP solver
+                try:
+                    result = solver.solve(
+                        solver_type=solver_type,
+                        problem_instance=problem_instance,
+                        problem_path=dzn_dest,
+                        timeout_s=timeout_s,
+                        output_path=experiment_dir,
+                        objectives=objectives,
+                        front_strategy=front_strategy,
+                        initial_population=None
+                    )
+                    
+                    # Save result
+                    with open(result_file, 'w') as f:
+                        import json
+                        json.dump(result.to_dict(), f, indent=2)
+                    
+                    log.info(f"    ✅ Completed iteration {iteration + 1}")
+                    successful_iterations += 1
+                    
+                except Exception as e:
+                    log.error(f"    ❌ Failed iteration {iteration + 1}: {e}")
+                    continue
+            
+            # Only count as successful if ALL iterations succeeded
+            if successful_iterations == iter_count:
+                success_count += 1
+                log.info(f"✅ Successfully completed instance {instance_name} (all {iter_count} iterations)")
+            else:
+                log.error(f"❌ Failed to complete instance {instance_name} - only {successful_iterations}/{iter_count} iterations succeeded")
+        
+        except Exception as e:
+            log.error(f"Failed to process instance {instance_name}. Reason: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    log.info(f"Completed {success_count}/{len(dzn_files)} instances successfully")
+    return 0 if success_count == len(dzn_files) else 1
+
+
 def prepare_experiments(
     aois_dir: Path,
     images_dir: Path,
@@ -475,6 +624,82 @@ def main():
         help='Save logs to specified file (in addition to console output)'
     )
     
+    # MILP-only experiment command
+    milp_parser = subparsers.add_parser(
+        'run-milp',
+        help='Run MILP-only experiments (first phase only)',
+        description='Execute pure MILP solver experiments without PLS heuristic phase'
+    )
+    
+    milp_parser.add_argument(
+        '--instances-dir',
+        type=Path,
+        help='Directory containing .dzn instance files (default: sims-problem/tests/data)'
+    )
+    
+    milp_parser.add_argument(
+        '--timeout',
+        type=int,
+        default=600,
+        help='Timeout in seconds for each solver run (default: 600)'
+    )
+    
+    milp_parser.add_argument(
+        '--solver-type',
+        choices=['gurobi', 'ortools-py'],
+        default='gurobi',
+        help='Type of MILP solver to use (default: gurobi)'
+    )
+    
+    milp_parser.add_argument(
+        '--front-strategy',
+        choices=['gpba-a', 'saugmecon', 'gavanelli', 'aneja-nair'],
+        default='gpba-a',
+        help='Front generation strategy (default: gpba-a)'
+    )
+    
+    milp_parser.add_argument(
+        '--dry-run',
+        action='store_true',
+        help='Simulate the run without actual execution'
+    )
+    
+    milp_parser.add_argument(
+        '--iterations',
+        type=int,
+        default=1,
+        help='Number of iterations per configuration (default: 1)'
+    )
+    
+    milp_parser.add_argument(
+        '--filter',
+        help='Filter experiments by name using regex pattern (e.g., "lagos.*30")'
+    )
+    
+    milp_parser.add_argument(
+        '--skip-solved',
+        action='store_true',
+        help='Skip already solved experiments'
+    )
+    
+    milp_parser.add_argument(
+        '--results-dir',
+        type=Path,
+        help='Directory to save results (if different from experiment dirs)'
+    )
+    
+    milp_parser.add_argument(
+        '--verbose',
+        action='store_true',
+        help='Enable verbose logging'
+    )
+    
+    milp_parser.add_argument(
+        '--log-file',
+        type=Path,
+        help='Save logs to specified file (in addition to console output)'
+    )
+    
     # Prepare experiments command
     prepare_parser = subparsers.add_parser(
         'prepare',
@@ -582,6 +807,30 @@ def main():
             return run_hybrid_experiments(
                 instances_dir=args.instances_dir,
                 ratio_step=args.ratio_step,
+                timeout_s=args.timeout,
+                solver_type=solver_type,
+                front_strategy=front_strategy,
+                dry_run=args.dry_run,
+                iter_count=args.iterations,
+                instance_regex=args.filter,
+                skip_solved=args.skip_solved,
+                results_dir=args.results_dir,
+            )
+        
+        elif args.command == 'run-milp':
+            # Convert string enums to proper types
+            solver_type = SolverType.from_str(args.solver_type)
+            front_strategy = FrontStrategy.from_str(args.front_strategy)
+            
+            # If no log file specified, create one automatically for MILP experiments
+            if not log_file and not args.dry_run:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                log_file = Path(f"sims_milp_{timestamp}.log")
+                setup_logging(verbose=verbose, log_file=log_file)
+                log.info(f"📝 Automatically created log file: {log_file}")
+            
+            return run_milp_experiments(
+                instances_dir=args.instances_dir,
                 timeout_s=args.timeout,
                 solver_type=solver_type,
                 front_strategy=front_strategy,
