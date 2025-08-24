@@ -99,7 +99,7 @@ class Solver(ABC):
         pass
 
     @abstractmethod
-    def build_objective_e_constraint_augmecon2(self, best_constrain_obj_list, nadir_constrain_obj_list, augmentation):
+    def build_objective_e_constraint_augmecon2(self, best_constrain_obj_list, nadir_constrain_obj_list, augmentation, main_obj_index=0):
         pass
 
     @abstractmethod

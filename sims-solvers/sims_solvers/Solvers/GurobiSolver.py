@@ -73,22 +73,54 @@ class GurobiSolver(Solver):
             obj = obj + (delta * rest_obj)
         self.set_single_objective(obj)
 
-    def build_objective_e_constraint_augmecon2(self, best_constrain_obj_list, nadir_constrain_obj_list, augmentation):
-        if len(self.model.objectives) != 2:
-            raise Exception("The augmecon2 is implemented for 2 objectives only.")
+    def build_objective_e_constraint_augmecon2(self, best_constrain_obj_list, nadir_constrain_obj_list, augmentation, main_obj_index=0):
+        """
+        Build ε-constraint formulation with specified main objective.
+        
+        Args:
+            best_constrain_obj_list: Best values for constraint objectives
+            nadir_constrain_obj_list: Nadir values for constraint objectives  
+            augmentation: Whether to use slack variable augmentation
+            main_obj_index: Index of objective to optimize (others become constraints)
+        
+        Returns:
+            List of constraint objective expressions
+        """
+        num_objectives = len(self.model.objectives)
+        if num_objectives < 2:
+            raise Exception("The augmecon2 requires at least 2 objectives.")
+        
+        if main_obj_index < 0 or main_obj_index >= num_objectives:
+            raise Exception(f"main_obj_index {main_obj_index} is out of range [0, {num_objectives-1}]")
+        
         constraint_objectives = []
         if augmentation:
             delta = 0.0001  # delta should be between 0.001 and 0.000001
-            max_s2 = abs(best_constrain_obj_list[1] - nadir_constrain_obj_list[1])
-            s2 = self.model.solver_model.addVar(vtype=gp.GRB.INTEGER, lb=0, ub=max_s2, name="s2")
-            # main objective
-            obj = self.model.objectives[0] + (delta * s2)
+            
+            # Create slack variables for all constraint objectives (all except main_obj_index)
+            slack_vars = []
+            constraint_indices = [i for i in range(num_objectives) if i != main_obj_index]
+            
+            for i in constraint_indices:
+                max_s = abs(best_constrain_obj_list[i] - nadir_constrain_obj_list[i])
+                s = self.model.solver_model.addVar(vtype=gp.GRB.INTEGER, lb=0, ub=max_s, name=f"s{i+1}")
+                slack_vars.append(s)
+            
+            # Main objective: selected objective + delta * sum of slack variables
+            slack_sum = sum(slack_vars) if slack_vars else 0
+            obj = self.model.objectives[main_obj_index] + (delta * slack_sum)
             self.set_single_objective(obj)
-            # constraint objectives
-            constraint_objectives.append(self.model.objectives[1] - s2)
+            
+            # Constraint objectives: each constraint objective minus its corresponding slack variable
+            for j, i in enumerate(constraint_indices):
+                constraint_objectives.append(self.model.objectives[i] - slack_vars[j])
         else:
-            self.set_single_objective(self.model.objectives[0])
-            constraint_objectives.append(self.model.objectives[1])
+            # Without augmentation: specified objective is main, others are constraints
+            self.set_single_objective(self.model.objectives[main_obj_index])
+            constraint_indices = [i for i in range(num_objectives) if i != main_obj_index]
+            for i in constraint_indices:
+                constraint_objectives.append(self.model.objectives[i])
+        
         return constraint_objectives
 
 

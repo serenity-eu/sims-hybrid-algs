@@ -69,30 +69,65 @@ class OrtoolsCPSolver(Solver):
         else:
             self.current_objective = self.model.objectives[0]
 
-    def build_objective_e_constraint_augmecon2(self, best_constrain_obj_list, nadir_constrain_obj_list, augmentation):
-        if len(self.model.objectives) != 2:
-            raise Exception("The augmecon2 is implemented for 2 objectives only.")
+    def build_objective_e_constraint_augmecon2(self, best_constrain_obj_list, nadir_constrain_obj_list, augmentation, main_obj_index=0):
+        """
+        Build ε-constraint formulation with specified main objective.
+        
+        Args:
+            best_constrain_obj_list: Best values for constraint objectives
+            nadir_constrain_obj_list: Nadir values for constraint objectives  
+            augmentation: Whether to use slack variable augmentation
+            main_obj_index: Index of objective to optimize (others become constraints)
+        
+        Returns:
+            List of constraint objective expressions
+        """
+        num_objectives = len(self.model.objectives)
+        if num_objectives < 2:
+            raise Exception("The augmecon2 requires at least 2 objectives.")
+        
+        if main_obj_index < 0 or main_obj_index >= num_objectives:
+            raise Exception(f"main_obj_index {main_obj_index} is out of range [0, {num_objectives-1}]")
+        
         constraint_objectives = []
         if augmentation:
             delta = 1000
-            max_s2 = abs(best_constrain_obj_list[1]-nadir_constrain_obj_list[1])
-            s2 = self.model.solver_model.NewIntVar(lb=0, ub=max_s2, name="s2")
-            # main objective
-            min_obj = delta * min(nadir_constrain_obj_list[0], best_constrain_obj_list[0])
-            max_obj = delta * max(nadir_constrain_obj_list[0], best_constrain_obj_list[0]) + max_s2
+            
+            # Create slack variables for all constraint objectives (all except main_obj_index)
+            slack_vars = []
+            constraint_indices = [i for i in range(num_objectives) if i != main_obj_index]
+            
+            for i in constraint_indices:
+                max_s = abs(best_constrain_obj_list[i] - nadir_constrain_obj_list[i])
+                s = self.model.solver_model.NewIntVar(lb=0, ub=max_s, name=f"s{i+1}")
+                slack_vars.append(s)
+            
+            # Main objective: selected objective * delta + sum of slack variables
+            min_obj = delta * min(nadir_constrain_obj_list[main_obj_index], best_constrain_obj_list[main_obj_index])
+            max_obj = delta * max(nadir_constrain_obj_list[main_obj_index], best_constrain_obj_list[main_obj_index]) + sum(
+                abs(best_constrain_obj_list[i] - nadir_constrain_obj_list[i]) for i in constraint_indices
+            )
             obj = self.model.solver_model.NewIntVar(lb=min_obj, ub=max_obj, name="obj")
-            self.model.solver_model.Add(obj == self.model.objectives[0] * delta + s2).WithName("obj_augmecon2")
-            # constraint objectives
-            min_obji = min(nadir_constrain_obj_list[1], best_constrain_obj_list[1])
-            max_obji = max(nadir_constrain_obj_list[1], best_constrain_obj_list[1])
-            obji_minus_s2 = self.model.solver_model.NewIntVar(lb=min_obji, ub=max_obji, name="obji_minus_s2_variable")
-            self.model.solver_model.Add(obji_minus_s2 == self.model.objectives[1] - s2).WithName(
-                "obji_minus_s2_constraint")
-            constraint_objectives.append(obji_minus_s2)
+            slack_sum = sum(slack_vars) if slack_vars else 0
+            self.model.solver_model.Add(obj == self.model.objectives[main_obj_index] * delta + slack_sum).WithName("obj_augmecon2")
+            
+            # Constraint objectives: each constraint objective minus its corresponding slack variable
+            for j, i in enumerate(constraint_indices):
+                min_obji = min(nadir_constrain_obj_list[i], best_constrain_obj_list[i])
+                max_obji = max(nadir_constrain_obj_list[i], best_constrain_obj_list[i])
+                obji_minus_s = self.model.solver_model.NewIntVar(lb=min_obji, ub=max_obji, name=f"obji_minus_s{i+1}_variable")
+                self.model.solver_model.Add(obji_minus_s == self.model.objectives[i] - slack_vars[j]).WithName(
+                    f"obji_minus_s{i+1}_constraint")
+                constraint_objectives.append(obji_minus_s)
+            
             self.current_objective = obj
         else:
-            self.current_objective = self.model.objectives[0]
-            constraint_objectives.append(self.model.objectives[1])
+            # Without augmentation: specified objective is main, others are constraints
+            self.current_objective = self.model.objectives[main_obj_index]
+            constraint_indices = [i for i in range(num_objectives) if i != main_obj_index]
+            for i in constraint_indices:
+                constraint_objectives.append(self.model.objectives[i])
+        
         return constraint_objectives
 
     def change_objective_sense(self, id_objective):
