@@ -411,12 +411,8 @@ def run_milp_experiments(
                         import json
                         json.dump(result.to_dict(), f, indent=2)
                     
-                    # Count solutions found
-                    solution_count = 0
-                    if result.exact_solver_result is not None:
-                        solution_count += len(result.exact_solver_result.pareto_front)
-                    if result.pls_result is not None:
-                        solution_count += len(result.pls_result.pareto_front)
+                    # Count solutions found - solver.solve() returns SolverResult with pareto_front
+                    solution_count = len(result.pareto_front)
                     
                     log.info(f"    ✅ Completed iteration {iteration + 1} - found {solution_count} solutions")
                     successful_iterations += 1
