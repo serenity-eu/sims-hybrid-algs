@@ -5,7 +5,7 @@ import csv
 import dataclasses
 import logging
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from os import PathLike
 from pathlib import Path
@@ -42,8 +42,16 @@ class Solution:
             "timestamp_s": self.timestamp_s.total_seconds(),
         }
 
-    def __eq__(self, other: Solution) -> bool:
-        return self.selected_images == other.selected_images
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Solution):
+            return False
+        return (
+            self.selected_images == other.selected_images
+            and self.cost == other.cost
+            and self.cloudy_area == other.cloudy_area
+            and self.max_incidence_angle == other.max_incidence_angle
+            and self.min_resolutions_sum == other.min_resolutions_sum
+        )
 
     def __hash__(self) -> int:
         return self.selected_images.__hash__()
@@ -181,7 +189,7 @@ class SolverResult:
     solver_type: SolverType
     problem_instance: ProblemInstance
     front_strategy: Optional[FrontStrategy] = None
-    pareto_front_snapshots: list[ParetoFrontSnapshot] = None
+    pareto_front_snapshots: list[ParetoFrontSnapshot] = field(default_factory=list)
 
     def to_dict(self, full=False) -> dict:
         result_dict = {
@@ -202,6 +210,7 @@ class SolverResult:
     def from_summary_csv(
         input_path: PathLike,
         problem_instance: ProblemInstance,
+        objectives: list[str],
         row_index: int = -1,
         no_headers=False,
     ) -> SolverResult:
@@ -237,12 +246,13 @@ class SolverResult:
             summary_data = list(csv.DictReader(data, fieldnames=fieldnames, delimiter=";"))
 
         # Parse the given row of the summary data and return the result object
-        return SolverResult.from_summary_dict(summary_data[row_index], problem_instance)
+        return SolverResult.from_summary_dict(summary_data[row_index], problem_instance, objectives=objectives)
 
     @staticmethod
     def from_summary_dict(
         summary_dict: dict,
         problem_instance: ProblemInstance,
+        objectives: list[str],
         pareto_front_snapshots: list[ParetoFrontSnapshot] | None = None,
     ) -> SolverResult:
         expected_name = problem_instance.name
@@ -268,19 +278,23 @@ class SolverResult:
 
         # Parse solutions pareto front
         pareto_front = []
-        for objectives, selected_images, timestamp_s in zip(
+        for objective_values, selected_images, timestamp_s in zip(
             summary_dict["pareto_front"],
             summary_dict["solutions_pareto_front"],
             summary_dict["pareto_solutions_time_list"],
         ):
             if not selected_images:
                 continue
+                
+            # Create a mapping of objective names to values
+            obj_map = {obj_name: objective_values[i] for i, obj_name in enumerate(objectives) if i < len(objective_values)}
+            
             solution = Solution(
                 selected_images=frozenset(selected_images),
-                cost=objectives[0],
-                cloudy_area=objectives[1],
-                min_resolutions_sum=objectives[2] if len(objectives) > 2 else -1,
-                max_incidence_angle=objectives[3] if len(objectives) > 3 else (objectives[2] if len(objectives) == 3 else -1),
+                cost=obj_map.get("min_cost", -1),
+                cloudy_area=obj_map.get("cloud_coverage", -1),
+                min_resolutions_sum=obj_map.get("min_resolutions_sum", -1),
+                max_incidence_angle=obj_map.get("min_max_incidence_angle", -1),
                 timestamp_s=timedelta(seconds=float(timestamp_s)),
             )
             solution.fix_objectives(problem_instance.problem)
@@ -321,7 +335,7 @@ class SolverResult:
             hypervolume=float(summary_dict["hypervolume"]),
             solver_type=SolverType.from_str(summary_dict["solver_name"]),
             front_strategy=FrontStrategy.from_str(summary_dict["front_strategy"]),
-            pareto_front_snapshots=pareto_front_snapshots,
+            pareto_front_snapshots=pareto_front_snapshots or [],
         )
 
     def validate(self) -> bool:
@@ -527,6 +541,7 @@ class TwoPhaseSolverResult:
         input_path: Path,
         two_phase_solver_config: TwoPhaseSolverConfig,
         problem_instance: ProblemInstance,
+        objectives: list[str],
     ) -> TwoPhaseSolverResult:
         data = Path(input_path).read_text().splitlines()
 
@@ -586,17 +601,17 @@ class TwoPhaseSolverResult:
             pls_pareto_front_snapshots = None
 
         if ratio == (100, 0):
-            exact_solver_result = SolverResult.from_summary_dict(summary_data[0], problem_instance)
+            exact_solver_result = SolverResult.from_summary_dict(summary_data[0], problem_instance, objectives)
             pls_solver_result = None
         elif ratio == (0, 100):
             exact_solver_result = None
             pls_solver_result = SolverResult.from_summary_dict(
-                summary_data[0], problem_instance, pls_pareto_front_snapshots
+                summary_data[0], problem_instance, objectives, pls_pareto_front_snapshots
             )
         else:
-            exact_solver_result = SolverResult.from_summary_dict(summary_data[0], problem_instance)
+            exact_solver_result = SolverResult.from_summary_dict(summary_data[0], problem_instance, objectives)
             pls_solver_result = SolverResult.from_summary_dict(
-                summary_data[-1], problem_instance, pls_pareto_front_snapshots
+                summary_data[-1], problem_instance, objectives, pls_pareto_front_snapshots
             )
 
         return TwoPhaseSolverResult.from_results_pair(

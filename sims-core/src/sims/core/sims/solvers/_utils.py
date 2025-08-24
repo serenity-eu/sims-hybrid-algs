@@ -72,4 +72,4 @@ def run_sims_solver(
         raise e
 
     log.debug(f"Reading summary from {summary_path}")
-    return SolverResult.from_summary_csv(summary_path, problem_instance)
+    return SolverResult.from_summary_csv(summary_path, problem_instance, objectives=objectives)
