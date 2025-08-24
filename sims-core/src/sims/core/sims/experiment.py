@@ -639,9 +639,12 @@ class Experiment:
 
                 log.debug(f"Parsing the results for ratio {ratio}")
 
+                # Default objectives for SIMS problem - these match the standard naming
+                default_objectives = ["min_cost", "cloud_coverage", "min_resolution", "min_max_incidence_angle"]
+                
                 solver_results.append(
                     TwoPhaseSolverResult.from_summary_csv(
-                        result_csv_path, two_phase_solver_config, self._problem_instance
+                        result_csv_path, two_phase_solver_config, self._problem_instance, objectives=default_objectives
                     )
                 )
             else:
@@ -656,9 +659,12 @@ class Experiment:
                         / f"{self._problem_instance.name.rsplit('_', maxsplit=1)[0]}.csv"
                     )
 
+                    # Default objectives for SIMS problem - these match the standard naming
+                    default_objectives = ["min_cost", "cloud_coverage", "min_resolution", "min_max_incidence_angle"]
+
                     solver_results.append(
                         TwoPhaseSolverResult.from_summary_csv(
-                            result_csv_path, two_phase_solver_config, self._problem_instance
+                            result_csv_path, two_phase_solver_config, self._problem_instance, objectives=default_objectives
                         )
                     )
 
@@ -702,8 +708,11 @@ class Experiment:
                     / f"{self._problem_instance.name.rsplit('_', maxsplit=1)[0]}.csv"
                 )
                 try:
+                    # Default objectives for SIMS problem - these match the standard naming
+                    default_objectives = ["min_cost", "cloud_coverage", "min_resolution", "min_max_incidence_angle"]
+                    
                     two_phase_solver_result = TwoPhaseSolverResult.from_summary_csv(
-                        result_csv_path, two_phase_solver_config, self._problem_instance
+                        result_csv_path, two_phase_solver_config, self._problem_instance, objectives=default_objectives
                     )
                 except Exception as e:
                     log.error(f"Error parsing results for {result_csv_path}: {e}")
