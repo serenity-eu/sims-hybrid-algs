@@ -14,6 +14,7 @@ def solve(
     timeout_s: int,
     summary_path: Path,
     front_strategy: FrontStrategy,
+    objectives: list[str],
 ):
     return _utils.run_sims_solver(
         problem_instance,
@@ -22,4 +23,5 @@ def solve(
         summary_path,
         SolverType.GUROBI,
         front_strategy,
+        objectives,
     )

@@ -49,7 +49,7 @@ class Solution:
         return self.selected_images.__hash__()
 
     def validate(self, problem: SimsDiscreteProblem) -> bool:
-        coverage = frozenset.union(*(problem.images[i] for i in self.selected_images))
+        coverage = frozenset.union(*(frozenset(problem.images[i]) for i in self.selected_images))
         is_valid = len(coverage) == problem.universe
         if not is_valid:
             uncovered_elements = sorted(set(range(problem.universe)) - coverage)
@@ -63,7 +63,7 @@ class Solution:
         total_cost = sum(problem.costs[i] for i in self.selected_images)
 
         clear_parts = frozenset.union(
-            *(problem.images[i] - problem.clouds[i] for i in self.selected_images)
+            *(frozenset(problem.images[i]) - frozenset(problem.clouds[i]) for i in self.selected_images)
         )
         cloudy_area = sum(problem.areas[u] for u in range(problem.universe) if u not in clear_parts)
 
@@ -72,7 +72,7 @@ class Solution:
         min_resolutions_sum = sum(
             map(
                 lambda u: min(
-                    problem.resolution[i] for i in self.selected_images if u in problem.images[i]
+                    problem.resolution[i] for i in self.selected_images if u in frozenset(problem.images[i])
                 ),
                 range(problem.universe),
             )

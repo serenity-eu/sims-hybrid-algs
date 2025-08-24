@@ -22,11 +22,11 @@ def solve(
     match solver_type:
         case SolverType.OR_TOOLS:
             return ortools.solve(
-                problem_instance, problem_path, timeout_s, output_path, front_strategy
+                problem_instance, problem_path, timeout_s, output_path, front_strategy, objectives
             )
         case SolverType.GUROBI:
             return gurobi.solve(
-                problem_instance, problem_path, timeout_s, output_path, front_strategy
+                problem_instance, problem_path, timeout_s, output_path, front_strategy, objectives
             )
         case SolverType.PLS:
             return pareto_local_search.solve(
