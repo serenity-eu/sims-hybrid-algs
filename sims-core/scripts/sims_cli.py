@@ -74,7 +74,7 @@ except ImportError as e:
 
 # Configure logging
 log_format = "%(asctime)s %(name)-10s [%(levelname)-7s] %(message)s"
-logging.basicConfig(level=logging.INFO, format=log_format)
+logging.basicConfig(level=logging.ERROR, format=log_format)
 log = logging.getLogger("sims-cli")
 
 
@@ -219,12 +219,14 @@ def run_hybrid_experiments(
                                 problem_path=dzn_dest,
                                 experiment_path=ratio_dir,
                                 solver_config=two_phase_config,
-                                objectives=["min_cost", "cloud_coverage"],
+                                objectives=["min_cost", "cloud_coverage", "min_max_incidence_angle"],
                                 dry_run=dry_run
                             )
                             log.info(f"    Ratio {ratio}:{100-ratio} completed successfully")
                         except Exception as e:
                             log.error(f"    Ratio {ratio}:{100-ratio} failed: {e}")
+                            import traceback
+                            traceback.print_exc()
                     else:
                         log.info(f"    [DRY RUN] Would solve with ratio {ratio}:{100-ratio}")
                 
@@ -233,9 +235,8 @@ def run_hybrid_experiments(
         
         except Exception as e:
             log.error(f"Failed to process instance {instance_name}. Reason: {e}")
-            if log.isEnabledFor(logging.DEBUG):
-                import traceback
-                traceback.print_exc()
+            import traceback
+            traceback.print_exc()
     
     log.info(f"Completed {success_count}/{len(dzn_files)} instances successfully")
     return 0 if success_count == len(dzn_files) else 1
@@ -537,9 +538,8 @@ def main():
     
     except Exception as e:
         log.error(f"Command failed: {e}")
-        if log.isEnabledFor(logging.DEBUG):
-            import traceback
-            traceback.print_exc()
+        import traceback
+        traceback.print_exc()
         return 1
 
 
