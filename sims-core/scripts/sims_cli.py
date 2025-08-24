@@ -392,12 +392,15 @@ def run_milp_experiments(
                 
                 # Run the single-phase MILP solver
                 try:
+                    # Create output file path for solver results
+                    solver_output_file = experiment_dir / f"solver_output_iter_{iteration + 1}.json"
+                    
                     result = solver.solve(
                         solver_type=solver_type,
                         problem_instance=problem_instance,
                         problem_path=dzn_dest,
                         timeout_s=timeout_s,
-                        output_path=experiment_dir,
+                        output_path=solver_output_file,
                         objectives=objectives,
                         front_strategy=front_strategy,
                         initial_population=None
