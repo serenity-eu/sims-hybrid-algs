@@ -39,7 +39,7 @@ class SatelliteImageMosaicSelectionOrtoolsCPModel(OrtoolsCPModel, SatelliteImage
         """
         return False
 
-    def get_data_from_sims_instance(self) -> None:
+    def get_data_from_instance(self) -> None:
         """Extract and process data from the SIMS instance."""
         self.total_area_clouds = int(sum(self.sims_instance.clouds_id_area.values()))
 

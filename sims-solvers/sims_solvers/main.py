@@ -4,6 +4,7 @@ import os
 import sys
 import traceback
 from datetime import datetime
+from pathlib import Path
 
 from filelock import FileLock, Timeout
 from minizinc import Instance, Model, Solver
@@ -134,22 +135,67 @@ def build_instance_minizinc_data(config: Config) -> InstanceGeneric:
     else:
         mzn_solver = Solver.lookup(config.solver_name)
     config.initialize_cores(mzn_solver)
-    instance = Instance(mzn_solver, model)
+    minizinc_instance = Instance(mzn_solver, model)
     problem_name = config.problem_name
     if config.solver_name == "gurobi" or config.solver_name == "ortools-py":
         if problem_name == constants.Problem.SATELLITE_IMAGE_SELECTION_PROBLEM.value:
-            instance = InstanceSIMS(instance)
+            instance = InstanceSIMS(minizinc_instance)
+        else:
+            instance = InstanceMinizinc(mzn_solver, model, problem_name)
     else:
         instance = InstanceMinizinc(mzn_solver, model, problem_name)
 
     return instance
 
 
-def build_instance_text_data(config: Config) -> InstanceMIPMatrix:
-    objective_matrix = []
-    constraints_matrix = []
-    rhs_constraints_vector = []
+def parse_dzn_to_sims_dict(dzn_file_path: str) -> dict:
+    """
+    Parse a .dzn file and convert it to the dictionary format expected by InstanceSIMS.
+    
+    Args:
+        dzn_file_path: Path to the .dzn file containing SIMS problem data
+        
+    Returns:
+        Dictionary with keys: images, clouds, costs, areas, max_cloud_area, resolution, incidence_angle
+    """
+    try:
+        # Import sims_problem here to avoid import issues if module not available
+        import sims_problem
+        
+        # Parse the .dzn file using the Rust-based parser
+        problem = sims_problem.SimsDiscreteProblem.from_dzn(dzn_file_path)
+        
+        # Convert to the dictionary format expected by InstanceSIMS
+        # Note: InstanceSIMS.correct_starting_indexes will convert from 1-based to 0-based indexing
+        sims_dict = {
+            "images": problem.images,  # List of lists of covered fragments per image
+            "clouds": problem.clouds,  # List of lists of cloudy fragments per image  
+            "costs": problem.costs,    # List of costs per image
+            "areas": problem.areas,    # List of area values per fragment
+            "max_cloud_area": problem.max_cloud_area,  # Maximum allowed cloud area
+            "resolution": problem.resolution,  # List of resolution values per image
+            "incidence_angle": problem.incidence_angle,  # List of incidence angles per image
+        }
+        
+        return sims_dict
+        
+    except ImportError as e:
+        print(f"Error: Could not import sims_problem module: {e}")
+        print("Make sure the sims_problem package is properly installed.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error parsing .dzn file {dzn_file_path}: {e}")
+        sys.exit(1)
+
+
+def build_instance_text_data(config: Config) -> InstanceGeneric:
+    """Build an instance from text/dzn data based on the problem type."""
     if config.problem_name == constants.Problem.MULTI_OBJECTIVE_KNAPSACK_PROBLEM.value:
+        # Handle MOKP problems (existing logic)
+        objective_matrix = []
+        constraints_matrix = []
+        rhs_constraints_vector = []
+        
         datasets_folder = os.path.join(
             config.data_sets_folder, "mokp", config.data_name
         )
@@ -161,16 +207,31 @@ def build_instance_text_data(config: Config) -> InstanceMIPMatrix:
         rhs_constraints_vector = mokp_get_rhs_vector_from_file(
             path_rhs_constraints_vector
         )
+        
+        instance = InstanceMIPMatrix(
+            config.problem_name,
+            objective_matrix,
+            constraints_matrix,
+            rhs_constraints_vector,
+        )
+        return instance
+        
+    elif config.problem_name == constants.Problem.SATELLITE_IMAGE_SELECTION_PROBLEM.value:
+        # Handle SIMS problems by parsing .dzn files
+        dzn_file_path = os.path.join(config.data_sets_folder, f"{config.data_name}.dzn")
+        
+        if not os.path.exists(dzn_file_path):
+            print(f"Error: .dzn file not found: {dzn_file_path}")
+            sys.exit(1)
+            
+        # Parse the .dzn file and convert to InstanceSIMS format
+        sims_data = parse_dzn_to_sims_dict(dzn_file_path)
+        instance = InstanceSIMS(sims_data)
+        return instance
+        
     else:
         print("Error: problem name not recognized")
         sys.exit(1)
-    instance = InstanceMIPMatrix(
-        config.problem_name,
-        objective_matrix,
-        constraints_matrix,
-        rhs_constraints_vector,
-    )
-    return instance
 
 
 def mokp_get_text_data_files(datasets_folder, data_name):
