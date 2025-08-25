@@ -59,7 +59,6 @@ def solve_with_two_phases(
     front_strategy = solver_config.front_strategy
 
     summary_path = experiment_path / f"{problem_instance.name.rsplit('_', maxsplit=1)[0]}.csv"
-    ortools_output_path = None
 
     exact_solver_time, pls_time = _split_time_by_ratio(timeout_s, ratio)
 
@@ -83,21 +82,18 @@ def solve_with_two_phases(
             f"[{problem_instance.name}] - running {repr(exact_solver_type)} for {exact_solver_time} seconds...Done"
         )
 
-        # Set ortools output path is the input for PLS
-        ortools_output_path = summary_path
-
     if pls_time != 0:
         log.info(
             f"[{problem_instance.name}] - running Pareto Local Search for {pls_time} seconds..."
         )
 
         if not dry_run:
-            # Convert initial population from CSV if available
+            # Convert initial population from first phase results if available
             initial_population = None
-            if ortools_output_path and ortools_output_path.exists():
-                # TODO: Implement CSV to initial population conversion if needed
-                # For now, PLS will start with random initial population
-                pass
+            if exact_solver_result is not None and exact_solver_result.pareto_front:
+                # Use solutions from the first phase as initial population for PLS
+                initial_population = exact_solver_result.pareto_front
+                log.info(f"[{problem_instance.name}] - seeding PLS with {len(initial_population)} solutions from MILP phase")
             
             pls_result = solve(
                 SolverType.PLS,
