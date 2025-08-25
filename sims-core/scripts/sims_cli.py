@@ -255,7 +255,7 @@ def run_hybrid_experiments(
                     
                     if not dry_run:
                         try:
-                            solver.solve_with_two_phases(
+                            two_phase_result = solver.solve_with_two_phases(
                                 problem_instance=problem_instance,
                                 problem_path=dzn_dest,
                                 experiment_path=ratio_dir,
@@ -263,6 +263,12 @@ def run_hybrid_experiments(
                                 objectives=["min_cost", "cloud_coverage", "min_max_incidence_angle"],
                                 dry_run=dry_run
                             )
+
+                            # Save the result to JSON file in the ratio directory
+                            result_file = ratio_dir / "two_phase_result.json"
+                            with open(result_file, 'w') as f:
+                                import json
+                                json.dump(two_phase_result.to_dict(), f, indent=2)
                             log.info(f"    Ratio {ratio}:{100-ratio} completed successfully")
                         except Exception as e:
                             log.error(f"    Ratio {ratio}:{100-ratio} failed: {e}")
