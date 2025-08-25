@@ -91,7 +91,7 @@ def setup_logging(verbose: bool = False, log_file: Optional[Path] = None):
         root_logger.removeHandler(handler)
     
     # Set base level
-    level = logging.DEBUG if verbose else logging.INFO
+    level = logging.DEBUG if verbose else logging.ERROR
     root_logger.setLevel(level)
     
     # Console handler
@@ -116,6 +116,7 @@ def setup_logging(verbose: bool = False, log_file: Optional[Path] = None):
 # Initial basic configuration (will be reconfigured in main)
 logging.basicConfig(level=logging.ERROR, format=log_format)
 log = logging.getLogger("sims-cli")
+log.setLevel(logging.INFO)  # Keep sims-cli messages visible
 
 
 def run_hybrid_experiments(
@@ -413,8 +414,9 @@ def run_milp_experiments(
                     
                     # Count solutions found - solver.solve() returns SolverResult with pareto_front
                     solution_count = len(result.pareto_front)
+                    explored_count = len(result.explored_solutions)
                     
-                    log.info(f"    ✅ Completed iteration {iteration + 1} - found {solution_count} solutions")
+                    log.info(f"    ✅ Completed iteration {iteration + 1} - found {solution_count} solutions, explored {explored_count} solutions")
                     successful_iterations += 1
                     
                 except Exception as e:

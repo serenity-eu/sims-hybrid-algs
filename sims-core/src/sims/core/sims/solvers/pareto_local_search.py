@@ -112,8 +112,9 @@ def solve(
     
     # Convert solutions
     pareto_front = [convert_solution(sol) for sol in solving_result.final_solutions]
+    explored_solutions = [convert_solution(sol) for sol in solving_result.explored_solutions]
     
-    log.debug(f"Found {len(pareto_front)} Pareto-optimal solutions")
+    log.debug(f"Found {len(pareto_front)} Pareto-optimal solutions and {len(explored_solutions)} explored solutions")
     
     # Calculate hypervolume for backward compatibility
     # For now, we'll use a simple estimation based on the problem bounds
@@ -139,5 +140,6 @@ def solve(
         solver_type=SolverType.PLS,
         problem_instance=problem_instance,
         front_strategy=None,
-        pareto_front_snapshots=[]
+        pareto_front_snapshots=[],
+        explored_solutions=explored_solutions
     )
