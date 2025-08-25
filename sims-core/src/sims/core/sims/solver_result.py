@@ -190,6 +190,7 @@ class SolverResult:
     problem_instance: ProblemInstance
     front_strategy: Optional[FrontStrategy] = None
     pareto_front_snapshots: list[ParetoFrontSnapshot] = field(default_factory=list)
+    explored_solutions: list[Solution] = field(default_factory=list)
 
     def to_dict(self, full=False) -> dict:
         result_dict = {
@@ -197,6 +198,7 @@ class SolverResult:
             "timeout_sec": self.timeout_sec,
             "execution_time_sec": self.execution_time_sec,
             "hypervolume": self.hypervolume,
+            "explored_solutions": [solution.to_json() for solution in self.explored_solutions],
         }
 
         if full:
@@ -336,6 +338,7 @@ class SolverResult:
             solver_type=SolverType.from_str(summary_dict["solver_name"]),
             front_strategy=FrontStrategy.from_str(summary_dict["front_strategy"]),
             pareto_front_snapshots=pareto_front_snapshots or [],
+            explored_solutions=[],  # CSV parsers don't have explored solutions data
         )
 
     def validate(self) -> bool:
