@@ -458,11 +458,22 @@ impl<const D: usize> BitsetEncodedSolution<D> {
             "Objectives are invalid before removing image"
         );
 
+        log::debug!("REMOVE_IMAGE: Starting removal of image {}", i);
+        log::debug!("  Current objectives: {:?}", self.objectives);
+        log::debug!("  Clear parts for image {}: {:?}", i, problem.images[i].clear_parts);
+        
+        // Log current clear_parts_counts for the affected clear parts
+        for &clear_part in &problem.images[i].clear_parts {
+            log::debug!("  Clear part {} count BEFORE removal: {}", clear_part, self.clear_parts_counts[clear_part]);
+        }
+
         // Use the new generic objective delta calculation
         let mut deltas = [0i64; D];
         for (obj_index, delta) in deltas.iter_mut().enumerate().take(D) {
             *delta = self.calculate_objective_delta(obj_index, i, problem);
         }
+        log::debug!("  Calculated deltas: {:?}", deltas);
+        
         objectives::apply_delta(&mut self.objectives, &deltas);
 
         problem.images[i].parts.iter().for_each(|&part| {
@@ -473,9 +484,15 @@ impl<const D: usize> BitsetEncodedSolution<D> {
             .iter()
             .for_each(|&clear_part| {
                 debug_assert!(self.clear_parts_counts[clear_part] > 0);
+                log::debug!("  Decrementing clear_parts_counts[{}] from {} to {}", 
+                           clear_part, self.clear_parts_counts[clear_part], self.clear_parts_counts[clear_part] - 1);
                 self.clear_parts_counts[clear_part] -= 1;
             });
         self.selected_images.set(i, false);
+        
+        log::debug!("REMOVE_IMAGE: Completed removal of image {}", i);
+        log::debug!("  Final objectives: {:?}", self.objectives);
+        
         debug_assert!(
             self.are_objectives_valid(problem),
             "Objectives are invalid after removing image"
@@ -484,11 +501,22 @@ impl<const D: usize> BitsetEncodedSolution<D> {
 
     /// Add image at index i
     pub fn add_image(&mut self, i: usize, problem: &Problem<Self, D>) {
+        log::debug!("ADD_IMAGE: Starting addition of image {}", i);
+        log::debug!("  Current objectives: {:?}", self.objectives);
+        log::debug!("  Clear parts for image {}: {:?}", i, problem.images[i].clear_parts);
+        
+        // Log current clear_parts_counts for the affected clear parts
+        for &clear_part in &problem.images[i].clear_parts {
+            log::debug!("  Clear part {} count BEFORE addition: {}", clear_part, self.clear_parts_counts[clear_part]);
+        }
+
         // Use the new generic objective delta calculation
         let mut deltas = [0i64; D];
         for (obj_index, delta) in deltas.iter_mut().enumerate().take(D) {
             *delta = self.calculate_objective_delta(obj_index, i, problem);
         }
+        log::debug!("  Calculated deltas: {:?}", deltas);
+        
         objectives::apply_delta(&mut self.objectives, &deltas);
 
         problem.images[i].parts.iter().for_each(|&part| {
@@ -498,9 +526,14 @@ impl<const D: usize> BitsetEncodedSolution<D> {
             .clear_parts
             .iter()
             .for_each(|&clear_part| {
+                log::debug!("  Incrementing clear_parts_counts[{}] from {} to {}", 
+                           clear_part, self.clear_parts_counts[clear_part], self.clear_parts_counts[clear_part] + 1);
                 self.clear_parts_counts[clear_part] += 1;
             });
         self.selected_images.set(i, true);
+        
+        log::debug!("ADD_IMAGE: Completed addition of image {}", i);
+        log::debug!("  Final objectives: {:?}", self.objectives);
     }
 
     /// Check whether image at index i can be replaced by another image(s)
