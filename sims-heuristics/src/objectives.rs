@@ -159,7 +159,17 @@ impl<T: ImageSet<D>, const D: usize> ObjectiveType<T, D> {
                     for &clear_part in &problem.images[image_index].clear_parts {
                         // If this is the last image with clear part covering the element, add element area to delta
                         if solution.clear_parts_counts()[clear_part] == 1 {
-                            cloudy_area_delta += problem.universe[clear_part].area as i64;
+                            let area = problem.universe[clear_part].area as i64;
+                            cloudy_area_delta += area;
+                            log::debug!(
+                                "CloudyArea: REMOVING image {}, clear_part {} becomes uncovered (count was 1), adding area {} to delta. New delta: {}",
+                                image_index, clear_part, area, cloudy_area_delta
+                            );
+                        } else {
+                            log::debug!(
+                                "CloudyArea: REMOVING image {}, clear_part {} still covered (count is {}), no delta change",
+                                image_index, clear_part, solution.clear_parts_counts()[clear_part]
+                            );
                         }
                     }
                 } else {
@@ -167,11 +177,25 @@ impl<T: ImageSet<D>, const D: usize> ObjectiveType<T, D> {
                     for &clear_part in &problem.images[image_index].clear_parts {
                         // If this is the first image with clear part covering the element, subtract element area from delta
                         if solution.clear_parts_counts()[clear_part] == 0 {
-                            cloudy_area_delta -= problem.universe[clear_part].area as i64;
+                            let area = problem.universe[clear_part].area as i64;
+                            cloudy_area_delta -= area;
+                            log::debug!(
+                                "CloudyArea: ADDING image {}, clear_part {} becomes covered for first time (count was 0), subtracting area {} from delta. New delta: {}",
+                                image_index, clear_part, area, cloudy_area_delta
+                            );
+                        } else {
+                            log::debug!(
+                                "CloudyArea: ADDING image {}, clear_part {} already covered (count is {}), no delta change",
+                                image_index, clear_part, solution.clear_parts_counts()[clear_part]
+                            );
                         }
                     }
                 }
 
+                log::debug!(
+                    "CloudyArea delta calculation complete for image {}: final delta = {} ({})",
+                    image_index, cloudy_area_delta, if is_selected { "REMOVING" } else { "ADDING" }
+                );
                 cloudy_area_delta
             }
             Self::MinResolution { .. } => {
@@ -329,7 +353,15 @@ pub fn apply_delta<const D: usize>(objectives: &mut pareto::Objectives<D>, delta
         if delta < 0 {
             // TEMPORARY DEBUGGING
             let subtraction_amount = delta.unsigned_abs();
+            log::debug!(
+                "apply_delta: objective[{}] = {}, attempting to subtract {} (delta = {})",
+                i, objectives[i], subtraction_amount, delta
+            );
             if objectives[i] < subtraction_amount {
+                log::error!(
+                    "UNDERFLOW DETAILS: objective[{}] current value = {}, delta = {}, subtraction_amount = {}, all deltas = {:?}, all objectives = {:?}",
+                    i, objectives[i], delta, subtraction_amount, deltas, objectives
+                );
                 panic!(
                     "Objective underflow detected! Attempted to subtract {} from objective[{}] = {}, which would cause underflow to u64::MAX",
                     subtraction_amount, i, objectives[i]
@@ -337,8 +369,17 @@ pub fn apply_delta<const D: usize>(objectives: &mut pareto::Objectives<D>, delta
             }
             // END TEMPORARY DEBUGGING
             objectives[i] -= subtraction_amount;
-        } else {
+        } else if delta > 0 {
+            log::debug!(
+                "apply_delta: objective[{}] = {}, adding {} (delta = {})",
+                i, objectives[i], delta, delta
+            );
             objectives[i] += delta as u64;
+        } else {
+            log::debug!(
+                "apply_delta: objective[{}] = {}, no change (delta = 0)",
+                i, objectives[i]
+            );
         }
     }
 }
