@@ -25,6 +25,7 @@ def solve(
     max_iterations: int = 50000,
     neighborhood_size_min: int = 1,
     neighborhood_size_max: int = 6,
+    enable_trace: bool = False,
 ) -> SolverResult:
     """
     Solve the SIMS problem using Pareto Local Search via sims_problem.solve_with_pls.
@@ -40,6 +41,7 @@ def solve(
         max_iterations: Maximum number of iterations for the PLS algorithm
         neighborhood_size_min: Minimum neighborhood size for local search
         neighborhood_size_max: Maximum neighborhood size for local search
+        enable_trace: Whether to enable tracing for debugging/analysis
     
     Returns:
         SolverResult: The solving result with Pareto front solutions
@@ -93,8 +95,9 @@ def solve(
             initial_population=initial_population_sims,
             neighborhood_size_min=neighborhood_size_min,
             neighborhood_size_max=neighborhood_size_max,
-            trace=False
+            trace=enable_trace
         )
+
     except Exception as e:
         log.error(f"Error calling sims_problem.solve_with_pls: {e}")
         raise e
@@ -116,14 +119,6 @@ def solve(
     
     log.debug(f"Found {len(pareto_front)} Pareto-optimal solutions and {len(explored_solutions)} explored solutions")
     
-    # Calculate hypervolume for backward compatibility
-    # For now, we'll use a simple estimation based on the problem bounds
-    max_cost = sum(problem_instance.problem.costs) if problem_instance.problem.costs else 1
-    max_cloudy_area = sum(problem_instance.problem.areas) if problem_instance.problem.areas else 1
-    
-    from ..solver_result import compute_hypervolume
-    hypervolume = compute_hypervolume(pareto_front, (max_cost, max_cloudy_area), scaled=True)
-    
     # Calculate execution time from solutions if available
     execution_time_sec = 0.0
     if pareto_front:
@@ -136,10 +131,10 @@ def solve(
         pareto_front=pareto_front,
         timeout_sec=timeout_s,
         execution_time_sec=execution_time_sec,
-        hypervolume=hypervolume,
+        hypervolume=0.0,
         solver_type=SolverType.PLS,
         problem_instance=problem_instance,
         front_strategy=None,
         pareto_front_snapshots=[],
-        explored_solutions=explored_solutions
+        trace_data=solving_result.trace
     )

@@ -269,6 +269,12 @@ def run_hybrid_experiments(
                             with open(result_file, 'w') as f:
                                 import json
                                 json.dump(two_phase_result.to_dict(), f, indent=2)
+
+                            if two_phase_result.pls_result is not None and two_phase_result.pls_result.trace is not None:
+                                trace_file = ratio_dir / "pls_trace.tar.gz"
+                                with open(trace_file, 'wb') as tf:
+                                    tf.write(two_phase_result.pls_result.trace)
+                                log.info(f"    Saved PLS trace to {trace_file}")
                             log.info(f"    Ratio {ratio}:{100-ratio} completed successfully")
                         except Exception as e:
                             log.error(f"    Ratio {ratio}:{100-ratio} failed: {e}")

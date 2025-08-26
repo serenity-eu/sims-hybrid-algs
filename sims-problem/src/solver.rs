@@ -346,31 +346,9 @@ pub fn solve_with_pls(
                 python_final_solutions.push(py_solution);
             }
 
-            // Extract 2D explored solutions
-            let explored_solution_fingerprints: Vec<
-                &pls::explored_solutions_data::SolutionFingerprint<2>,
-            > = pareto_local_search
-                .explored_solutions
-                .solutions
-                .values()
-                .collect();
-            let mut python_explored_solutions = Vec::new();
-            for solution_fingerprint in explored_solution_fingerprints.iter() {
-                let py_solution = crate::solution::Solution {
-                    selected_images: std::collections::HashSet::new(),
-                    cost: solution_fingerprint.objectives[0],
-                    cloudy_area: solution_fingerprint.objectives[1],
-                    timestamp: solution_fingerprint.time,
-                    max_incidence_angle: None,
-                    min_resolutions_sum: None,
-                };
-                python_explored_solutions.push(py_solution);
-            }
-
             info!(
-                "Successfully converted {} 2D final solutions and {} explored solutions to Python format",
+                "Successfully converted {} 2D final solutions to Python format",
                 python_final_solutions.len(),
-                python_explored_solutions.len()
             );
 
             // Generate trace if requested
@@ -387,13 +365,11 @@ pub fn solve_with_pls(
                 })?;
                 Ok(crate::solution::SolvingResult::with_trace(
                     python_final_solutions,
-                    python_explored_solutions,
                     trace_archive,
                 ))
             } else {
                 Ok(crate::solution::SolvingResult::new(
                     python_final_solutions,
-                    python_explored_solutions,
                 ))
             }
         }
@@ -517,35 +493,9 @@ pub fn solve_with_pls(
                 python_final_solutions.push(py_solution);
             }
 
-            // Extract 3D explored solutions
-            let explored_solution_fingerprints: Vec<
-                &pls::explored_solutions_data::SolutionFingerprint<3>,
-            > = pareto_local_search
-                .explored_solutions
-                .solutions
-                .values()
-                .collect();
-            let mut python_explored_solutions = Vec::new();
-            for solution_fingerprint in explored_solution_fingerprints.iter() {
-                let py_solution = crate::solution::Solution {
-                    selected_images: std::collections::HashSet::new(),
-                    cost: solution_fingerprint.objectives[0],
-                    cloudy_area: solution_fingerprint.objectives[1],
-                    timestamp: solution_fingerprint.time,
-                    max_incidence_angle: if solution_fingerprint.objectives.len() > 2 {
-                        Some(solution_fingerprint.objectives[2])
-                    } else {
-                        None
-                    },
-                    min_resolutions_sum: None,
-                };
-                python_explored_solutions.push(py_solution);
-            }
-
             info!(
-                "Successfully converted {} 3D final solutions and {} explored solutions to Python format",
+                "Successfully converted {} 3D final solutions to Python format",
                 python_final_solutions.len(),
-                python_explored_solutions.len()
             );
 
             // Generate trace if requested
@@ -562,13 +512,11 @@ pub fn solve_with_pls(
                 })?;
                 Ok(crate::solution::SolvingResult::with_trace(
                     python_final_solutions,
-                    python_explored_solutions,
                     trace_archive,
                 ))
             } else {
                 Ok(crate::solution::SolvingResult::new(
                     python_final_solutions,
-                    python_explored_solutions,
                 ))
             }
         }
@@ -693,39 +641,9 @@ pub fn solve_with_pls(
                 python_final_solutions.push(py_solution);
             }
 
-            // Extract 4D explored solutions
-            let explored_solution_fingerprints: Vec<
-                &pls::explored_solutions_data::SolutionFingerprint<4>,
-            > = pareto_local_search
-                .explored_solutions
-                .solutions
-                .values()
-                .collect();
-            let mut python_explored_solutions = Vec::new();
-            for solution_fingerprint in explored_solution_fingerprints.iter() {
-                let py_solution = crate::solution::Solution {
-                    selected_images: std::collections::HashSet::new(),
-                    cost: solution_fingerprint.objectives[0],
-                    cloudy_area: solution_fingerprint.objectives[1],
-                    timestamp: solution_fingerprint.time,
-                    max_incidence_angle: if solution_fingerprint.objectives.len() > 2 {
-                        Some(solution_fingerprint.objectives[2])
-                    } else {
-                        None
-                    },
-                    min_resolutions_sum: if solution_fingerprint.objectives.len() > 3 {
-                        Some(solution_fingerprint.objectives[3])
-                    } else {
-                        None
-                    },
-                };
-                python_explored_solutions.push(py_solution);
-            }
-
             info!(
-                "Successfully converted {} 4D final solutions and {} explored solutions to Python format",
+                "Successfully converted {} 4D final solutions to Python format",
                 python_final_solutions.len(),
-                python_explored_solutions.len()
             );
 
             // Generate trace if requested
@@ -742,13 +660,11 @@ pub fn solve_with_pls(
                 })?;
                 Ok(crate::solution::SolvingResult::with_trace(
                     python_final_solutions,
-                    python_explored_solutions,
                     trace_archive,
                 ))
             } else {
                 Ok(crate::solution::SolvingResult::new(
                     python_final_solutions,
-                    python_explored_solutions,
                 ))
             }
         }
@@ -773,7 +689,6 @@ pub fn solve_with_pls(
     early_exit=true,
     flag_array=true,
     solver_name="cbc".to_string(),
-    trace=true
 ))]
 pub fn solve_with_milp(
     sims_instance: &SimsDiscreteProblem,
@@ -784,7 +699,6 @@ pub fn solve_with_milp(
     early_exit: bool,
     flag_array: bool,
     solver_name: String,
-    trace: bool,
 ) -> PyResult<SolvingResult> {
     // Validate objectives
     let valid_objectives = [
@@ -960,24 +874,9 @@ pub fn solve_with_milp(
         python_solutions.len()
     );
 
-    // Generate trace if requested (for MILP we don't have intermediate solutions like PLS)
-    if trace {
-        info!("Generating MILP optimization trace archive");
-        // For MILP, we only have final solutions, so we use those for the trace
-        // We need to convert to BitsetEncodedSolution first
-        // However, MILP solutions don't have the same structure as PLS solutions
-        // For now, we'll return without trace for MILP
-        info!("MILP trace generation not yet implemented, returning without trace");
-        Ok(crate::solution::SolvingResult::new(
-            python_solutions,
-            Vec::new(),
-        ))
-    } else {
-        Ok(crate::solution::SolvingResult::new(
-            python_solutions,
-            Vec::new(),
-        ))
-    }
+    Ok(crate::solution::SolvingResult::new(
+        python_solutions,
+    ))
 }
 
 /// Solves the SIMS problem using a hybrid approach: MILP first, then PLS with MILP solutions as initial population
@@ -1064,7 +963,6 @@ pub fn solve_with_hybrid(
             milp_config.early_exit,
             milp_config.flag_array,
             milp_config.solver_name.clone(),
-            false, // No trace for internal hybrid calls
         );
     }
 
@@ -1079,7 +977,6 @@ pub fn solve_with_hybrid(
         milp_config.early_exit,
         milp_config.flag_array,
         milp_config.solver_name.clone(),
-        false, // No trace for internal hybrid calls
     )?;
 
     info!(
@@ -1343,9 +1240,9 @@ fn solve_hybrid_2d(
         "Successfully converted {} hybrid 2D solutions",
         python_solutions.len()
     );
+
     Ok(crate::solution::SolvingResult::new(
         python_solutions,
-        Vec::new(),
     ))
 }
 
@@ -1526,7 +1423,6 @@ fn solve_hybrid_3d(
     );
     Ok(crate::solution::SolvingResult::new(
         python_solutions,
-        Vec::new(),
     ))
 }
 
@@ -1708,6 +1604,5 @@ fn solve_hybrid_4d(
     );
     Ok(crate::solution::SolvingResult::new(
         python_solutions,
-        Vec::new(),
     ))
 }

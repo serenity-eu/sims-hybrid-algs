@@ -277,9 +277,6 @@ pub struct SolvingResult {
     /// The final Pareto-optimal solutions
     #[pyo3(get, set)]
     pub final_solutions: Vec<Solution>,
-    /// All solutions explored during the search process
-    #[pyo3(get, set)]
-    pub explored_solutions: Vec<Solution>,
     /// Binary trace archive of the optimization process (None if trace=False)
     #[pyo3(get, set)]
     pub trace: Option<Vec<u8>>,
@@ -288,10 +285,9 @@ pub struct SolvingResult {
 #[pymethods]
 impl SolvingResult {
     #[new]
-    pub fn new(final_solutions: Vec<Solution>, explored_solutions: Vec<Solution>) -> Self {
+    pub fn new(final_solutions: Vec<Solution>) -> Self {
         Self {
             final_solutions,
-            explored_solutions,
             trace: None,
         }
     }
@@ -299,12 +295,10 @@ impl SolvingResult {
     #[staticmethod]
     pub fn with_trace(
         final_solutions: Vec<Solution>,
-        explored_solutions: Vec<Solution>,
         trace: Vec<u8>,
     ) -> Self {
         Self {
             final_solutions,
-            explored_solutions,
             trace: Some(trace),
         }
     }
