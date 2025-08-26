@@ -115,9 +115,8 @@ def solve(
     
     # Convert solutions
     pareto_front = [convert_solution(sol) for sol in solving_result.final_solutions]
-    explored_solutions = [convert_solution(sol) for sol in solving_result.explored_solutions]
     
-    log.debug(f"Found {len(pareto_front)} Pareto-optimal solutions and {len(explored_solutions)} explored solutions")
+    log.debug(f"Found {len(pareto_front)} Pareto-optimal solutions")
     
     # Calculate execution time from solutions if available
     execution_time_sec = 0.0
