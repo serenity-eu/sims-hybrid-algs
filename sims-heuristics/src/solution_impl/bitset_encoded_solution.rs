@@ -289,14 +289,20 @@ impl<const D: usize> BitsetEncodedSolution<D> {
     /// Creates a `BitsetEncodedSolution` from a list of selected image indices.
     #[must_use]
     pub fn from_selected_images(selected_images_vec: &[usize], problem: &Problem<Self, D>) -> Self {
+        // Initialize with empty solution - no images selected
         let mut solution = Self {
             selected_images: FixedBitSet::with_capacity(problem.images.len()),
-            objectives: [0; D],
+            objectives: [0; D], // Will be recalculated below
             clear_parts_counts: vec![0; problem.universe.len()],
             element_coverage: vec![0; problem.universe.len()],
             timestamp: Duration::new(0, 0), // Initial solutions have timestamp 0
         };
 
+        // Calculate correct objectives for empty solution (no images selected)
+        // This is crucial for CloudyArea which should start at total universe area
+        solution.recalculate_objectives(problem);
+
+        // Now add the specified images
         for &image_index in selected_images_vec {
             solution.add_image(image_index, problem);
         }

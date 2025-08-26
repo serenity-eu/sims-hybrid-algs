@@ -351,35 +351,16 @@ pub fn weighted_sum_f32<const D: usize>(values: &[f32; D], weights: &[f32; D]) -
 pub fn apply_delta<const D: usize>(objectives: &mut pareto::Objectives<D>, deltas: &[i64; D]) {
     for (i, &delta) in deltas.iter().enumerate() {
         if delta < 0 {
-            // TEMPORARY DEBUGGING
             let subtraction_amount = delta.unsigned_abs();
-            log::debug!(
-                "apply_delta: objective[{}] = {}, attempting to subtract {} (delta = {})",
-                i, objectives[i], subtraction_amount, delta
-            );
             if objectives[i] < subtraction_amount {
-                log::error!(
-                    "UNDERFLOW DETAILS: objective[{}] current value = {}, delta = {}, subtraction_amount = {}, all deltas = {:?}, all objectives = {:?}",
-                    i, objectives[i], delta, subtraction_amount, deltas, objectives
-                );
                 panic!(
                     "Objective underflow detected! Attempted to subtract {} from objective[{}] = {}, which would cause underflow to u64::MAX",
                     subtraction_amount, i, objectives[i]
                 );
             }
-            // END TEMPORARY DEBUGGING
             objectives[i] -= subtraction_amount;
-        } else if delta > 0 {
-            log::debug!(
-                "apply_delta: objective[{}] = {}, adding {} (delta = {})",
-                i, objectives[i], delta, delta
-            );
-            objectives[i] += delta as u64;
         } else {
-            log::debug!(
-                "apply_delta: objective[{}] = {}, no change (delta = 0)",
-                i, objectives[i]
-            );
+            objectives[i] += delta as u64;
         }
     }
 }
