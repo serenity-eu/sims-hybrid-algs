@@ -327,7 +327,16 @@ pub fn weighted_sum_f32<const D: usize>(values: &[f32; D], weights: &[f32; D]) -
 pub fn apply_delta<const D: usize>(objectives: &mut pareto::Objectives<D>, deltas: &[i64; D]) {
     for (i, &delta) in deltas.iter().enumerate() {
         if delta < 0 {
-            objectives[i] -= delta.unsigned_abs();
+            // TEMPORARY DEBUGGING
+            let subtraction_amount = delta.unsigned_abs();
+            if objectives[i] < subtraction_amount {
+                panic!(
+                    "Objective underflow detected! Attempted to subtract {} from objective[{}] = {}, which would cause underflow to u64::MAX",
+                    subtraction_amount, i, objectives[i]
+                );
+            }
+            // END TEMPORARY DEBUGGING
+            objectives[i] -= subtraction_amount;
         } else {
             objectives[i] += delta as u64;
         }
