@@ -421,38 +421,32 @@ class SolvingResult:
     """
     Results from solving a SIMS problem instance.
     
-    Contains the final Pareto-optimal solutions, all explored solutions during
-    the search process, and optionally a binary trace archive.
+    Contains the final Pareto-optimal solutions and optionally a binary trace archive.
     
     Attributes:
         final_solutions: List of final Pareto-optimal solutions found
-        explored_solutions: List of all solutions explored during the search
         trace: Optional binary trace archive of the optimization process
     """
     
     # Properties (can be read and written)
     final_solutions: list[Solution]
-    explored_solutions: list[Solution]
     trace: Optional[bytes]
     
     def __new__(
         cls,
         final_solutions: list[Solution],
-        explored_solutions: list[Solution]
     ) -> SolvingResult:
         """
         Create a new SolvingResult without trace.
         
         Args:
             final_solutions: Final Pareto-optimal solutions
-            explored_solutions: All explored solutions during search
         """
         ...
     
     @staticmethod
     def with_trace(
         final_solutions: list[Solution],
-        explored_solutions: list[Solution],
         trace: bytes
     ) -> SolvingResult:
         """
@@ -460,7 +454,6 @@ class SolvingResult:
         
         Args:
             final_solutions: Final Pareto-optimal solutions
-            explored_solutions: All explored solutions during search
             trace: Binary trace archive of optimization process
         """
         ...
@@ -669,7 +662,6 @@ def solve_with_pls(
     ...
 
 
-@overload
 def solve_with_milp(
     sims_instance: SimsDiscreteProblem,
     objectives: list[str] = ["min_cost", "cloud_coverage"],
@@ -679,34 +671,6 @@ def solve_with_milp(
     early_exit: bool = True,
     flag_array: bool = True,
     solver_name: str = "cbc",
-    *,
-    trace: Literal[False]
-) -> list[Solution]: ...
-
-@overload
-def solve_with_milp(
-    sims_instance: SimsDiscreteProblem,
-    objectives: list[str] = ["min_cost", "cloud_coverage"],
-    grid_points: int = 50,
-    timeout: timedelta = timedelta(seconds=300),
-    bypass_coefficient: bool = True,
-    early_exit: bool = True,
-    flag_array: bool = True,
-    solver_name: str = "cbc",
-    *,
-    trace: Literal[True] = True
-) -> SolvingResult: ...
-
-def solve_with_milp(
-    sims_instance: SimsDiscreteProblem,
-    objectives: list[str] = ["min_cost", "cloud_coverage"],
-    grid_points: int = 50,
-    timeout: timedelta = timedelta(seconds=300),
-    bypass_coefficient: bool = True,
-    early_exit: bool = True,
-    flag_array: bool = True,
-    solver_name: str = "cbc",
-    trace: bool = True
 ) -> SolvingResult:
     """
     Solve the SIMS problem using Mixed Integer Linear Programming with AUGMECON (exact algorithm).
@@ -727,11 +691,9 @@ def solve_with_milp(
         early_exit: Enable early exit when no improvements are found
         flag_array: Enable flag array optimization for constraint handling
         solver_name: MILP solver to use ("cbc" is currently supported)
-        trace: Whether to generate optimization trace archive (default True)
         
     Returns:
-        When trace=True (default): SolvingResult containing solutions (no trace for MILP yet)
-        When trace=False: List of Pareto-optimal solutions only (for backward compatibility)
+        When SolvingResult containing solutions
         
     Raises:
         ValueError: If invalid objectives are specified or solver setup fails
