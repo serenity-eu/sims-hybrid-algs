@@ -508,7 +508,6 @@ impl<const D: usize> BitsetEncodedSolution<D> {
         for (obj_index, delta) in deltas.iter_mut().enumerate().take(D) {
             *delta = self.calculate_objective_delta(obj_index, i, problem);
         }
-        log::debug!("  Calculated deltas: {:?}", deltas);
         
         objectives::apply_delta(&mut self.objectives, &deltas);
 
@@ -519,8 +518,6 @@ impl<const D: usize> BitsetEncodedSolution<D> {
             .clear_parts
             .iter()
             .for_each(|&clear_part| {
-                log::debug!("  Incrementing clear_parts_counts[{}] from {} to {}", 
-                           clear_part, self.clear_parts_counts[clear_part], self.clear_parts_counts[clear_part] + 1);
                 self.clear_parts_counts[clear_part] += 1;
             });
         self.selected_images.set(i, true);
