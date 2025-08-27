@@ -34,9 +34,6 @@ Usage:
     # Run with custom ratio step
     uv run sims_cli.py run-hybrid --ratio-step 10
     
-    # Run on specific instance size
-    uv run sims_cli.py run-hybrid --size 30
-    
     # Filter specific instances
     uv run sims_cli.py run-hybrid --filter lagos_nigeria
     
@@ -263,6 +260,9 @@ def run_hybrid_experiments(
                                 objectives=["min_cost", "cloud_coverage", "min_max_incidence_angle"],
                                 dry_run=dry_run
                             )
+
+                            if two_phase_result.pls_result is not None:
+                                log.error(f"PLS Pareto front has {len(two_phase_result.pls_result.pareto_front)} solutions")
 
                             # Save the result to JSON file in the ratio directory
                             result_file = ratio_dir / "two_phase_result.json"
