@@ -4,6 +4,7 @@ pub mod problem;
 pub mod solution;
 pub mod solver;
 pub mod trace;
+pub mod hypervolume;
 
 // Re-export the main types
 pub use problem::SimsDiscreteProblem;

@@ -161,15 +161,6 @@ impl<T: ImageSet<D>, const D: usize> ObjectiveType<T, D> {
                         if solution.clear_parts_counts()[clear_part] == 1 {
                             let area = problem.universe[clear_part].area as i64;
                             cloudy_area_delta += area;
-                            log::debug!(
-                                "CloudyArea: REMOVING image {}, clear_part {} becomes uncovered (count was 1), adding area {} to delta. New delta: {}",
-                                image_index, clear_part, area, cloudy_area_delta
-                            );
-                        } else {
-                            log::debug!(
-                                "CloudyArea: REMOVING image {}, clear_part {} still covered (count is {}), no delta change",
-                                image_index, clear_part, solution.clear_parts_counts()[clear_part]
-                            );
                         }
                     }
                 } else {
@@ -179,23 +170,10 @@ impl<T: ImageSet<D>, const D: usize> ObjectiveType<T, D> {
                         if solution.clear_parts_counts()[clear_part] == 0 {
                             let area = problem.universe[clear_part].area as i64;
                             cloudy_area_delta -= area;
-                            log::debug!(
-                                "CloudyArea: ADDING image {}, clear_part {} becomes covered for first time (count was 0), subtracting area {} from delta. New delta: {}",
-                                image_index, clear_part, area, cloudy_area_delta
-                            );
-                        } else {
-                            log::debug!(
-                                "CloudyArea: ADDING image {}, clear_part {} already covered (count is {}), no delta change",
-                                image_index, clear_part, solution.clear_parts_counts()[clear_part]
-                            );
                         }
                     }
                 }
 
-                log::debug!(
-                    "CloudyArea delta calculation complete for image {}: final delta = {} ({})",
-                    image_index, cloudy_area_delta, if is_selected { "REMOVING" } else { "ADDING" }
-                );
                 cloudy_area_delta
             }
             Self::MinResolution { .. } => {
@@ -351,14 +329,7 @@ pub fn weighted_sum_f32<const D: usize>(values: &[f32; D], weights: &[f32; D]) -
 pub fn apply_delta<const D: usize>(objectives: &mut pareto::Objectives<D>, deltas: &[i64; D]) {
     for (i, &delta) in deltas.iter().enumerate() {
         if delta < 0 {
-            let subtraction_amount = delta.unsigned_abs();
-            if objectives[i] < subtraction_amount {
-                panic!(
-                    "Objective underflow detected! Attempted to subtract {} from objective[{}] = {}, which would cause underflow to u64::MAX",
-                    subtraction_amount, i, objectives[i]
-                );
-            }
-            objectives[i] -= subtraction_amount;
+            objectives[i] -= delta.unsigned_abs();
         } else {
             objectives[i] += delta as u64;
         }
