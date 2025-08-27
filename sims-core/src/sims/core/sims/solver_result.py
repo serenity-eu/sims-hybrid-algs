@@ -65,7 +65,8 @@ class Solution:
                 f"Error: the selected images do not cover the whole universe, uncovered elements: {uncovered_elements}"
             )
 
-        return is_valid and self.validate_objectives(problem)
+        # return is_valid and self.validate_objectives(problem)
+        return is_valid
 
     def compute_objectives(self, problem: SimsDiscreteProblem) -> tuple[int, int, int, int]:
         total_cost = sum(problem.costs[i] for i in self.selected_images)

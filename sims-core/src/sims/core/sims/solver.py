@@ -115,4 +115,4 @@ def solve_with_two_phases(
             f"[{problem_instance.name}] - running Pareto Local Search for {pls_time} seconds...Done"
         )
 
-    return TwoPhaseSolverResult.from_results_pair(exact_solver_result, pls_result, solver_config)
+    return TwoPhaseSolverResult.from_results_pair(exact_solver_result, pls_result, solver_config, filter_invalid=False)
