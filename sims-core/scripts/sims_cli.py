@@ -88,7 +88,7 @@ def setup_logging(verbose: bool = False, log_file: Optional[Path] = None):
         root_logger.removeHandler(handler)
     
     # Set base level
-    level = logging.DEBUG if verbose else logging.ERROR
+    level = logging.INFO if verbose else logging.ERROR
     root_logger.setLevel(level)
     
     # Console handler
