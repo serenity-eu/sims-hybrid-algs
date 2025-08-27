@@ -109,6 +109,8 @@ def solve_with_two_phases(
                 enable_trace=enable_pls_trace,
             )
 
+            log.info(f"[{problem_instance.name}][solve_with_two_phases] - PLS found {len(pls_result.pareto_front)} solutions")
+
         log.info(
             f"[{problem_instance.name}] - running Pareto Local Search for {pls_time} seconds...Done"
         )
