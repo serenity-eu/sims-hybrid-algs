@@ -483,12 +483,18 @@ class TwoPhaseSolverResult:
             )
         else:
             discarded_solutions, added_solutions = None, None
+        
+        if pls_result is not None:
+            log.info(f"[{problem_instance.name}][from_results_pair] - PLS found {len(pls_result.pareto_front)} solutions")
 
         if filter_invalid:
             if exact_solver_result is not None:
                 exact_solver_result.filter_invalid()
             if pls_result is not None:
                 pls_result.filter_invalid()
+
+        if pls_result is not None:
+            log.info(f"[{problem_instance.name}][from_results_pair] - PLS has {len(pls_result.pareto_front)} valid solutions after filtering")
 
         two_phase_solver_result = TwoPhaseSolverResult(
             problem_instance=problem_instance,
