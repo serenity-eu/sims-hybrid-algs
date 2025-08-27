@@ -123,30 +123,15 @@ class Solution:
 
     def fix_objectives(self, problem: SimsDiscreteProblem):
         """
-        Fix the objectives of the solution - only fix objectives that need fixing
-        """
-        # Check which objectives need fixing
-        need_cost = self.cost < 0
-        need_cloudy_area = self.cloudy_area < 0
-        need_max_incidence = self.max_incidence_angle == -1
-        need_min_resolutions = self.min_resolutions_sum == -1
+        Fix the objectives of the solution - DISABLED: this was too expensive
         
-        # Only compute objectives if any need fixing
-        if need_cost or need_cloudy_area or need_max_incidence or need_min_resolutions:
-            cost, cloudy_area, max_incidence_angle, min_resolutions_sum = self.compute_objectives(problem)
-            
-            if need_cost:
-                log.warning(f"Fixing cost from {self.cost} to {cost}")
-                self.cost = cost
-            if need_cloudy_area:
-                log.warning(f"Fixing cloudy area from {self.cloudy_area} to {cloudy_area}")
-                self.cloudy_area = cloudy_area
-            if need_max_incidence:
-                log.warning(f"Fixing max incidence angle from {self.max_incidence_angle} to {max_incidence_angle}")
-                self.max_incidence_angle = max_incidence_angle
-            if need_min_resolutions:
-                log.warning(f"Fixing min resolutions sum from {self.min_resolutions_sum} to {min_resolutions_sum}")
-                self.min_resolutions_sum = min_resolutions_sum
+        Originally this method would compute missing objectives (marked with -1),
+        but the compute_objectives method is very expensive (especially min_resolutions_sum)
+        and was taking minutes to run during MILP processing.
+        """
+        # DISABLED: The objectives fixing logic has been removed as it was too expensive
+        # The compute_objectives call was taking minutes to complete
+        pass
 
 
 def compute_hypervolume(
