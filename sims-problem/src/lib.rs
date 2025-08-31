@@ -9,7 +9,9 @@ pub mod hypervolume;
 // Re-export the main types
 pub use problem::SimsDiscreteProblem;
 pub use solution::{Solution, SolvingResult};
-pub use solver::{MilpConfig, PlsConfig};
+#[cfg(feature = "milp")]
+pub use solver::MilpConfig;
+pub use solver::PlsConfig;
 
 use pyo3::prelude::*;
 
@@ -21,13 +23,16 @@ fn sims_problem(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Add solver functions
     m.add_function(wrap_pyfunction!(solver::solve_with_pls, m)?)?;
+    #[cfg(feature = "milp")]
     m.add_function(wrap_pyfunction!(solver::solve_with_milp, m)?)?;
+    #[cfg(feature = "milp")]
     m.add_function(wrap_pyfunction!(solver::solve_with_hybrid, m)?)?;
 
     // Add classes
     m.add_class::<SimsDiscreteProblem>()?;
     m.add_class::<Solution>()?;
     m.add_class::<SolvingResult>()?;
+    #[cfg(feature = "milp")]
     m.add_class::<MilpConfig>()?;
     m.add_class::<PlsConfig>()?;
 

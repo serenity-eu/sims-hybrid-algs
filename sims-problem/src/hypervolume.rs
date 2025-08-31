@@ -1,7 +1,5 @@
 use pareto::{HasObjectives, Objectives};
 
-use crate::Solution;
-
 /// Compute hypervolume for 4D minimization front.
 /// Input: non-dominated points (Pareto front), reference point >= all coords.
 /// Returns exact HV as u128.
