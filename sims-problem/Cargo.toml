@@ -9,7 +9,7 @@ name = "sims_problem"
 crate-type = ["cdylib"]
 
 [features]
-default = ["plotting"]
+default = []
 plotting = ["pls/plotting"]
 milp = ["augmecon"]
 
