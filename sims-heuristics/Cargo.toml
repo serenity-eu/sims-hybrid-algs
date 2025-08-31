@@ -37,12 +37,12 @@ chrono = "0.4.41"
 plotters = { version = "0.3.7", optional = true }
 humantime = "2.2.0"
 pareto = { path = "../pareto", version = "0.1.0" }
-nd-tree = { path = "../nd-tree", version = "0.1.0"}
+nd-tree = { path = "../nd-tree", version = "0.1.0", default-features = false}
 fixedbitset = { version = "0.5.7", optional = true }
 
 [features]
 default = ["bitmaps", "plotting"]
-plotting = ["plotters"]
+plotting = ["plotters", "nd-tree/plotting"]
 bitmaps = ["fixedbitset"]
 
 [profile.release]
