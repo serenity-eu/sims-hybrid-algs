@@ -1,16 +1,21 @@
+#[cfg(feature = "milp")]
 use augmecon::{sims_problem::SimsInstance, Augmecon, HasObjectives, ObjectiveDirection, Options};
 use log::{debug, info};
 use pareto::ParetoFront;
+#[cfg(feature = "milp")]
 use pls::pareto_local_search::ParetoLocalSearch;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::{iter::IntoIterator, ops::RangeInclusive, time::Duration};
 
 use crate::problem::SimsDiscreteProblem;
-use crate::solution::{Solution, SolvingResult};
+use crate::solution::SolvingResult;
+#[cfg(feature = "milp")]
+use crate::solution::Solution;
 use crate::trace;
 
 /// Configuration for MILP solver
+#[cfg(feature = "milp")]
 #[pyclass]
 #[derive(Debug, Clone)]
 pub struct MilpConfig {
@@ -28,6 +33,7 @@ pub struct MilpConfig {
     pub solver_name: String,
 }
 
+#[cfg(feature = "milp")]
 #[pymethods]
 impl MilpConfig {
     #[new]
@@ -675,6 +681,7 @@ pub fn solve_with_pls(
 }
 
 /// Solves the SIMS problem using MILP with AUGMECON for exact Pareto solutions
+#[cfg(feature = "milp")]
 #[expect(
     clippy::too_many_arguments,
     reason = "It's okay for Python API to have many parameters"
@@ -880,6 +887,7 @@ pub fn solve_with_milp(
 }
 
 /// Solves the SIMS problem using a hybrid approach: MILP first, then PLS with MILP solutions as initial population
+#[cfg(feature = "milp")]
 #[pyfunction]
 #[pyo3(signature = (
     sims_instance,
@@ -1067,6 +1075,7 @@ pub fn solve_with_hybrid(
 }
 
 /// 2D hybrid solver implementation
+#[cfg(feature = "milp")]
 fn solve_hybrid_2d(
     sims_instance: &SimsDiscreteProblem,
     milp_solutions: Vec<Solution>,
@@ -1247,6 +1256,7 @@ fn solve_hybrid_2d(
 }
 
 /// 3D hybrid solver implementation
+#[cfg(feature = "milp")]
 fn solve_hybrid_3d(
     sims_instance: &SimsDiscreteProblem,
     milp_solutions: Vec<Solution>,
@@ -1427,6 +1437,7 @@ fn solve_hybrid_3d(
 }
 
 /// 4D hybrid solver implementation
+#[cfg(feature = "milp")]
 fn solve_hybrid_4d(
     sims_instance: &SimsDiscreteProblem,
     milp_solutions: Vec<Solution>,
