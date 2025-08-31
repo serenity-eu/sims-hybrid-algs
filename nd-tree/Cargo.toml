@@ -43,11 +43,15 @@ codegen-units = 1
 
 [dependencies]
 arrayvec = "0.7.6"
-plotters = "0.3.7"
+plotters = { version = "0.3.7", optional = true }
 slotmap = "1.0.7"
 tracing = "0.1.41"
 pareto = { path = "../pareto" }
 rand = "0.9.1"
+
+[features]
+default = []
+plotting = ["plotters"]
 
 [dev-dependencies]
 criterion = { version = "0.6.0", features = ["html_reports"] }
