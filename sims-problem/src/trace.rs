@@ -1,7 +1,7 @@
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use pareto::{HasObjectives, MoSolution};
-use pls::solution::{bitset_encoded_solution::BitsetEncodedSolution, EncodedSolution};
+use pls::explored_solutions_data::SolutionFingerprint;
 use serde_json;
 use std::collections::HashMap;
 use std::io::Write;
@@ -53,15 +53,15 @@ struct TraceMetadata {
 /// with open("trace.tar.gz", "wb") as f:
 ///     f.write(archive_bytes)
 /// ```
-pub fn create_optimization_trace_archive<const N: usize>(
-    explored_solutions: Vec<BitsetEncodedSolution<N>>,
+pub fn create_optimization_trace_archive<const D: usize>(
+    explored_solutions: Vec<SolutionFingerprint<D>>,
     objectives: Vec<String>,
     total_duration_us: u64,
     algorithm: String,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     // Sort solutions by timestamp (should already be sorted, but ensure it)
     let mut solutions = explored_solutions;
-    solutions.sort_by_key(|a| a.timestamp());
+    solutions.sort_by_key(|a| a.timestamp);
 
     if solutions.is_empty() {
         return Err("Cannot create trace archive from empty solution list".into());
@@ -95,7 +95,7 @@ pub fn create_optimization_trace_archive<const N: usize>(
 
 /// Creates objectives.bin - binary file with objectives in u64 LE format
 fn create_objectives_binary<const N: usize>(
-    solutions: &[BitsetEncodedSolution<N>],
+    solutions: &[SolutionFingerprint<N>],
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let mut data = Vec::new();
 
@@ -112,7 +112,7 @@ fn create_objectives_binary<const N: usize>(
 
 /// Creates dominated.bin - binary file with domination indices in u32 LE format
 fn create_dominated_binary<const N: usize>(
-    solutions: &[BitsetEncodedSolution<N>],
+    solutions: &[SolutionFingerprint<N>],
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let mut data = Vec::new();
     let mut domination_map: HashMap<usize, usize> = HashMap::new();
@@ -136,14 +136,14 @@ fn create_dominated_binary<const N: usize>(
 }
 
 /// Creates timestamp.bin - binary file with timestamps in u32 LE format
-fn create_timestamp_binary<const N: usize>(
-    solutions: &[BitsetEncodedSolution<N>],
+fn create_timestamp_binary<const D: usize>(
+    solutions: &[SolutionFingerprint<D>],
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let mut data = Vec::new();
 
     for solution in solutions {
         // Use the solution's timestamp directly (already represents time since optimization start)
-        let timestamp_us = solution.timestamp().as_micros() as u32; // Truncate to u32
+        let timestamp_us = solution.timestamp.as_micros() as u32; // Truncate to u32
         data.extend_from_slice(&timestamp_us.to_le_bytes());
     }
 
@@ -152,7 +152,7 @@ fn create_timestamp_binary<const N: usize>(
 
 /// Creates metadata.json with trace information
 fn create_metadata_json<const N: usize>(
-    solutions: &[BitsetEncodedSolution<N>],
+    solutions: &[SolutionFingerprint<N>],
     objectives: Vec<String>,
     total_duration_us: u64,
     algorithm: String,

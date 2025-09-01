@@ -1,6 +1,5 @@
 use std::{
     fs::{self, OpenOptions},
-    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -9,7 +8,6 @@ use csv::{ReaderBuilder, WriterBuilder};
 use itertools::Itertools;
 use pareto::HasObjectives;
 use pls::{
-    explored_solutions_data::ParetoFrontSnapshot,
     problem::{Problem, parse_set_of_vecs},
     solution::ImageSet,
 };
@@ -123,26 +121,4 @@ pub fn append_solutions_to_csv<T: ImageSet<D> + HasObjectives<D>, const D: usize
         .write_record(record)
         .expect("Failed to write CSV record");
     writer.flush().expect("Failed to flush CSV writer");
-}
-
-pub fn dump_pareto_front_snapshots(
-    pareto_front_snapshots: Vec<ParetoFrontSnapshot>,
-    output_path: &PathBuf,
-) {
-    let mut file =
-        fs::File::create(output_path).expect("Failed to create pareto front snapshots file");
-
-    for snapshot in pareto_front_snapshots {
-        writeln!(
-            file,
-            "{} {} {}",
-            snapshot.iteration,
-            snapshot.timestamp.as_secs(),
-            snapshot.solutions.len()
-        )
-        .unwrap();
-        for solution in snapshot.solutions {
-            writeln!(file, "{}", solution.into_iter().join(" ")).unwrap();
-        }
-    }
 }

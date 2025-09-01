@@ -230,17 +230,10 @@ fn main() {
                 .explored_solutions
                 .get_solution_fingerprint(solution)
                 .unwrap()
-                .time
+                .timestamp
                 .as_secs_f32()
         })
         .collect();
-
-    file_io::dump_pareto_front_snapshots(
-        pareto_local_search
-            .explored_solutions
-            .pareto_front_snapshots,
-        &output_dir.join("pareto_front_snapshots.txt"),
-    );
 
     let elapsed_time_s = start_time.elapsed().as_secs();
     file_io::append_solutions_to_csv(
