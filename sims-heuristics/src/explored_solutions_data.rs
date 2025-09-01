@@ -5,22 +5,29 @@ use std::{
     time::Duration,
 };
 
-use pareto::{HasObjectives, Objectives};
+use pareto::{HasObjectives, MoSolution, Objectives};
 use tracing::warn;
 
-use crate::solution::ImageSet;
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SolutionFingerprint<const D: usize> {
     pub explored_neighborhood_size: u8,
     pub objectives: pareto::Objectives<D>,
     pub iteration: u16,
-    pub time: Duration,
+    pub timestamp: Duration,
 }
+
+impl<const D: usize> HasObjectives<D> for SolutionFingerprint<D> {
+    fn objectives(&self) -> &Objectives<D> {
+        &self.objectives
+    }
+}
+
+impl<const D: usize> MoSolution<D> for SolutionFingerprint<D> { }
 
 #[derive(Debug, Eq, Clone, Copy)]
 pub struct SolutionPoint<const D: usize> {
     pub iteration: usize,
+    pub timestamp: Duration,
     pub objectives: Objectives<D>,
 }
 
@@ -50,24 +57,8 @@ impl<const D: usize> From<&SolutionFingerprint<D>> for SolutionPoint<D> {
     fn from(solution: &SolutionFingerprint<D>) -> Self {
         Self {
             iteration: solution.iteration as usize,
+            timestamp: solution.timestamp,
             objectives: solution.objectives,
-        }
-    }
-}
-
-pub struct ParetoFrontSnapshot {
-    pub iteration: usize,
-    pub timestamp: Duration,
-    pub solutions: Vec<Vec<usize>>,
-}
-
-impl ParetoFrontSnapshot {
-    #[must_use]
-    pub const fn new(iteration: usize, timestamp: Duration, solutions: Vec<Vec<usize>>) -> Self {
-        Self {
-            iteration,
-            timestamp,
-            solutions,
         }
     }
 }
@@ -81,7 +72,6 @@ pub struct ExploredSolutionsData<const D: usize> {
     pub num_iterations: usize,
     /// Maximum values for each objective dimension, used for plotting bounds and normalization
     pub max_objectives: [u64; D],
-    pub pareto_front_snapshots: Vec<ParetoFrontSnapshot>,
 }
 
 impl<const D: usize> ExploredSolutionsData<D> {
@@ -91,7 +81,6 @@ impl<const D: usize> ExploredSolutionsData<D> {
             solutions: HashMap::new(),
             num_iterations: 0,
             max_objectives,
-            pareto_front_snapshots: Vec::new(),
         }
     }
 
@@ -123,7 +112,7 @@ impl<const D: usize> ExploredSolutionsData<D> {
                 iteration: iteration as u16,
                 objectives: *solution.objectives(),
                 explored_neighborhood_size: 0,
-                time,
+                timestamp: time,
             };
             e.insert(new_entry);
         } else {
@@ -217,21 +206,6 @@ impl<const D: usize> ExploredSolutionsData<D> {
             }
         }
         non_dominated_solutions
-    }
-
-    pub fn register_pareto_snapshot<'a, T: ImageSet<D> + 'a, I>(
-        &mut self,
-        iteration: usize,
-        elapsed: Duration,
-        solutions: I,
-    ) where
-        I: Iterator<Item = &'a T>,
-    {
-        let solutions: Vec<Vec<usize>> = solutions
-            .map(super::solution::ImageSet::selected_images)
-            .collect();
-        let pareto_front_snapshot = ParetoFrontSnapshot::new(iteration, elapsed, solutions);
-        self.pareto_front_snapshots.push(pareto_front_snapshot);
     }
 
     /// Get the maximum value for a specific objective index

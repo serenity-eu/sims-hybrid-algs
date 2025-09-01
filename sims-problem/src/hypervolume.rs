@@ -18,7 +18,10 @@ pub fn hypervolume_4d_min_u64(points: &mut [[u64; 4]], reference: [u64; 4]) -> u
             // Compute 3D volume for slice [0..=i]
             let slice3d: &mut [[u64; 3]] = unsafe {
                 // Reinterpret as 3D slice view
-                &mut *(&mut points[..=i] as *mut [[u64; 4]] as *mut [[u64; 3]])
+                &mut *core::ptr::slice_from_raw_parts_mut(
+                    points[..=i].as_mut_ptr() as *mut [u64; 3],
+                    points[..=i].len()
+                )
             };
             let vol3d = hypervolume_3d_min_u64(slice3d, [reference[0], reference[1], reference[2]]);
             total += width * vol3d;
@@ -42,8 +45,12 @@ fn hypervolume_3d_min_u64(points: &mut [Objectives<3>], reference: Objectives<3>
         if bound < prev {
             let width = diff_to_u128(prev, bound);
             // Compute 2D area for slice [0..=i]
-            let slice2d: &mut [[u64; 2]] =
-                unsafe { &mut *(&mut points[..=i] as *mut [[u64; 3]] as *mut [[u64; 2]]) };
+            let slice2d: &mut [[u64; 2]] = unsafe {
+                &mut *core::ptr::slice_from_raw_parts_mut(
+                    points[..=i].as_mut_ptr() as *mut [u64; 2],
+                    points[..=i].len()
+                )
+            };
             let area2d = hypervolume_2d_min_u64(slice2d, [reference[0], reference[1]]);
             total += width * area2d;
             prev = bound;

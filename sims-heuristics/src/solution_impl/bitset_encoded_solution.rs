@@ -464,7 +464,7 @@ impl<const D: usize> BitsetEncodedSolution<D> {
             "Objectives are invalid before removing image"
         );
 
-        log::debug!("REMOVE_IMAGE: Starting removal of image {}", i);
+        log::debug!("REMOVE_IMAGE: Starting removal of image {i}");
         log::debug!("  Current objectives: {:?}", self.objectives);
 
         // Use the new generic objective delta calculation
@@ -489,7 +489,7 @@ impl<const D: usize> BitsetEncodedSolution<D> {
             });
         self.selected_images.set(i, false);
         
-        log::debug!("REMOVE_IMAGE: Completed removal of image {}", i);
+        log::debug!("REMOVE_IMAGE: Completed removal of image {i}");
         log::debug!("  Final objectives: {:?}", self.objectives);
         
         debug_assert!(
@@ -500,7 +500,7 @@ impl<const D: usize> BitsetEncodedSolution<D> {
 
     /// Add image at index i
     pub fn add_image(&mut self, i: usize, problem: &Problem<Self, D>) {
-        log::debug!("ADD_IMAGE: Starting addition of image {}", i);
+        log::debug!("ADD_IMAGE: Starting addition of image {i}");
         log::debug!("  Current objectives: {:?}", self.objectives);
         
         // Use the new generic objective delta calculation
@@ -522,7 +522,7 @@ impl<const D: usize> BitsetEncodedSolution<D> {
             });
         self.selected_images.set(i, true);
         
-        log::debug!("ADD_IMAGE: Completed addition of image {}", i);
+        log::debug!("ADD_IMAGE: Completed addition of image {i}");
         log::debug!("  Final objectives: {:?}", self.objectives);
     }
 

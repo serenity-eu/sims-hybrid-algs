@@ -1,3 +1,8 @@
+//! Test example for `HiGHS` solver integration with the augmecon library.
+//! 
+//! This example demonstrates how to use different solvers (Default, `CoinCbc`, `HiGHS`)
+//! with the augmecon multi-objective optimization library.
+
 use augmecon::{
     Augmecon, MultiObjectiveProblem, ObjectiveDirection, Options, VariableType, Solver
 };
@@ -20,7 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         
         let problem = create_simple_problem();
         let options = Options::new()
-            .with_name(&format!("test_{}", solver.name().to_lowercase()))
+            .with_name(format!("test_{}", solver.name().to_lowercase()))
             .with_solver(*solver)
             .with_grid_points(3);
         

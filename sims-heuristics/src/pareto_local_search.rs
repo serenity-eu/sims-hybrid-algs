@@ -9,7 +9,7 @@ use pareto::ParetoFront;
 use tracing::{debug_span, info_span, instrument};
 
 use crate::{
-    explored_solutions_data::ExploredSolutionsData,
+    explored_solutions_data::{ExploredSolutionsData, SolutionFingerprint},
     probabilistic_probing_neighborhood::ProbabilisticProbingNeighborhood,
     problem::Problem,
     solution::{EncodedSolution, ImageSet},
@@ -641,5 +641,11 @@ where
             error!("Solution {}: {:?}", i + 1, obj);
         }
         error!("===== Total solutions: {} =====", objectives.len());
+    }
+
+    pub fn explored_solutions_fingerprints(&self) -> Vec<SolutionFingerprint<D>> {
+        self.explored_solutions
+            .solutions
+            .values().cloned().collect()
     }
 }

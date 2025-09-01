@@ -2,6 +2,8 @@
 use augmecon::{sims_problem::SimsInstance, Augmecon, HasObjectives, ObjectiveDirection, Options};
 use log::{debug, info};
 use pareto::ParetoFront;
+use pls::explored_solutions_data::SolutionFingerprint;
+use pls::pareto_local_search::ParetoLocalSearch;
 #[cfg(feature = "milp")]
 use pls::pareto_local_search::ParetoLocalSearch;
 use pyo3::exceptions::PyValueError;
@@ -352,6 +354,8 @@ pub fn solve_with_pls(
                 python_final_solutions.push(py_solution);
             }
 
+            let explored_solutions: Vec<SolutionFingerprint<2>> = pareto_local_search.explored_solutions_fingerprints();
+
             info!(
                 "Successfully converted {} 2D final solutions to Python format",
                 python_final_solutions.len(),
@@ -361,7 +365,7 @@ pub fn solve_with_pls(
             if trace {
                 info!("Generating 2D optimization trace archive");
                 let trace_archive = trace::create_optimization_trace_archive(
-                    final_solutions,
+                    explored_solutions,
                     objectives,
                     timeout.as_micros() as u64,
                     "PLS-2D".to_string(),
@@ -451,7 +455,7 @@ pub fn solve_with_pls(
             }
 
             // Create and run 3D PLS
-            let mut pareto_local_search = pls::pareto_local_search::ParetoLocalSearch::new(
+            let mut pareto_local_search = ParetoLocalSearch::new(
                 &pls_problem,
                 &initial_solution_set,
                 neighborhood_size_range,
@@ -499,6 +503,8 @@ pub fn solve_with_pls(
                 python_final_solutions.push(py_solution);
             }
 
+            let explored_solutions: Vec<SolutionFingerprint<3>> = pareto_local_search.explored_solutions_fingerprints();
+
             info!(
                 "Successfully converted {} 3D final solutions to Python format",
                 python_final_solutions.len(),
@@ -508,7 +514,7 @@ pub fn solve_with_pls(
             if trace {
                 info!("Generating 3D optimization trace archive");
                 let trace_archive = trace::create_optimization_trace_archive(
-                    final_solutions,
+                    explored_solutions,
                     objectives,
                     timeout.as_micros() as u64,
                     "PLS-3D".to_string(),
@@ -647,6 +653,8 @@ pub fn solve_with_pls(
                 python_final_solutions.push(py_solution);
             }
 
+            let explored_solutions: Vec<SolutionFingerprint<4>> = pareto_local_search.explored_solutions_fingerprints();
+
             info!(
                 "Successfully converted {} 4D final solutions to Python format",
                 python_final_solutions.len(),
@@ -656,7 +664,7 @@ pub fn solve_with_pls(
             if trace {
                 info!("Generating 4D optimization trace archive");
                 let trace_archive = trace::create_optimization_trace_archive(
-                    final_solutions,
+                    explored_solutions,
                     objectives,
                     timeout.as_micros() as u64,
                     "PLS-4D".to_string(),
