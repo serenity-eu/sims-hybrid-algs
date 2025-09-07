@@ -200,13 +200,13 @@ class TestHypervolumeWithRequiredBounds:
         points = [[10, 20], [30, 40]]
         bounds = [[0, 100], [0, 100]]
         
-        hv_no_scale = sims_problem.compute_hypervolume(points, bounds, scaled=False)
-        hv_scaled = sims_problem.compute_hypervolume(points, bounds, scaled=True)
+        hv_no_scale = sims_problem.compute_hypervolume(points, bounds, normalized=False)
+        hv_normalized = sims_problem.compute_hypervolume(points, bounds, normalized=True)
         
         # Should be different due to scaling
-        assert hv_no_scale != hv_scaled
+        assert hv_no_scale != hv_normalized
         assert hv_no_scale > 0
-        assert hv_scaled > 0
+        assert hv_normalized > 0
 
     def test_scaling_with_explicit_reference(self):
         """Test scaling with explicit reference point."""
@@ -214,8 +214,8 @@ class TestHypervolumeWithRequiredBounds:
         bounds = [[0, 100], [0, 100]]
         reference = [80, 90]
         
-        hv_scaled = sims_problem.compute_hypervolume(points, bounds, reference_point=reference, scaled=True)
-        assert hv_scaled > 0
+        hv_normalized = sims_problem.compute_hypervolume(points, bounds, reference_point=reference, normalized=True)
+        assert hv_normalized > 0
 
     def test_empty_solutions(self):
         """Test with empty solutions."""
@@ -232,7 +232,7 @@ class TestHypervolumeWithRequiredBounds:
         bounds = [[0, 100], [0, 200]]  # Bounds smaller than some points
         
         # This should work without error (points get clamped)
-        hv = sims_problem.compute_hypervolume(points, bounds, scaled=True)
+        hv = sims_problem.compute_hypervolume(points, bounds, normalized=True)
         assert hv >= 0
 
     def test_bounds_validation_errors(self):
@@ -265,8 +265,8 @@ class TestHypervolumeWithRequiredBounds:
         bounds = [[0, 100], [0, 100]]
         
         # Multiple calls with same bounds should be consistent in their scaling
-        hv1 = sims_problem.compute_hypervolume(points1, bounds, scaled=True)
-        hv2 = sims_problem.compute_hypervolume(points2, bounds, scaled=True)
+        hv1 = sims_problem.compute_hypervolume(points1, bounds, normalized=True)
+        hv2 = sims_problem.compute_hypervolume(points2, bounds, normalized=True)
         
         # Both should be valid hypervolumes
         assert hv1 > 0
@@ -281,7 +281,7 @@ class TestHypervolumeWithRequiredBounds:
         bounds = [[5, 5], [10, 10]]  # Min == Max for both dimensions
         
         # Should not fail, uses range of 1 for constant dimensions
-        hv = sims_problem.compute_hypervolume(points, bounds, scaled=True)
+        hv = sims_problem.compute_hypervolume(points, bounds, normalized=True)
         assert hv >= 0
 
     def test_auto_reference_computation(self):
