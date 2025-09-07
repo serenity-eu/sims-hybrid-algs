@@ -28,6 +28,10 @@ fn sims_problem(m: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(feature = "milp")]
     m.add_function(wrap_pyfunction!(solver::solve_with_hybrid, m)?)?;
 
+    // Add hypervolume function
+    m.add_function(wrap_pyfunction!(hypervolume::compute_hypervolume, m)?)?;
+    m.add_function(wrap_pyfunction!(hypervolume::compute_hypervolume_solutions, m)?)?;
+
     // Add classes
     m.add_class::<SimsDiscreteProblem>()?;
     m.add_class::<Solution>()?;

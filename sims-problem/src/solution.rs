@@ -5,6 +5,7 @@ use std::{
     hash::{Hash, Hasher},
     time::Duration,
 };
+use pareto::Objectives;
 
 use crate::problem::SimsDiscreteProblem;
 
@@ -266,6 +267,24 @@ impl Solution {
         }
 
         Ok(())
+    }
+    
+    /// Get objectives as a 2D array (cost, cloudy_area)
+    pub fn objectives_2d(&self) -> Objectives<2> {
+        [self.cost, self.cloudy_area]
+    }
+    
+    /// Get objectives as a 3D array (cost, cloudy_area, max_incidence_angle)
+    pub fn objectives_3d(&self) -> Objectives<3> {
+        let max_angle = self.max_incidence_angle.unwrap_or(u64::MAX);
+        [self.cost, self.cloudy_area, max_angle]
+    }
+    
+    /// Get objectives as a 4D array (cost, cloudy_area, max_incidence_angle, min_resolutions_sum)
+    pub fn objectives_4d(&self) -> Objectives<4> {
+        let max_angle = self.max_incidence_angle.unwrap_or(u64::MAX);
+        let min_res = self.min_resolutions_sum.unwrap_or(u64::MAX);
+        [self.cost, self.cloudy_area, max_angle, min_res]
     }
 }
 
