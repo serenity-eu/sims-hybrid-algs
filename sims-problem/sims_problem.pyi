@@ -804,6 +804,68 @@ def solve_with_hybrid(
     ...
 
 
+def compute_hypervolume(
+    solutions: list[Solution] | list[list[int]],
+    reference_point: list[int],
+    scaled: bool = False
+) -> int:
+    """
+    Compute the hypervolume indicator for a set of solutions or points.
+    
+    The hypervolume indicator measures the volume of the objective space dominated
+    by a set of solutions, bounded by a reference point. It's a key quality metric
+    for multi-objective optimization algorithms.
+    
+    This unified function automatically detects the input type and dimension (2D, 3D, or 4D)
+    and applies the appropriate computation algorithm.
+    
+    Args:
+        solutions: Either a list of Solution objects or a list of points (each point is a list of floats).
+                  For Solution objects, objectives are extracted using objectives_2d(), objectives_3d(), 
+                  or objectives_4d() based on the reference point dimension.
+        reference_point: Reference point for hypervolume computation. The dimension of this point
+                        determines which objectives method is called on Solution objects.
+                        Must be strictly dominated by all solutions for meaningful results.
+        scaled: If True, scales all points to [0, 1000] range using min-max normalization
+               before computing hypervolume. This preserves dominance relationships while
+               normalizing the scale. Default is False.
+    
+    Returns:
+        The hypervolume value as a float. When scaled=True, the result is in the
+        normalized [0, 1000] coordinate space.
+        
+    Raises:
+        ValueError: If dimension is not 2, 3, or 4, or if inputs are inconsistent
+        TypeError: If negative coordinate values are encountered (use non-negative coordinates)
+        
+    Examples:
+        # Using Solution objects (2D)
+        solutions = [sol1, sol2, sol3]  # Solution objects
+        hv = compute_hypervolume(solutions, [100.0, 50.0])
+        
+        # Using raw points (3D) 
+        points = [[10.0, 20.0, 30.0], [15.0, 25.0, 35.0]]
+        hv = compute_hypervolume(points, [100.0, 100.0, 100.0])
+        
+        # With scaling for normalized comparison
+        hv_scaled = compute_hypervolume(solutions, [100.0, 50.0], scaled=True)
+        
+        # 4D optimization with Solution objects
+        hv_4d = compute_hypervolume(solutions, [100.0, 50.0, 200.0, 90.0])
+        
+    Notes:
+        - For Solution objects, the reference point dimension determines which objectives are used:
+          * 2D reference point → calls objectives_2d() 
+          * 3D reference point → calls objectives_3d()
+          * 4D reference point → calls objectives_4d()
+        - All coordinates must be non-negative for meaningful hypervolume computation
+        - The reference point should be dominated by all input solutions/points
+        - When scaled=True, normalization preserves the relative dominance structure
+        - Uses optimized sweep-line algorithms with u128 precision for accuracy
+    """
+    ...
+
+
 # Module-level exports
 __all__ = [
     "SimsDiscreteProblem",
@@ -814,4 +876,5 @@ __all__ = [
     "solve_with_pls",
     "solve_with_milp",
     "solve_with_hybrid",
+    "compute_hypervolume",
 ]

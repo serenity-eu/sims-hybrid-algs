@@ -30,7 +30,6 @@ fn sims_problem(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Add hypervolume function
     m.add_function(wrap_pyfunction!(hypervolume::compute_hypervolume, m)?)?;
-    m.add_function(wrap_pyfunction!(hypervolume::compute_hypervolume_solutions, m)?)?;
 
     // Add classes
     m.add_class::<SimsDiscreteProblem>()?;

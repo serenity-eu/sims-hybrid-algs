@@ -182,82 +182,56 @@ pub fn compute<const D: usize, T: HasObjectives<D>>(pareto_front: Vec<T>, refere
     }
 }
 
-/// Compute hypervolume for a Pareto front of solutions.
+/// Unified hypervolume computation function.
 /// 
 /// # Arguments
-/// * `solutions` - List of Solution objects
+/// * `data` - Either a list of points (Vec<Vec<u64>>) or a list of Solution objects
 /// * `reference_point` - Reference point as a list of objective values
+/// * `scaled` - Optional scaling flag. If true, normalizes objectives to [0, 1000] range
 /// 
 /// # Returns
 /// The hypervolume as an integer
 /// 
-/// # Example
+/// # Examples
 /// ```python
-/// # 2D case with solutions
-/// solutions = [solution1, solution2]  # Solution objects
-/// reference = [1000, 500]  # reference for (cost, cloudy_area)
-/// hv = compute_hypervolume_solutions(solutions, reference)
-/// ```
-#[pyfunction]
-pub fn compute_hypervolume_solutions(solutions: Vec<Solution>, reference_point: Vec<u64>) -> PyResult<u128> {
-    if solutions.is_empty() {
-        return Ok(0);
-    }
-
-    let dimension = reference_point.len();
-    
-    let result = match dimension {
-        2 => {
-            let reference: Objectives<2> = [reference_point[0], reference_point[1]];
-            let mut points: Vec<Objectives<2>> = solutions.iter().map(|s| s.objectives_2d()).collect();
-            hypervolume_2d_min_u64(&mut points, reference)
-        }
-        3 => {
-            let reference: Objectives<3> = [reference_point[0], reference_point[1], reference_point[2]];
-            let mut points: Vec<Objectives<3>> = solutions.iter().map(|s| s.objectives_3d()).collect();
-            hypervolume_3d_min_u64(&mut points, reference)
-        }
-        4 => {
-            let reference: Objectives<4> = [reference_point[0], reference_point[1], reference_point[2], reference_point[3]];
-            let mut points: Vec<Objectives<4>> = solutions.iter().map(|s| s.objectives_4d()).collect();
-            hypervolume_4d_min_u64(&mut points, reference)
-        }
-        _ => {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "Unsupported dimension: {}. Only 2D, 3D, and 4D are supported.",
-                dimension
-            )));
-        }
-    };
-
-    Ok(result)
-}
-
-/// Compute hypervolume for a Pareto front.
-/// 
-/// # Arguments
-/// * `points` - List of points, where each point is a list of objective values
-/// * `reference_point` - Reference point as a list of objective values
-/// 
-/// # Returns
-/// The hypervolume as an integer
-/// 
-/// # Example
-/// ```python
-/// # 2D case
+/// # Points without scaling
 /// points = [[1, 2], [2, 1]]
 /// reference = [3, 3]
 /// hv = compute_hypervolume(points, reference)
-/// assert hv == 3
+/// 
+/// # Points with scaling
+/// hv_scaled = compute_hypervolume(points, reference, scaled=True)
+/// 
+/// # Solutions without scaling
+/// hv = compute_hypervolume(solutions, reference)
+/// 
+/// # Solutions with scaling
+/// hv_scaled = compute_hypervolume(solutions, reference, scaled=True)
 /// ```
 #[pyfunction]
-pub fn compute_hypervolume(points: Vec<Vec<u64>>, reference_point: Vec<u64>) -> PyResult<u128> {
-    if points.is_empty() {
-        return Ok(0);
-    }
-
+#[pyo3(signature = (data, reference_point, scaled=false))]
+pub fn compute_hypervolume(data: &Bound<'_, pyo3::PyAny>, reference_point: Vec<u64>, scaled: bool) -> PyResult<u128> {
     let dimension = reference_point.len();
     
+    // Convert input data to points format
+    let points = if let Ok(solutions) = data.extract::<Vec<Solution>>() {
+        // Input is solutions
+        if solutions.is_empty() {
+            return Ok(0);
+        }
+        solutions_to_points(&solutions, dimension)
+    } else if let Ok(points_vec) = data.extract::<Vec<Vec<u64>>>() {
+        // Input is points
+        if points_vec.is_empty() {
+            return Ok(0);
+        }
+        points_vec
+    } else {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "Input data must be either a list of points (Vec<Vec<u64>>) or a list of Solution objects"
+        ));
+    };
+
     // Validate that all points have the same dimension
     for point in &points {
         if point.len() != dimension {
@@ -268,20 +242,28 @@ pub fn compute_hypervolume(points: Vec<Vec<u64>>, reference_point: Vec<u64>) -> 
         }
     }
 
+    // Apply scaling if requested
+    let (final_points, final_reference) = if scaled {
+        scale_points_to_unit_range(&points, &reference_point)
+    } else {
+        (points, reference_point)
+    };
+
+    // Compute hypervolume based on dimension
     let result = match dimension {
         2 => {
-            let reference: Objectives<2> = [reference_point[0], reference_point[1]];
-            let mut objectives: Vec<Objectives<2>> = points.iter().map(|p| [p[0], p[1]]).collect();
+            let reference: Objectives<2> = [final_reference[0], final_reference[1]];
+            let mut objectives: Vec<Objectives<2>> = final_points.iter().map(|p| [p[0], p[1]]).collect();
             hypervolume_2d_min_u64(&mut objectives, reference)
         }
         3 => {
-            let reference: Objectives<3> = [reference_point[0], reference_point[1], reference_point[2]];
-            let mut objectives: Vec<Objectives<3>> = points.iter().map(|p| [p[0], p[1], p[2]]).collect();
+            let reference: Objectives<3> = [final_reference[0], final_reference[1], final_reference[2]];
+            let mut objectives: Vec<Objectives<3>> = final_points.iter().map(|p| [p[0], p[1], p[2]]).collect();
             hypervolume_3d_min_u64(&mut objectives, reference)
         }
         4 => {
-            let reference: Objectives<4> = [reference_point[0], reference_point[1], reference_point[2], reference_point[3]];
-            let mut objectives: Vec<Objectives<4>> = points.iter().map(|p| [p[0], p[1], p[2], p[3]]).collect();
+            let reference: Objectives<4> = [final_reference[0], final_reference[1], final_reference[2], final_reference[3]];
+            let mut objectives: Vec<Objectives<4>> = final_points.iter().map(|p| [p[0], p[1], p[2], p[3]]).collect();
             hypervolume_4d_min_u64(&mut objectives, reference)
         }
         _ => {
@@ -303,6 +285,72 @@ fn diff_to_u128(a: u64, b: u64) -> u128 {
         0
     }
 }
+
+/// Scale points to [0, 1000] range based on min/max bounds.
+/// Returns (scaled_points, scaled_reference).
+fn scale_points_to_unit_range(points: &[Vec<u64>], reference_point: &[u64]) -> (Vec<Vec<u64>>, Vec<u64>) {
+    let dimension = reference_point.len();
+    let mut min_bounds = vec![u64::MAX; dimension];
+    let mut max_bounds = vec![u64::MIN; dimension];
+    
+    // Find min/max for each dimension across all points and reference
+    for point in points {
+        for (i, &val) in point.iter().enumerate() {
+            min_bounds[i] = min_bounds[i].min(val);
+            max_bounds[i] = max_bounds[i].max(val);
+        }
+    }
+    
+    // Include reference point in bounds calculation
+    for (i, &val) in reference_point.iter().enumerate() {
+        min_bounds[i] = min_bounds[i].min(val);
+        max_bounds[i] = max_bounds[i].max(val);
+    }
+    
+    // Calculate ranges (ensuring no division by zero)
+    let ranges: Vec<u64> = min_bounds.iter().zip(max_bounds.iter())
+        .map(|(&min_val, &max_val)| {
+            if max_val > min_val {
+                max_val - min_val
+            } else {
+                1 // Avoid division by zero for constant dimensions
+            }
+        }).collect();
+    
+    // Scale points to [0, 1000] range (using 1000 as unit to maintain u64 precision)
+    const SCALE_FACTOR: u64 = 1000;
+    let scaled_points: Vec<Vec<u64>> = points.iter().map(|point| {
+        point.iter().enumerate().map(|(i, &val)| {
+            ((val - min_bounds[i]) * SCALE_FACTOR) / ranges[i]
+        }).collect()
+    }).collect();
+    
+    // Scale reference point
+    let scaled_reference: Vec<u64> = reference_point.iter().enumerate().map(|(i, &val)| {
+        ((val - min_bounds[i]) * SCALE_FACTOR) / ranges[i]
+    }).collect();
+    
+    (scaled_points, scaled_reference)
+}
+
+/// Convert solutions to points Vec<Vec<u64>> format
+/// Uses the specified dimension from reference point length
+fn solutions_to_points(solutions: &[Solution], dimension: usize) -> Vec<Vec<u64>> {
+    if solutions.is_empty() {
+        return Vec::new();
+    }
+    
+    solutions.iter().map(|s| {
+        match dimension {
+            2 => s.objectives_2d().to_vec(),
+            3 => s.objectives_3d().to_vec(),
+            4 => s.objectives_4d().to_vec(),
+            _ => unreachable!(), // We only handle 2, 3, 4 dimensions
+        }
+    }).collect()
+}
+
+
 
 #[cfg(test)]
 mod tests {
