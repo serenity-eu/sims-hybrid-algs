@@ -29,18 +29,18 @@ class TestUnifiedHypervolume:
         hv = compute_hypervolume(points, [[0, 100], [0, 100]], reference)
         assert hv == 3
 
-    def test_points_2d_scaled(self):
+    def test_points_2d_normalized(self):
         """Test 2D points with scaling."""
         points = [[100, 200], [200, 100]]
         reference = [300, 300]
-        hv_unscaled = compute_hypervolume(points, [[0, 400], [0, 400]], reference, scaled=False)
-        hv_scaled = compute_hypervolume(points, [[0, 400], [0, 400]], reference, scaled=True)
+        hv_not_normalized = compute_hypervolume(points, [[0, 400], [0, 400]], reference, normalized=False)
+        hv_normalized = compute_hypervolume(points, [[0, 400], [0, 400]], reference, normalized=True)
         
-        # Both should give meaningful results, scaled should normalize
-        assert hv_unscaled > 0
-        assert hv_scaled > 0
-        # Scaled hypervolume should be in a normalized range
-        assert hv_scaled <= 1000 * 1000  # max scaled range
+        # Both should give meaningful results, normalized should use [0,1] range
+        assert hv_not_normalized > 0
+        assert hv_normalized > 0
+        # Normalized hypervolume should be in [0,1] range  
+        assert hv_normalized <= 1.0  # normalized to unit range
 
     @pytest.mark.skipif(not PYMOO_AVAILABLE, reason="pymoo not available")
     def test_points_2d_pymoo_validation(self):
@@ -123,7 +123,7 @@ class TestUnifiedHypervolume:
         hv = compute_hypervolume(solutions, [[0, 100], [0, 100]], reference)
         assert hv > 0
 
-    def test_solutions_2d_scaled(self):
+    def test_solutions_2d_normalized(self):
         """Test Solution objects with scaling."""
         solution1 = Solution.create(
             selected_images=[1, 2],
@@ -146,17 +146,17 @@ class TestUnifiedHypervolume:
         reference = [3000, 3000]
         bounds = [[0, 3000], [0, 3000]]
         
-        hv_unscaled = compute_hypervolume(solutions, bounds, reference, scaled=False)
-        hv_scaled = compute_hypervolume(solutions, bounds, reference, scaled=True)
+        hv_not_normalized = compute_hypervolume(solutions, bounds, reference, normalized=False)
+        hv_normalized = compute_hypervolume(solutions, bounds, reference, normalized=True)
         
-        assert hv_unscaled > 0
-        assert hv_scaled > 0
+        assert hv_not_normalized > 0
+        assert hv_normalized > 0
 
     def test_empty_input(self):
         """Test with empty input."""
         bounds = [[0, 3], [0, 3]]
         assert compute_hypervolume([], bounds, [3, 3]) == 0
-        assert compute_hypervolume([], bounds, [3, 3], scaled=True) == 0
+        assert compute_hypervolume([], bounds, [3, 3], normalized=True) == 0
 
     def test_dimension_mismatch(self):
         """Test error handling for dimension mismatch."""
@@ -194,8 +194,8 @@ class TestUnifiedHypervolume:
         reference_small = [3, 3]
         
         # Both should have the same relative hypervolume when normalized
-        hv_large = compute_hypervolume(points, [[0, 400], [0, 400]], reference, scaled=True)
-        hv_small = compute_hypervolume(points_small, [[0, 10], [0, 10]], reference_small, scaled=True)
+        hv_large = compute_hypervolume(points, [[0, 400], [0, 400]], reference, normalized=True)
+        hv_small = compute_hypervolume(points_small, [[0, 10], [0, 10]], reference_small, normalized=True)
         
         # Both should give meaningful results
         assert hv_large > 0

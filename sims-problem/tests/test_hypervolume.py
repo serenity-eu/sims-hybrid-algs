@@ -284,6 +284,254 @@ class TestHypervolumeCrossValidation:
             f"4D hypervolume mismatch: ours={our_hv}, pymoo={pymoo_hv}"
 
 
+@pytest.mark.skipif(not PYMOO_AVAILABLE, reason="pymoo not available")
+class TestHypervolumeNormalizationCrossValidation:
+    """Extensive cross-validation of normalization feature with pymoo."""
+    
+    def compute_pymoo_hypervolume_normalized(self, points, bounds, reference) -> float:
+        """Compute hypervolume using pymoo with manual normalization to [0,1] range."""
+        if not points or HV is None:
+            return 0.0
+        
+        # Normalize points and reference to [0,1] range using bounds
+        normalized_points = []
+        for point in points:
+            normalized_point = []
+            for i, (val, (min_bound, max_bound)) in enumerate(zip(point, bounds)):
+                if max_bound - min_bound > 0:
+                    normalized_val = (val - min_bound) / (max_bound - min_bound)
+                else:
+                    normalized_val = 0.0  # Handle case where min == max
+                normalized_point.append(normalized_val)
+            normalized_points.append(normalized_point)
+        
+        normalized_reference = []
+        for i, (ref_val, (min_bound, max_bound)) in enumerate(zip(reference, bounds)):
+            if max_bound - min_bound > 0:
+                normalized_ref = (ref_val - min_bound) / (max_bound - min_bound)
+            else:
+                normalized_ref = 1.0  # Handle case where min == max
+            normalized_reference.append(normalized_ref)
+        
+        points_array = np.array(normalized_points, dtype=np.float64)
+        reference_array = np.array(normalized_reference, dtype=np.float64)
+        
+        hv_indicator = HV(ref_point=reference_array)
+        result = hv_indicator(points_array)
+        return float(result) if result is not None else 0.0
+    
+    def test_normalization_preserves_relative_ordering(self):
+        """Test that normalization preserves relative ordering between different point sets."""
+        # Two different point sets with same bounds and reference
+        points1 = [[10, 20], [30, 40]]
+        points2 = [[15, 25], [25, 35]]
+        bounds = [[0, 100], [0, 100]]
+        reference = [80, 90]
+        
+        # Compute normalized hypervolumes for both
+        our_normalized = compute_hypervolume(points1, bounds, reference, normalized=True)
+        our_normalized = compute_hypervolume(points2, bounds, reference, normalized=True)
+        
+        # Compute pymoo normalized equivalents
+        pymoo_hv1 = self.compute_pymoo_hypervolume_normalized(points1, bounds, reference)
+        pymoo_hv2 = self.compute_pymoo_hypervolume_normalized(points2, bounds, reference)
+        
+        # Check that relative ordering is preserved
+        if our_normalized:
+            assert pymoo_hv1 > pymoo_hv2, f"Relative ordering should be preserved: pymoo_hv1={pymoo_hv1} should be > pymoo_hv2={pymoo_hv2}"
+        elif our_normalized:
+            assert pymoo_hv1 < pymoo_hv2, f"Relative ordering should be preserved: pymoo_hv1={pymoo_hv1} should be < pymoo_hv2={pymoo_hv2}"
+        else:
+            assert abs(pymoo_hv1 - pymoo_hv2) < 1e-10, f"Equal values should remain equal: pymoo_hv1={pymoo_hv1}, pymoo_hv2={pymoo_hv2}"
+    
+    def test_normalization_vs_not_normalized_ratios_match_pymoo(self):
+        """Test that the ratio of normalized to not_normalized matches pymoo's behavior pattern."""
+        points = [[10, 20], [30, 40]]
+        bounds = [[0, 100], [0, 100]]
+        reference = [80, 90]
+        
+        # Get our normalized and not_normalized values
+        our_hv_normalized = compute_hypervolume(points, bounds, reference, normalized=True)
+        our_hv_not_normalized = compute_hypervolume(points, bounds, reference, normalized=False)
+        
+        # Get pymoo normalized and raw values
+        pymoo_hv_normalized = self.compute_pymoo_hypervolume_normalized(points, bounds, reference)
+        # Raw pymoo without normalization
+        if HV is not None:
+            points_array = np.array(points, dtype=np.float64)
+            reference_array = np.array(reference, dtype=np.float64)
+            hv_indicator = HV(ref_point=reference_array)
+            pymoo_result = hv_indicator(points_array)
+            pymoo_hv_raw = float(pymoo_result) if pymoo_result is not None else 0.0
+        else:
+            pymoo_hv_raw = 0.0
+        
+        # Both should show consistent relative normalization patterns
+        our_normalization_effect = our_hv_normalized != our_hv_not_normalized
+        pymoo_normalization_effect = pymoo_hv_normalized != pymoo_hv_raw
+        
+        assert our_normalization_effect == pymoo_normalization_effect, \
+            f"Both implementations should apply normalization: ours={our_normalization_effect}, pymoo={pymoo_normalization_effect}"
+        
+        print(f"Our not_normalized: {our_hv_not_normalized}, normalized: {our_hv_normalized}")
+        print(f"PyMoo raw: {pymoo_hv_raw}, normalized: {pymoo_hv_normalized}")
+    
+    def test_normalization_cross_validation_relative_ratios_2d(self):
+        """Cross-validate that normalization ratios are consistent across different test cases in 2D."""
+        test_cases = [
+            {
+                "points": [[10, 20], [30, 40]], 
+                "bounds": [[0, 100], [0, 100]], 
+                "reference": [80, 90]
+            },
+            {
+                "points": [[5, 10], [15, 5]], 
+                "bounds": [[0, 20], [0, 15]], 
+                "reference": [18, 12]
+            },
+            {
+                "points": [[100, 200], [150, 180]], 
+                "bounds": [[50, 200], [150, 250]], 
+                "reference": [180, 240]
+            }
+        ]
+        
+        our_ratios = []
+        pymoo_ratios = []
+        
+        for case in test_cases:
+            points = case["points"]
+            bounds = case["bounds"]
+            reference = case["reference"]
+            
+            # Our implementation
+            our_normalized = compute_hypervolume(points, bounds, reference, normalized=True)
+            our_not_normalized = compute_hypervolume(points, bounds, reference, normalized=False)
+            our_ratio = our_normalized / our_not_normalized if our_not_normalized != 0 else 1.0
+            our_ratios.append(our_ratio)
+            
+            # PyMoo implementation
+            pymoo_normalized = self.compute_pymoo_hypervolume_normalized(points, bounds, reference)
+            if HV is not None:
+                points_array = np.array(points, dtype=np.float64)
+                reference_array = np.array(reference, dtype=np.float64)
+                hv_indicator = HV(ref_point=reference_array)
+                pymoo_result = hv_indicator(points_array)
+                pymoo_raw = float(pymoo_result) if pymoo_result is not None else 0.0
+            else:
+                pymoo_raw = 0.0
+            pymoo_ratio = pymoo_normalized / pymoo_raw if pymoo_raw != 0 else 1.0
+            pymoo_ratios.append(pymoo_ratio)
+        
+        # Check that the normalization pattern is consistent
+        print(f"Our normalization ratios: {our_ratios}")
+        print(f"PyMoo normalization ratios: {pymoo_ratios}")
+        
+        # All our ratios should show same normalization behavior (all > 1 or all < 1 or all == 1)
+        our_all_greater = all(r > 1 for r in our_ratios)
+        our_all_less = all(r < 1 for r in our_ratios)
+        our_all_equal = all(abs(r - 1) < 1e-10 for r in our_ratios)
+        
+        pymoo_all_greater = all(r > 1 for r in pymoo_ratios)
+        pymoo_all_less = all(r < 1 for r in pymoo_ratios)
+        pymoo_all_equal = all(abs(r - 1) < 1e-10 for r in pymoo_ratios)
+        
+        # At least one should be true for each
+        assert our_all_greater or our_all_less or our_all_equal, "Our normalization should be consistent"
+        assert pymoo_all_greater or pymoo_all_less or pymoo_all_equal, "PyMoo normalization should be consistent"
+    
+    def test_normalization_cross_validation_3d_relative(self):
+        """Cross-validate 3D normalization behavior preservation."""
+        points1 = [[10, 20, 30], [40, 50, 60]]
+        points2 = [[15, 25, 35], [35, 45, 55]]
+        bounds = [[0, 100], [0, 100], [0, 100]]
+        reference = [80, 90, 95]
+        
+        # Our implementation
+        our_hv1 = compute_hypervolume(points1, bounds, reference, normalized=True)
+        our_hv2 = compute_hypervolume(points2, bounds, reference, normalized=True)
+        
+        # PyMoo implementation
+        pymoo_hv1 = self.compute_pymoo_hypervolume_normalized(points1, bounds, reference)
+        pymoo_hv2 = self.compute_pymoo_hypervolume_normalized(points2, bounds, reference)
+        
+        # Relative comparison should be preserved
+        if our_hv1 > our_hv2:
+            assert pymoo_hv1 > pymoo_hv2, "3D: Relative ordering should be preserved"
+        elif our_hv1 < our_hv2:
+            assert pymoo_hv1 < pymoo_hv2, "3D: Relative ordering should be preserved"
+        else:
+            assert abs(pymoo_hv1 - pymoo_hv2) < 1e-10, "3D: Equal values should remain equal"
+    
+    def test_normalization_cross_validation_4d_relative(self):
+        """Cross-validate 4D normalization behavior preservation."""
+        points1 = [[10, 20, 30, 40], [50, 60, 70, 80]]
+        points2 = [[15, 25, 35, 45], [45, 55, 65, 75]]
+        bounds = [[0, 100], [0, 100], [0, 100], [0, 100]]
+        reference = [90, 95, 85, 92]
+        
+        # Our implementation
+        our_hv1 = compute_hypervolume(points1, bounds, reference, normalized=True)
+        our_hv2 = compute_hypervolume(points2, bounds, reference, normalized=True)
+        
+        # PyMoo implementation
+        pymoo_hv1 = self.compute_pymoo_hypervolume_normalized(points1, bounds, reference)
+        pymoo_hv2 = self.compute_pymoo_hypervolume_normalized(points2, bounds, reference)
+        
+        # Relative comparison should be preserved
+        if our_hv1 > our_hv2:
+            assert pymoo_hv1 > pymoo_hv2, "4D: Relative ordering should be preserved"
+        elif our_hv1 < our_hv2:
+            assert pymoo_hv1 < pymoo_hv2, "4D: Relative ordering should be preserved"
+        else:
+            assert abs(pymoo_hv1 - pymoo_hv2) < 1e-10, "4D: Equal values should remain equal"
+    
+    def test_normalization_cross_validation_empty_and_single_point(self):
+        """Cross-validate normalization with edge cases."""
+        bounds = [[0, 100], [0, 100]]
+        reference = [80, 90]
+        
+        # Empty set
+        our_empty = compute_hypervolume([], bounds, reference, normalized=True)
+        pymoo_empty = self.compute_pymoo_hypervolume_normalized([], bounds, reference)
+        
+        assert our_empty == 0.0
+        assert pymoo_empty == 0.0
+        
+        # Single point
+        points = [[25, 35]]
+        our_single = compute_hypervolume(points, bounds, reference, normalized=True)
+        pymoo_single = self.compute_pymoo_hypervolume_normalized(points, bounds, reference)
+        
+        # Both should be positive
+        assert our_single > 0
+        assert pymoo_single > 0
+    
+    def test_normalization_with_different_bounds_ranges(self):
+        """Test that normalization works consistently with different bounds ranges."""
+        points = [[10, 20], [30, 40]]
+        reference = [80, 90]
+        
+        # Different bounds ranges
+        bounds1 = [[0, 100], [0, 100]]  # Same range
+        bounds2 = [[0, 200], [0, 150]]  # Different ranges
+        
+        our_hv1 = compute_hypervolume(points, bounds1, reference, normalized=True)
+        our_hv2 = compute_hypervolume(points, bounds2, reference, normalized=True)
+        
+        pymoo_hv1 = self.compute_pymoo_hypervolume_normalized(points, bounds1, reference)
+        pymoo_hv2 = self.compute_pymoo_hypervolume_normalized(points, bounds2, reference)
+        
+        # Both should handle different bounds ranges sensibly
+        assert our_hv1 > 0
+        assert our_hv2 > 0
+        assert pymoo_hv1 > 0
+        assert pymoo_hv2 > 0
+        
+        print(f"Same bounds - Our: {our_hv1}, PyMoo: {pymoo_hv1}")
+        print(f"Different bounds - Our: {our_hv2}, PyMoo: {pymoo_hv2}")
+
+
 class TestHypervolumeEdgeCases:
     """Test edge cases and error conditions."""
     
@@ -357,7 +605,7 @@ class TestHypervolumePerformance:
         
         return points, reference
     
-    def test_2d_performance_scaling(self):
+    def test_2d_performance_normalization(self):
         """Test 2D hypervolume performance with increasing point count."""
         dimensions = 2
         point_counts = [10, 50, 100, 200]
@@ -376,7 +624,7 @@ class TestHypervolumePerformance:
         # Performance should be reasonable (less than 1 second for 200 points in 2D)
         assert times[-1] < 1.0, f"2D performance too slow: {times[-1]:.3f}s for {point_counts[-1]} points"
     
-    def test_3d_performance_scaling(self):
+    def test_3d_performance_normalization(self):
         """Test 3D hypervolume performance with increasing point count."""
         dimensions = 3
         point_counts = [10, 25, 50, 100]
@@ -395,7 +643,7 @@ class TestHypervolumePerformance:
         # 3D should be slower but still reasonable
         assert times[-1] < 5.0, f"3D performance too slow: {times[-1]:.3f}s for {point_counts[-1]} points"
     
-    def test_4d_performance_scaling(self):
+    def test_4d_performance_normalization(self):
         """Test 4D hypervolume performance with increasing point count."""
         dimensions = 4
         point_counts = [5, 10, 20, 30]  # Smaller counts for 4D

@@ -808,8 +808,8 @@ def compute_hypervolume(
     solutions: list[Solution] | list[list[int]],
     objective_bounds: list[list[int]],
     reference_point: list[int] | None = None,
-    scaled: bool = False
-) -> int:
+    normalized: bool = False
+) -> float:
     """
     Compute the hypervolume indicator for a set of solutions or points.
     
@@ -857,7 +857,7 @@ def compute_hypervolume(
         hv = compute_hypervolume(points, bounds, reference_point=reference)
         
         # With scaling for normalized comparison
-        hv_scaled = compute_hypervolume(solutions, bounds, scaled=True)
+        hv_normalized = compute_hypervolume(solutions, bounds, normalized=True)
         
         # 3D optimization with custom reference point
         bounds_3d = [[0, 100], [0, 50], [0, 200]]
@@ -874,7 +874,8 @@ def compute_hypervolume(
           * 3D bounds → calls objectives_3d()
           * 4D bounds → calls objectives_4d()
         - When reference_point is not provided, it's computed as [max1, max2, ...] from objective_bounds
-        - Points outside the bounds are clamped when scaled=True
+        - Points outside the bounds are clamped when normalized=True
+        - The normalized=True option normalizes points to [0,1] range like pymoo for cross-validation
         - objective_bounds is now required for consistent and predictable hypervolume computation
         - All coordinates must be non-negative for meaningful hypervolume computation
         - The reference point should be dominated by all input solutions/points
