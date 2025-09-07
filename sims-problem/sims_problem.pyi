@@ -806,7 +806,8 @@ def solve_with_hybrid(
 
 def compute_hypervolume(
     solutions: list[Solution] | list[list[int]],
-    reference_point: list[int],
+    objective_bounds: list[list[int]],
+    reference_point: list[int] | None = None,
     scaled: bool = False
 ) -> int:
     """
@@ -820,44 +821,61 @@ def compute_hypervolume(
     and applies the appropriate computation algorithm.
     
     Args:
-        solutions: Either a list of Solution objects or a list of points (each point is a list of floats).
+        solutions: Either a list of Solution objects or a list of points (each point is a list of ints).
                   For Solution objects, objectives are extracted using objectives_2d(), objectives_3d(), 
-                  or objectives_4d() based on the reference point dimension.
-        reference_point: Reference point for hypervolume computation. The dimension of this point
-                        determines which objectives method is called on Solution objects.
-                        Must be strictly dominated by all solutions for meaningful results.
-        scaled: If True, scales all points to [0, 1000] range using min-max normalization
+                  or objectives_4d() based on the objective bounds dimension.
+        objective_bounds: Bounds for each dimension. Format: [[min1, max1], [min2, max2], ...]
+                         for each dimension. Used for scaling when scaled=True and determines
+                         the problem dimension.
+        reference_point: Optional reference point for hypervolume computation. If not provided,
+                        computed as the maximum bounds [max1, max2, ...]. Must be within or
+                        dominated by all solutions for meaningful results.
+        scaled: If True, scales all points to [0, 1000] range using objective_bounds
                before computing hypervolume. This preserves dominance relationships while
                normalizing the scale. Default is False.
     
     Returns:
-        The hypervolume value as a float. When scaled=True, the result is in the
+        The hypervolume value as an int. When scaled=True, the result is in the
         normalized [0, 1000] coordinate space.
         
     Raises:
-        ValueError: If dimension is not 2, 3, or 4, or if inputs are inconsistent
+        ValueError: If dimension is not 2, 3, or 4, or if inputs are inconsistent,
+                   or if objective_bounds format is invalid, or if reference_point
+                   dimension doesn't match objective_bounds
         TypeError: If negative coordinate values are encountered (use non-negative coordinates)
         
     Examples:
-        # Using Solution objects (2D)
+        # Basic usage with bounds only (reference computed as max bounds)
         solutions = [sol1, sol2, sol3]  # Solution objects
-        hv = compute_hypervolume(solutions, [100.0, 50.0])
+        bounds = [[0, 200], [0, 100]]  # [min, max] for each dimension
+        hv = compute_hypervolume(solutions, bounds)
         
-        # Using raw points (3D) 
-        points = [[10.0, 20.0, 30.0], [15.0, 25.0, 35.0]]
-        hv = compute_hypervolume(points, [100.0, 100.0, 100.0])
+        # Using raw points with explicit reference point
+        points = [[10, 20], [30, 40]]
+        bounds = [[0, 100], [0, 100]]
+        reference = [80, 90]
+        hv = compute_hypervolume(points, bounds, reference_point=reference)
         
         # With scaling for normalized comparison
-        hv_scaled = compute_hypervolume(solutions, [100.0, 50.0], scaled=True)
+        hv_scaled = compute_hypervolume(solutions, bounds, scaled=True)
         
-        # 4D optimization with Solution objects
-        hv_4d = compute_hypervolume(solutions, [100.0, 50.0, 200.0, 90.0])
+        # 3D optimization with custom reference point
+        bounds_3d = [[0, 100], [0, 50], [0, 200]]
+        reference_3d = [80, 40, 180]
+        hv_3d = compute_hypervolume(solutions, bounds_3d, reference_point=reference_3d)
+        
+        # 4D with auto-computed reference (max bounds)
+        bounds_4d = [[0, 100], [0, 50], [0, 200], [0, 90]]
+        hv_4d = compute_hypervolume(solutions, bounds_4d)  # reference = [100, 50, 200, 90]
         
     Notes:
-        - For Solution objects, the reference point dimension determines which objectives are used:
-          * 2D reference point → calls objectives_2d() 
-          * 3D reference point → calls objectives_3d()
-          * 4D reference point → calls objectives_4d()
+        - For Solution objects, the objective bounds dimension determines which objectives are used:
+          * 2D bounds → calls objectives_2d() 
+          * 3D bounds → calls objectives_3d()
+          * 4D bounds → calls objectives_4d()
+        - When reference_point is not provided, it's computed as [max1, max2, ...] from objective_bounds
+        - Points outside the bounds are clamped when scaled=True
+        - objective_bounds is now required for consistent and predictable hypervolume computation
         - All coordinates must be non-negative for meaningful hypervolume computation
         - The reference point should be dominated by all input solutions/points
         - When scaled=True, normalization preserves the relative dominance structure

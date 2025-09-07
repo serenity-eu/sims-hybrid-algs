@@ -26,15 +26,15 @@ class TestUnifiedHypervolume:
         """Test basic 2D points without scaling."""
         points = [[1, 2], [2, 1]]
         reference = [3, 3]
-        hv = compute_hypervolume(points, reference)
+        hv = compute_hypervolume(points, [[0, 100], [0, 100]], reference)
         assert hv == 3
 
     def test_points_2d_scaled(self):
         """Test 2D points with scaling."""
         points = [[100, 200], [200, 100]]
         reference = [300, 300]
-        hv_unscaled = compute_hypervolume(points, reference, scaled=False)
-        hv_scaled = compute_hypervolume(points, reference, scaled=True)
+        hv_unscaled = compute_hypervolume(points, [[0, 400], [0, 400]], reference, scaled=False)
+        hv_scaled = compute_hypervolume(points, [[0, 400], [0, 400]], reference, scaled=True)
         
         # Both should give meaningful results, scaled should normalize
         assert hv_unscaled > 0
@@ -49,7 +49,7 @@ class TestUnifiedHypervolume:
         reference = [4, 4]
         
         # Our implementation
-        hv_ours = compute_hypervolume(points, reference)
+        hv_ours = compute_hypervolume(points, [[0, 100], [0, 100]], reference)
         
         # PyMoo validation
         points_np = np.array(points, dtype=float)
@@ -67,7 +67,7 @@ class TestUnifiedHypervolume:
         """Test basic 3D points."""
         points = [[1, 2, 3], [2, 1, 3], [1, 1, 2]]
         reference = [4, 4, 4]
-        hv = compute_hypervolume(points, reference)
+        hv = compute_hypervolume(points, [[0, 4], [0, 4], [0, 4]], reference)
         assert hv > 0
 
     @pytest.mark.skipif(not PYMOO_AVAILABLE, reason="pymoo not available")
@@ -77,7 +77,7 @@ class TestUnifiedHypervolume:
         reference = [3, 3, 3]
         
         # Our implementation
-        hv_ours = compute_hypervolume(points, reference)
+        hv_ours = compute_hypervolume(points, [[0, 3], [0, 3], [0, 3]], reference)
         
         # PyMoo validation
         points_np = np.array(points, dtype=float)
@@ -94,7 +94,7 @@ class TestUnifiedHypervolume:
         """Test basic 4D points."""
         points = [[1, 2, 3, 4], [2, 1, 3, 4]]
         reference = [5, 5, 5, 5]
-        hv = compute_hypervolume(points, reference)
+        hv = compute_hypervolume(points, [[0, 5], [0, 5], [0, 5], [0, 5]], reference)
         assert hv > 0
 
     def test_solutions_2d(self):
@@ -120,7 +120,7 @@ class TestUnifiedHypervolume:
         solutions = [solution1, solution2]
         reference = [300, 300]
         
-        hv = compute_hypervolume(solutions, reference)
+        hv = compute_hypervolume(solutions, [[0, 100], [0, 100]], reference)
         assert hv > 0
 
     def test_solutions_2d_scaled(self):
@@ -144,17 +144,19 @@ class TestUnifiedHypervolume:
         
         solutions = [solution1, solution2]
         reference = [3000, 3000]
+        bounds = [[0, 3000], [0, 3000]]
         
-        hv_unscaled = compute_hypervolume(solutions, reference, scaled=False)
-        hv_scaled = compute_hypervolume(solutions, reference, scaled=True)
+        hv_unscaled = compute_hypervolume(solutions, bounds, reference, scaled=False)
+        hv_scaled = compute_hypervolume(solutions, bounds, reference, scaled=True)
         
         assert hv_unscaled > 0
         assert hv_scaled > 0
 
     def test_empty_input(self):
         """Test with empty input."""
-        assert compute_hypervolume([], [3, 3]) == 0
-        assert compute_hypervolume([], [3, 3], scaled=True) == 0
+        bounds = [[0, 3], [0, 3]]
+        assert compute_hypervolume([], bounds, [3, 3]) == 0
+        assert compute_hypervolume([], bounds, [3, 3], scaled=True) == 0
 
     def test_dimension_mismatch(self):
         """Test error handling for dimension mismatch."""
@@ -162,23 +164,23 @@ class TestUnifiedHypervolume:
         reference = [4, 4]
         
         with pytest.raises(ValueError, match="same dimension"):
-            compute_hypervolume(points, reference)
+            compute_hypervolume(points, [[0, 100], [0, 100]], reference)
 
     def test_unsupported_dimension(self):
         """Test error for unsupported dimensions."""
         points = [[1, 2, 3, 4, 5]]  # 5D not supported
         reference = [6, 6, 6, 6, 6]
         
-        with pytest.raises(ValueError, match="Unsupported dimension"):
-            compute_hypervolume(points, reference)
+        with pytest.raises(ValueError, match="Unsupported|dimension"):
+            compute_hypervolume(points, [[0, 100], [0, 100], [0, 100], [0, 100], [0, 100]], reference)
 
     def test_invalid_input_type(self):
         """Test error for invalid input types."""
         invalid_data = "not a list"
         reference = [3, 3]
         
-        with pytest.raises(TypeError, match="must be either a list of points"):
-            compute_hypervolume(invalid_data, reference)  # type: ignore
+        with pytest.raises(TypeError, match="Input data must be either a list"):
+            compute_hypervolume(invalid_data, [[0, 10], [0, 10]], reference)  # type: ignore
 
     @pytest.mark.skipif(not PYMOO_AVAILABLE, reason="pymoo not available")
     def test_scaling_preserves_relationships(self):
@@ -192,8 +194,8 @@ class TestUnifiedHypervolume:
         reference_small = [3, 3]
         
         # Both should have the same relative hypervolume when normalized
-        hv_large = compute_hypervolume(points, reference, scaled=True)
-        hv_small = compute_hypervolume(points_small, reference_small, scaled=True)
+        hv_large = compute_hypervolume(points, [[0, 400], [0, 400]], reference, scaled=True)
+        hv_small = compute_hypervolume(points_small, [[0, 10], [0, 10]], reference_small, scaled=True)
         
         # Both should give meaningful results
         assert hv_large > 0
@@ -224,8 +226,8 @@ class TestUnifiedHypervolume:
         points = [[100, 200], [200, 100]]
         reference = [300, 300]
         
-        hv_solutions = compute_hypervolume(solutions, reference)
-        hv_points = compute_hypervolume(points, reference)
+        hv_solutions = compute_hypervolume(solutions, [[0, 100], [0, 100]], reference)
+        hv_points = compute_hypervolume(points, [[0, 100], [0, 100]], reference)
         
         assert hv_solutions == hv_points
 
@@ -256,8 +258,11 @@ class TestUnifiedHypervolume:
             points = case["points"]
             reference = case["reference"]
             
+            # Create bounds matching the reference dimensions
+            bounds = [[0, 100] for _ in reference]
+            
             # Our implementation
-            hv_ours = compute_hypervolume(points, reference)
+            hv_ours = compute_hypervolume(points, bounds, reference)
             
             # PyMoo validation
             points_np = np.array(points, dtype=float)

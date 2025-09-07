@@ -186,32 +186,59 @@ pub fn compute<const D: usize, T: HasObjectives<D>>(pareto_front: Vec<T>, refere
 /// 
 /// # Arguments
 /// * `data` - Either a list of points (Vec<Vec<u64>>) or a list of Solution objects
-/// * `reference_point` - Reference point as a list of objective values
-/// * `scaled` - Optional scaling flag. If true, normalizes objectives to [0, 1000] range
+/// * `objective_bounds` - Bounds for each dimension. Format: [[min1, max1], [min2, max2], ...] for each dimension
+/// * `reference_point` - Optional reference point. If not provided, computed as the maximum bounds
+/// * `scaled` - Optional scaling flag. If true, normalizes objectives to [0, 1000] range using objective_bounds
 /// 
 /// # Returns
 /// The hypervolume as an integer
 /// 
 /// # Examples
 /// ```python
-/// # Points without scaling
+/// # Basic usage with bounds only (reference computed as max bounds)
 /// points = [[1, 2], [2, 1]]
-/// reference = [3, 3]
-/// hv = compute_hypervolume(points, reference)
+/// bounds = [[0, 10], [0, 10]]  # min/max for each dimension
+/// hv = compute_hypervolume(points, bounds)
 /// 
-/// # Points with scaling
-/// hv_scaled = compute_hypervolume(points, reference, scaled=True)
+/// # With explicit reference point
+/// reference = [8, 8]
+/// hv = compute_hypervolume(points, bounds, reference_point=reference)
 /// 
-/// # Solutions without scaling
-/// hv = compute_hypervolume(solutions, reference)
+/// # With scaling
+/// hv_scaled = compute_hypervolume(points, bounds, scaled=True)
 /// 
-/// # Solutions with scaling
-/// hv_scaled = compute_hypervolume(solutions, reference, scaled=True)
+/// # Solutions with bounds
+/// hv = compute_hypervolume(solutions, bounds)
+/// 
+/// # Solutions with scaling and custom reference
+/// hv_scaled = compute_hypervolume(solutions, bounds, reference_point=reference, scaled=True)
 /// ```
 #[pyfunction]
-#[pyo3(signature = (data, reference_point, scaled=false))]
-pub fn compute_hypervolume(data: &Bound<'_, pyo3::PyAny>, reference_point: Vec<u64>, scaled: bool) -> PyResult<u128> {
-    let dimension = reference_point.len();
+#[pyo3(signature = (data, objective_bounds, reference_point=None, scaled=false))]
+pub fn compute_hypervolume(
+    data: &Bound<'_, pyo3::PyAny>, 
+    objective_bounds: Vec<Vec<u64>>,
+    reference_point: Option<Vec<u64>>,
+    scaled: bool
+) -> PyResult<u128> {
+    // Validate objective bounds first
+    let dimension = objective_bounds.len();
+    validate_objective_bounds(&objective_bounds, dimension)?;
+    
+    // Compute reference point if not provided (use max bounds)
+    let reference_point = if let Some(ref_point) = reference_point {
+        // Validate provided reference point matches dimensions
+        if ref_point.len() != dimension {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Reference point must have {} dimensions to match objective bounds, but got {}",
+                dimension, ref_point.len()
+            )));
+        }
+        ref_point
+    } else {
+        // Use max bounds as reference point
+        objective_bounds.iter().map(|bound| bound[1]).collect()
+    };
     
     // Convert input data to points format
     let points = if let Ok(solutions) = data.extract::<Vec<Solution>>() {
@@ -244,7 +271,8 @@ pub fn compute_hypervolume(data: &Bound<'_, pyo3::PyAny>, reference_point: Vec<u
 
     // Apply scaling if requested
     let (final_points, final_reference) = if scaled {
-        scale_points_to_unit_range(&points, &reference_point)
+        // Use objective bounds for scaling
+        scale_points_with_explicit_bounds(&points, &reference_point, &objective_bounds)
     } else {
         (points, reference_point)
     };
@@ -286,48 +314,64 @@ fn diff_to_u128(a: u64, b: u64) -> u128 {
     }
 }
 
-/// Scale points to [0, 1000] range based on min/max bounds.
-/// Returns (scaled_points, scaled_reference).
-fn scale_points_to_unit_range(points: &[Vec<u64>], reference_point: &[u64]) -> (Vec<Vec<u64>>, Vec<u64>) {
-    let dimension = reference_point.len();
-    let mut min_bounds = vec![u64::MAX; dimension];
-    let mut max_bounds = vec![u64::MIN; dimension];
+/// Validate that objective bounds have the correct format and dimensions
+fn validate_objective_bounds(bounds: &[Vec<u64>], dimension: usize) -> PyResult<()> {
+    if bounds.len() != dimension {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Objective bounds dimension mismatch: expected {}, but got {}",
+            dimension, bounds.len()
+        )));
+    }
     
-    // Find min/max for each dimension across all points and reference
-    for point in points {
-        for (i, &val) in point.iter().enumerate() {
-            min_bounds[i] = min_bounds[i].min(val);
-            max_bounds[i] = max_bounds[i].max(val);
+    for (i, bound) in bounds.iter().enumerate() {
+        if bound.len() != 2 {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Each bound must have exactly 2 values [min, max], but dimension {} has {} values",
+                i, bound.len()
+            )));
+        }
+        
+        if bound[0] > bound[1] {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Bound minimum must be <= maximum for dimension {}, but got min={}, max={}",
+                i, bound[0], bound[1]
+            )));
         }
     }
     
-    // Include reference point in bounds calculation
-    for (i, &val) in reference_point.iter().enumerate() {
-        min_bounds[i] = min_bounds[i].min(val);
-        max_bounds[i] = max_bounds[i].max(val);
-    }
+    Ok(())
+}
+
+/// Scale points to [0, 1000] range using explicit objective bounds.
+/// Returns (scaled_points, scaled_reference).
+fn scale_points_with_explicit_bounds(
+    points: &[Vec<u64>], 
+    reference_point: &[u64], 
+    bounds: &[Vec<u64>]
+) -> (Vec<Vec<u64>>, Vec<u64>) {
+    const SCALE_FACTOR: u64 = 1000;
     
-    // Calculate ranges (ensuring no division by zero)
-    let ranges: Vec<u64> = min_bounds.iter().zip(max_bounds.iter())
-        .map(|(&min_val, &max_val)| {
-            if max_val > min_val {
-                max_val - min_val
-            } else {
-                1 // Avoid division by zero for constant dimensions
-            }
+    // Calculate ranges from explicit bounds (ensuring no division by zero)
+    let ranges: Vec<u64> = bounds.iter()
+        .map(|bound| {
+            let range = bound[1] - bound[0];
+            if range > 0 { range } else { 1 }
         }).collect();
     
-    // Scale points to [0, 1000] range (using 1000 as unit to maintain u64 precision)
-    const SCALE_FACTOR: u64 = 1000;
+    // Scale points to [0, 1000] range
     let scaled_points: Vec<Vec<u64>> = points.iter().map(|point| {
         point.iter().enumerate().map(|(i, &val)| {
-            ((val - min_bounds[i]) * SCALE_FACTOR) / ranges[i]
+            let min_bound = bounds[i][0];
+            let clamped_val = val.max(min_bound).min(bounds[i][1]);
+            ((clamped_val - min_bound) * SCALE_FACTOR) / ranges[i]
         }).collect()
     }).collect();
     
     // Scale reference point
     let scaled_reference: Vec<u64> = reference_point.iter().enumerate().map(|(i, &val)| {
-        ((val - min_bounds[i]) * SCALE_FACTOR) / ranges[i]
+        let min_bound = bounds[i][0];
+        let clamped_val = val.max(min_bound).min(bounds[i][1]);
+        ((clamped_val - min_bound) * SCALE_FACTOR) / ranges[i]
     }).collect();
     
     (scaled_points, scaled_reference)

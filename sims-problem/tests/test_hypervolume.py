@@ -36,63 +36,65 @@ class TestHypervolumeCore:
         """Test basic 2D hypervolume computation."""
         points = [[1, 2], [2, 1]]
         reference = [3, 3]
-        hv = compute_hypervolume(points, reference)
+        bounds = [[0, 3], [0, 3]]  # bounds with max = reference
+        hv = compute_hypervolume(points, bounds, reference_point=reference)
         assert hv == 3, f"Expected hypervolume 3, got {hv}"
     
     def test_3d_hypervolume_basic(self):
         """Test basic 3D hypervolume computation."""
         points = [[1, 2, 3], [2, 1, 3]]
         reference = [4, 4, 4]
-        hv = compute_hypervolume(points, reference)
+        bounds = [[0, 4], [0, 4], [0, 4]]  # bounds with max = reference
+        hv = compute_hypervolume(points, bounds, reference_point=reference)
         assert hv == 8, f"Expected hypervolume 8, got {hv}"
     
     def test_4d_hypervolume_basic(self):
         """Test basic 4D hypervolume computation."""
         points = [[1, 2, 3, 4]]
         reference = [5, 6, 7, 8]
-        hv = compute_hypervolume(points, reference)
+        hv = compute_hypervolume(points, [[0, 5], [0, 6], [0, 7], [0, 8]], reference)
         assert hv == 256, f"Expected hypervolume 256, got {hv}"
     
     def test_empty_front(self):
         """Test hypervolume with empty Pareto front."""
         points = []
         reference = [5, 5, 5, 5]
-        hv = compute_hypervolume(points, reference)
+        hv = compute_hypervolume(points, [[0, 5], [0, 5], [0, 5], [0, 5]], reference)
         assert hv == 0, f"Expected hypervolume 0 for empty front, got {hv}"
     
     def test_single_point(self):
         """Test hypervolume with single point in different dimensions."""
         # 2D
-        hv_2d = compute_hypervolume([[1, 2]], [3, 4])
+        hv_2d = compute_hypervolume([[1, 2]], [[0, 3], [0, 4]], [3, 4])
         assert hv_2d == 4, f"2D single point: expected 4, got {hv_2d}"
         
         # 3D  
-        hv_3d = compute_hypervolume([[1, 2, 3]], [4, 5, 6])
+        hv_3d = compute_hypervolume([[1, 2, 3]], [[0, 4], [0, 5], [0, 6]], [4, 5, 6])
         assert hv_3d == 27, f"3D single point: expected 27, got {hv_3d}"
         
         # 4D
-        hv_4d = compute_hypervolume([[1, 2, 3, 4]], [5, 6, 7, 8])
+        hv_4d = compute_hypervolume([[1, 2, 3, 4]], [[0, 5], [0, 6], [0, 7], [0, 8]], [5, 6, 7, 8])
         assert hv_4d == 256, f"4D single point: expected 256, got {hv_4d}"
     
     def test_identical_points(self):
         """Test hypervolume with identical points (should handle duplicates)."""
         points = [[2, 2], [2, 2], [2, 2]]
         reference = [3, 3]
-        hv = compute_hypervolume(points, reference)
+        hv = compute_hypervolume(points, [[0, 1000], [0, 1000]], reference)
         assert hv == 1, f"Expected hypervolume 1 for identical points, got {hv}"
     
     def test_points_on_reference(self):
         """Test hypervolume when points are on the reference boundary."""
         points = [[3, 3], [2, 3], [3, 2]]
         reference = [3, 3]
-        hv = compute_hypervolume(points, reference)
+        hv = compute_hypervolume(points, [[0, 1000], [0, 1000]], reference)
         assert hv == 0, f"Expected hypervolume 0 for points on reference, got {hv}"
     
     def test_points_outside_reference(self):
         """Test hypervolume when points are outside reference bounds."""
         points = [[4, 4], [5, 5]]
         reference = [3, 3]
-        hv = compute_hypervolume(points, reference)
+        hv = compute_hypervolume(points, [[0, 1000], [0, 1000]], reference)
         assert hv == 0, f"Expected hypervolume 0 for points outside reference, got {hv}"
     
     def test_dominated_points(self):
@@ -101,9 +103,10 @@ class TestHypervolumeCore:
         points_with_dominated = [[1, 2], [2, 1], [3, 3]]
         points_pareto_only = [[1, 2], [2, 1]]
         reference = [4, 4]
+        bounds = [[0, 4], [0, 4]]
         
-        hv_with_dominated = compute_hypervolume(points_with_dominated, reference)
-        hv_pareto_only = compute_hypervolume(points_pareto_only, reference)
+        hv_with_dominated = compute_hypervolume(points_with_dominated, bounds, reference)
+        hv_pareto_only = compute_hypervolume(points_pareto_only, bounds, reference)
         
         assert hv_with_dominated == hv_pareto_only, \
             f"Dominated points should not affect hypervolume: {hv_with_dominated} != {hv_pareto_only}"
@@ -116,7 +119,7 @@ class TestHypervolumeDimensionality:
         """Test 2D hypervolume with multiple non-dominated points."""
         points = [[1, 4], [2, 3], [3, 2], [4, 1]]
         reference = [5, 5]
-        hv = compute_hypervolume(points, reference)
+        hv = compute_hypervolume(points, [[0, 1000], [0, 1000]], reference)
         assert hv > 0, f"2D multiple points should have positive hypervolume, got {hv}"
     
     def test_3d_multiple_points(self):
@@ -128,7 +131,7 @@ class TestHypervolumeDimensionality:
             [2, 2, 2]
         ]
         reference = [4, 4, 4]
-        hv = compute_hypervolume(points, reference)
+        hv = compute_hypervolume(points, [[0, 4], [0, 4], [0, 4]], reference)
         assert hv > 0, f"3D multiple points should have positive hypervolume, got {hv}"
     
     def test_4d_multiple_points(self):
@@ -139,18 +142,18 @@ class TestHypervolumeDimensionality:
             [1, 1, 2, 3],
         ]
         reference = [5, 5, 5, 5]
-        hv = compute_hypervolume(points, reference)
+        hv = compute_hypervolume(points, [[0, 5], [0, 5], [0, 5], [0, 5]], reference)
         assert hv > 0, f"4D multiple points should have positive hypervolume, got {hv}"
     
     def test_dimension_consistency(self):
         """Test that point and reference dimensions must match."""
         with pytest.raises(Exception):
             # Mismatched dimensions should raise an error
-            compute_hypervolume([[1, 2]], [3, 4, 5])
+            compute_hypervolume([[1, 2]], [[0, 4], [0, 5], [0, 6]], [3, 4, 5])
         
         with pytest.raises(Exception):
             # Inconsistent point dimensions should raise an error
-            compute_hypervolume([[1, 2], [3, 4, 5]], [6, 7, 8])
+            compute_hypervolume([[1, 2], [3, 4, 5]], [[0, 7], [0, 8], [0, 9]], [6, 7, 8])
 
 
 class TestHypervolumeSolutions:
@@ -178,12 +181,13 @@ class TestHypervolumeSolutions:
         ]
         
         reference = [200, 300]
-        hv = compute_hypervolume(solutions, reference)
+        bounds = [[0, 200], [0, 300]]
+        hv = compute_hypervolume(solutions, bounds, reference)
         assert hv > 0, f"Solution 2D hypervolume should be positive, got {hv}"
         
         # Verify consistency with raw points
         points = [[s.cost, s.cloudy_area] for s in solutions]
-        hv_raw = compute_hypervolume(points, reference)
+        hv_raw = compute_hypervolume(points, bounds, reference)
         assert hv == hv_raw, f"Solution and raw point hypervolumes should match: {hv} != {hv_raw}"
     
     def test_solution_3d_hypervolume(self):
@@ -195,7 +199,8 @@ class TestHypervolumeSolutions:
         ]
         
         reference = [200, 300, 40]
-        hv = compute_hypervolume(solutions, reference)
+        bounds = [[0, 200], [0, 300], [0, 40]]
+        hv = compute_hypervolume(solutions, bounds, reference)
         assert hv > 0, f"Solution 3D hypervolume should be positive, got {hv}"
     
     def test_solution_4d_hypervolume(self):
@@ -207,14 +212,16 @@ class TestHypervolumeSolutions:
         ]
         
         reference = [200, 300, 40, 250]
-        hv = compute_hypervolume(solutions, reference)
+        bounds = [[0, 200], [0, 300], [0, 40], [0, 250]]
+        hv = compute_hypervolume(solutions, bounds, reference)
         assert hv > 0, f"Solution 4D hypervolume should be positive, got {hv}"
     
     def test_solution_empty_list(self):
         """Test hypervolume with empty solution list."""
         solutions = []
         reference = [200, 300]
-        hv = compute_hypervolume(solutions, reference)
+        bounds = [[0, 200], [0, 300]]
+        hv = compute_hypervolume(solutions, bounds, reference)
         assert hv == 0, f"Empty solution list should have hypervolume 0, got {hv}"
     
     def test_solution_single(self):
@@ -222,7 +229,8 @@ class TestHypervolumeSolutions:
         solution = self.create_test_solution(100, 200)
         solutions = [solution]
         reference = [200, 300]
-        hv = compute_hypervolume(solutions, reference)
+        bounds = [[0, 200], [0, 300]]
+        hv = compute_hypervolume(solutions, bounds, reference)
         assert hv == 10000, f"Single solution hypervolume should be 10000, got {hv}"
 
 
@@ -247,7 +255,7 @@ class TestHypervolumeCrossValidation:
         points = [[1, 2], [2, 1], [1, 1]]
         reference = [3, 3]
         
-        our_hv = compute_hypervolume(points, reference)
+        our_hv = compute_hypervolume(points, [[0, 1000], [0, 1000]], reference)
         pymoo_hv = self.compute_pymoo_hypervolume(points, reference)
         
         assert abs(our_hv - pymoo_hv) < 1e-10, \
@@ -258,7 +266,7 @@ class TestHypervolumeCrossValidation:
         points = [[1, 2, 3], [2, 1, 3], [1, 1, 2]]
         reference = [4, 4, 4]
         
-        our_hv = compute_hypervolume(points, reference)
+        our_hv = compute_hypervolume(points, [[0, 4], [0, 4], [0, 4]], reference)
         pymoo_hv = self.compute_pymoo_hypervolume(points, reference)
         
         assert abs(our_hv - pymoo_hv) < 1e-10, \
@@ -269,7 +277,7 @@ class TestHypervolumeCrossValidation:
         points = [[1, 2, 3, 4], [2, 1, 3, 4], [1, 1, 2, 3]]
         reference = [5, 5, 5, 5]
         
-        our_hv = compute_hypervolume(points, reference)
+        our_hv = compute_hypervolume(points, [[0, 5], [0, 5], [0, 5], [0, 5]], reference)
         pymoo_hv = self.compute_pymoo_hypervolume(points, reference)
         
         assert abs(our_hv - pymoo_hv) < 1e-10, \
@@ -282,12 +290,12 @@ class TestHypervolumeEdgeCases:
     def test_invalid_dimensions(self):
         """Test error handling for invalid dimensions."""
         # Empty points should return 0, not raise an error
-        hv = compute_hypervolume([], [1, 2])
+        hv = compute_hypervolume([], [[0, 2], [0, 3]], [1, 2])
         assert hv == 0, f"Empty points should give hypervolume 0, got {hv}"
         
         # Mismatched dimensions should raise an error
         with pytest.raises(Exception):
-            compute_hypervolume([[1, 2]], [3, 4, 5])
+            compute_hypervolume([[1, 2]], [[0, 4], [0, 5], [0, 6]], [3, 4, 5])
     
     def test_unsupported_dimensions(self):
         """Test error handling for unsupported dimensions (>4D)."""
@@ -295,7 +303,7 @@ class TestHypervolumeEdgeCases:
         reference = [6, 7, 8, 9, 10]
         
         with pytest.raises(Exception):
-            compute_hypervolume(points, reference)
+            compute_hypervolume(points, [[0, 10], [0, 10], [0, 10], [0, 10], [0, 10]], reference)
     
     def test_1d_dimension(self):
         """Test error handling for 1D (unsupported)."""
@@ -303,7 +311,7 @@ class TestHypervolumeEdgeCases:
         reference = [4]
         
         with pytest.raises(Exception):
-            compute_hypervolume(points, reference)
+            compute_hypervolume(points, [[0, 1000], [0, 1000]], reference)
     
     def test_negative_coordinates(self):
         """Test handling of negative coordinates."""
@@ -313,20 +321,20 @@ class TestHypervolumeEdgeCases:
         reference = [0, 0]
         
         with pytest.raises(TypeError):
-            compute_hypervolume(points, reference)
+            compute_hypervolume(points, [[0, 1000], [0, 1000]], reference)
     
     def test_large_coordinates(self):
         """Test handling of large coordinate values."""
         points = [[1000000, 2000000], [2000000, 1000000]]
         reference = [3000000, 3000000]
-        hv = compute_hypervolume(points, reference)
+        hv = compute_hypervolume(points, [[0, 1000], [0, 1000]], reference)
         assert hv > 0, f"Large coordinates should work, got hypervolume {hv}"
     
     def test_reference_point_validation(self):
         """Test that reference point must dominate all points."""
         points = [[1, 2], [2, 1]]
         reference = [1, 1]  # Reference doesn't dominate points
-        hv = compute_hypervolume(points, reference)
+        hv = compute_hypervolume(points, [[0, 1000], [0, 1000]], reference)
         assert hv == 0, f"Reference that doesn't dominate should give 0 hypervolume, got {hv}"
 
 
@@ -359,7 +367,7 @@ class TestHypervolumePerformance:
             points, reference = self.generate_random_front(n_points, dimensions)
             
             start_time = time.time()
-            hv = compute_hypervolume(points, reference)
+            hv = compute_hypervolume(points, [[0, 1000], [0, 1000]], reference)
             end_time = time.time()
             
             times.append(end_time - start_time)
@@ -378,7 +386,7 @@ class TestHypervolumePerformance:
             points, reference = self.generate_random_front(n_points, dimensions)
             
             start_time = time.time()
-            hv = compute_hypervolume(points, reference)
+            hv = compute_hypervolume(points, [[0, 1000], [0, 1000], [0, 1000]], reference)
             end_time = time.time()
             
             times.append(end_time - start_time)
@@ -397,7 +405,7 @@ class TestHypervolumePerformance:
             points, reference = self.generate_random_front(n_points, dimensions)
             
             start_time = time.time()
-            hv = compute_hypervolume(points, reference)
+            hv = compute_hypervolume(points, [[0, 1000], [0, 1000], [0, 1000], [0, 1000]], reference)
             end_time = time.time()
             
             times.append(end_time - start_time)
@@ -425,7 +433,7 @@ class TestHypervolumePerformance:
         reference = [1000, 300, 100, 300]
         
         start_time = time.time()
-        hv = compute_hypervolume(solutions, reference)
+        hv = compute_hypervolume(solutions, [[0, 1000], [0, 300], [0, 100], [0, 300]], reference)
         end_time = time.time()
         
         computation_time = end_time - start_time
@@ -482,17 +490,17 @@ class TestHypervolumeIntegration:
         
         # Test 2D hypervolume (cost vs cloudy_area trade-off)
         reference_2d = [100, 400]  # Reference point for cost and cloudy area
-        hv_2d = compute_hypervolume(solutions, reference_2d)
+        hv_2d = compute_hypervolume(solutions, [[0, 100], [0, 400]], reference_2d)
         assert hv_2d > 0, f"Problem-based 2D hypervolume should be positive, got {hv_2d}"
         
         # Test 3D hypervolume 
         reference_3d = [100, 400, 70]
-        hv_3d = compute_hypervolume(solutions, reference_3d)
+        hv_3d = compute_hypervolume(solutions, [[0, 100], [0, 400], [0, 70]], reference_3d)
         assert hv_3d > 0, f"Problem-based 3D hypervolume should be positive, got {hv_3d}"
         
         # Test 4D hypervolume
         reference_4d = [100, 400, 70, 500]
-        hv_4d = compute_hypervolume(solutions, reference_4d)
+        hv_4d = compute_hypervolume(solutions, [[0, 100], [0, 400], [0, 70], [0, 500]], reference_4d)
         assert hv_4d > 0, f"Problem-based 4D hypervolume should be positive, got {hv_4d}"
     
     def test_hypervolume_comparison(self):
@@ -520,14 +528,14 @@ class TestHypervolumeIntegration:
         reference = [100, 500]
         
         # Single better solution should have higher HV than single worse solution
-        hv_better = compute_hypervolume([better_solution], reference)
-        hv_worse = compute_hypervolume([worse_solution], reference)
+        hv_better = compute_hypervolume([better_solution], [[0, 100], [0, 500]], reference)
+        hv_worse = compute_hypervolume([worse_solution], [[0, 100], [0, 500]], reference)
         
         assert hv_better > hv_worse, \
             f"Better solution should have higher hypervolume: {hv_better} <= {hv_worse}"
         
         # Combined front should have higher HV than either individual solution
-        hv_combined = compute_hypervolume([better_solution, worse_solution], reference)
+        hv_combined = compute_hypervolume([better_solution, worse_solution], [[0, 100], [0, 500]], reference)
         assert hv_combined >= hv_better, \
             f"Combined front should have at least as high HV as better solution: {hv_combined} < {hv_better}"
 
