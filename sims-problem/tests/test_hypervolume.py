@@ -15,8 +15,7 @@ import numpy as np
 from typing import List, Tuple
 import time
 from sims_problem import (
-    compute_hypervolume, 
-    compute_hypervolume_solutions, 
+    compute_hypervolume,
     Solution,
     SimsDiscreteProblem
 )
@@ -179,7 +178,7 @@ class TestHypervolumeSolutions:
         ]
         
         reference = [200, 300]
-        hv = compute_hypervolume_solutions(solutions, reference)
+        hv = compute_hypervolume(solutions, reference)
         assert hv > 0, f"Solution 2D hypervolume should be positive, got {hv}"
         
         # Verify consistency with raw points
@@ -196,7 +195,7 @@ class TestHypervolumeSolutions:
         ]
         
         reference = [200, 300, 40]
-        hv = compute_hypervolume_solutions(solutions, reference)
+        hv = compute_hypervolume(solutions, reference)
         assert hv > 0, f"Solution 3D hypervolume should be positive, got {hv}"
     
     def test_solution_4d_hypervolume(self):
@@ -208,14 +207,14 @@ class TestHypervolumeSolutions:
         ]
         
         reference = [200, 300, 40, 250]
-        hv = compute_hypervolume_solutions(solutions, reference)
+        hv = compute_hypervolume(solutions, reference)
         assert hv > 0, f"Solution 4D hypervolume should be positive, got {hv}"
     
     def test_solution_empty_list(self):
         """Test hypervolume with empty solution list."""
         solutions = []
         reference = [200, 300]
-        hv = compute_hypervolume_solutions(solutions, reference)
+        hv = compute_hypervolume(solutions, reference)
         assert hv == 0, f"Empty solution list should have hypervolume 0, got {hv}"
     
     def test_solution_single(self):
@@ -223,7 +222,7 @@ class TestHypervolumeSolutions:
         solution = self.create_test_solution(100, 200)
         solutions = [solution]
         reference = [200, 300]
-        hv = compute_hypervolume_solutions(solutions, reference)
+        hv = compute_hypervolume(solutions, reference)
         assert hv == 10000, f"Single solution hypervolume should be 10000, got {hv}"
 
 
@@ -313,7 +312,7 @@ class TestHypervolumeEdgeCases:
         points = [[-1, -2], [-2, -1]]
         reference = [0, 0]
         
-        with pytest.raises(OverflowError):
+        with pytest.raises(TypeError):
             compute_hypervolume(points, reference)
     
     def test_large_coordinates(self):
@@ -426,7 +425,7 @@ class TestHypervolumePerformance:
         reference = [1000, 300, 100, 300]
         
         start_time = time.time()
-        hv = compute_hypervolume_solutions(solutions, reference)
+        hv = compute_hypervolume(solutions, reference)
         end_time = time.time()
         
         computation_time = end_time - start_time
@@ -483,17 +482,17 @@ class TestHypervolumeIntegration:
         
         # Test 2D hypervolume (cost vs cloudy_area trade-off)
         reference_2d = [100, 400]  # Reference point for cost and cloudy area
-        hv_2d = compute_hypervolume_solutions(solutions, reference_2d)
+        hv_2d = compute_hypervolume(solutions, reference_2d)
         assert hv_2d > 0, f"Problem-based 2D hypervolume should be positive, got {hv_2d}"
         
         # Test 3D hypervolume 
         reference_3d = [100, 400, 70]
-        hv_3d = compute_hypervolume_solutions(solutions, reference_3d)
+        hv_3d = compute_hypervolume(solutions, reference_3d)
         assert hv_3d > 0, f"Problem-based 3D hypervolume should be positive, got {hv_3d}"
         
         # Test 4D hypervolume
         reference_4d = [100, 400, 70, 500]
-        hv_4d = compute_hypervolume_solutions(solutions, reference_4d)
+        hv_4d = compute_hypervolume(solutions, reference_4d)
         assert hv_4d > 0, f"Problem-based 4D hypervolume should be positive, got {hv_4d}"
     
     def test_hypervolume_comparison(self):
@@ -521,14 +520,14 @@ class TestHypervolumeIntegration:
         reference = [100, 500]
         
         # Single better solution should have higher HV than single worse solution
-        hv_better = compute_hypervolume_solutions([better_solution], reference)
-        hv_worse = compute_hypervolume_solutions([worse_solution], reference)
+        hv_better = compute_hypervolume([better_solution], reference)
+        hv_worse = compute_hypervolume([worse_solution], reference)
         
         assert hv_better > hv_worse, \
             f"Better solution should have higher hypervolume: {hv_better} <= {hv_worse}"
         
         # Combined front should have higher HV than either individual solution
-        hv_combined = compute_hypervolume_solutions([better_solution, worse_solution], reference)
+        hv_combined = compute_hypervolume([better_solution, worse_solution], reference)
         assert hv_combined >= hv_better, \
             f"Combined front should have at least as high HV as better solution: {hv_combined} < {hv_better}"
 
