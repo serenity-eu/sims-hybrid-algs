@@ -1,7 +1,10 @@
 """
 Integration tests for hypervolume functionality with real SIMS problem scenarios.
 
-This module demonstrates how to use hypervolume computation in practical
+This module demonstrates how to use hypervolume computation in        # Test 4D hypervolume (all objectives)
+        reference_4d = [600, 400, 50, 500]
+        bounds_4d = [[0, 600], [0, 400], [0, 50], [0, 500]]
+        hv_4d = compute_hypervolume(solutions, bounds_4d, reference_4d)actical
 multi-objective optimization scenarios for the SIMS problem.
 """
 
@@ -128,7 +131,8 @@ class TestHypervolumeIntegrationAdvanced:
         
         # Test 2D hypervolume (cost vs cloudy_area)
         reference_2d = [600, 400]
-        hv_2d = compute_hypervolume(solutions, reference_2d)
+        bounds_2d = [[0, 600], [0, 400]]
+        hv_2d = compute_hypervolume(solutions, bounds_2d, reference_2d)
         assert hv_2d > 0, f"2D hypervolume should be positive, got {hv_2d}"
         
         # Cross-validate with pymoo for 2D
@@ -137,7 +141,8 @@ class TestHypervolumeIntegrationAdvanced:
         
         # Test 3D hypervolume (cost, cloudy_area, max_incidence_angle)
         reference_3d = [600, 400, 50]
-        hv_3d = compute_hypervolume(solutions, reference_3d)
+        bounds_3d = [[0, 600], [0, 400], [0, 50]]
+        hv_3d = compute_hypervolume(solutions, bounds_3d, reference_3d)
         assert hv_3d > 0, f"3D hypervolume should be positive, got {hv_3d}"
         assert hv_3d <= hv_2d * 50, f"3D HV should be reasonable extension of 2D: {hv_3d} vs {hv_2d}"
         
@@ -147,7 +152,8 @@ class TestHypervolumeIntegrationAdvanced:
         
         # Test 4D hypervolume (all objectives)
         reference_4d = [600, 400, 50, 700]
-        hv_4d = compute_hypervolume(solutions, reference_4d)
+        bounds_4d = [[0, 600], [0, 400], [0, 50], [0, 700]]
+        hv_4d = compute_hypervolume(solutions, bounds_4d, reference_4d)
         assert hv_4d > 0, f"4D hypervolume should be positive, got {hv_4d}"
         assert hv_4d <= hv_3d * 700, f"4D HV should be reasonable extension of 3D: {hv_4d} vs {hv_3d}"
         
@@ -177,23 +183,24 @@ class TestHypervolumeIntegrationAdvanced:
         )
         
         reference = [1200, 400, 50, 1500]
+        bounds = [[0, 1200], [0, 400], [0, 50], [0, 1500]]
         
         # Single dominated solution
-        hv_dominated = compute_hypervolume([dominated_solution], reference)
+        hv_dominated = compute_hypervolume([dominated_solution], bounds, reference)
         # Cross-validate dominated solution
         points_dominated = [[dominated_solution.cost, dominated_solution.cloudy_area, 
                            dominated_solution.max_incidence_angle, dominated_solution.min_resolutions_sum]]
         assert_hypervolume_matches_pymoo(points_dominated, reference, hv_dominated)
         
         # Single efficient solution  
-        hv_efficient = compute_hypervolume([efficient_solution], reference)
+        hv_efficient = compute_hypervolume([efficient_solution], bounds, reference)
         # Cross-validate efficient solution
         points_efficient = [[efficient_solution.cost, efficient_solution.cloudy_area,
                            efficient_solution.max_incidence_angle, efficient_solution.min_resolutions_sum]]
         assert_hypervolume_matches_pymoo(points_efficient, reference, hv_efficient)
         
         # Combined solutions
-        hv_combined = compute_hypervolume([dominated_solution, efficient_solution], reference)
+        hv_combined = compute_hypervolume([dominated_solution, efficient_solution], bounds, reference)
         # Cross-validate combined solutions
         points_combined = [points_dominated[0], points_efficient[0]]
         assert_hypervolume_matches_pymoo(points_combined, reference, hv_combined)
@@ -266,10 +273,11 @@ class TestHypervolumeIntegrationAdvanced:
         ]
         
         reference = [250, 200]
+        bounds = [[0, 250], [0, 200]]
         hypervolumes = []
         
         for i, solutions in enumerate(iteration_solutions):
-            hv = compute_hypervolume(solutions, reference)
+            hv = compute_hypervolume(solutions, bounds, reference)
             hypervolumes.append(hv)
             print(f"Iteration {i+1}: HV = {hv}, {len(solutions)} solutions")
             
@@ -298,9 +306,9 @@ class TestHypervolumeIntegrationAdvanced:
         )
         
         # Test same solution in different dimensional spaces
-        hv_2d = compute_hypervolume([solution], [300, 250])
-        hv_3d = compute_hypervolume([solution], [300, 250, 40])  
-        hv_4d = compute_hypervolume([solution], [300, 250, 40, 400])
+        hv_2d = compute_hypervolume([solution], [[0, 300], [0, 250]], [300, 250])
+        hv_3d = compute_hypervolume([solution], [[0, 300], [0, 250], [0, 40]], [300, 250, 40])  
+        hv_4d = compute_hypervolume([solution], [[0, 300], [0, 250], [0, 40], [0, 400]], [300, 250, 40, 400])
         
         # Cross-validate each dimension with pymoo
         point_2d = [[solution.cost, solution.cloudy_area]]
@@ -356,19 +364,20 @@ class TestHypervolumeUtilityFunctions:
         )
         
         reference = [200, 200, 40, 300]
+        bounds = [[0, 200], [0, 200], [0, 40], [0, 300]]
         
         # Calculate hypervolume with all solutions
         all_solutions = [solution1, solution2, solution3]
-        hv_all = compute_hypervolume(all_solutions, reference)
+        hv_all = compute_hypervolume(all_solutions, bounds, reference)
         
         # Cross-validate the full solution set
         points_all = [[s.cost, s.cloudy_area, s.max_incidence_angle, s.min_resolutions_sum] for s in all_solutions]
         assert_hypervolume_matches_pymoo(points_all, reference, hv_all)
         
         # Calculate hypervolume without each solution (to find contribution)
-        hv_without_1 = compute_hypervolume([solution2, solution3], reference)
-        hv_without_2 = compute_hypervolume([solution1, solution3], reference)
-        hv_without_3 = compute_hypervolume([solution1, solution2], reference)
+        hv_without_1 = compute_hypervolume([solution2, solution3], bounds, reference)
+        hv_without_2 = compute_hypervolume([solution1, solution3], bounds, reference)
+        hv_without_3 = compute_hypervolume([solution1, solution2], bounds, reference)
         
         # Cross-validate the subset computations
         points_without_1 = [points_all[1], points_all[2]]
@@ -418,7 +427,8 @@ class TestHypervolumeUtilityFunctions:
         point_2d = [[solution.cost, solution.cloudy_area]]
         
         for ref in ref_points:
-            hv = compute_hypervolume([solution], ref)
+            bounds = [[0, ref[0]], [0, ref[1]]]
+            hv = compute_hypervolume([solution], bounds, ref)
             hypervolumes.append(hv)
             print(f"Reference {ref}: HV = {hv}")
             
@@ -442,22 +452,23 @@ class TestHypervolumeUtilityFunctions:
         )
         
         reference = [200, 200, 40, 300]
+        bounds = [[0, 200], [0, 200], [0, 40], [0, 300]]
         
         # Empty solution set
-        hv_empty = compute_hypervolume([], reference)
+        hv_empty = compute_hypervolume([], bounds, reference)
         assert hv_empty == 0, f"Empty set should have HV = 0, got {hv_empty}"
         # Cross-validate empty case
         assert_hypervolume_matches_pymoo([], reference, hv_empty)
         
         # Single solution
-        hv_single = compute_hypervolume([solution], reference)
+        hv_single = compute_hypervolume([solution], bounds, reference)
         assert hv_single > 0, f"Single solution should have positive HV, got {hv_single}"
         # Cross-validate single solution
         point_4d = [[solution.cost, solution.cloudy_area, solution.max_incidence_angle, solution.min_resolutions_sum]]
         assert_hypervolume_matches_pymoo(point_4d, reference, hv_single)
         
         # Two identical solutions (should be same as single)
-        hv_duplicate = compute_hypervolume([solution, solution], reference)
+        hv_duplicate = compute_hypervolume([solution, solution], bounds, reference)
         assert hv_duplicate == hv_single, \
             f"Duplicate solutions should have same HV as single: {hv_duplicate} != {hv_single}"
         # Cross-validate duplicate case
