@@ -1527,6 +1527,7 @@ name = "sims-problem"
 source = { editable = "." }
 dependencies = [
     { name = "plotly" },
+    { name = "pymoo" },
     { name = "rich" },
     { name = "sims-solvers" },
 ]
@@ -1547,6 +1548,7 @@ test = [
 dev = [
     { name = "maturin" },
     { name = "patchelf" },
+    { name = "pymoo" },
     { name = "pytest" },
     { name = "pytest-cov" },
 ]
@@ -1555,6 +1557,7 @@ dev = [
 requires-dist = [
     { name = "black", marker = "extra == 'dev'" },
     { name = "plotly", specifier = ">=6.2.0" },
+    { name = "pymoo", specifier = ">=0.6.1.5" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4.1" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.4.1" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6.2.1" },
@@ -1569,6 +1572,7 @@ provides-extras = ["test", "dev"]
 dev = [
     { name = "maturin", specifier = ">=1.9.3" },
     { name = "patchelf", specifier = ">=0.17.2.4" },
+    { name = "pymoo", specifier = ">=0.6.1.5" },
     { name = "pytest", specifier = ">=8.4.1" },
     { name = "pytest-cov", specifier = ">=6.2.1" },
 ]

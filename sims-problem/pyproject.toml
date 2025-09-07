@@ -13,6 +13,7 @@ classifiers = [
 dynamic = ["version"]
 dependencies = [
     "plotly>=6.2.0",
+    "pymoo>=0.6.1.5",
     "rich>=14.1.0",
     "sims-solvers",
 ]
@@ -85,6 +86,7 @@ exclude_lines = [
 dev = [
     "maturin>=1.9.3",
     "patchelf>=0.17.2.4",
+    "pymoo>=0.6.1.5",
     "pytest>=8.4.1",
     "pytest-cov>=6.2.1",
 ]
