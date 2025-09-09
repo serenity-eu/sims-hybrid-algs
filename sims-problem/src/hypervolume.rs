@@ -196,138 +196,32 @@ fn hypervolume_2d_brute_force(points: &[Objectives<2>], reference: Objectives<2>
     total
 }
 
-/// 2D HV: union area = sum over strips
-fn hypervolume_2d_min_u64(points: &mut [Objectives<2>], reference: Objectives<2>) -> u128 {
-    if points.is_empty() {
-        return 0;
-    }
-
-    // Sort by y-coordinate (second dimension)
-    points.sort_by_key(|p| p[1]);
-
-    let mut total: u128 = 0;
-    let mut prev_y = reference[1];
-
-    for i in (0..points.len()).rev() {
-        let curr_y = points[i][1];
-        
-        if curr_y < prev_y {
-            // Find minimum x-coordinate among points[0..=i]
-            let min_x = points[..=i].iter().map(|p| p[0]).min().unwrap();
-            
-            if min_x < reference[0] {
-                let width_y = diff_to_u128(prev_y, curr_y);
-                let width_x = diff_to_u128(reference[0], min_x);
-                total += width_y * width_x;
-            }
-            
-            prev_y = curr_y;
-        }
-    }
-
-    total
-}
-
-/// 3D HV: union volume = sum over "slabs" (u64 version)
-fn hypervolume_3d_min_u64(points: &mut [Objectives<3>], reference: Objectives<3>) -> u128 {
-    if points.is_empty() {
-        return 0;
-    }
-
-    // Sort by z-coordinate (third dimension)
-    points.sort_by_key(|p| p[2]);
-
-    let mut total: u128 = 0;
-    let mut prev = reference[2];
-    let mut i = points.len();
-
-    while i > 0 {
-        i -= 1;
-        let bound = points[i][2];
-        
-        if bound < prev {
-            let width = diff_to_u128(prev, bound);
-            
-            // Extract 2D points from slice [0..=i]
-            let mut points_2d: Vec<Objectives<2>> = points[..=i].iter()
-                .map(|p| [p[0], p[1]])
-                .collect();
-            
-            let area2d = hypervolume_2d_min_u64(&mut points_2d, [reference[0], reference[1]]);
-            total += width * area2d;
-            prev = bound;
-        }
-        
-        // Skip all points with the same z-coordinate to handle ties correctly
-        while i > 0 && points[i-1][2] == bound {
-            i -= 1;
-        }
-    }
-
-    total
-}
-
-/// 4D HV: union hypervolume = sum over "hyperslabs" (u64 version)
-fn hypervolume_4d_min_u64(points: &mut [Objectives<4>], reference: Objectives<4>) -> u128 {
-    if points.is_empty() {
-        return 0;
-    }
-
-    // Sort by w-coordinate (fourth dimension)
-    points.sort_by_key(|p| p[3]);
-
-    let mut total: u128 = 0;
-    let mut prev = reference[3];
-    let mut i = points.len();
-
-    while i > 0 {
-        i -= 1;
-        let bound = points[i][3];
-        
-        if bound < prev {
-            let width = diff_to_u128(prev, bound);
-            
-            // Extract 3D points from slice [0..=i]
-            let mut points_3d: Vec<Objectives<3>> = points[..=i].iter()
-                .map(|p| [p[0], p[1], p[2]])
-                .collect();
-            
-            let volume3d = hypervolume_3d_min_u64(&mut points_3d, [reference[0], reference[1], reference[2]]);
-            total += width * volume3d;
-            prev = bound;
-        }
-        
-        // Skip all points with the same w-coordinate to handle ties correctly
-        while i > 0 && points[i-1][3] == bound {
-            i -= 1;
-        }
-    }
-
-    total
-}
-
+/// Compute hypervolume for generic structure implementing HasObjectives
 pub fn compute<const D: usize, T: HasObjectives<D>>(pareto_front: Vec<T>, reference_point: Objectives<D>) -> u128 {
     match D {
         2 => {
-            let mut points_2d: Vec<Objectives<2>> = pareto_front.iter().map(|s| {
-            let objectives = *s.objectives();
-            [objectives[0], objectives[1]]
+            let mut points_vec: Vec<Vec<u64>> = pareto_front.iter().map(|s| {
+                let objectives = *s.objectives();
+                vec![objectives[0], objectives[1]]
             }).collect();
-            hypervolume_2d_min_u64(&mut points_2d, [reference_point[0], reference_point[1]])
+            let reference_vec = vec![reference_point[0], reference_point[1]];
+            hypervolume_2d_min_generic(&mut points_vec, &reference_vec) as u128
         }
         3 => {
-            let mut points_3d: Vec<Objectives<3>> = pareto_front.iter().map(|s| {
-            let objectives = *s.objectives();
-            [objectives[0], objectives[1], objectives[2]]
+            let mut points_vec: Vec<Vec<u64>> = pareto_front.iter().map(|s| {
+                let objectives = *s.objectives();
+                vec![objectives[0], objectives[1], objectives[2]]
             }).collect();
-            hypervolume_3d_min_u64(&mut points_3d, [reference_point[0], reference_point[1], reference_point[2]])
+            let reference_vec = vec![reference_point[0], reference_point[1], reference_point[2]];
+            hypervolume_3d_min_generic(&mut points_vec, &reference_vec) as u128
         }
         4 => {
-            let mut points_4d: Vec<Objectives<4>> = pareto_front.iter().map(|s| {
-            let objectives = *s.objectives();
-            [objectives[0], objectives[1], objectives[2], objectives[3]]
+            let mut points_vec: Vec<Vec<u64>> = pareto_front.iter().map(|s| {
+                let objectives = *s.objectives();
+                vec![objectives[0], objectives[1], objectives[2], objectives[3]]
             }).collect();
-            hypervolume_4d_min_u64(&mut points_4d, [reference_point[0], reference_point[1], reference_point[2], reference_point[3]])
+            let reference_vec = vec![reference_point[0], reference_point[1], reference_point[2], reference_point[3]];
+            hypervolume_4d_min_generic(&mut points_vec, &reference_vec) as u128
         }
         _ => 0
     }
@@ -446,22 +340,22 @@ pub fn compute_hypervolume(
             }
         }
     } else {
-        // Use original u64 implementation
-        let result_u128 = match dimension {
+        // Use generic u64 implementation
+        let result = match dimension {
             2 => {
-                let reference: Objectives<2> = [reference_point[0], reference_point[1]];
-                let mut objectives: Vec<Objectives<2>> = points.iter().map(|p| [p[0], p[1]]).collect();
-                hypervolume_2d_min_u64(&mut objectives, reference)
+                let mut points_vec: Vec<Vec<u64>> = points.iter().map(|p| vec![p[0], p[1]]).collect();
+                let reference_vec = vec![reference_point[0], reference_point[1]];
+                hypervolume_2d_min_generic(&mut points_vec, &reference_vec)
             }
             3 => {
-                let reference: Objectives<3> = [reference_point[0], reference_point[1], reference_point[2]];
-                let mut objectives: Vec<Objectives<3>> = points.iter().map(|p| [p[0], p[1], p[2]]).collect();
-                hypervolume_3d_min_u64(&mut objectives, reference)
+                let mut points_vec: Vec<Vec<u64>> = points.iter().map(|p| vec![p[0], p[1], p[2]]).collect();
+                let reference_vec = vec![reference_point[0], reference_point[1], reference_point[2]];
+                hypervolume_3d_min_generic(&mut points_vec, &reference_vec)
             }
             4 => {
-                let reference: Objectives<4> = [reference_point[0], reference_point[1], reference_point[2], reference_point[3]];
-                let mut objectives: Vec<Objectives<4>> = points.iter().map(|p| [p[0], p[1], p[2], p[3]]).collect();
-                hypervolume_4d_min_u64(&mut objectives, reference)
+                let mut points_vec: Vec<Vec<u64>> = points.iter().map(|p| vec![p[0], p[1], p[2], p[3]]).collect();
+                let reference_vec = vec![reference_point[0], reference_point[1], reference_point[2], reference_point[3]];
+                hypervolume_4d_min_generic(&mut points_vec, &reference_vec)
             }
             _ => {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -470,19 +364,10 @@ pub fn compute_hypervolume(
                 )));
             }
         };
-        result_u128 as f64
+        result as f64
     };
 
     Ok(result)
-}
-
-#[inline(always)]
-fn diff_to_u128(a: u64, b: u64) -> u128 {
-    if a > b {
-        (a - b) as u128
-    } else {
-        0
-    }
 }
 
 /// Validate that objective bounds have the correct format and dimensions
@@ -570,125 +455,125 @@ mod tests {
 
     #[test]
     fn hv_single_point() {
-        let mut pts = [[1, 2, 3, 4]];
-        let r = [5, 6, 7, 8];
-        assert_eq!(hypervolume_4d_min_u64(&mut pts, r), 256);
+        let mut pts = vec![vec![1, 2, 3, 4]];
+        let r = vec![5, 6, 7, 8];
+        assert_eq!(hypervolume_4d_min_generic::<u64>(&mut pts, &r) as u128, 256);
     }
 
     #[test]
     fn hv_two_points_cross() {
-        let mut pts = [[1, 4, 2, 2], [4, 1, 2, 2]];
-        let r = [5, 5, 3, 3];
-        assert_eq!(hypervolume_4d_min_u64(&mut pts, r), 7);
+        let mut pts = vec![vec![1, 4, 2, 2], vec![4, 1, 2, 2]];
+        let r = vec![5, 5, 3, 3];
+        assert_eq!(hypervolume_4d_min_generic::<u64>(&mut pts, &r) as u128, 7);
     }
     #[test]
     fn hv_empty_front() {
-        let mut pts: [[u64; 4]; 0] = [];
-        let r = [5, 6, 7, 8];
-        assert_eq!(hypervolume_4d_min_u64(&mut pts, r), 0);
+        let mut pts: Vec<Vec<u64>> = vec![];
+        let r = vec![5, 6, 7, 8];
+        assert_eq!(hypervolume_4d_min_generic::<u64>(&mut pts, &r) as u128, 0);
     }
 
     #[test]
     fn hv_identical_points() {
-        let mut pts = [[2, 2, 2, 2], [2, 2, 2, 2]];
-        let r = [5, 5, 5, 5];
-        assert_eq!(hypervolume_4d_min_u64(&mut pts, r), 81);
+        let mut pts = vec![vec![2, 2, 2, 2], vec![2, 2, 2, 2]];
+        let r = vec![5, 5, 5, 5];
+        assert_eq!(hypervolume_4d_min_generic::<u64>(&mut pts, &r) as u128, 81);
     }
 
     #[test]
     fn hv_points_on_reference() {
-        let mut pts = [[5, 6, 7, 8]];
-        let r = [5, 6, 7, 8];
-        assert_eq!(hypervolume_4d_min_u64(&mut pts, r), 0);
+        let mut pts = vec![vec![5, 6, 7, 8]];
+        let r = vec![5, 6, 7, 8];
+        assert_eq!(hypervolume_4d_min_generic::<u64>(&mut pts, &r) as u128, 0);
     }
 
     #[test]
     fn hv_points_outside_reference() {
-        let mut pts = [[6, 7, 8, 9]];
-        let r = [5, 6, 7, 8];
-        assert_eq!(hypervolume_4d_min_u64(&mut pts, r), 0);
+        let mut pts = vec![vec![6, 7, 8, 9]];
+        let r = vec![5, 6, 7, 8];
+        assert_eq!(hypervolume_4d_min_generic::<u64>(&mut pts, &r) as u128, 0);
     }
 
     #[test]
     fn hv_multiple_non_dominated_points() {
-        let mut pts = [
-            [1, 2, 3, 4],
-            [2, 1, 3, 4],
-            [1, 1, 2, 3],
-            [3, 3, 3, 3],
+        let mut pts = vec![
+            vec![1, 2, 3, 4],
+            vec![2, 1, 3, 4],
+            vec![1, 1, 2, 3],
+            vec![3, 3, 3, 3],
         ];
-        let r = [5, 5, 5, 5];
-        let hv = hypervolume_4d_min_u64(&mut pts, r);
+        let r = vec![5, 5, 5, 5];
+        let hv = hypervolume_4d_min_generic::<u64>(&mut pts, &r) as u128;
         assert!(hv > 0);
     }
 
     #[test]
     fn hv_2d_min_u64_basic() {
-        let mut pts = [[1, 2], [2, 1]];
-        let r = [3, 3];
-        assert_eq!(hypervolume_2d_min_u64(&mut pts, r), 3);
+        let mut pts = vec![vec![1, 2], vec![2, 1]];
+        let r = vec![3, 3];
+        assert_eq!(hypervolume_2d_min_generic::<u64>(&mut pts, &r) as u128, 3);
     }
 
     #[test]
     fn hv_3d_min_u64_basic() {
-        let mut pts = [[1, 2, 3], [2, 1, 3]];
-        let r = [4, 4, 4];
-        assert_eq!(hypervolume_3d_min_u64(&mut pts, r), 8);
+        let mut pts = vec![vec![1, 2, 3], vec![2, 1, 3]];
+        let r = vec![4, 4, 4];
+        assert_eq!(hypervolume_3d_min_generic::<u64>(&mut pts, &r) as u128, 8);
     }
 
     #[test]
     fn hv_2d_min_u64_empty() {
-        let mut pts: [[u64; 2]; 0] = [];
-        let r = [3, 3];
-        assert_eq!(hypervolume_2d_min_u64(&mut pts, r), 0);
+        let mut pts: Vec<Vec<u64>> = vec![];
+        let r = vec![3, 3];
+        assert_eq!(hypervolume_2d_min_generic::<u64>(&mut pts, &r) as u128, 0);
     }
 
     #[test]
     fn hv_3d_min_u64_empty() {
-        let mut pts: [[u64; 3]; 0] = [];
-        let r = [4, 4, 4];
-        assert_eq!(hypervolume_3d_min_u64(&mut pts, r), 0);
+        let mut pts: Vec<Vec<u64>> = vec![];
+        let r = vec![4, 4, 4];
+        assert_eq!(hypervolume_3d_min_generic::<u64>(&mut pts, &r) as u128, 0);
     }
 
     #[test]
     fn hv_2d_min_u64_identical_points() {
-        let mut pts = [[2, 2], [2, 2]];
-        let r = [3, 3];
-        assert_eq!(hypervolume_2d_min_u64(&mut pts, r), 1);
+        let mut pts = vec![vec![2, 2], vec![2, 2]];
+        let r = vec![3, 3];
+        assert_eq!(hypervolume_2d_min_generic::<u64>(&mut pts, &r) as u128, 1);
     }
 
     #[test]
     fn hv_3d_min_u64_identical_points() {
-        let mut pts = [[2, 2, 2], [2, 2, 2]];
-        let r = [4, 4, 4];
-        assert_eq!(hypervolume_3d_min_u64(&mut pts, r), 8);
+        let mut pts = vec![vec![2, 2, 2], vec![2, 2, 2]];
+        let r = vec![4, 4, 4];
+        assert_eq!(hypervolume_3d_min_generic::<u64>(&mut pts, &r) as u128, 8);
     }
 
     #[test]
     fn hv_2d_min_u64_points_on_reference() {
-        let mut pts = [[3, 3]];
-        let r = [3, 3];
-        assert_eq!(hypervolume_2d_min_u64(&mut pts, r), 0);
+        let mut pts = vec![vec![3, 3]];
+        let r = vec![3, 3];
+        assert_eq!(hypervolume_2d_min_generic::<u64>(&mut pts, &r) as u128, 0);
     }
 
     #[test]
     fn hv_3d_min_u64_points_on_reference() {
-        let mut pts = [[4, 4, 4]];
-        let r = [4, 4, 4];
-        assert_eq!(hypervolume_3d_min_u64(&mut pts, r), 0);
+        let mut pts = vec![vec![4, 4, 4]];
+        let r = vec![4, 4, 4];
+        assert_eq!(hypervolume_3d_min_generic::<u64>(&mut pts, &r) as u128, 0);
     }
 
     #[test]
     fn hv_2d_min_u64_points_outside_reference() {
-        let mut pts = [[4, 4]];
-        let r = [3, 3];
-        assert_eq!(hypervolume_2d_min_u64(&mut pts, r), 0);
+        let mut pts = vec![vec![4, 4]];
+        let r = vec![3, 3];
+        assert_eq!(hypervolume_2d_min_generic::<u64>(&mut pts, &r) as u128, 0);
     }
 
     #[test]
     fn hv_3d_min_u64_points_outside_reference() {
-        let mut pts = [[5, 5, 5]];
-        let r = [4, 4, 4];
-        assert_eq!(hypervolume_3d_min_u64(&mut pts, r), 0);
+        let mut pts = vec![vec![5, 5, 5]];
+        let r = vec![4, 4, 4];
+        assert_eq!(hypervolume_3d_min_generic::<u64>(&mut pts, &r) as u128, 0);
     }
 }
