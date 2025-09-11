@@ -148,54 +148,6 @@ where
     total
 }
 
-/// Brute force 2D hypervolume for debugging
-#[allow(dead_code)]
-fn hypervolume_2d_brute_force(points: &[Objectives<2>], reference: Objectives<2>) -> u128 {
-    if points.is_empty() {
-        return 0;
-    }
-    
-    let mut total = 0u128;
-    
-    // Check every integer point in the grid from (0,0) to reference
-    // Try both exclusive and inclusive bounds
-    for x in 0..reference[0] {
-        for y in 0..reference[1] {
-            // Check if this point (x,y) is dominated by any point in the set
-            let dominated = points.iter().any(|p| p[0] <= x && p[1] <= y);
-            if dominated {
-                total += 1;
-            }
-        }
-    }
-    
-    println!("Grid points dominated (exclusive bounds [0, ref)):");
-    for x in 0..reference[0] {
-        for y in 0..reference[1] {
-            let dominated = points.iter().any(|p| p[0] <= x && p[1] <= y);
-            if dominated {
-                println!("  ({}, {})", x, y);
-            }
-        }
-    }
-    
-    // Also try inclusive bounds
-    let mut total_incl = 0u128;
-    println!("Grid points dominated (inclusive bounds [0, ref]):");
-    for x in 0..=reference[0] {
-        for y in 0..=reference[1] {
-            let dominated = points.iter().any(|p| p[0] <= x && p[1] <= y);
-            if dominated {
-                println!("  ({}, {})", x, y);
-                total_incl += 1;
-            }
-        }
-    }
-    println!("Inclusive result: {}", total_incl);
-    
-    total
-}
-
 /// Compute hypervolume for generic structure implementing HasObjectives
 pub fn compute<const D: usize, T: HasObjectives<D>>(pareto_front: Vec<T>, reference_point: Objectives<D>) -> u128 {
     match D {
