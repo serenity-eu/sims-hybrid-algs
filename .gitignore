@@ -200,3 +200,4 @@ cython_debug/
 .env*
 
 *.tar.gz
+experiment*

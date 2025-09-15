@@ -71,8 +71,8 @@ def solve(
                 cost=sol.cost,
                 cloudy_area=sol.cloudy_area,
                 timestamp_us=sol.timestamp_s.microseconds,  # Convert to microseconds
-                max_incidence_angle=sol.max_incidence_angle,
-                min_resolutions_sum=sol.min_resolutions_sum
+                max_incidence_angle=sol.max_incidence_angle if sol.max_incidence_angle != -1 else None,
+                min_resolutions_sum=sol.min_resolutions_sum if sol.min_resolutions_sum != -1 else None
             ) for sol in initial_population
         ]
     else:

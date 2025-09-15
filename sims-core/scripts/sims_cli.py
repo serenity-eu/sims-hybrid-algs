@@ -127,6 +127,7 @@ def run_hybrid_experiments(
     instance_regex: Optional[str] = None,
     skip_solved: bool = False,
     results_dir: Optional[Path] = None,
+    enable_trace: bool = False,
 ) -> int:
     """
     Run hybrid experiments with the specified configuration.
@@ -142,6 +143,7 @@ def run_hybrid_experiments(
         instance_regex: Regex pattern to filter instances by name
         skip_solved: Skip already solved experiments
         results_dir: Directory to save results (if different from default)
+        enable_trace: Enable PLS trace data collection for debugging and analysis
     
     Returns:
         Exit code (0 for success, 1 for error)
@@ -258,7 +260,8 @@ def run_hybrid_experiments(
                                 experiment_path=ratio_dir,
                                 solver_config=two_phase_config,
                                 objectives=["min_cost", "cloud_coverage", "min_max_incidence_angle"],
-                                dry_run=dry_run
+                                dry_run=dry_run,
+                                enable_pls_trace=enable_trace
                             )
 
                             if two_phase_result.pls_result is not None:
@@ -644,6 +647,12 @@ def main():
         help='Save logs to specified file (in addition to console output)'
     )
     
+    hybrid_parser.add_argument(
+        '--enable-trace',
+        action='store_true',
+        help='Enable PLS trace data collection for debugging and analysis'
+    )
+    
     # MILP-only experiment command
     milp_parser = subparsers.add_parser(
         'run-milp',
@@ -835,6 +844,7 @@ def main():
                 instance_regex=args.filter,
                 skip_solved=args.skip_solved,
                 results_dir=args.results_dir,
+                enable_trace=args.enable_trace,
             )
         
         elif args.command == 'run-milp':

@@ -20,6 +20,7 @@ dependencies = [
     "maturin>=1.9.0",
     "plotly>=6.2.0",
     "sims-solvers",
+    "sims-problem",
 ]
 
 [project.optional-dependencies]
@@ -37,6 +38,7 @@ members = [
 [tool.uv.sources]
 sims-core = { workspace = true }
 sims-solvers = { workspace = true }
+sims-problem = { path = "sims-problem" }
 
 [build-system]
 requires = ["pdm-backend"]
