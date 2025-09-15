@@ -55,6 +55,9 @@ class MinizincSolver(Solver):
         print("Deactivating lexicographic optimization is not implemented yet for MinizincSolver.")
         raise NotImplementedError()
 
+    def add_constraints_eq(self, constraint, rhs):
+        raise NotImplementedError()
+
     def add_constraints_leq(self, constraint, rhs):
         raise NotImplementedError()
 

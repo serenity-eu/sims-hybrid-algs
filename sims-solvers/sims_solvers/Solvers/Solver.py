@@ -67,6 +67,10 @@ class Solver(ABC):
             raise ValueError("Invalid optimization sense: " + sense)
 
     @abstractmethod
+    def add_constraints_eq(self, constraint, rhs):
+        pass
+
+    @abstractmethod
     def add_constraints_leq(self, constraint, rhs):
         pass
 

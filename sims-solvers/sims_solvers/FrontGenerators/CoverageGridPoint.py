@@ -26,17 +26,18 @@ class CoverageGridPoint(FrontGeneratorStrategy):
         Implements GPBA-A algorithm with objective rotation as described in the paper:
         'performs a single run for every iteration and for each objective function'
         """
-        # get the best and worst values for each objective
+        # get the best and worst values for each objective. todo consider computing best and worst only for the objective variables, e.g. all except main_obj_index
         yield from self.get_best_worst_values()
         # convert problem to maximization problem
         self.convert_model_to_maximization()
         
-        num_objectives = len(self.solver.model.objectives)
-        
+        # todo in the original paper only one objective is optimized, rotation is tricky, could lead to missing some points
+        # num_objectives = len(self.solver.model.objectives)
         # Run GPBA-A for each objective as the main one (complete objective rotation)
-        for main_obj_index in range(num_objectives):
-            print(f"🎯 GPBA-A: Running iteration {main_obj_index + 1}/{num_objectives} with objective {main_obj_index} as main objective")
-            yield from self.solve_with_main_objective(main_obj_index)
+        # for main_obj_index in range(num_objectives):
+        #     print(f"🎯 GPBA-A: Running iteration {main_obj_index + 1}/{num_objectives} with objective {main_obj_index} as main objective")
+        #     yield from self.solve_with_main_objective(main_obj_index)
+        yield from self.solve_with_main_objective(0)
     
     def solve_with_main_objective(self, main_obj_index):
         """
@@ -71,22 +72,26 @@ class CoverageGridPoint(FrontGeneratorStrategy):
         # Create interval managers for each constraint objective
         ef_intervals = []
         for i in constraint_indices:
-            min_interval = min(self.nadir_objectives_values[i], self.best_objective_values[i])
-            max_interval = max(self.nadir_objectives_values[i], self.best_objective_values[i])
-            ef_intervals.append(IntervalManager(min_interval+1, max_interval-1))
+            ef_intervals.append(self.create_interval(i))
 
-        # Initialize ef_array with middle points for all constraint objectives
+        # Initialize ef_array with the nadir points for all constraint objectives
         for j, i in enumerate(constraint_indices):
-            ef_array[j] = int((self.best_objective_values[i] + self.nadir_objectives_values[i]) / 2)
-        
-        yield from self.coverage_loop(ef_array, previous_solutions, previous_solution_information, ef_intervals, constraint_indices)
+            ef_array[j] = int(self.nadir_objectives_values[i])
 
-    def coverage_loop(self, ef_array, previous_solutions, previous_solution_information, ef_intervals, constraint_indices):
+        # Initialize the relative worst values
+        rwv = [0] * len(constraint_indices)
+        for i in range(len(constraint_indices)):
+            rwv[i] = self.best_objective_values[constraint_indices[i]]
+
+        yield from self.coverage_loop(ef_array, rwv, previous_solutions, previous_solution_information, ef_intervals, constraint_indices)
+
+    def coverage_loop(self, ef_array, rwv, previous_solutions, previous_solution_information, ef_intervals, constraint_indices):
         """
         Main coverage loop for GPBA-A algorithm.
         
         Args:
             ef_array: Array of constraint values
+            rwv: Relative worst values for constraint objectives
             previous_solutions: Set of previous solution strings
             previous_solution_information: List of previous solution information
             ef_intervals: List of interval managers for constraint objectives
@@ -94,33 +99,21 @@ class CoverageGridPoint(FrontGeneratorStrategy):
         """
         # For multi-objective, continue while any constraint objective has valid intervals
         iteration_count = 0
+        # todo the algorithm should finish when all the points are found, max_iterations is only useful if you want to use them as a stopping condition
         max_iterations = 1000  # Safety limit to prevent infinite loops
         
-        while (any(len(interval.intervals) > 0 for interval in ef_intervals) and 
-               iteration_count < max_iterations):
-            yield from self.coverage_most_inner_loop(ef_array, previous_solutions, previous_solution_information,
+        while ef_array[0] <= self.best_objective_values[constraint_indices[0]]:
+            yield from self.coverage_most_inner_loop(ef_array, rwv, previous_solutions, previous_solution_information,
                                                      ef_intervals, constraint_indices)
             iteration_count += 1
-            
-            # Update ef_array to next valid point from intervals
-            updated = False
-            for i, interval_manager in enumerate(ef_intervals):
-                if len(interval_manager.intervals) > 0:
-                    largest_interval = interval_manager.find_largest_interval()
-                    if largest_interval is not None:
-                        ef_array[i] = int((largest_interval[0] + largest_interval[1]) / 2)
-                        updated = True
-                        break
-            
-            if not updated:
-                break
 
-    def coverage_most_inner_loop(self, ef_array, previous_solutions, previous_solution_information, ef_intervals, constraint_indices):
+    def coverage_most_inner_loop(self, ef_array, rwv, previous_solutions, previous_solution_information, ef_intervals, constraint_indices):
         """
         Inner loop of coverage algorithm that solves each constraint configuration.
         
         Args:
             ef_array: Array of constraint values
+            rwv: Relative worst values for constraint objectives
             previous_solutions: Set of previous solution strings
             previous_solution_information: List of previous solution information
             ef_intervals: List of interval managers for constraint objectives
@@ -173,41 +166,64 @@ class CoverageGridPoint(FrontGeneratorStrategy):
                         calculated_cloud_uncovered = self.solver.model.calculate_cloud_uncovered(formatted_solution["solution_values"])
                         if calculated_cloud_uncovered != abs(one_solution[1]):
                             print(f"Cloud covered error. Expected: {one_solution[1]}, calculated: {calculated_cloud_uncovered}")
-        # Update all constraint objectives
-        for i in range(len(self.constraint_objectives)):
-            self.adjust_parameter_ef_array(gamma, i, ef_array, one_solution, ef_intervals[i], constraint_indices)
+        # Update relative worst values array
+        sol_obj_id = None
+        id_interval = -1
+        if len(one_solution) > 0:
+            for i in range(len(rwv)):
+                rwv[i] = min(rwv[i], one_solution[constraint_indices[i]])
+            sol_obj_id = one_solution[constraint_indices[id_interval]]
 
-    def adjust_parameter_ef_array(self, gamma, id_constraint_objective, ef_array, one_solution, ef_interval, constraint_indices):
+        # Update all constraint objectives. NOTE: An objective x (with 0 < x < p-1, where p-1 is the index of the last objective) is only updated when the ef_array[x-1] > best_value[x-1]
+        ef_intervals[id_interval] = self.adjust_parameter_ef_array(id_interval, ef_array, sol_obj_id, ef_intervals[id_interval], constraint_indices, gamma)
+        for i in range(len(constraint_indices)-1, 0, -1):
+            if ef_array[i] > self.best_objective_values[constraint_indices[i]]:
+                ef_array[i] = self.nadir_objectives_values[constraint_indices[i]]
+                rwv[i] = self.best_objective_values[constraint_indices[i]]
+                id_interval = i - 1
+                if sol_obj_id is not None:
+                    sol_obj_id = one_solution[constraint_indices[id_interval]]
+                ef_intervals[id_interval] = self.adjust_parameter_ef_array(id_interval, ef_array, sol_obj_id,
+                                               ef_intervals[id_interval], constraint_indices, gamma)
+            else:
+                break
+
+    def adjust_parameter_ef_array(self, id_constraint_objective, ef_array, sol_obj_k, ef_interval, constraint_indices, gamma=1):
         """
         Adjust the ef_array parameter based on the solution found.
         
         Args:
-            gamma: Coverage parameter
             id_constraint_objective: Index in the constraint objective array (0-based)
             ef_array: Array of constraint values
-            one_solution: Solution found (or empty if infeasible)
+            sol_obj_k: Objective k value for the solution found (or None if infeasible)
             ef_interval: Interval manager for this constraint objective
             constraint_indices: Indices of objectives that are constraints (not main objective)
+            gamma: Coverage parameter
         """
         # check if the list one_solution is empty
         start_removal = ef_array[id_constraint_objective]
         new_max_interval = start_removal - 1
-        if not one_solution:
+        if sol_obj_k is None:
             end_removal = ef_interval.max_value
         else:
             # Map from constraint objective index to actual objective index
-            actual_obj_index = constraint_indices[id_constraint_objective]
-            end_removal = min(one_solution[actual_obj_index], ef_interval.max_value)
+            end_removal = min(sol_obj_k, ef_interval.max_value)
         ef_interval.remove_interval(start_removal, end_removal)
         # update max_value
         if end_removal >= ef_interval.max_value:
             ef_interval.max_value = new_max_interval
         max_interval = ef_interval.find_largest_interval()
-        if max_interval is not None:
-            ef_array[id_constraint_objective] = int((max_interval[0] + max_interval[1]) / 2)
+        actual_obj_index = constraint_indices[id_constraint_objective]
+        if ef_array[id_constraint_objective] == self.nadir_objectives_values[actual_obj_index]:
+            ef_array[id_constraint_objective] = self.best_objective_values[actual_obj_index]
         else:
-            actual_obj_index = constraint_indices[id_constraint_objective]
-            ef_array[id_constraint_objective] = self.best_objective_values[actual_obj_index] + 1
+            if max_interval is not None:
+                ef_array[id_constraint_objective] = int((max_interval[0] + max_interval[1]) / 2)
+            else:
+                ef_array[id_constraint_objective] = self.best_objective_values[actual_obj_index] + 1
+                # reinitialize the interval manager to avoid stopping the algorithm
+                ef_interval = self.create_interval(actual_obj_index)
+        return ef_interval
 
     def convert_model_to_maximization(self):
         if not self.solver.model.is_a_minimization_model():
@@ -234,17 +250,18 @@ class CoverageGridPoint(FrontGeneratorStrategy):
                 self.best_objective_values[i] = int(objective_val)
                 formatted_solutions.append(formatted_solution)
                 self.front_solutions.append(formatted_solution)
-                
-                # For nadir calculation, use the worst values from other objectives when optimizing objective i
-                obj_values = formatted_solution['objs']
-                for j in range(num_objectives):
-                    if i != j:
-                        # Update nadir if this is worse than current nadir for objective j
-                        if self.nadir_objectives_values[j] == 0 or obj_values[j] > self.nadir_objectives_values[j]:
-                            self.nadir_objectives_values[j] = obj_values[j]
             else:
                 raise TimeoutError(f"Timeout while optimizing objective {i}")
-        
+        # Get the nadir values by optimizing each objective in the opposite sense. Do it after getting the best values,
+        # because the best values are potential Pareto points, but the nadir values are not. If the time is short, it is better to get the best values.
+        nadir_optimization_sense = "min" if self.model_optimization_sense == "max" else "max"
+        for i in range(num_objectives):
+            sols, objective_val = self.optimize_single_objectives(nadir_optimization_sense, i)
+            if objective_val is not None:
+                self.nadir_objectives_values[i] = int(objective_val)
+            else:
+                raise TimeoutError(f"Timeout while optimizing objective {i}")
+
         # Yield all found extreme solutions
         for formatted_solution in formatted_solutions:
             if formatted_solution is not None:
@@ -272,6 +289,12 @@ class CoverageGridPoint(FrontGeneratorStrategy):
 
     def always_add_new_solutions_to_front(self):
         return False
+
+    def create_interval(self, i):
+        min_interval = min(self.nadir_objectives_values[i], self.best_objective_values[i])
+        max_interval = max(self.nadir_objectives_values[i], self.best_objective_values[i])
+        # todo Vlad review if it should be min_interval or min_interval+1 and max_interval or max_interval-1
+        return IntervalManager(min_interval + 1, max_interval - 1)
 
 
 class IntervalManager:
