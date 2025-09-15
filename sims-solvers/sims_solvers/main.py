@@ -151,6 +151,7 @@ def build_instance_minizinc_data(config: Config) -> InstanceGeneric:
 def parse_dzn_to_sims_dict(dzn_file_path: str) -> dict:
     """
     Parse a .dzn file and convert it to the dictionary format expected by InstanceSIMS.
+    Uses simple Python regex parsing instead of sims_problem Rust module.
     
     Args:
         dzn_file_path: Path to the .dzn file containing SIMS problem data
@@ -158,31 +159,55 @@ def parse_dzn_to_sims_dict(dzn_file_path: str) -> dict:
     Returns:
         Dictionary with keys: images, clouds, costs, areas, max_cloud_area, resolution, incidence_angle
     """
+    import re
+    
     try:
-        # Import sims_problem here to avoid import issues if module not available
-        import sims_problem
+        with open(dzn_file_path, 'r') as f:
+            content = f.read()
         
-        # Parse the .dzn file using the Rust-based parser
-        problem = sims_problem.SimsDiscreteProblem.from_dzn(dzn_file_path)
+        # Helper functions for parsing
+        def parse_array(pattern, content):
+            match = re.search(pattern, content, re.DOTALL)
+            if match:
+                array_str = match.group(1)
+                # Remove brackets and split by comma, then convert to appropriate type
+                items = [item.strip() for item in array_str.strip('[]').split(',')]
+                return [float(item) if '.' in item else int(item) for item in items if item.strip()]
+            return []
         
-        # Convert to the dictionary format expected by InstanceSIMS
-        # Note: InstanceSIMS.correct_starting_indexes will convert from 1-based to 0-based indexing
+        def parse_set_array(pattern, content):
+            match = re.search(pattern, content, re.DOTALL)
+            if match:
+                array_str = match.group(1)
+                sets = []
+                # Find all sets in the array
+                set_matches = re.findall(r'\{([^}]*)\}', array_str)
+                for set_match in set_matches:
+                    if set_match.strip():
+                        # Convert to list of integers (1-indexed in DZN, will be corrected later)
+                        elements = [int(x.strip()) for x in set_match.split(',') if x.strip()]
+                        sets.append(elements)  # InstanceSIMS expects lists, not sets
+                    else:
+                        sets.append([])
+                return sets
+            return []
+        
+        # Extract data using simple regex patterns
         sims_dict = {
-            "images": problem.images,  # List of lists of covered fragments per image
-            "clouds": problem.clouds,  # List of lists of cloudy fragments per image  
-            "costs": problem.costs,    # List of costs per image
-            "areas": problem.areas,    # List of area values per fragment
-            "max_cloud_area": problem.max_cloud_area,  # Maximum allowed cloud area
-            "resolution": problem.resolution,  # List of resolution values per image
-            "incidence_angle": problem.incidence_angle,  # List of incidence angles per image
+            'costs': parse_array(r'costs\s*=\s*\[([^\]]+)\]', content),
+            'areas': parse_array(r'areas\s*=\s*\[([^\]]+)\]', content),
+            'resolution': parse_array(r'resolution\s*=\s*\[([^\]]+)\]', content),
+            'incidence_angle': parse_array(r'incidence_angle\s*=\s*\[([^\]]+)\]', content),
+            'images': parse_set_array(r'images\s*=\s*\[([^\]]+)\]', content),
+            'clouds': parse_set_array(r'clouds\s*=\s*\[([^\]]+)\]', content),
         }
+        
+        # Extract max_cloud_area
+        match = re.search(r'max_cloud_area\s*=\s*(\d+)', content)
+        sims_dict['max_cloud_area'] = int(match.group(1)) if match else 0
         
         return sims_dict
         
-    except ImportError as e:
-        print(f"Error: Could not import sims_problem module: {e}")
-        print("Make sure the sims_problem package is properly installed.")
-        sys.exit(1)
     except Exception as e:
         print(f"Error parsing .dzn file {dzn_file_path}: {e}")
         sys.exit(1)
