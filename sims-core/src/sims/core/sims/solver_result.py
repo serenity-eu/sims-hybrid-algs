@@ -68,17 +68,46 @@ class Solution:
         # return is_valid and self.validate_objectives(problem)
         return is_valid
 
-    def compute_objectives(self, problem: SimsDiscreteProblem) -> tuple[int, int, int, int]:
-        total_cost = sum(problem.costs[i] for i in self.selected_images)
-
+    def compute_objectives(self, problem: SimsDiscreteProblem, objectives: list[str]) -> dict[str, int]:
+        """
+        Compute only the specified objectives for efficiency.
+        
+        Args:
+            problem: The problem instance
+            objectives: List of objective names to compute (e.g., ["min_cost", "cloud_coverage"])
+            
+        Returns:
+            Dictionary mapping objective names to their computed values
+        """
+        result = {}
+        
+        # Map of objective names to computation functions
+        objective_computations = {
+            "min_cost": lambda: sum(problem.costs[i] for i in self.selected_images),
+            "cloud_coverage": lambda: self._compute_cloudy_area(problem),
+            "min_max_incidence_angle": lambda: max(problem.incidence_angle[i] for i in self.selected_images),
+            "min_resolution": lambda: self._compute_min_resolutions_sum(problem),
+        }
+        
+        # Compute only the requested objectives
+        for obj_name in objectives:
+            if obj_name in objective_computations:
+                result[obj_name] = objective_computations[obj_name]()
+            else:
+                log.warning(f"Unknown objective: {obj_name}")
+                
+        return result
+    
+    def _compute_cloudy_area(self, problem: SimsDiscreteProblem) -> int:
+        """Helper method to compute cloudy area."""
         clear_parts = frozenset.union(
             *(frozenset(problem.images[i]) - frozenset(problem.clouds[i]) for i in self.selected_images)
         )
-        cloudy_area = sum(problem.areas[u] for u in range(problem.universe) if u not in clear_parts)
-
-        max_incidence_angle = max(problem.incidence_angle[i] for i in self.selected_images)
-
-        min_resolutions_sum = sum(
+        return sum(problem.areas[u] for u in range(problem.universe) if u not in clear_parts)
+    
+    def _compute_min_resolutions_sum(self, problem: SimsDiscreteProblem) -> int:
+        """Helper method to compute minimum resolutions sum."""
+        return sum(
             map(
                 lambda u: min(
                     problem.resolution[i] for i in self.selected_images if u in frozenset(problem.images[i])
@@ -87,29 +116,23 @@ class Solution:
             )
         )
 
-        return total_cost, cloudy_area, max_incidence_angle, min_resolutions_sum
-
     def validate_objectives(self, problem: SimsDiscreteProblem) -> bool:
         """
         Validate the objectives of the solution
         """
+        # Get all objective names to validate all of them
+        all_objectives = ["min_cost", "cloud_coverage", "min_max_incidence_angle", "min_resolution"]
+        computed_objectives = self.compute_objectives(problem, all_objectives)
 
-        (
-            total_cost,
-            cloudy_area,
-            max_incidence_angle,
-            min_resolutions_sum,
-        ) = self.compute_objectives(problem)
-
-        is_cost_valid = self.cost == total_cost
-        is_cloudy_area_valid = self.cloudy_area == cloudy_area
+        is_cost_valid = self.cost == computed_objectives.get("min_cost", self.cost)
+        is_cloudy_area_valid = self.cloudy_area == computed_objectives.get("cloud_coverage", self.cloudy_area)
         is_max_incidence_angle_valid = (
-            self.max_incidence_angle == max_incidence_angle
+            self.max_incidence_angle == computed_objectives.get("min_max_incidence_angle", self.max_incidence_angle)
             if self.max_incidence_angle != -1
             else True
         )
         is_min_resolutions_sum_valid = (
-            self.min_resolutions_sum == min_resolutions_sum
+            self.min_resolutions_sum == computed_objectives.get("min_resolution", self.min_resolutions_sum)
             if self.min_resolutions_sum != -1
             else True
         )
@@ -121,17 +144,86 @@ class Solution:
             and is_min_resolutions_sum_valid
         )
 
-    def fix_objectives(self, problem: SimsDiscreteProblem):
+    def fix_objectives(self, problem: SimsDiscreteProblem, objectives: list[str]):
         """
-        Fix the objectives of the solution - DISABLED: this was too expensive
+        Fix the objectives of the solution to handle negative values and missing objectives.
         
-        Originally this method would compute missing objectives (marked with -1),
-        but the compute_objectives method is very expensive (especially min_resolutions_sum)
-        and was taking minutes to run during MILP processing.
+        This method computes or fixes the specified objectives to ensure they are valid
+        for compatibility with Rust PLS solver that expects unsigned integers.
+        
+        Args:
+            problem: The problem instance
+            objectives: List of objective names to fix/compute (e.g., ["min_cost", "cloud_coverage"])
         """
-        # DISABLED: The objectives fixing logic has been removed as it was too expensive
-        # The compute_objectives call was taking minutes to complete
-        pass
+        log.debug(f"fix_objectives called with objectives: {objectives}")
+        log.debug(f"Initial values - cost: {self.cost}, cloudy_area: {self.cloudy_area}, "
+                 f"max_incidence_angle: {self.max_incidence_angle}, min_resolutions_sum: {self.min_resolutions_sum}")
+        
+        # Compute objectives that need fixing
+        computed_objectives = self.compute_objectives(problem, objectives)
+        log.debug(f"Computed objectives: {computed_objectives}")
+        
+        # Fix each objective explicitly with proper typing
+        for obj_name in objectives:
+            if obj_name == "min_cost":
+                computed_value = computed_objectives.get("min_cost")
+                if computed_value is not None:
+                    log.debug(f"Processing min_cost: current={self.cost}, computed={computed_value}")
+                    if self.cost < 0:
+                        log.warning(f"Found negative cost {self.cost}, setting to computed value {computed_value}")
+                        self.cost = max(0, computed_value)
+                        log.info(f"Fixed cost: {self.cost}")
+                    elif self.cost != computed_value:
+                        log.warning(f"Cost mismatch: current={self.cost}, computed={computed_value}, using computed")
+                        self.cost = max(0, computed_value)
+                        log.info(f"Updated cost: {self.cost}")
+            
+            elif obj_name == "cloud_coverage":
+                computed_value = computed_objectives.get("cloud_coverage")
+                if computed_value is not None:
+                    log.debug(f"Processing cloud_coverage: current={self.cloudy_area}, computed={computed_value}")
+                    if self.cloudy_area < 0:
+                        log.warning(f"Found negative cloudy_area {self.cloudy_area}, setting to computed value {computed_value}")
+                        self.cloudy_area = max(0, computed_value)
+                        log.info(f"Fixed cloudy_area: {self.cloudy_area}")
+                    elif self.cloudy_area != computed_value:
+                        log.warning(f"Cloudy area mismatch: current={self.cloudy_area}, computed={computed_value}, using computed")
+                        self.cloudy_area = max(0, computed_value)
+                        log.info(f"Updated cloudy_area: {self.cloudy_area}")
+            
+            elif obj_name == "min_max_incidence_angle":
+                computed_value = computed_objectives.get("min_max_incidence_angle")
+                if computed_value is not None:
+                    log.debug(f"Processing min_max_incidence_angle: current={self.max_incidence_angle}, computed={computed_value}")
+                    # Handle -1 as "not set" sentinel value, don't treat as negative error
+                    if self.max_incidence_angle is not None and self.max_incidence_angle < 0 and self.max_incidence_angle != -1:
+                        log.warning(f"Found negative max_incidence_angle {self.max_incidence_angle}, setting to computed value {computed_value}")
+                        self.max_incidence_angle = max(0, computed_value)
+                        log.info(f"Fixed max_incidence_angle: {self.max_incidence_angle}")
+                    elif self.max_incidence_angle != computed_value and self.max_incidence_angle != -1:
+                        log.warning(f"Max incidence angle mismatch: current={self.max_incidence_angle}, computed={computed_value}, using computed")
+                        self.max_incidence_angle = max(0, computed_value)
+                        log.info(f"Updated max_incidence_angle: {self.max_incidence_angle}")
+            
+            elif obj_name == "min_resolution":
+                computed_value = computed_objectives.get("min_resolution")
+                if computed_value is not None:
+                    log.debug(f"Processing min_resolution: current={self.min_resolutions_sum}, computed={computed_value}")
+                    # Handle -1 as "not set" sentinel value, don't treat as negative error
+                    if self.min_resolutions_sum is not None and self.min_resolutions_sum < 0 and self.min_resolutions_sum != -1:
+                        log.warning(f"Found negative min_resolutions_sum {self.min_resolutions_sum}, setting to computed value {computed_value}")
+                        self.min_resolutions_sum = max(0, computed_value)
+                        log.info(f"Fixed min_resolutions_sum: {self.min_resolutions_sum}")
+                    elif self.min_resolutions_sum != computed_value and self.min_resolutions_sum != -1:
+                        log.warning(f"Min resolutions sum mismatch: current={self.min_resolutions_sum}, computed={computed_value}, using computed")
+                        self.min_resolutions_sum = max(0, computed_value)
+                        log.info(f"Updated min_resolutions_sum: {self.min_resolutions_sum}")
+            
+            else:
+                log.warning(f"Unknown objective: {obj_name}")
+        
+        log.debug(f"Final values - cost: {self.cost}, cloudy_area: {self.cloudy_area}, "
+                 f"max_incidence_angle: {self.max_incidence_angle}, min_resolutions_sum: {self.min_resolutions_sum}")
 
 
 def compute_hypervolume(
@@ -284,7 +376,7 @@ class SolverResult:
                 max_incidence_angle=obj_map.get("min_max_incidence_angle", -1),
                 timestamp_s=timedelta(seconds=float(timestamp_s)),
             )
-            solution.fix_objectives(problem_instance.problem)
+            solution.fix_objectives(problem_instance.problem, objectives)
             pareto_front.append(solution)
 
         # Derive the pareto front snapshots from current pareto front
@@ -452,13 +544,24 @@ class TwoPhaseSolverResult:
         solver_config: TwoPhaseSolverConfig,
         filter_invalid: bool = True,
     ) -> TwoPhaseSolverResult:
+        if pls_result is None and exact_solver_result is None:
+            raise ValueError("At least one of exact_solver_result or pls_result must be provided")
+        
+        # Initialize problem_instance from whichever result is available
+        problem_instance = (
+            exact_solver_result.problem_instance if exact_solver_result is not None
+            else pls_result.problem_instance if pls_result is not None
+            else None
+        )
+        
+        if problem_instance is None:
+            raise ValueError("No problem instance found in either result")
+        
         total_time_sec = 0
         if exact_solver_result is not None:
-            problem_instance = exact_solver_result.problem_instance
             total_time_sec += exact_solver_result.execution_time_sec
 
         if pls_result is not None:
-            problem_instance = pls_result.problem_instance
             total_time_sec += pls_result.execution_time_sec
 
         if exact_solver_result is not None and pls_result is not None:
@@ -469,18 +572,13 @@ class TwoPhaseSolverResult:
             )
         else:
             discarded_solutions, added_solutions = None, None
-        
-        if pls_result is not None:
-            log.info(f"[{problem_instance.name}][from_results_pair] - PLS found {len(pls_result.pareto_front)} solutions")
+
 
         if filter_invalid:
             if exact_solver_result is not None:
                 exact_solver_result.filter_invalid()
             if pls_result is not None:
                 pls_result.filter_invalid()
-
-        if pls_result is not None:
-            log.info(f"[{problem_instance.name}][from_results_pair] - PLS has {len(pls_result.pareto_front)} valid solutions after filtering")
 
         two_phase_solver_result = TwoPhaseSolverResult(
             problem_instance=problem_instance,
@@ -496,7 +594,7 @@ class TwoPhaseSolverResult:
 
     @staticmethod
     def _parse_pls_pareto_front_snapshots(
-        pareto_snapshots_path: Path, problem: SimsDiscreteProblem
+        pareto_snapshots_path: Path, problem: SimsDiscreteProblem, objectives: list[str]
     ):
         pareto_fronts = []
 
@@ -519,7 +617,7 @@ class TwoPhaseSolverResult:
                         cloudy_area=-1,
                         timestamp_s=timedelta(seconds=elapsed_time),
                     )
-                    solution.fix_objectives(problem)
+                    solution.fix_objectives(problem, objectives)
                     solutions.append(solution)
                     i += 1
 
@@ -588,7 +686,7 @@ class TwoPhaseSolverResult:
         if False:
             pls_pareto_front_snapshots_path = input_path.parent / "pareto_front_snapshots.txt"
             pls_pareto_front_snapshots = TwoPhaseSolverResult._parse_pls_pareto_front_snapshots(
-                pls_pareto_front_snapshots_path, problem=problem_instance.problem
+                pls_pareto_front_snapshots_path, problem=problem_instance.problem, objectives=objectives
             )
         else:
             pls_pareto_front_snapshots = None
