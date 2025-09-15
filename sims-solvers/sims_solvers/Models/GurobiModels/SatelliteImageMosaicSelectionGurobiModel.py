@@ -125,7 +125,12 @@ class SatelliteImageMosaicSelectionGurobiModel(GurobiModel, SatelliteImageMosaic
         # Find the index of resolution objective if it exists and calculate it manually
         for i, obj_name in enumerate(objectives_to_use):
             if obj_name == "min_resolution":
+                # todo Vlad please review if this is correct. Sometimes calculate_resolution changed the sign of the value
+                sign = 1 if objective_values[i] >= 0 else -1
                 objective_values[i] = self.calculate_resolution(selected_images)
+                # check if sign changed
+                if (objective_values[i] >= 0 > sign) or (objective_values[i] < 0 < sign):
+                    objective_values[i] *= -1
                 break
             elif obj_name not in ["min_cost", "cloud_coverage", "min_resolution", "min_max_incidence_angle"]:
                 raise ValueError(f"Invalid objective '{obj_name}'. Valid objectives are: min_cost, cloud_coverage, min_resolution, min_max_incidence_angle")
