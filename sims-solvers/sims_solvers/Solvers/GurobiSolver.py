@@ -95,7 +95,7 @@ class GurobiSolver(Solver):
         
         constraint_objectives = []
         if augmentation:
-            delta = 0.0001  # delta should be between 0.001 and 0.000001
+            delta = 0.01  # delta should be between 0.001 and 0.000001. In the paper of  Mesquita-Cunha et al. 2021 it is set to 0.01 for computational experiments.
             
             # Create slack variables for all constraint objectives (all except main_obj_index)
             slack_vars = []
@@ -105,10 +105,17 @@ class GurobiSolver(Solver):
                 max_s = abs(best_constrain_obj_list[i] - nadir_constrain_obj_list[i])
                 s = self.model.solver_model.addVar(vtype=gp.GRB.INTEGER, lb=0, ub=max_s, name=f"s{i+1}")
                 slack_vars.append(s)
+            # objective ranges
+            obj_range = []
+            for i in constraint_indices:
+                obj_range.append(abs(best_constrain_obj_list[i] - nadir_constrain_obj_list[i]))
             
-            # Main objective: selected objective + delta * sum of slack variables
-            slack_sum = sum(slack_vars) if slack_vars else 0
-            obj = self.model.objectives[main_obj_index] + (delta * slack_sum)
+            # Main objective: selected objective + delta * sum_{k=2,..p}(10^(k-1)*slack[k] / range[k])
+            slack_range_sum = 0
+            for i in range(len(constraint_indices)):
+                slack_range_sum += slack_vars[i]/(10 ** i * obj_range[i])
+
+            obj = self.model.objectives[main_obj_index] + (delta * slack_range_sum)
             self.set_single_objective(obj)
             
             # Constraint objectives: each constraint objective minus its corresponding slack variable
