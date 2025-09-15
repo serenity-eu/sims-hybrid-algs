@@ -74,10 +74,8 @@ class CoverageGridPoint(FrontGeneratorStrategy):
         for i in constraint_indices:
             ef_intervals.append(self.create_interval(i))
 
-        # Initialize ef_array with middle points for all constraint objectives
+        # Initialize ef_array with the nadir points for all constraint objectives
         for j, i in enumerate(constraint_indices):
-            # In the original paper ef_array start at nadir values
-            # ef_array[j] = int((self.best_objective_values[i] + self.nadir_objectives_values[i]) / 2)
             ef_array[j] = int(self.nadir_objectives_values[i])
 
         # Initialize the relative worst values
@@ -176,7 +174,7 @@ class CoverageGridPoint(FrontGeneratorStrategy):
                 rwv[i] = min(rwv[i], one_solution[constraint_indices[i]])
             sol_obj_id = one_solution[constraint_indices[id_interval]]
 
-        # Update all constraint objectives. NOTE: An objective x is only updated when the ef_array[x-1] > best_value[x-1]
+        # Update all constraint objectives. NOTE: An objective x (with 0 < x < p-1, where p-1 is the index of the last objective) is only updated when the ef_array[x-1] > best_value[x-1]
         ef_intervals[id_interval] = self.adjust_parameter_ef_array(id_interval, ef_array, sol_obj_id, ef_intervals[id_interval], constraint_indices, gamma)
         for i in range(len(constraint_indices)-1, 0, -1):
             if ef_array[i] > self.best_objective_values[constraint_indices[i]]:
