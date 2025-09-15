@@ -48,6 +48,9 @@ coverage.xml
 *.cover
 *.py,cover
 .hypothesis/
+
+# Test artifacts
+test_artifacts/
 .pytest_cache/
 cover/
 

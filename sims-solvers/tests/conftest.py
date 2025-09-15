@@ -26,6 +26,20 @@ TEST_INSTANCES_50 = [
     "tokyo_bay_50.dzn"
 ]
 
+@pytest.fixture(scope="session")
+def test_artifacts_dir():
+    """
+    Fixture providing a persistent test artifacts directory.
+    Creates test_artifacts directory in sims-solvers and persists for the entire test session.
+    """
+    sims_solvers_dir = Path(__file__).parent.parent
+    artifacts_dir = sims_solvers_dir / "test_artifacts"
+    
+    # Create the directory if it doesn't exist
+    artifacts_dir.mkdir(exist_ok=True)
+    
+    return str(artifacts_dir)
+
 @pytest.fixture
 def test_data_dir():
     """Fixture providing the test data directory path."""
