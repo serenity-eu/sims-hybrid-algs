@@ -202,4 +202,5 @@ class ParetoFront:
             # convert maximization to minimization to calculate the Hypervolume using the pymoo library
             ref_point = -ref_point
             front = -front
-        return HV(ref_point=ref_point)(front)
+        hv_result = HV(ref_point=ref_point)(front)
+        return float(hv_result) if hv_result is not None else 0.0

@@ -46,13 +46,15 @@ LARGE_INSTANCES = [
 ]
 
 
-def create_test_config(dzn_file_path: str, mzn_model_path: str, test_artifacts_dir: str, timeout: int = 300) -> Config:
+def create_test_config(dzn_file_path: str, mzn_model_path: str, test_artifacts_dir: str, timeout: int = 300, test_type: str = "") -> Config:
     """Create a test configuration for solving MILP problems."""
     # Create a unique subdirectory for this test run
     from datetime import datetime
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")  # datetime-based timestamp
     instance_name = Path(dzn_file_path).stem
-    test_subdir = Path(test_artifacts_dir) / f"{instance_name}_{timestamp}"
+    # Include test type (2d/3d/4d) in subdirectory name to distinguish between different objective counts
+    subdir_name = f"{instance_name}_{test_type}_{timestamp}" if test_type else f"{instance_name}_{timestamp}"
+    test_subdir = Path(test_artifacts_dir) / subdir_name
     test_subdir.mkdir(exist_ok=True)
     
     return Config(
@@ -79,7 +81,8 @@ def run_solve_milp_with_validation(
     test_artifacts_dir: str,
     objectives: List[str],
     timeout: int,
-    logger: logging.Logger
+    logger: logging.Logger,
+    test_type: str = ""
 ) -> TestResult:
     """
     Run solve_milp with the given configuration and validate results.
@@ -103,7 +106,7 @@ def run_solve_milp_with_validation(
     
     try:
         # Create configuration
-        config = create_test_config(dzn_file_path, mzn_model_path, test_artifacts_dir, timeout)
+        config = create_test_config(dzn_file_path, mzn_model_path, test_artifacts_dir, timeout, test_type)
         test_subdir = Path(config.summary_filename).parent
         
         logger.info(f"Test artifacts will be stored in: {test_subdir}")
@@ -184,7 +187,8 @@ class TestSolveMILPIntegration:
             test_artifacts_dir=test_artifacts_dir,
             objectives=objectives,
             timeout=timeout,
-            logger=logger
+            logger=logger,
+            test_type="2d"
         )
         
         # Assert success
@@ -216,7 +220,8 @@ class TestSolveMILPIntegration:
             test_artifacts_dir=test_artifacts_dir,
             objectives=objectives,
             timeout=timeout,
-            logger=logger
+            logger=logger,
+            test_type="3d"
         )
         
         # Assert success
@@ -248,7 +253,8 @@ class TestSolveMILPIntegration:
             test_artifacts_dir=test_artifacts_dir,
             objectives=objectives,
             timeout=timeout,
-            logger=logger
+            logger=logger,
+            test_type="4d"
         )
         
         # Assert success
@@ -280,7 +286,8 @@ class TestSolveMILPIntegration:
             test_artifacts_dir=test_artifacts_dir,
             objectives=objectives,
             timeout=timeout,
-            logger=logger
+            logger=logger,
+            test_type="2d"
         )
         
         # Assert success
@@ -312,7 +319,8 @@ class TestSolveMILPIntegration:
             test_artifacts_dir=test_artifacts_dir,
             objectives=objectives,
             timeout=timeout,
-            logger=logger
+            logger=logger,
+            test_type="3d"
         )
         
         # Assert success
@@ -344,7 +352,8 @@ class TestSolveMILPIntegration:
             test_artifacts_dir=test_artifacts_dir,
             objectives=objectives,
             timeout=timeout,
-            logger=logger
+            logger=logger,
+            test_type="4d"
         )
         
         # Assert success
@@ -376,7 +385,8 @@ class TestSolveMILPIntegration:
             test_artifacts_dir=test_artifacts_dir,
             objectives=objectives,
             timeout=timeout,
-            logger=logger
+            logger=logger,
+            test_type="2d"
         )
         
         # Assert success
@@ -408,7 +418,8 @@ class TestSolveMILPIntegration:
             test_artifacts_dir=test_artifacts_dir,
             objectives=objectives,
             timeout=timeout,
-            logger=logger
+            logger=logger,
+            test_type="3d"
         )
         
         # Assert success
@@ -440,7 +451,8 @@ class TestSolveMILPIntegration:
             test_artifacts_dir=test_artifacts_dir,
             objectives=objectives,
             timeout=timeout,
-            logger=logger
+            logger=logger,
+            test_type="4d"
         )
         
         # Assert success
