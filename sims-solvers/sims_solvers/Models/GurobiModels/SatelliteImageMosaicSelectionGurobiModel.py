@@ -43,7 +43,9 @@ class SatelliteImageMosaicSelectionGurobiModel(GurobiModel, SatelliteImageMosaic
         return False  # For Ortools-cp it is not possible
 
     def create_model(self) -> gp.Model:
-        return gp.Model("SIMSModel")
+        model = gp.Model("SIMSModel")
+        # model.setParam('OutputFlag', 0)  # Suppress Gurobi output
+        return model
 
     def get_data_from_instance(self) -> None:
         self.elements, self.areas = gp.multidict({i: self.sims_instance.areas[i] for i in range(len(self.sims_instance.areas))})

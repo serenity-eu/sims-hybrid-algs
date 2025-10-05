@@ -23,11 +23,11 @@ def solve(
     match solver_type:
         case SolverType.OR_TOOLS:
             return ortools.solve(
-                problem_instance, problem_path, timeout_s, output_path, front_strategy, objectives
+                problem_instance, problem_path, timeout_s, output_path, front_strategy, objectives, enable_trace
             )
         case SolverType.GUROBI:
             return gurobi.solve(
-                problem_instance, problem_path, timeout_s, output_path, front_strategy, objectives
+                problem_instance, problem_path, timeout_s, output_path, front_strategy, objectives, enable_trace
             )
         case SolverType.PLS:
             return pareto_local_search.solve(
@@ -79,6 +79,7 @@ def solve_with_two_phases(
                 summary_path,
                 objectives,
                 front_strategy,
+                enable_trace=enable_pls_trace,  # Enable tracing for exact solver too
             )
 
         log.info(

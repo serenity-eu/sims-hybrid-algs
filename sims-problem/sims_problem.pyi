@@ -885,15 +885,119 @@ def compute_hypervolume(
     ...
 
 
+def generate_trace(
+    solutions: list[Solution],
+    objectives: list[str], 
+    algorithm: str,
+    num_objectives: int,
+    objective_bounds: list[list[int]],
+    reference_point: list[int]
+) -> bytes:
+    """
+    Creates a gzipped tar archive containing binary optimization trace data.
+    
+    This function creates a compressed archive containing detailed optimization traces
+    suitable for analysis and visualization. The archive contains:
+    
+    - **objectives.bin**: u64 LE objectives for each solution
+    - **dominated.bin**: u32 LE domination indices (u32::MAX = not dominated)  
+    - **timestamp.bin**: u32 LE timestamps in microseconds since start
+    - **hypervolume.bin**: f64 LE cumulative hypervolume progression
+    - **metadata.json**: JSON metadata about the trace including objective names
+    
+    Args:
+        solutions: List of Solution objects (must be sorted by timestamp)
+        objectives: Names of the objectives (e.g., ["min_cost", "cloud_coverage", "max_incidence_angle"])
+        algorithm: Name of the algorithm that generated the solutions
+        num_objectives: Number of objectives (2, 3, or 4)
+        objective_bounds: Bounds for each objective [[min, max], ...]
+        reference_point: Reference point for hypervolume calculation
+        
+    Returns:
+        Compressed tar archive as bytes
+        
+    Example:
+        ```python
+        import sims_problem
+        
+        # Create some solutions
+        solutions = [
+            sims_problem.Solution.create([0, 2, 5], 1500, 250, 100000, 45, 800),
+            sims_problem.Solution.create([1, 3, 7], 1200, 300, 500000, 40, 900),
+        ]
+        
+        # Create trace archive
+        archive_bytes = sims_problem.generate_trace(
+            solutions, ["min_cost", "cloud_coverage", "max_incidence_angle"], 
+            "MILP", 3, [[0, 10000], [0, 1000], [0, 2000]], [10000, 1000, 2000]
+        )
+        
+        # Save to file
+        with open("trace.tar.gz", "wb") as f:
+            f.write(archive_bytes)
+        ```
+    """
+    ...
+
+
+def merge_traces(
+    first_trace: bytes,
+    second_trace: bytes, 
+    combined_algorithm: str,
+    objective_bounds: list[list[int]],
+    reference_point: list[int]
+) -> bytes:
+    """
+    Merges two trace archives into a single archive with adjusted timestamps.
+    
+    This function takes two compressed trace archives and combines them into one.
+    The second trace's timestamps are offset by the execution time of the first phase.
+    
+    Args:
+        first_trace: Bytes of the first trace archive (tar.gz)
+        second_trace: Bytes of the second trace archive (tar.gz)
+        combined_algorithm: Algorithm name for the merged trace
+        objective_bounds: Bounds for each objective [[min, max], ...]
+        reference_point: Reference point for hypervolume calculation
+        
+    Returns:
+        Bytes of the merged trace archive
+        
+    Example:
+        ```python
+        import sims_problem
+        
+        # Load existing trace files
+        with open("trace1.tar.gz", "rb") as f:
+            first_trace = f.read()
+        with open("trace2.tar.gz", "rb") as f:
+            second_trace = f.read()
+            
+        # Merge traces
+        merged_trace = sims_problem.merge_traces(
+            first_trace, second_trace, "two-phase-50-50",
+            [[0, 10000], [0, 1000]], [10000, 1000]
+        )
+        
+        # Save merged trace
+        with open("merged_trace.tar.gz", "wb") as f:
+            f.write(merged_trace)
+        ```
+    """
+    ...
+
+
 # Module-level exports
 __all__ = [
     "SimsDiscreteProblem",
-    "Solution",
+    "Solution", 
     "SolvingResult",
-    "MilpConfig", 
+    "MilpConfig",
     "PlsConfig",
     "solve_with_pls",
-    "solve_with_milp",
+    "solve_with_milp", 
     "solve_with_hybrid",
     "compute_hypervolume",
+    "generate_trace",
+    "merge_traces",
 ]

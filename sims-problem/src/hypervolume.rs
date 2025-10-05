@@ -72,7 +72,7 @@ where
 }
 
 /// 3D HV with slice view (generic version)
-fn hypervolume_3d_min_generic<T>(points: &mut [Vec<T>], reference: &[T]) -> T
+pub fn hypervolume_3d_min_generic<T>(points: &mut [Vec<T>], reference: &[T]) -> T
 where
     T: HVNumeric + std::iter::Sum,
 {
@@ -114,7 +114,7 @@ where
 }
 
 /// 2D HV: union area = sum over strips (generic version)
-fn hypervolume_2d_min_generic<T>(points: &mut [Vec<T>], reference: &[T]) -> T
+pub fn hypervolume_2d_min_generic<T>(points: &mut [Vec<T>], reference: &[T]) -> T
 where
     T: HVNumeric + std::iter::Sum,
 {
@@ -318,6 +318,16 @@ pub fn compute_hypervolume(
         };
         result as f64
     };
+
+    // Assert hypervolume bounds based on normalization mode
+    if normalized {
+        // For normalized hypervolume, values should be in [0,1] range
+        assert!(result >= 0.0, "Normalized hypervolume must be non-negative, got: {}", result);
+        assert!(result <= 1.0, "Normalized hypervolume must be <= 1.0, got: {}", result);
+    } else {
+        // For non-normalized hypervolume, values should still be non-negative
+        assert!(result >= 0.0, "Hypervolume must be non-negative, got: {}", result);
+    }
 
     Ok(result)
 }

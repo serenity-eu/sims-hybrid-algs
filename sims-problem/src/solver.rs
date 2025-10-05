@@ -364,11 +364,18 @@ pub fn solve_with_pls(
             // Generate trace if requested
             if trace {
                 info!("Generating 2D optimization trace archive");
+                
+                // Calculate objective bounds and reference point
+                let (objective_bounds, reference_point) = trace::calculate_objective_bounds_from_solutions(&explored_solutions)
+                    .map_err(|e| PyValueError::new_err(format!("Failed to calculate objective bounds: {}", e)))?;
+                
                 let trace_archive = trace::create_optimization_trace_archive(
                     explored_solutions,
                     objectives,
                     timeout.as_micros() as u64,
                     "PLS-2D".to_string(),
+                    objective_bounds,
+                    reference_point,
                 )
                 .map_err(|e| {
                     PyValueError::new_err(format!("Failed to create trace archive: {}", e))
@@ -513,11 +520,18 @@ pub fn solve_with_pls(
             // Generate trace if requested
             if trace {
                 info!("Generating 3D optimization trace archive");
+                
+                // Calculate objective bounds and reference point
+                let (objective_bounds, reference_point) = trace::calculate_objective_bounds_from_solutions(&explored_solutions)
+                    .map_err(|e| PyValueError::new_err(format!("Failed to calculate objective bounds: {}", e)))?;
+                
                 let trace_archive = trace::create_optimization_trace_archive(
                     explored_solutions,
                     objectives,
                     timeout.as_micros() as u64,
                     "PLS-3D".to_string(),
+                    objective_bounds,
+                    reference_point,
                 )
                 .map_err(|e| {
                     PyValueError::new_err(format!("Failed to create trace archive: {}", e))
@@ -663,11 +677,18 @@ pub fn solve_with_pls(
             // Generate trace if requested
             if trace {
                 info!("Generating 4D optimization trace archive");
+                
+                // Calculate objective bounds and reference point
+                let (objective_bounds, reference_point) = trace::calculate_objective_bounds_from_solutions(&explored_solutions)
+                    .map_err(|e| PyValueError::new_err(format!("Failed to calculate objective bounds: {}", e)))?;
+                
                 let trace_archive = trace::create_optimization_trace_archive(
                     explored_solutions,
                     objectives,
                     timeout.as_micros() as u64,
                     "PLS-4D".to_string(),
+                    objective_bounds,
+                    reference_point,
                 )
                 .map_err(|e| {
                     PyValueError::new_err(format!("Failed to create trace archive: {}", e))

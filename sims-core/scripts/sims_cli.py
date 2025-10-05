@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+
+import argparse
+import json
+import logging
+import re
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
 """
 SIMS Core CLI Script
 
@@ -40,15 +50,6 @@ Usage:
     # Process experiment results
     uv run sims_cli.py process --experiments-dir /path/to/experiments
 """
-"""
-"""
-
-import argparse
-import logging
-import sys
-from datetime import datetime
-from pathlib import Path
-from typing import Optional
 
 # Add the src directory to Python path to import sims.core
 script_dir = Path(__file__).parent
@@ -74,7 +75,7 @@ except ImportError as e:
 log_format = "%(asctime)s %(name)-10s [%(levelname)-7s] %(message)s"
 
 
-def setup_logging(verbose: bool = False, log_file: Optional[Path] = None):
+def setup_logging(verbose: bool = False, log_file: Path | None = None):
     """
     Configure logging to output to both console and optionally to a file.
     
@@ -116,17 +117,17 @@ log = logging.getLogger("sims-cli")
 log.setLevel(logging.INFO)  # Keep sims-cli messages visible
 
 
-def run_hybrid_experiments(
-    instances_dir: Optional[Path],
-    ratio_step: int = 25,
-    timeout_s: int = 600,
-    solver_type: SolverType = SolverType.GUROBI,
-    front_strategy: FrontStrategy = FrontStrategy.GPBA_A,
-    dry_run: bool = False,
-    iter_count: int = 1,
-    instance_regex: Optional[str] = None,
+def run_experiments(
+    instances_dir: Path | None,
+    ratio_step: int,
+    timeout_s: int,
+    solver_type: SolverType,
+    front_strategy: FrontStrategy,
+    dry_run: bool,
+    iter_count: int,
+    instance_regex: str | None = None,
     skip_solved: bool = False,
-    results_dir: Optional[Path] = None,
+    results_dir: Path | None = None,
     enable_trace: bool = False,
 ) -> int:
     """
@@ -299,15 +300,15 @@ def run_hybrid_experiments(
 
 
 def run_milp_experiments(
-    instances_dir: Optional[Path],
-    timeout_s: int = 600,
-    solver_type: SolverType = SolverType.GUROBI,
-    front_strategy: FrontStrategy = FrontStrategy.GPBA_A,
-    dry_run: bool = False,
-    iter_count: int = 1,
-    instance_regex: Optional[str] = None,
+    instances_dir: Path | None,
+    timeout_s: int,
+    solver_type: SolverType,
+    front_strategy: FrontStrategy,
+    dry_run: bool,
+    iter_count: int,
+    instance_regex: str | None = None,
     skip_solved: bool = False,
-    results_dir: Optional[Path] = None,
+    results_dir: Path | None = None,
 ) -> int:
     """
     Run MILP-only experiments (first phase only, no PLS heuristic).
@@ -458,7 +459,7 @@ def prepare_experiments(
     aois_dir: Path,
     images_dir: Path,
     output_dir: Path,
-    satellite_data_dir: Optional[Path] = None,
+    satellite_data_dir: Path | None = None,
 ) -> int:
     """
     Prepare experiments from AOI and image data.
@@ -542,6 +543,385 @@ def process_results(experiments_dir: Path, output_dir: Path) -> int:
     
     except Exception as e:
         log.error(f"Failed to process results: {e}")
+        return 1
+
+
+def compress_traces(artifacts_dir: Path, filter_pattern: str | None = None, overwrite: bool = False) -> int:
+    """
+    Compress result.json files from test artifacts to trace.tar.gz format.
+    
+    This function scans test_artifacts directory structure and converts all result.json 
+    files to compressed trace.tar.gz archives in the same locations.
+    
+    Args:
+        artifacts_dir: Directory containing test artifacts with result.json files
+        filter_pattern: Regex pattern to filter artifact directories
+        overwrite: Overwrite existing trace.tar.gz files
+    
+    Returns:
+        0 on success, 1 on failure
+    """
+    artifacts_dir = artifacts_dir.resolve()
+    if not artifacts_dir.exists():
+        log.error(f"Artifacts directory does not exist: {artifacts_dir}")
+        return 1
+    
+    log.info(f"🔍 Scanning test artifacts directory: {artifacts_dir}")
+    
+    # Recursively find all result.json files
+    result_files: list[Path] = list(artifacts_dir.rglob("result.json"))
+    
+    # Apply filter if provided
+    if filter_pattern:
+        pattern = re.compile(filter_pattern)
+        filtered_files = []
+        for result_file in result_files:
+            # Check if any parent directory matches the pattern
+            if any(pattern.search(parent.name) for parent in result_file.parents):
+                filtered_files.append(result_file)
+        result_files = filtered_files
+        log.info(f"📦 Filtered to {len(result_files)} result.json files matching pattern: {filter_pattern}")
+    else:
+        log.info(f"📦 Found {len(result_files)} result.json files to process")
+    
+    if not result_files:
+        raise ValueError("No result.json files found matching filter pattern - ensure files exist and pattern is correct")
+    
+    converted_count = 0
+    skipped_count = 0
+    
+    for result_file in sorted(result_files):
+        try:
+            trace_file = result_file.parent / "trace.tar.gz"
+            
+            # Skip if trace file already exists and not overwriting
+            if trace_file.exists() and not overwrite:
+                log.info(f"⏭️  Trace already exists: {trace_file.relative_to(artifacts_dir)}")
+                skipped_count += 1
+                continue
+            
+            log.info(f"🔄 Processing: {result_file.relative_to(artifacts_dir)}")
+            
+            # Load and parse the JSON file
+            with open(result_file, 'r') as f:
+                result_data: dict[str, Any] = json.load(f)
+            
+            # Extract instance name from result data - fail if not found
+            if "instance_name" not in result_data or not result_data["instance_name"]:
+                raise ValueError(f"Missing or empty 'instance_name' field in result.json: {result_file.relative_to(artifacts_dir)}")
+            
+            instance_name = result_data["instance_name"]
+            log.info(f"Processing instance: {instance_name}")
+            
+            # Parse different JSON formats and extract solutions - fail fast on unknown format
+            solutions: list[dict[str, Any]] = []
+            
+            # Format 1: From save_test_artifacts function (test results)
+            if "solutions" in result_data and isinstance(result_data["solutions"], list):
+                if not result_data["solutions"]:
+                    raise ValueError(f"Empty solutions list in result.json: {result_file.relative_to(artifacts_dir)}")
+                
+                for i, sol in enumerate(result_data["solutions"]):
+                    # Strict validation of required solution fields
+                    required_fields = ["selected_images", "cost", "cloudy_area", "max_incidence_angle", "min_resolutions_sum", "timestamp_s"]
+                    for field in required_fields:
+                        if field not in sol:
+                            raise ValueError(f"Solution {i} missing required field '{field}' in result.json")
+                    
+                    solutions.append({
+                        "selected_images": sol["selected_images"],
+                        "cost": sol["cost"], 
+                        "cloudy_area": sol["cloudy_area"],
+                        "max_incidence_angle": sol["max_incidence_angle"],
+                        "min_resolutions_sum": sol["min_resolutions_sum"],
+                        "timestamp_s": sol["timestamp_s"]
+                    })
+                    
+            # Format 2: TwoPhaseSolverResult format (experiment files)
+            elif "pls_result" in result_data or "exact_solver_result" in result_data:
+                found_solutions = False
+                
+                if result_data.get("exact_solver_result") and result_data["exact_solver_result"].get("pareto_front"):
+                    found_solutions = True
+                    for i, sol in enumerate(result_data["exact_solver_result"]["pareto_front"]):
+                        # Strict validation
+                        required_fields = ["selected_images", "cost", "cloudy_area", "max_incidence_angle", "min_resolutions_sum", "timestamp_s"]
+                        for field in required_fields:
+                            if field not in sol:
+                                raise ValueError(f"exact_solver_result solution {i} missing required field '{field}'")
+                        
+                        solutions.append({
+                            "selected_images": sol["selected_images"],
+                            "cost": sol["cost"],
+                            "cloudy_area": sol["cloudy_area"], 
+                            "max_incidence_angle": sol["max_incidence_angle"],
+                            "min_resolutions_sum": sol["min_resolutions_sum"],
+                            "timestamp_s": sol["timestamp_s"]
+                        })
+                
+                if result_data.get("pls_result") and result_data["pls_result"].get("pareto_front"):
+                    found_solutions = True
+                    for i, sol in enumerate(result_data["pls_result"]["pareto_front"]):
+                        # Strict validation
+                        required_fields = ["selected_images", "cost", "cloudy_area", "max_incidence_angle", "min_resolutions_sum", "timestamp_s"]
+                        for field in required_fields:
+                            if field not in sol:
+                                raise ValueError(f"pls_result solution {i} missing required field '{field}'")
+                        
+                        solutions.append({
+                            "selected_images": sol["selected_images"],
+                            "cost": sol["cost"],
+                            "cloudy_area": sol["cloudy_area"],
+                            "max_incidence_angle": sol["max_incidence_angle"],
+                            "min_resolutions_sum": sol["min_resolutions_sum"],
+                            "timestamp_s": sol["timestamp_s"]
+                        })
+                
+                if not found_solutions:
+                    raise ValueError(f"No solutions found in pls_result or exact_solver_result in: {result_file.relative_to(artifacts_dir)}")
+            
+            # Format 3: Direct SolverResult format
+            elif "pareto_front" in result_data:
+                if not result_data["pareto_front"]:
+                    raise ValueError(f"Empty pareto_front in result.json: {result_file.relative_to(artifacts_dir)}")
+                
+                for i, sol in enumerate(result_data["pareto_front"]):
+                    # Strict validation
+                    required_fields = ["selected_images", "cost", "cloudy_area", "max_incidence_angle", "min_resolutions_sum", "timestamp_s"]
+                    for field in required_fields:
+                        if field not in sol:
+                            raise ValueError(f"pareto_front solution {i} missing required field '{field}'")
+                    
+                    solutions.append({
+                        "selected_images": sol["selected_images"],
+                        "cost": sol["cost"],
+                        "cloudy_area": sol["cloudy_area"],
+                        "max_incidence_angle": sol["max_incidence_angle"],
+                        "min_resolutions_sum": sol["min_resolutions_sum"],
+                        "timestamp_s": sol["timestamp_s"]
+                    })
+            
+            else:
+                raise ValueError(f"Unknown JSON format in result.json: {result_file.relative_to(artifacts_dir)}. Expected 'solutions', 'pls_result'/'exact_solver_result', or 'pareto_front' fields")
+            
+            if not solutions:
+                raise ValueError(f"No valid solutions found in: {result_file.relative_to(artifacts_dir)}")
+            
+            log.info(f"Found {len(solutions)} validated solutions for instance: {instance_name}")
+            
+            # Calculate variable bounds from solutions - fail if no variables found
+            all_variables = set()
+            for i, solution in enumerate(solutions):
+                if not solution["selected_images"]:
+                    raise ValueError(f"Solution {i} has empty selected_images list")
+                all_variables.update(solution["selected_images"])
+            
+            if not all_variables:
+                raise ValueError(f"No variables found in any solution in: {result_file.relative_to(artifacts_dir)}")
+            
+            variable_bounds = {
+                "min_var": min(all_variables),
+                "max_var": max(all_variables),
+                "num_variables": len(all_variables)
+            }
+            
+            log.info(f"Variable bounds: {variable_bounds['min_var']}-{variable_bounds['max_var']} ({variable_bounds['num_variables']} variables)")
+            
+            # Get objectives from result data - no defaults, fail if missing
+            if "objectives" not in result_data:
+                raise ValueError(f"Missing 'objectives' field in result.json: {result_file.relative_to(artifacts_dir)}")
+            
+            result_objectives = result_data["objectives"]
+            if not result_objectives or not isinstance(result_objectives, list):
+                raise ValueError(f"Invalid 'objectives' field: expected non-empty list, got {result_objectives}")
+            
+            # Map to the expected objective names for sims-problem - fail if unknown objective
+            objective_mapping = {
+                "min_cost": "min_cost",
+                "cloud_coverage": "cloud_area", 
+                "min_resolution": "min_resolution"
+            }
+            
+            objectives = []
+            for obj in result_objectives:
+                if obj not in objective_mapping:
+                    raise ValueError(f"Unknown objective '{obj}' in result.json. Supported: {list(objective_mapping.keys())}")
+                objectives.append(objective_mapping[obj])
+            
+            obj_count = len(objectives)
+            
+            log.info(f"Using {obj_count} objectives: {objectives} (mapped from {result_objectives})")
+            
+            # Calculate objective bounds from solutions - no defaults, fail if missing data
+            cost_values = []
+            cloudy_area_values = []
+            min_res_values = []
+            
+            for i, sol in enumerate(solutions):
+                # Strict validation of all required fields
+                if "cost" not in sol or sol["cost"] is None:
+                    raise ValueError(f"Solution {i} missing required 'cost' field")
+                if "cloudy_area" not in sol or sol["cloudy_area"] is None:
+                    raise ValueError(f"Solution {i} missing required 'cloudy_area' field")
+                if "min_resolutions_sum" not in sol or sol["min_resolutions_sum"] is None:
+                    raise ValueError(f"Solution {i} missing required 'min_resolutions_sum' field")
+                
+                cost_values.append(int(sol["cost"]))
+                cloudy_area_values.append(int(sol["cloudy_area"]))
+                min_res_values.append(int(sol["min_resolutions_sum"]))
+            
+            log.info(f"Validated {len(cost_values)} complete solutions with all objective values")
+            
+            cost_bound = max(cost_values)
+            cloudy_area_bound = max(cloudy_area_values)
+            min_res_bound = max(min_res_values)
+            
+            objective_bounds = [[0, cost_bound], [0, cloudy_area_bound], [0, min_res_bound]]
+            reference_point = [cost_bound + 1, cloudy_area_bound + 1, min_res_bound + 1]
+            
+            # Convert solutions to sims_problem.Solution objects - strict validation
+            formatted_solutions = []
+            for i, sol in enumerate(solutions):
+                # Strict timestamp validation
+                if "timestamp_s" not in sol or sol["timestamp_s"] is None:
+                    raise ValueError(f"Solution {i} missing required 'timestamp_s' field")
+                
+                timestamp_us = int(sol["timestamp_s"] * 1_000_000)
+                
+                # Strict max_incidence_angle validation - -1 means None (not set), otherwise must be >= 0
+                max_incidence_angle = None
+                if sol["max_incidence_angle"] is not None:
+                    if sol["max_incidence_angle"] == -1:
+                        max_incidence_angle = None  # -1 explicitly means "not set"
+                    elif sol["max_incidence_angle"] < 0:
+                        raise ValueError(f"Solution {i} has invalid max_incidence_angle: {sol['max_incidence_angle']} (must be >= 0 or -1 for None)")
+                    else:
+                        max_incidence_angle = int(sol["max_incidence_angle"])
+                
+                # Strict selected_images validation
+                if not isinstance(sol["selected_images"], list) or not sol["selected_images"]:
+                    raise ValueError(f"Solution {i} has invalid selected_images: must be non-empty list")
+                
+                solution_obj = sims_problem.Solution.create(
+                    selected_images=sol["selected_images"],
+                    cost=int(sol["cost"]),
+                    cloudy_area=int(sol["cloudy_area"]),
+                    timestamp_us=timestamp_us,
+                    max_incidence_angle=max_incidence_angle,
+                    min_resolutions_sum=int(sol["min_resolutions_sum"]) if sol["min_resolutions_sum"] != 0 else 0
+                )
+                formatted_solutions.append(solution_obj)
+            
+            # Generate trace data using sims-problem
+            trace_data = sims_problem.generate_trace(
+                solutions=formatted_solutions,
+                objectives=objectives,
+                algorithm="MILP",
+                num_objectives=obj_count,
+                objective_bounds=objective_bounds,
+                reference_point=reference_point
+            )
+            
+            # Write trace file
+            with open(trace_file, 'wb') as f:
+                f.write(trace_data)
+            
+            log.info(f"✅ Generated trace file: {trace_file.relative_to(artifacts_dir)}")
+            converted_count += 1
+            
+        except json.JSONDecodeError as e:
+            log.error(f"Invalid JSON in {result_file.relative_to(artifacts_dir)}: {e}")
+        except Exception as e:
+            log.error(f"Failed to convert {result_file.relative_to(artifacts_dir)}: {e}")
+            raise  # Re-raise the exception instead of continuing
+    
+    log.info(f"🎉 Successfully converted {converted_count} result.json files to traces")
+    if skipped_count > 0:
+        log.info(f"⏭️  Skipped {skipped_count} existing trace files")
+    return 0
+
+
+def convert_traces(artifacts_dir: Path, output_dir: Path | None = None, filter_pattern: str | None = None) -> int:
+    """
+    Convert CSV summary files to trace.tar.gz archives.
+    
+    Args:
+        artifacts_dir: Directory containing test artifacts with CSV files
+        output_dir: Directory to save trace files (default: same as artifacts_dir)
+        filter_pattern: Regex pattern to filter artifact directories
+    
+    Returns:
+        0 on success, 1 on failure
+    """
+    import re
+    
+    # Import the trace generation function from sims-problem
+    try:
+        sims_problem.generate_trace  # Just check if it exists
+    except AttributeError as e:
+        log.error(f"Failed to access generate_trace from sims_problem: {e}")
+        log.error("Make sure sims-problem is built with the generate_trace function")
+        return 1
+    
+    try:
+        artifacts_dir = artifacts_dir.resolve()
+        if not artifacts_dir.exists():
+            log.error(f"Artifacts directory does not exist: {artifacts_dir}")
+            return 1
+        
+        if output_dir is None:
+            output_dir = artifacts_dir
+        else:
+            output_dir = output_dir.resolve()
+            output_dir.mkdir(parents=True, exist_ok=True)
+        
+        log.info(f"🔍 Scanning artifacts directory: {artifacts_dir}")
+        log.info(f"📁 Output directory: {output_dir}")
+        
+        # Find all directories containing test_summary.csv
+        artifact_dirs = []
+        for item in artifacts_dir.iterdir():
+            if item.is_dir():
+                csv_file = item / "test_summary.csv"
+                if csv_file.exists():
+                    # Apply filter if provided
+                    if filter_pattern is None or re.search(filter_pattern, item.name):
+                        artifact_dirs.append(item)
+                    else:
+                        log.debug(f"Skipping {item.name} (doesn't match filter: {filter_pattern})")
+        
+        if not artifact_dirs:
+            log.warning("No artifact directories with test_summary.csv found")
+            return 0
+        
+        log.info(f"📦 Found {len(artifact_dirs)} artifact directories to process")
+        
+        converted_count = 0
+        for artifact_dir in sorted(artifact_dirs):
+            try:
+                log.info(f"🔄 Processing: {artifact_dir.name}")
+                
+                csv_file = artifact_dir / "test_summary.csv"
+                trace_file = output_dir / f"{artifact_dir.name}_trace.tar.gz"
+                
+                # Skip if trace file already exists
+                if trace_file.exists():
+                    log.info(f"⏭️  Trace file already exists: {trace_file.name}")
+                    continue
+                
+                # TODO: Implement CSV parsing for convert_traces
+                log.warning(f"CSV parsing not yet implemented for: {csv_file.relative_to(artifacts_dir)}")
+                
+            except Exception as e:
+                log.error(f"Failed to convert {artifact_dir.name}: {e}")
+                import traceback
+                log.debug(traceback.format_exc())
+        
+        log.info(f"🎉 Successfully converted {converted_count} artifact directories")
+        return 0
+    
+    except Exception as e:
+        log.error(f"Failed to convert traces: {e}")
         return 1
 
 
@@ -805,6 +1185,82 @@ def main():
         type=Path,
         help='Save logs to specified file (in addition to console output)'
     )
+
+    # Compress traces command
+    compress_traces_parser = subparsers.add_parser(
+        'compress-traces',
+        help='Compress result.json files from test artifacts to trace.tar.gz format',
+        description='Convert result.json files from test artifacts to binary trace archives'
+    )
+    
+    compress_traces_parser.add_argument(
+        '--artifacts-dir',
+        type=Path,
+        default=Path('test_artifacts'),
+        help='Directory containing test artifacts with result.json files (default: test_artifacts)'
+    )
+    
+    compress_traces_parser.add_argument(
+        '--filter',
+        type=str,
+        help='Filter artifacts by name using regex pattern (e.g., "lagos.*30")'
+    )
+    
+    compress_traces_parser.add_argument(
+        '--overwrite',
+        action='store_true',
+        help='Overwrite existing trace.tar.gz files'
+    )
+    
+    compress_traces_parser.add_argument(
+        '--verbose',
+        action='store_true',
+        help='Enable verbose logging'
+    )
+    
+    compress_traces_parser.add_argument(
+        '--log-file',
+        type=Path,
+        help='Save logs to specified file (in addition to console output)'
+    )
+
+    # Convert traces command
+    convert_traces_parser = subparsers.add_parser(
+        'convert-traces',
+        help='Convert CSV summary files to trace.tar.gz archives',
+        description='Convert CSV summary files from test artifacts to binary trace archives'
+    )
+    
+    convert_traces_parser.add_argument(
+        '--artifacts-dir',
+        type=Path,
+        default=Path('sims-solvers/test_artifacts'),
+        help='Directory containing test artifacts with CSV files (default: sims-solvers/test_artifacts)'
+    )
+    
+    convert_traces_parser.add_argument(
+        '--output-dir',
+        type=Path,
+        help='Directory to save trace.tar.gz files (default: same as artifacts-dir)'
+    )
+    
+    convert_traces_parser.add_argument(
+        '--filter',
+        type=str,
+        help='Filter artifacts by name using regex pattern (e.g., "lagos.*30")'
+    )
+    
+    convert_traces_parser.add_argument(
+        '--verbose',
+        action='store_true',
+        help='Enable verbose logging'
+    )
+    
+    convert_traces_parser.add_argument(
+        '--log-file',
+        type=Path,
+        help='Save logs to specified file (in addition to console output)'
+    )
     
     # Parse arguments
     args = parser.parse_args()
@@ -833,7 +1289,7 @@ def main():
                 setup_logging(verbose=verbose, log_file=log_file)
                 log.info(f"📝 Automatically created log file: {log_file}")
             
-            return run_hybrid_experiments(
+            return run_experiments(
                 instances_dir=args.instances_dir,
                 ratio_step=args.ratio_step,
                 timeout_s=args.timeout,
@@ -883,6 +1339,20 @@ def main():
             return process_results(
                 experiments_dir=args.experiments_dir,
                 output_dir=args.output_dir,
+            )
+        
+        elif args.command == 'compress-traces':
+            return compress_traces(
+                artifacts_dir=args.artifacts_dir,
+                filter_pattern=args.filter,
+                overwrite=args.overwrite,
+            )
+        
+        elif args.command == 'convert-traces':
+            return convert_traces(
+                artifacts_dir=args.artifacts_dir,
+                output_dir=args.output_dir,
+                filter_pattern=args.filter,
             )
         
         else:

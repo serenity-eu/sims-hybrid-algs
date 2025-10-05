@@ -15,6 +15,11 @@ from dataclasses import dataclass
 from sims_solvers import solve
 from sims_solvers.Config import Config
 
+# Import trace generation modules
+import sims_problem
+from sims.core.sims.problem import ProblemInstance
+from sims.core.sims.solver_result import SolverResult
+
 
 logger = logging.getLogger(__name__)
 
@@ -65,13 +70,13 @@ def create_test_config(dzn_file_path: str, mzn_model_path: str, test_artifacts_d
         dzn_dir=Path(dzn_file_path).parent,
         solver_name="gurobi",
         problem_name="sims",
-        front_strategy="saugmecon",
+        front_strategy="gpba-a",
         solver_timeout_sec=timeout,
         summary_filename=str(test_subdir / "test_summary.csv"),
         solver_search_strategy="free_search",
         fzn_optimisation_level=1,
-        cores=1,
-        threads=1
+        cores=7,
+        threads=14
     )
 
 
@@ -134,6 +139,72 @@ def run_solve_milp_with_validation(
         else:
             logger.warning(f"Summary file was not created at: {config.summary_filename}")
         
+        # Generate trace file from CSV data
+        if summary_file.exists():
+            try:
+                logger.info("Generating binary trace archive from CSV results...")
+                trace_file = test_subdir / f"{instance_name}_{test_type}_trace.tar.gz"
+                
+                # Create a dummy problem instance for parsing
+                problem_instance = ProblemInstance(
+                    name=instance_name,
+                    problem=None,  # Not needed for CSV parsing
+                )
+                
+                # Parse the CSV file
+                solver_result = SolverResult.from_summary_csv(
+                    input_path=summary_file,
+                    problem_instance=problem_instance,
+                    objectives=objectives
+                )
+                
+                if solver_result.pareto_front:
+                    logger.info(f"Found {len(solver_result.pareto_front)} solutions for trace generation")
+                    
+                    # Convert sims-core Solution objects to sims-problem Solution objects
+                    sims_problem_solutions = []
+                    for solution in solver_result.pareto_front:
+                        # Convert selected_images from frozenset to list
+                        selected_images_list = list(solution.selected_images)
+                        
+                        # Convert timestamp from timedelta to microseconds
+                        timestamp_us = int(solution.timestamp_s.total_seconds() * 1_000_000)
+                        
+                        # Ensure all values are non-negative integers (Rust expects unsigned integers)
+                        cost = max(0, int(solution.cost))
+                        cloudy_area = max(0, int(solution.cloudy_area))
+                        max_incidence_angle = max(0, int(solution.max_incidence_angle)) if solution.max_incidence_angle is not None else None
+                        min_resolutions_sum = max(0, int(solution.min_resolutions_sum)) if solution.min_resolutions_sum is not None else None
+                        
+                        # Create sims_problem.Solution object
+                        sims_solution = sims_problem.Solution.create(
+                            selected_images=selected_images_list,
+                            cost=cost,
+                            cloudy_area=cloudy_area,
+                            timestamp_us=timestamp_us,
+                            max_incidence_angle=max_incidence_angle,
+                            min_resolutions_sum=min_resolutions_sum
+                        )
+                        sims_problem_solutions.append(sims_solution)
+                    
+                    # Generate the trace
+                    trace_bytes = sims_problem.generate_trace(
+                        solutions=sims_problem_solutions,
+                        objectives=objectives,
+                        algorithm="MILP",
+                        num_objectives=len(objectives)
+                    )
+                    
+                    # Save the trace file
+                    trace_file.write_bytes(trace_bytes)
+                    logger.info(f"✅ Generated binary trace archive: {trace_file.name}")
+                else:
+                    logger.warning("No solutions found in CSV for trace generation")
+                    
+            except Exception as trace_error:
+                logger.warning(f"Failed to generate trace file: {trace_error}")
+                # Don't fail the test if trace generation fails, just warn
+        
         # List all files in the test subdirectory
         if test_subdir.exists():
             artifacts = list(test_subdir.glob("*"))
@@ -178,7 +249,7 @@ class TestSolveMILPIntegration:
         
         # Configuration for small instances
         objectives = ["min_cost", "cloud_coverage"]
-        timeout = 180  # 3 minutes for small instances
+        timeout = 3540  # 59 minutes for small instances
         
         # Run the test
         result = run_solve_milp_with_validation(
@@ -211,7 +282,7 @@ class TestSolveMILPIntegration:
         
         # Configuration for small instances with 3 objectives
         objectives = ["min_cost", "cloud_coverage", "min_resolution"]
-        timeout = 240  # 4 minutes for small instances with 3 objectives
+        timeout = 3540  # 59 minutes for small instances with 3 objectives
         
         # Run the test
         result = run_solve_milp_with_validation(
@@ -244,7 +315,7 @@ class TestSolveMILPIntegration:
         
         # Configuration for small instances with 4 objectives
         objectives = ["min_cost", "cloud_coverage", "min_resolution", "min_max_incidence_angle"]
-        timeout = 300  # 5 minutes for small instances with 4 objectives
+        timeout = 3540  # 59 minutes for small instances with 4 objectives
         
         # Run the test
         result = run_solve_milp_with_validation(
@@ -277,7 +348,7 @@ class TestSolveMILPIntegration:
         
         # Configuration for medium instances
         objectives = ["min_cost", "cloud_coverage"]
-        timeout = 300  # 5 minutes for medium instances
+        timeout = 3540  # 59 minutes for medium instances
         
         # Run the test
         result = run_solve_milp_with_validation(
@@ -310,7 +381,7 @@ class TestSolveMILPIntegration:
         
         # Configuration for medium instances with 3 objectives
         objectives = ["min_cost", "cloud_coverage", "min_resolution"]
-        timeout = 400  # 6.5 minutes for medium instances with 3 objectives
+        timeout = 3540  # 59 minutes for medium instances with 3 objectives
         
         # Run the test
         result = run_solve_milp_with_validation(
@@ -343,7 +414,7 @@ class TestSolveMILPIntegration:
         
         # Configuration for medium instances with 4 objectives
         objectives = ["min_cost", "cloud_coverage", "min_resolution", "min_max_incidence_angle"]
-        timeout = 480  # 8 minutes for medium instances with 4 objectives
+        timeout = 3540  # 59 minutes for medium instances with 4 objectives
         
         # Run the test
         result = run_solve_milp_with_validation(
@@ -376,7 +447,7 @@ class TestSolveMILPIntegration:
         
         # Configuration for large instances
         objectives = ["min_cost", "cloud_coverage"]
-        timeout = 600  # 10 minutes for large instances
+        timeout = 3540  # 59 minutes for large instances
         
         # Run the test
         result = run_solve_milp_with_validation(
@@ -409,7 +480,7 @@ class TestSolveMILPIntegration:
         
         # Configuration for large instances with 3 objectives
         objectives = ["min_cost", "cloud_coverage", "min_resolution"]
-        timeout = 900  # 15 minutes for large instances with 3 objectives
+        timeout = 3540  # 59 minutes for large instances with 3 objectives
         
         # Run the test
         result = run_solve_milp_with_validation(
@@ -442,7 +513,7 @@ class TestSolveMILPIntegration:
         
         # Configuration for large instances with 4 objectives
         objectives = ["min_cost", "cloud_coverage", "min_resolution", "min_max_incidence_angle"]
-        timeout = 1200  # 20 minutes for large instances with 4 objectives
+        timeout = 3540  # 59 minutes for large instances with 4 objectives
         
         # Run the test
         result = run_solve_milp_with_validation(

@@ -1,5 +1,6 @@
 from sims_solvers.FrontGenerators.FrontGeneratorStrategy import FrontGeneratorStrategy
 from sims_solvers.FrontGenerators.Saugmecon import Saugmecon
+import logging
 
 
 class CoverageGridPoint(FrontGeneratorStrategy):
@@ -15,6 +16,7 @@ class CoverageGridPoint(FrontGeneratorStrategy):
         self.constraint_objectives_lhs = None
         self.constraint_objectives = [0] * (len(self.solver.model.objectives) - 1)
         self.is_a_minimization_model_originally = False
+        self.logger = logging.getLogger(__name__)
 
     def set_multiply_solution_by_minus_one(self):
         if self.model_optimization_sense == "min":
@@ -26,11 +28,13 @@ class CoverageGridPoint(FrontGeneratorStrategy):
         Implements GPBA-A algorithm with objective rotation as described in the paper:
         'performs a single run for every iteration and for each objective function'
         """
+        self.logger.critical("ORIGINAL GPBA-A: Starting solve method")
         # get the best and worst values for each objective. todo consider computing best and worst only for the objective variables, e.g. all except main_obj_index
         yield from self.get_best_worst_values()
         # convert problem to maximization problem
         self.convert_model_to_maximization()
         
+        self.logger.critical("ORIGINAL GPBA-A: Starting solve_with_main_objective(0)")
         # todo in the original paper only one objective is optimized, rotation is tricky, could lead to missing some points
         # num_objectives = len(self.solver.model.objectives)
         # Run GPBA-A for each objective as the main one (complete objective rotation)
@@ -46,17 +50,23 @@ class CoverageGridPoint(FrontGeneratorStrategy):
         Args:
             main_obj_index: Index of objective to optimize (others become constraints)
         """
+        self.logger.critical(f"ORIGINAL GPBA-A: solve_with_main_objective({main_obj_index})")
         # declare the model with the specified main objective
         self.set_augmecon2_objective_model(main_obj_index)
         
         # Determine constraint objective indices (all except main_obj_index)
         num_objectives = len(self.solver.model.objectives)
         constraint_indices = [i for i in range(num_objectives) if i != main_obj_index]
+        self.logger.critical(f"ORIGINAL GPBA-A: Main objective: {main_obj_index}, Constraint objectives: {constraint_indices}")
         
         # Initializes the loop control variable for all constraint objectives
         ef_array = []
         for i in constraint_indices:
             ef_array.append(self.nadir_objectives_values[i])
+        
+        self.logger.critical(f"ORIGINAL GPBA-A: Initial ef_array: {ef_array}")
+        self.logger.critical(f"ORIGINAL GPBA-A: Best values: {self.best_objective_values}")
+        self.logger.critical(f"ORIGINAL GPBA-A: Nadir values: {self.nadir_objectives_values}")
         
         # Update constraint_objectives array to match number of constraint objectives
         self.constraint_objectives = [0] * len(constraint_indices)
@@ -152,6 +162,7 @@ class CoverageGridPoint(FrontGeneratorStrategy):
 
                     if self.is_a_minimization_model_originally:
                         formatted_solution.solution.objs = [-1 * i for i in formatted_solution.solution.objs]
+                    self.logger.critical(f"ORIGINAL GPBA-A: Found solution: {one_solution}")
                     yield formatted_solution
                     # todo comment below the line below is for testing purposes, uncomment when necessary
                     try:
