@@ -15,6 +15,7 @@ def solve(
     summary_path: Path,
     front_strategy: FrontStrategy,
     objectives: list[str],
+    enable_trace: bool = False,
 ):
     return _utils.run_sims_solver(
         problem_instance,
@@ -24,4 +25,5 @@ def solve(
         SolverType.GUROBI,
         front_strategy,
         objectives,
+        enable_trace,
     )

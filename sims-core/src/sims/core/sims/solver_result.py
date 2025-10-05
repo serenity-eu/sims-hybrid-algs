@@ -268,7 +268,7 @@ class SolverResult:
     problem_instance: ProblemInstance
     front_strategy: Optional[FrontStrategy] = None
     pareto_front_snapshots: list[ParetoFrontSnapshot] = field(default_factory=list)
-    trace_data: Optional[bytes] = None  # PLS trace data for debugging/analysis (raw bytes)
+    trace_data: Optional[bytes] = None  # trace data for debugging/analysis (raw bytes)
 
     def to_dict(self, full=False) -> dict:
         result_dict = {
@@ -292,6 +292,7 @@ class SolverResult:
         objectives: list[str],
         row_index: int = -1,
         no_headers=False,
+        trace_data: Optional[bytes] = None,
     ) -> SolverResult:
         data = Path(input_path).read_text().splitlines()
         if not no_headers:
@@ -324,8 +325,13 @@ class SolverResult:
             ]
             summary_data = list(csv.DictReader(data, fieldnames=fieldnames, delimiter=";"))
 
+        # Print the Exhaustive flag
+        if summary_data:
+            exhaustive_flag = summary_data[row_index].get("exhaustive", "unknown")
+            print(f"Exhaustive flag: {exhaustive_flag}", flush=True)
+
         # Parse the given row of the summary data and return the result object
-        return SolverResult.from_summary_dict(summary_data[row_index], problem_instance, objectives=objectives)
+        return SolverResult.from_summary_dict(summary_data[row_index], problem_instance, objectives=objectives, trace_data=trace_data)
 
     @staticmethod
     def from_summary_dict(
@@ -333,6 +339,7 @@ class SolverResult:
         problem_instance: ProblemInstance,
         objectives: list[str],
         pareto_front_snapshots: list[ParetoFrontSnapshot] | None = None,
+        trace_data: Optional[bytes] = None,
     ) -> SolverResult:
         expected_name = problem_instance.name
         # Check if the instance name is the expected one
@@ -376,7 +383,9 @@ class SolverResult:
                 max_incidence_angle=obj_map.get("min_max_incidence_angle", -1),
                 timestamp_s=timedelta(seconds=float(timestamp_s)),
             )
-            solution.fix_objectives(problem_instance.problem, objectives)
+            # Only fix objectives if we have a problem instance
+            if problem_instance.problem is not None:
+                solution.fix_objectives(problem_instance.problem, objectives)
             pareto_front.append(solution)
 
         # Derive the pareto front snapshots from current pareto front
@@ -415,6 +424,7 @@ class SolverResult:
             solver_type=SolverType.from_str(summary_dict["solver_name"]),
             front_strategy=FrontStrategy.from_str(summary_dict["front_strategy"]),
             pareto_front_snapshots=pareto_front_snapshots or [],
+            trace_data=trace_data,
         )
 
     def validate(self) -> bool:
@@ -502,11 +512,104 @@ class TwoPhaseSolverResult:
     pls_result: Optional[SolverResult] | None = None
     discarded_solutions: list[Solution] | None = None
     added_solutions: list[Solution] | None = None
+    _trace_data: bytes | None = field(default=None, init=False)
+
+    def __post_init__(self):
+        """Compute merged trace data after initialization."""
+        self._trace_data = self._compute_merged_trace_data()
+
+    @property
+    def trace_data(self) -> bytes | None:
+        """Get the merged trace data from both phases."""
+        return self._trace_data
+
+    def _compute_merged_trace_data(self) -> bytes | None:
+        """Compute merged trace data from exact and PLS solver results."""
+        exact_has_trace = (self.exact_solver_result is not None and 
+                          hasattr(self.exact_solver_result, 'trace_data') and 
+                          self.exact_solver_result.trace_data is not None)
+        pls_has_trace = (self.pls_result is not None and 
+                        hasattr(self.pls_result, 'trace_data') and 
+                        self.pls_result.trace_data is not None)
+        
+        if exact_has_trace and pls_has_trace and self.exact_solver_result and self.pls_result:
+            # Import merge_traces function from sims_problem
+            import sims_problem
+            
+            # Calculate objective bounds and reference point from combined pareto fronts
+            objective_bounds, reference_point = self._calculate_objective_bounds_and_ref_point()
+            
+            # Merge traces with proper timestamp offsetting
+            combined_algorithm = f"two-phase-{self.solver_config.ratio[0]}-{self.solver_config.ratio[1]}"
+            return sims_problem.merge_traces(
+                self.exact_solver_result.trace_data,
+                self.pls_result.trace_data, 
+                combined_algorithm,
+                objective_bounds,
+                reference_point
+            )
+        elif exact_has_trace and self.exact_solver_result:
+            return self.exact_solver_result.trace_data
+        elif pls_has_trace and self.pls_result:
+            return self.pls_result.trace_data
+        else:
+            return None
+
+    def _calculate_objective_bounds_and_ref_point(self):
+        """Calculate objective bounds and reference point from combined pareto fronts."""
+        # Collect all solutions from both phases
+        all_solutions: list[Solution] = []
+        if self.exact_solver_result and self.exact_solver_result.pareto_front:
+            all_solutions.extend(self.exact_solver_result.pareto_front)
+        if self.pls_result and self.pls_result.pareto_front:
+            all_solutions.extend(self.pls_result.pareto_front)
+        
+        if not all_solutions:
+            # Default bounds if no solutions
+            return [[0, 0], [0, 0]], [1, 1]
+        
+        # Determine number of objectives based on solution attributes
+        objectives = []
+        if all_solutions[0].cost is not None and all_solutions[0].cost >= 0:
+            objectives.append('cost')
+        if all_solutions[0].cloudy_area is not None and all_solutions[0].cloudy_area >= 0:
+            objectives.append('cloudy_area')
+        if all_solutions[0].max_incidence_angle is not None and all_solutions[0].max_incidence_angle >= 0:
+            objectives.append('max_incidence_angle')
+        if all_solutions[0].min_resolutions_sum is not None and all_solutions[0].min_resolutions_sum >= 0:
+            objectives.append('min_resolutions_sum')
+        
+        # Calculate bounds for each objective
+        bounds = []
+        ref_point = []
+        
+        for obj_name in objectives:
+            match obj_name:
+                case 'cost':
+                    values = [sol.cost for sol in all_solutions if sol.cost is not None]
+                case 'cloudy_area':
+                    values = [sol.cloudy_area for sol in all_solutions if sol.cloudy_area is not None]
+                case 'max_incidence_angle':
+                    values = [sol.max_incidence_angle for sol in all_solutions if sol.max_incidence_angle is not None]
+                case 'min_resolutions_sum':
+                    values = [sol.min_resolutions_sum for sol in all_solutions if sol.min_resolutions_sum is not None]
+                case _:
+                    raise ValueError(f"Unknown objective name: {obj_name}")
+            # Raise error if any objective has sentinel value (-1)
+            if any(v == -1 for v in values):
+                raise ValueError(f"Found sentinel value (-1) in objective '{obj_name}' values: {values}")
+            min_val = min(values)
+            max_val = max(values)
+            bounds.append([min_val, max_val])
+            ref_point.append(max_val + 1)
+        
+        return bounds, ref_point
 
     def to_dict(self, full=False):
         result_dict = {
             "ratio": list(self.solver_config.ratio),
             "total_time_sec": self.total_time_sec,
+            "solutions": self.solutions,
             "exact_solver_result": self.exact_solver_result.to_dict()
             if self.exact_solver_result is not None
             else None,
@@ -516,16 +619,13 @@ class TwoPhaseSolverResult:
         if full:
             result_dict["problem_instance"] = self.problem_instance.to_dict()
             result_dict["solver_config"] = dataclasses.asdict(self.solver_config)
-            result_dict["pls_result"] = (
-                self.pls_result.to_dict() if self.pls_result is not None else None
-            )
             if self.discarded_solutions is not None:
                 result_dict["discarded_solutions"] = [
-                    dataclasses.asdict(solution) for solution in self.discarded_solutions
+                    solution.to_json() for solution in self.discarded_solutions
                 ]
             if self.added_solutions is not None:
                 result_dict["added_solutions"] = [
-                    dataclasses.asdict(solution) for solution in self.added_solutions
+                    solution.to_json() for solution in self.added_solutions
                 ]
         return result_dict
 
@@ -570,6 +670,9 @@ class TwoPhaseSolverResult:
                     exact_solver_result.pareto_front, pls_result.pareto_front
                 )
             )
+        elif exact_solver_result is None and pls_result is not None:
+            # PLS-only case (0:100 ratio): all PLS solutions are "added" solutions
+            discarded_solutions, added_solutions = None, pls_result.pareto_front
         else:
             discarded_solutions, added_solutions = None, None
 
@@ -779,3 +882,30 @@ class TwoPhaseSolverResult:
         else:
             # Should never happen
             raise ValueError("Both exact and PLS results are None")
+
+    @property
+    def solutions(self) -> list[dict]:
+        """
+        Get a combined list of solutions from both phases with correct indexing and phase information.
+        This property ensures that solutions from the PLS phase that were also in the exact phase are not duplicated.
+        """
+        all_solutions = []
+        
+        # Add exact solutions
+        if self.exact_solver_result:
+            for i, sol in enumerate(self.exact_solver_result.pareto_front):
+                sol_dict = sol.to_json()
+                sol_dict["phase"] = "exact"
+                sol_dict["index"] = i
+                all_solutions.append(sol_dict)
+        
+        # Add unique solutions from PLS phase
+        if self.added_solutions:
+            start_index = len(self.exact_solver_result.pareto_front) if self.exact_solver_result else 0
+            for i, sol in enumerate(self.added_solutions):
+                sol_dict = sol.to_json()
+                sol_dict["phase"] = "heuristic"
+                sol_dict["index"] = start_index + i
+                all_solutions.append(sol_dict)
+                
+        return all_solutions

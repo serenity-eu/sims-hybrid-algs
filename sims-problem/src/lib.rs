@@ -14,12 +14,17 @@ pub use solver::MilpConfig;
 pub use solver::PlsConfig;
 
 use pyo3::prelude::*;
+use std::sync::Once;
+
+static INIT_LOGGER: Once = Once::new();
 
 /// A Python module implemented in Rust.
 #[pymodule]
 fn sims_problem(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    // Initialize logging bridge from Rust to Python
-    pyo3_log::init();
+    // Initialize logging bridge from Rust to Python (only once)
+    INIT_LOGGER.call_once(|| {
+        pyo3_log::init();
+    });
 
     // Add solver functions
     m.add_function(wrap_pyfunction!(solver::solve_with_pls, m)?)?;
@@ -30,6 +35,12 @@ fn sims_problem(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Add hypervolume function
     m.add_function(wrap_pyfunction!(hypervolume::compute_hypervolume, m)?)?;
+
+    // Add trace generation function
+    m.add_function(wrap_pyfunction!(trace::generate_trace, m)?)?;
+    
+    // Add trace merging function
+    m.add_function(wrap_pyfunction!(trace::merge_traces, m)?)?;
 
     // Add classes
     m.add_class::<SimsDiscreteProblem>()?;
