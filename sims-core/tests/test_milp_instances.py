@@ -81,8 +81,8 @@ def run_solver_with_validation(
         execution_time = time.time() - start_time
         logger.info(f"Execution completed successfully in {execution_time:.2f} seconds")
         
-        # Validate result using utility function
-        success, error_msg = validate_solver_result(result, SolverResult)
+        # Validate result using utility function with semantic validation
+        success, error_msg = validate_solver_result(result, problem_instance.problem, objectives)
         if not success:
             return SolverTestResult(
                 instance_name=instance_name,

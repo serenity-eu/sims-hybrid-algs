@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import List, Optional
 from dataclasses import dataclass
 
-from sims.core.sims.problem import ProblemInstance
+from sims.core.sims.problem import ProblemInstance, SimsDiscreteProblem
 from sims.core.sims.solver_result import SolverResult, TwoPhaseSolverResult
 
 
@@ -68,36 +68,72 @@ def create_temp_output_dir(instance_name: str, test_type: str) -> Path:
     return output_dir
 
 
-def validate_solver_result(result, expected_type=SolverResult) -> tuple[bool, str]:
+def validate_solver_result(result: SolverResult, problem: SimsDiscreteProblem, objectives: list[str] | None = None) -> tuple[bool, str]:
     """
-    Validate a solver result and return success status and error message.
+    Validate a single solver result with semantic validation of solutions.
     
     Args:
         result: The solver result to validate
-        expected_type: Expected result type (SolverResult or TwoPhaseSolverResult)
+        problem: SimsDiscreteProblem for semantic validation of solutions
+        objectives: Optional list of objective names that were optimized (for validation)
     
     Returns:
         Tuple of (success, error_message)
     """
-    if not isinstance(result, expected_type):
-        return False, f"Expected {expected_type.__name__}, got {type(result)}"
+    if not result.pareto_front:
+        return True, ""  # No solutions to validate
     
-    if expected_type == TwoPhaseSolverResult:
-        # For two-phase results, check if we have at least one result
-        if not result.exact_solver_result and not result.pls_result:
-            return False, "Two-phase result contains no solver results"
-        # Check for solutions in available results
-        total_solutions = 0
-        if result.exact_solver_result and result.exact_solver_result.pareto_front:
-            total_solutions += len(result.exact_solver_result.pareto_front)
-        if result.pls_result and result.pls_result.pareto_front:
-            total_solutions += len(result.pls_result.pareto_front)
-        return True, ""
-    else:
-        # For regular solver results
-        if not hasattr(result, 'pareto_front'):
-            return False, "Result missing pareto_front attribute"
-        return True, ""
+    # Semantic validation
+    for idx, solution in enumerate(result.pareto_front):
+        if not solution.validate(problem):
+            return False, f"Solution {idx} failed validation (constraint violation or incorrect coverage)"
+        
+        # Validate objective values
+        if not solution.validate_objectives(problem, objectives):
+            return False, f"Solution {idx} has incorrect objective values"
+    
+    return True, ""
+
+
+def validate_two_phase_solver_result(result: TwoPhaseSolverResult, problem: SimsDiscreteProblem, objectives: list[str] | None = None) -> tuple[bool, str]:
+    """
+    Validate a two-phase solver result with semantic validation of solutions.
+    
+    Args:
+        result: The two-phase solver result to validate
+        problem: SimsDiscreteProblem for semantic validation of solutions
+        objectives: Optional list of objective names that were optimized (for validation)
+    
+    Returns:
+        Tuple of (success, error_message)
+    """
+    # Validate exact solver result
+    if result.exact_solver_result:
+        if not result.exact_solver_result.pareto_front:
+            logging.info("No solutions found in exact solver phase")
+        else:
+            for idx, solution in enumerate(result.exact_solver_result.pareto_front):
+                if not solution.validate(problem):
+                    return False, f"Solution {idx} from exact solver failed validation (constraint violation or incorrect coverage)"
+                
+                # Validate objective values
+                if not solution.validate_objectives(problem, objectives):
+                    return False, f"Solution {idx} from exact solver has incorrect objective values"
+    
+    # Validate PLS result
+    if result.pls_result:
+        if not result.pls_result.pareto_front:
+            logging.info("No solutions found in PLS phase")
+        else:
+            for idx, solution in enumerate(result.pls_result.pareto_front):
+                if not solution.validate(problem):
+                    return False, f"Solution {idx} from pls failed validation (constraint violation or incorrect coverage)"
+                
+                # Validate objective values
+                if not solution.validate_objectives(problem, objectives):
+                    return False, f"Solution {idx} from pls has incorrect objective values"
+    
+    return True, ""
 
 
 def log_solution_details(result, logger: logging.Logger):

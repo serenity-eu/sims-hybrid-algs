@@ -9,19 +9,19 @@ description = "SIMS Hybrid Solvers - Core Package"
 requires-python = ">=3.11"
 authors = [{ name = "Vladyslav Hlushchenko", email = "hl.vladyslav@gmail.com" }]
 dependencies = [
-    "aiohttp==3.12.6",
+    "aiohttp==3.12.15",
     "geojson==3.2.0",
-    "geopandas==1.0.1",
-    "numpy==2.2.6",
+    "geopandas==1.1.1",
+    "numpy==2.3.3",
     "pymoo==0.6.1.5",
-    "shapely==2.1.1",
+    "shapely==2.1.2",
     "sims-problem",
     "sims-solvers==0.1.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "ruff==0.11.12"
+    "ruff==0.13.3"
 ]
 
 [tool.uv.sources]
