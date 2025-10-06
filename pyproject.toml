@@ -8,23 +8,23 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "python-dotenv==1.1.0",
-    "pandas==2.2.3",
+    "python-dotenv==1.1.1",
+    "pandas==2.3.3",
     "sims-core==0.1.0",
     "seaborn==0.13.2",
     "scikit-posthocs>=0.11.4",
-    "geopandas>=1.0.1",
-    "matplotlib>=3.10.3",
-    "scipy>=1.15.3",
-    "numpy>=2.2.6",
-    "maturin>=1.9.0",
-    "plotly>=6.2.0",
+    "geopandas>=1.1.1",
+    "matplotlib>=3.10.6",
+    "scipy>=1.16.2",
+    "numpy>=2.3.3",
+    "maturin>=1.9.5",
+    "plotly>=6.3.1",
     "sims-solvers",
     "sims-problem",
 ]
 
 [project.optional-dependencies]
-dev = ["ruff==0.11.12"]
+dev = ["ruff==0.13.3"]
 
 [project.scripts]
 sims = "sims_cli:main"

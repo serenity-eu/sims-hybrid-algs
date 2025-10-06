@@ -11,17 +11,17 @@ requires-python = ">=3.11"
 dependencies = [
     "contextily==1.6.2",
     "dataclasses-json==0.6.7",
-    "filelock==3.18.0",
+    "filelock==3.19.1",
     "geojson==3.2.0",
-    "geopandas==1.0.1",
-    "gurobipy==12.0.2",
-    "numpy==2.2.6",
-    "ortools==9.12.4544",
+    "geopandas==1.1.1",
+    "gurobipy==12.0.3",
+    "numpy==2.3.3",
+    "ortools==9.14.6206",
     "pymoo==0.6.1.5",
-    "shapely==2.1.1",
+    "shapely==2.1.2",
     "minizinc[dzn]==0.10.0",
-    "pytest>=8.4.1",
-    "pytest-timeout>=2.1.0",
+    "pytest>=8.4.2",
+    "pytest-timeout>=2.4.0",
 ]
 
 [project.scripts]

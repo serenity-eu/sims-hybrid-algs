@@ -116,33 +116,61 @@ class Solution:
             )
         )
 
-    def validate_objectives(self, problem: SimsDiscreteProblem) -> bool:
+    def validate_objectives(self, problem: SimsDiscreteProblem, objectives: list[str] | None = None) -> bool:
         """
         Validate the objectives of the solution
+        
+        Args:
+            problem: The problem instance to validate against
+            objectives: Optional list of objective names to validate. If None, validates all non-None objectives.
+                       Valid objective names: "min_cost", "cloud_coverage", "min_max_incidence_angle", "min_resolution"
         """
-        # Get all objective names to validate all of them
-        all_objectives = ["min_cost", "cloud_coverage", "min_max_incidence_angle", "min_resolution"]
+        # If objectives not specified, validate all objectives that are set (not None)
+        if objectives is None:
+            all_objectives = ["min_cost", "cloud_coverage", "min_max_incidence_angle", "min_resolution"]
+        else:
+            all_objectives = objectives
+            
         computed_objectives = self.compute_objectives(problem, all_objectives)
 
-        is_cost_valid = self.cost == computed_objectives.get("min_cost", self.cost)
-        is_cloudy_area_valid = self.cloudy_area == computed_objectives.get("cloud_coverage", self.cloudy_area)
-        is_max_incidence_angle_valid = (
-            self.max_incidence_angle == computed_objectives.get("min_max_incidence_angle", self.max_incidence_angle)
-            if self.max_incidence_angle != -1
-            else True
-        )
-        is_min_resolutions_sum_valid = (
-            self.min_resolutions_sum == computed_objectives.get("min_resolution", self.min_resolutions_sum)
-            if self.min_resolutions_sum != -1
-            else True
-        )
+        # Validate only the objectives that were requested
+        validations = {}
+        
+        if "min_cost" in all_objectives:
+            validations["cost"] = self.cost == computed_objectives.get("min_cost", self.cost)
+        
+        if "cloud_coverage" in all_objectives:
+            validations["cloudy_area"] = self.cloudy_area == computed_objectives.get("cloud_coverage", self.cloudy_area)
+        
+        if "min_max_incidence_angle" in all_objectives:
+            validations["max_incidence_angle"] = (
+                self.max_incidence_angle == computed_objectives.get("min_max_incidence_angle", self.max_incidence_angle)
+                if self.max_incidence_angle is not None and self.max_incidence_angle != -1
+                else True
+            )
+        
+        if "min_resolution" in all_objectives:
+            validations["min_resolutions_sum"] = (
+                self.min_resolutions_sum == computed_objectives.get("min_resolution", self.min_resolutions_sum)
+                if self.min_resolutions_sum is not None and self.min_resolutions_sum != -1
+                else True
+            )
 
-        return (
-            is_cost_valid
-            and is_cloudy_area_valid
-            and is_max_incidence_angle_valid
-            and is_min_resolutions_sum_valid
-        )
+        all_valid = all(validations.values())
+        
+        # Print differences if invalid
+        if not all_valid:
+            print(f"Objective validation failed for solution with images: {sorted(self.selected_images)}")
+            if "cost" in validations and not validations["cost"]:
+                print(f"  cost: expected {computed_objectives.get('min_cost')}, got {self.cost}")
+            if "cloudy_area" in validations and not validations["cloudy_area"]:
+                print(f"  cloudy_area: expected {computed_objectives.get('cloud_coverage')}, got {self.cloudy_area}")
+            if "max_incidence_angle" in validations and not validations["max_incidence_angle"]:
+                print(f"  max_incidence_angle: expected {computed_objectives.get('min_max_incidence_angle')}, got {self.max_incidence_angle}")
+            if "min_resolutions_sum" in validations and not validations["min_resolutions_sum"]:
+                print(f"  min_resolutions_sum: expected {computed_objectives.get('min_resolution')}, got {self.min_resolutions_sum}")
+        
+        return all_valid
 
     def fix_objectives(self, problem: SimsDiscreteProblem, objectives: list[str]):
         """

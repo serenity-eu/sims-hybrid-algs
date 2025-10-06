@@ -17,7 +17,7 @@ from sims.core.sims.solver_result import TwoPhaseSolverResult
 from solver_test_utils import (
     SolverTestResult, SMALL_INSTANCES, MEDIUM_INSTANCES, LARGE_INSTANCES,
     TWO_PHASE_RATIOS, create_problem_instance, create_temp_output_dir,
-    validate_solver_result, log_solution_details, save_test_artifacts,
+    validate_two_phase_solver_result, log_solution_details, save_test_artifacts,
     format_ratio_string, get_timeout_for_instance_size
 )
 
@@ -91,8 +91,8 @@ def run_two_phase_solver_with_validation(
         execution_time = time.time() - start_time
         logger.info(f"Two-phase execution completed successfully in {execution_time:.2f} seconds")
         
-        # Validate that we got a valid result
-        success, error_msg = validate_solver_result(result, TwoPhaseSolverResult)
+        # Validate that we got a valid result with semantic validation
+        success, error_msg = validate_two_phase_solver_result(result, problem_instance.problem, objectives)
         if not success:
             return SolverTestResult(
                 instance_name=instance_name,
