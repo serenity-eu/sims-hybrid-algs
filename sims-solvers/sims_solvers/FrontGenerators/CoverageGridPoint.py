@@ -17,6 +17,7 @@ class CoverageGridPoint(FrontGeneratorStrategy):
         self.constraint_objectives = [0] * (len(self.solver.model.objectives) - 1)
         self.is_a_minimization_model_originally = False
         self.logger = logging.getLogger(__name__)
+        self.obj_k_at_ef_k = [None] * (len(self.solver.model.objectives) - 1)
 
     def set_multiply_solution_by_minus_one(self):
         if self.model_optimization_sense == "min":
@@ -178,24 +179,28 @@ class CoverageGridPoint(FrontGeneratorStrategy):
                         if calculated_cloud_uncovered != abs(one_solution[1]):
                             print(f"Cloud covered error. Expected: {one_solution[1]}, calculated: {calculated_cloud_uncovered}")
         # Update relative worst values array
-        sol_obj_id = None
         id_interval = -1
+        self.obj_k_at_ef_k[id_interval] = None
         if len(one_solution) > 0:
             for i in range(len(rwv)):
                 rwv[i] = min(rwv[i], one_solution[constraint_indices[i]])
-            sol_obj_id = one_solution[constraint_indices[id_interval]]
+                self.obj_k_at_ef_k[i] = rwv[i]
+            self.obj_k_at_ef_k[id_interval] = one_solution[constraint_indices[id_interval]]
 
-        # Update all constraint objectives. NOTE: An objective x (with 0 < x < p-1, where p-1 is the index of the last objective) is only updated when the ef_array[x-1] > best_value[x-1]
-        ef_intervals[id_interval] = self.adjust_parameter_ef_array(id_interval, ef_array, sol_obj_id, ef_intervals[id_interval], constraint_indices, gamma)
+        # Update all constraint objectives. NOTE: An objective x (with 1 <= x <= p-2, where p-1 is the index of the
+        # last objective) is only updated when the ef_array[x+1] > best_value[x+1]
+        ef_intervals[id_interval] = self.adjust_parameter_ef_array(id_interval, ef_array, self.obj_k_at_ef_k[id_interval], ef_intervals[id_interval], constraint_indices, gamma)
         for i in range(len(constraint_indices)-1, 0, -1):
             if ef_array[i] > self.best_objective_values[constraint_indices[i]]:
                 ef_array[i] = self.nadir_objectives_values[constraint_indices[i]]
                 rwv[i] = self.best_objective_values[constraint_indices[i]]
                 id_interval = i - 1
-                if sol_obj_id is not None:
-                    sol_obj_id = one_solution[constraint_indices[id_interval]]
-                ef_intervals[id_interval] = self.adjust_parameter_ef_array(id_interval, ef_array, sol_obj_id,
-                                               ef_intervals[id_interval], constraint_indices, gamma)
+                ef_intervals[id_interval] = self.adjust_parameter_ef_array(id_interval, ef_array, self.obj_k_at_ef_k[id_interval],
+                                                                           ef_intervals[id_interval], constraint_indices, gamma)
+                self.obj_k_at_ef_k[id_interval] = None
+                # todo review this part, it is not in the original algorithm but I think it is correct and speed up the resolution time
+                if i == 1:
+                    rwv[id_interval] = self.best_objective_values[constraint_indices[id_interval]]
             else:
                 break
 
@@ -219,7 +224,12 @@ class CoverageGridPoint(FrontGeneratorStrategy):
         else:
             # Map from constraint objective index to actual objective index
             end_removal = min(sol_obj_k, ef_interval.max_value)
-        ef_interval.remove_interval(start_removal, end_removal)
+        if start_removal < end_removal:
+            ef_interval.remove_interval(start_removal, end_removal)
+        else:
+            ef_interval.remove_one_point(start_removal)
+            if start_removal > end_removal:
+                ef_interval.remove_one_point(end_removal)
         # update max_value
         if end_removal >= ef_interval.max_value:
             ef_interval.max_value = new_max_interval
@@ -230,10 +240,10 @@ class CoverageGridPoint(FrontGeneratorStrategy):
         else:
             if max_interval is not None:
                 ef_array[id_constraint_objective] = int((max_interval[0] + max_interval[1]) / 2)
-            else:
-                ef_array[id_constraint_objective] = self.best_objective_values[actual_obj_index] + 1
-                # reinitialize the interval manager to avoid stopping the algorithm
-                ef_interval = self.create_interval(actual_obj_index)
+        else:
+            ef_array[id_constraint_objective] = self.best_objective_values[actual_obj_index] + 1
+            # reinitialize the interval manager to avoid stopping the algorithm
+            ef_interval = self.create_interval(actual_obj_index)
         return ef_interval
 
     def convert_model_to_maximization(self):
@@ -305,7 +315,7 @@ class CoverageGridPoint(FrontGeneratorStrategy):
         min_interval = min(self.nadir_objectives_values[i], self.best_objective_values[i])
         max_interval = max(self.nadir_objectives_values[i], self.best_objective_values[i])
         # todo Vlad review if it should be min_interval or min_interval+1 and max_interval or max_interval-1
-        return IntervalManager(min_interval + 1, max_interval - 1)
+        return IntervalManager(min_interval, max_interval)
 
 
 class IntervalManager:
@@ -328,6 +338,18 @@ class IntervalManager:
                 to_add = (min(to_add[0], interval[0]), max(to_add[1], interval[1]))
         new_intervals.add(to_add)
         self.intervals = new_intervals
+
+    def remove_one_point(self, point):
+        new_intervals = set()
+        for interval in self.intervals:
+            if interval[0] <= point <= interval[1]:  # Point is within this interval
+                if interval[0] < point:
+                    new_intervals.add((interval[0], point - 1))
+                if interval[1] > point:
+                    new_intervals.add((point + 1, interval[1]))
+            else:  # No overlap, keep interval
+                new_intervals.add(interval)
+        self.intervals = new_intervals  # Update intervals
 
     def remove_interval(self, start, end):
         """
