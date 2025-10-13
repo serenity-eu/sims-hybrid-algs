@@ -255,9 +255,16 @@ def get_timeout_for_instance_size(instances: List[str], base_timeout: int = 3300
     
     Args:
         instances: List of instance filenames to determine size category
-        base_timeout: Base timeout in seconds (default 59 minutes)
+        base_timeout: Base timeout in seconds (default 55 minutes)
     
     Returns:
         Timeout in seconds
     """
+    # Check if any instance is in LARGE_INSTANCES
+    # For large instances, use a reduced timeout to ensure completion before pytest timeout (3600s)
+    for instance in instances:
+        if instance in LARGE_INSTANCES:
+            # 50 minutes for large instances (leaves 10 min buffer for pytest's 60 min timeout)
+            return 3000
+    
     return base_timeout  

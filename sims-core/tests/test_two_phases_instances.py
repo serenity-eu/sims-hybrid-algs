@@ -4,6 +4,7 @@ Tests two-phase solver configurations (exact solver + PLS) on different instance
 with various time allocation ratios and multiple objectives.
 """
 
+import json
 import logging
 import time
 from pathlib import Path
@@ -22,6 +23,29 @@ from solver_test_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# Load objective bounds from JSON file
+def load_objective_bounds() -> dict[str, list[list[int]]]:
+    """Load objective bounds from tests/data/objective_bounds.json"""
+    bounds_file = Path(__file__).parent / "data" / "objective_bounds.json"
+    if not bounds_file.exists():
+        logger.warning(f"Objective bounds file not found: {bounds_file}")
+        return {}
+    
+    with open(bounds_file, 'r') as f:
+        data = json.load(f)
+    
+    return data.get("bounds", {})
+
+
+# Load bounds once at module level
+OBJECTIVE_BOUNDS = load_objective_bounds()
+
+
+def get_objective_bounds_for_instance(instance_name: str) -> list[list[int]] | None:
+    """Get objective bounds for a specific instance from the loaded data."""
+    return OBJECTIVE_BOUNDS.get(instance_name)
 
 
 def run_two_phase_solver_with_validation(
@@ -53,11 +77,18 @@ def run_two_phase_solver_with_validation(
     instance_name = Path(instance_path).stem
     ratio_str = format_ratio_string(ratio)
     
+    # Get objective bounds for this instance
+    objective_bounds = get_objective_bounds_for_instance(instance_name)
+    
     logger.info(f"Running two-phase solver on instance {instance_name}")
     logger.info(f"Objectives: {objectives}")
     logger.info(f"Ratio: {ratio[0]}% exact, {ratio[1]}% PLS ({ratio_str})")
     logger.info(f"Timeout: {timeout}s")
     logger.info(f"Test type: {test_type}")
+    if objective_bounds:
+        logger.info(f"Using objective bounds: {objective_bounds}")
+    else:
+        logger.info("No objective bounds available for this instance")
     
     start_time = time.time()
     
@@ -77,7 +108,7 @@ def run_two_phase_solver_with_validation(
             ratio=ratio
         )
         
-        # Call solver.solve_with_two_phases
+        # Call solver.solve_with_two_phases with objective bounds
         result = solve_with_two_phases(
             problem_instance=problem_instance,
             problem_path=Path(instance_path),
@@ -85,7 +116,8 @@ def run_two_phase_solver_with_validation(
             solver_config=solver_config,
             objectives=objectives,
             dry_run=False,
-            enable_pls_trace=True
+            enable_pls_trace=True,
+            objective_bounds=objective_bounds
         )
 
         execution_time = time.time() - start_time

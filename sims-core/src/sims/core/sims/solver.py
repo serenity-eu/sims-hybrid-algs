@@ -19,6 +19,7 @@ def solve(
     front_strategy: FrontStrategy = FrontStrategy.NON_APLICABLE,
     initial_population: list[Solution] | None = None,
     enable_trace: bool = False,
+    objective_bounds: list[list[int]] | None = None,
 ) -> SolverResult:
     match solver_type:
         case SolverType.OR_TOOLS:
@@ -36,6 +37,7 @@ def solve(
                 objectives,
                 initial_population,
                 enable_trace=enable_trace,
+                objective_bounds=objective_bounds,
             )
         case _:
             raise ValueError(f"Solver type {solver_type} is not supported")
@@ -53,6 +55,7 @@ def solve_with_two_phases(
     objectives: list[str],
     dry_run: bool = False,
     enable_pls_trace: bool = False,
+    objective_bounds: list[list[int]] | None = None,
 ) -> TwoPhaseSolverResult:
     exact_solver_result = None
     pls_result = None
@@ -108,6 +111,7 @@ def solve_with_two_phases(
                 objectives,
                 initial_population=initial_population,
                 enable_trace=enable_pls_trace,
+                objective_bounds=objective_bounds,
             )
 
             log.info(f"[{problem_instance.name}][solve_with_two_phases] - PLS found {len(pls_result.pareto_front)} solutions")
