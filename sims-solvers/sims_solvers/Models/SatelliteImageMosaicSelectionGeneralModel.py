@@ -96,6 +96,7 @@ class SatelliteImageMosaicSelectionGeneralModel(GenericModel, ABC):
         return float(sum(resolution_parts_max.values()))
 
     def assert_solution(self, solution: list[float], selected_images: list[int]) -> None:
+        # todo only assert the objectives that are in the problem
         self.assert_is_a_cover(selected_images)
         self.assert_cost(selected_images, solution[0])
         self.assert_cloud_covered(selected_images, solution[1])

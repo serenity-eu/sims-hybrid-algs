@@ -146,8 +146,15 @@ class TestIntervalManager:
         manager.remove_interval(3, 5)
         largest = manager.find_largest_interval()
         assert largest is not None, "Should find largest interval after removal"
+        assert largest[0] == 6 and largest[1] == 10, "Largest interval should be [1,2]"
+
+        # Test point removal
+        manager.remove_one_point(7)
+        for interval in manager.intervals:
+            assert 7 < interval[0] or 7 > interval[1], "Point 7 should be removed from intervals"
         
         # Test interval addition
+        manager = IntervalManager(1, 10)
         manager.add_interval(15, 20)
         assert len(manager.intervals) >= 1, "Should have intervals after addition"
 
