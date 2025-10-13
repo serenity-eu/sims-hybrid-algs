@@ -146,7 +146,8 @@ impl PlsConfig {
     initial_population=None,
     neighborhood_size_min=1,
     neighborhood_size_max=6,
-    trace=true
+    trace=true,
+    objective_bounds=None
 ))]
 pub fn solve_with_pls(
     sims_instance: &SimsDiscreteProblem,
@@ -161,6 +162,7 @@ pub fn solve_with_pls(
     neighborhood_size_min: u32,
     neighborhood_size_max: u32,
     trace: bool,
+    objective_bounds: Option<Vec<Vec<u64>>>,
 ) -> PyResult<SolvingResult> {
     debug!(
         "solve_with_pls_monolith called with {} objectives",
@@ -195,8 +197,12 @@ pub fn solve_with_pls(
         Some(pop) => format!("provided {} solutions", pop.len()),
         None => format!("random generation size {}", initial_population_size),
     };
+    let bounds_info = match &objective_bounds {
+        Some(bounds) => format!("provided bounds: {:?}", bounds),
+        None => "no bounds provided".to_string(),
+    };
     info!(
-        "Starting PLS algorithm with {} objectives: {objectives:?}, plots: {plots}, timeout: {timeout_seconds}s, max_iterations: {max_iterations}, deterministic: {is_deterministic}, initial_population: {initial_pop_info}, neighborhood: {neighborhood_size_min}..{neighborhood_size_max}",
+        "Starting PLS algorithm with {} objectives: {objectives:?}, plots: {plots}, timeout: {timeout_seconds}s, max_iterations: {max_iterations}, deterministic: {is_deterministic}, initial_population: {initial_pop_info}, neighborhood: {neighborhood_size_min}..{neighborhood_size_max}, objective_bounds: {bounds_info}",
         objectives.len()
     );
 
@@ -262,11 +268,28 @@ pub fn solve_with_pls(
                 };
             }
 
-            let pls_problem = pls::problem::Problem::from_raw_with_objectives(
+            let mut pls_problem = pls::problem::Problem::from_raw_with_objectives(
                 raw_instance,
                 objective_definitions,
             )
             .map_err(|e| PyValueError::new_err(format!("Failed to create 2D problem: {e}")))?;
+
+            // Set objective bounds if provided
+            if let Some(ref bounds) = objective_bounds {
+                let bounds_array: Vec<[u64; 2]> = bounds
+                    .iter()
+                    .map(|b| {
+                        if b.len() != 2 {
+                            return Err(PyValueError::new_err(format!(
+                                "Each objective bound must have exactly 2 elements [min, max], got {}",
+                                b.len()
+                            )));
+                        }
+                        Ok([b[0], b[1]])
+                    })
+                    .collect::<PyResult<Vec<[u64; 2]>>>()?;
+                pls_problem.set_objective_bounds(bounds_array);
+            }
 
             // Create initial population manually for 2D
             let mut initial_solution_set = BTreeSolutionSet::new("initial_2d_solutions");
@@ -365,16 +388,46 @@ pub fn solve_with_pls(
             if trace {
                 info!("Generating 2D optimization trace archive");
                 
-                // Calculate objective bounds and reference point
-                let (objective_bounds, reference_point) = trace::calculate_objective_bounds_from_solutions(&explored_solutions)
-                    .map_err(|e| PyValueError::new_err(format!("Failed to calculate objective bounds: {}", e)))?;
+                // Use provided objective bounds or calculate from solutions
+                let (trace_objective_bounds, reference_point) = if let Some(provided_bounds) = &objective_bounds {
+                    // Validate provided bounds
+                    if provided_bounds.len() != objectives.len() {
+                        return Err(PyValueError::new_err(format!(
+                            "objective_bounds length ({}) does not match objectives length ({})",
+                            provided_bounds.len(),
+                            objectives.len()
+                        )));
+                    }
+                    
+                    // Convert Vec<Vec<u64>> to Vec<[u64; 2]> and Vec<u64>
+                    let mut bounds_vec = Vec::new();
+                    let mut ref_point = Vec::new();
+                    
+                    for bound in provided_bounds {
+                        if bound.len() != 2 {
+                            return Err(PyValueError::new_err(format!(
+                                "Each objective bound must have exactly 2 elements [min, max], got {}",
+                                bound.len()
+                            )));
+                        }
+                        bounds_vec.push([bound[0], bound[1]]);
+                        ref_point.push(bound[1] + 1); // Use max + 1 as reference point
+                    }
+                    
+                    info!("Using provided objective bounds: {:?}", bounds_vec);
+                    (bounds_vec, ref_point)
+                } else {
+                    // Calculate from explored solutions
+                    trace::calculate_objective_bounds_from_solutions(&explored_solutions)
+                        .map_err(|e| PyValueError::new_err(format!("Failed to calculate objective bounds: {}", e)))?
+                };
                 
                 let trace_archive = trace::create_optimization_trace_archive(
                     explored_solutions,
                     objectives,
                     timeout.as_micros() as u64,
                     "PLS-2D".to_string(),
-                    objective_bounds,
+                    trace_objective_bounds,
                     reference_point,
                 )
                 .map_err(|e| {
@@ -417,11 +470,28 @@ pub fn solve_with_pls(
                 };
             }
 
-            let pls_problem = pls::problem::Problem::from_raw_with_objectives(
+            let mut pls_problem = pls::problem::Problem::from_raw_with_objectives(
                 raw_instance,
                 objective_definitions,
             )
             .map_err(|e| PyValueError::new_err(format!("Failed to create 3D problem: {e}")))?;
+
+            // Set objective bounds if provided
+            if let Some(ref bounds) = objective_bounds {
+                let bounds_array: Vec<[u64; 2]> = bounds
+                    .iter()
+                    .map(|b| {
+                        if b.len() != 2 {
+                            return Err(PyValueError::new_err(format!(
+                                "Each objective bound must have exactly 2 elements [min, max], got {}",
+                                b.len()
+                            )));
+                        }
+                        Ok([b[0], b[1]])
+                    })
+                    .collect::<PyResult<Vec<[u64; 2]>>>()?;
+                pls_problem.set_objective_bounds(bounds_array);
+            }
 
             // Create initial population manually for 3D using ND-Tree
             let mut initial_solution_set: NdTreeSolutionSet<BitsetEncodedSolution<3>, 3> =
@@ -521,16 +591,46 @@ pub fn solve_with_pls(
             if trace {
                 info!("Generating 3D optimization trace archive");
                 
-                // Calculate objective bounds and reference point
-                let (objective_bounds, reference_point) = trace::calculate_objective_bounds_from_solutions(&explored_solutions)
-                    .map_err(|e| PyValueError::new_err(format!("Failed to calculate objective bounds: {}", e)))?;
+                // Use provided objective bounds or calculate from solutions
+                let (trace_objective_bounds, reference_point) = if let Some(provided_bounds) = &objective_bounds {
+                    // Validate provided bounds
+                    if provided_bounds.len() != objectives.len() {
+                        return Err(PyValueError::new_err(format!(
+                            "objective_bounds length ({}) does not match objectives length ({})",
+                            provided_bounds.len(),
+                            objectives.len()
+                        )));
+                    }
+                    
+                    // Convert Vec<Vec<u64>> to Vec<[u64; 2]> and Vec<u64>
+                    let mut bounds_vec = Vec::new();
+                    let mut ref_point = Vec::new();
+                    
+                    for bound in provided_bounds {
+                        if bound.len() != 2 {
+                            return Err(PyValueError::new_err(format!(
+                                "Each objective bound must have exactly 2 elements [min, max], got {}",
+                                bound.len()
+                            )));
+                        }
+                        bounds_vec.push([bound[0], bound[1]]);
+                        ref_point.push(bound[1] + 1); // Use max + 1 as reference point
+                    }
+                    
+                    info!("Using provided objective bounds: {:?}", bounds_vec);
+                    (bounds_vec, ref_point)
+                } else {
+                    // Calculate from explored solutions
+                    trace::calculate_objective_bounds_from_solutions(&explored_solutions)
+                        .map_err(|e| PyValueError::new_err(format!("Failed to calculate objective bounds: {}", e)))?
+                };
                 
                 let trace_archive = trace::create_optimization_trace_archive(
                     explored_solutions,
                     objectives,
                     timeout.as_micros() as u64,
                     "PLS-3D".to_string(),
-                    objective_bounds,
+                    trace_objective_bounds,
                     reference_point,
                 )
                 .map_err(|e| {
@@ -574,11 +674,28 @@ pub fn solve_with_pls(
                 };
             }
 
-            let pls_problem = pls::problem::Problem::from_raw_with_objectives(
+            let mut pls_problem = pls::problem::Problem::from_raw_with_objectives(
                 raw_instance,
                 objective_definitions,
             )
             .map_err(|e| PyValueError::new_err(format!("Failed to create 4D problem: {e}")))?;
+
+            // Set objective bounds if provided
+            if let Some(ref bounds) = objective_bounds {
+                let bounds_array: Vec<[u64; 2]> = bounds
+                    .iter()
+                    .map(|b| {
+                        if b.len() != 2 {
+                            return Err(PyValueError::new_err(format!(
+                                "Each objective bound must have exactly 2 elements [min, max], got {}",
+                                b.len()
+                            )));
+                        }
+                        Ok([b[0], b[1]])
+                    })
+                    .collect::<PyResult<Vec<[u64; 2]>>>()?;
+                pls_problem.set_objective_bounds(bounds_array);
+            }
 
             // Create initial population manually for 4D using ND-Tree
             let mut initial_solution_set: NdTreeSolutionSet<BitsetEncodedSolution<4>, 4> =
@@ -678,16 +795,46 @@ pub fn solve_with_pls(
             if trace {
                 info!("Generating 4D optimization trace archive");
                 
-                // Calculate objective bounds and reference point
-                let (objective_bounds, reference_point) = trace::calculate_objective_bounds_from_solutions(&explored_solutions)
-                    .map_err(|e| PyValueError::new_err(format!("Failed to calculate objective bounds: {}", e)))?;
+                // Use provided objective bounds or calculate from solutions
+                let (trace_objective_bounds, reference_point) = if let Some(provided_bounds) = &objective_bounds {
+                    // Validate provided bounds
+                    if provided_bounds.len() != objectives.len() {
+                        return Err(PyValueError::new_err(format!(
+                            "objective_bounds length ({}) does not match objectives length ({})",
+                            provided_bounds.len(),
+                            objectives.len()
+                        )));
+                    }
+                    
+                    // Convert Vec<Vec<u64>> to Vec<[u64; 2]> and Vec<u64>
+                    let mut bounds_vec = Vec::new();
+                    let mut ref_point = Vec::new();
+                    
+                    for bound in provided_bounds {
+                        if bound.len() != 2 {
+                            return Err(PyValueError::new_err(format!(
+                                "Each objective bound must have exactly 2 elements [min, max], got {}",
+                                bound.len()
+                            )));
+                        }
+                        bounds_vec.push([bound[0], bound[1]]);
+                        ref_point.push(bound[1] + 1); // Use max + 1 as reference point
+                    }
+                    
+                    info!("Using provided objective bounds: {:?}", bounds_vec);
+                    (bounds_vec, ref_point)
+                } else {
+                    // Calculate from explored solutions
+                    trace::calculate_objective_bounds_from_solutions(&explored_solutions)
+                        .map_err(|e| PyValueError::new_err(format!("Failed to calculate objective bounds: {}", e)))?
+                };
                 
                 let trace_archive = trace::create_optimization_trace_archive(
                     explored_solutions,
                     objectives,
                     timeout.as_micros() as u64,
                     "PLS-4D".to_string(),
-                    objective_bounds,
+                    trace_objective_bounds,
                     reference_point,
                 )
                 .map_err(|e| {

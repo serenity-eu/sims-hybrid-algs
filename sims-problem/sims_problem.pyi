@@ -560,8 +560,8 @@ def solve_with_pls(
     initial_population: Optional[list[Solution]] = None,
     neighborhood_size_min: int = 1,
     neighborhood_size_max: int = 6,
-    *,
-    trace: Literal[False]
+    trace: Literal[False] = False,
+    objective_bounds: Optional[list[list[int]]] = None
 ) -> SolvingResult: ...
 
 @overload
@@ -577,8 +577,8 @@ def solve_with_pls(
     initial_population: Optional[list[Solution]] = None,
     neighborhood_size_min: int = 1,
     neighborhood_size_max: int = 6,
-    *,
-    trace: Literal[True] = True
+    trace: Literal[True] = True,
+    objective_bounds: Optional[list[list[int]]] = None
 ) -> SolvingResult: ...
 
 def solve_with_pls(
@@ -593,7 +593,8 @@ def solve_with_pls(
     initial_population: Optional[list[Solution]] = None,
     neighborhood_size_min: int = 1,
     neighborhood_size_max: int = 6,
-    trace: bool = True
+    trace: bool = True,
+    objective_bounds: Optional[list[list[int]]] = None
 ) -> SolvingResult:
     """
     Solve the SIMS problem using Pareto Local Search (heuristic algorithm).
@@ -622,6 +623,10 @@ def solve_with_pls(
         neighborhood_size_min: Minimum neighborhood size for local search
         neighborhood_size_max: Maximum neighborhood size for local search
         trace: Whether to generate optimization trace archive (default True)
+        objective_bounds: Optional list of [min, max] bounds for each objective, used for trace generation.
+            Format: [[obj0_min, obj0_max], [obj1_min, obj1_max], ...]
+            Length must match the number of objectives. If None, bounds are calculated from explored solutions.
+            Example: [[2000000, 7000000], [0, 500000], [200, 500]] for 3D problem
         
     Returns:
         When trace=True (default): SolvingResult containing solutions and trace
@@ -650,6 +655,14 @@ def solve_with_pls(
             objectives=["min_cost", "cloud_coverage", "min_resolution", "max_incidence_angle"],
             timeout=timedelta(seconds=60),
             max_iterations=10000
+        )
+        
+        # With custom objective bounds for trace
+        result = solve_with_pls(
+            problem,
+            objectives=["min_cost", "cloud_coverage", "min_max_incidence_angle"],
+            objective_bounds=[[2736640, 6970860], [53469, 511693], [333, 479]],
+            trace=True
         )
         
         # Generate plots with custom output path

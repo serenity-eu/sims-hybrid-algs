@@ -733,25 +733,19 @@ impl<const D: usize> BitsetEncodedSolution<D> {
             })
             .collect();
 
-        // Calculate min/max for each objective dimension
-        let mut min_deltas = [i64::MAX; D];
-        let mut max_deltas = [i64::MIN; D];
-
-        for image_deltas in &raw_comparable_images {
-            for (i, &delta) in image_deltas.deltas.iter().enumerate() {
-                min_deltas[i] = min_deltas[i].min(delta);
-                max_deltas[i] = max_deltas[i].max(delta);
-            }
-        }
-
-        // Calculate ranges for scaling
-        let mut ranges = [1i64; D]; // Default to 1 to avoid division by zero
-        for i in 0..D {
-            let range = max_deltas[i] - min_deltas[i];
-            if range > 0 {
-                ranges[i] = range;
-            }
-        }
+        // Use global objective bounds for normalization if available
+        // Otherwise fall back to max_objectives as before
+        let normalization_ranges: Vec<f32> = if let Some(ref bounds) = problem.objective_bounds {
+            bounds.iter().map(|bound| {
+                let range = bound[1] as f32 - bound[0] as f32;
+                if range > 0.0 { range } else { 1.0 }
+            }).collect()
+        } else {
+            // Fallback: use max_objectives (nadir point approximation)
+            problem.max_objectives.iter().map(|&max_val| {
+                if max_val > 0 { max_val as f32 } else { 1.0 }
+            }).collect()
+        };
 
         raw_comparable_images
             .iter()
@@ -760,7 +754,9 @@ impl<const D: usize> BitsetEncodedSolution<D> {
                 let raw_deltas = objective_deltas.deltas;
 
                 for i in 0..D {
-                    scaled_deltas[i] = (raw_deltas[i] - min_deltas[i]) as f32 / ranges[i] as f32;
+                    // Scale using absolute value divided by global range
+                    // This ensures consistent scaling across all batches
+                    scaled_deltas[i] = raw_deltas[i].abs() as f32 / normalization_ranges[i];
                 }
 
                 ScaledObjectiveDeltas {

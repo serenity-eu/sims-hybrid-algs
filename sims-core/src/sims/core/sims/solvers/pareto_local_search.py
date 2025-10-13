@@ -26,6 +26,7 @@ def solve(
     neighborhood_size_min: int = 1,
     neighborhood_size_max: int = 6,
     enable_trace: bool = False,
+    objective_bounds: list[list[int]] | None = None,
 ) -> SolverResult:
     """
     Solve the SIMS problem using Pareto Local Search via sims_problem.solve_with_pls.
@@ -42,6 +43,7 @@ def solve(
         neighborhood_size_min: Minimum neighborhood size for local search
         neighborhood_size_max: Maximum neighborhood size for local search
         enable_trace: Whether to enable tracing for debugging/analysis
+        objective_bounds: Optional list of [min, max] bounds for each objective (for trace generation)
     
     Returns:
         SolverResult: The solving result with Pareto front solutions
@@ -95,7 +97,8 @@ def solve(
             initial_population=initial_population_sims,
             neighborhood_size_min=neighborhood_size_min,
             neighborhood_size_max=neighborhood_size_max,
-            trace=enable_trace
+            trace=enable_trace,
+            objective_bounds=objective_bounds
         )
 
     except Exception as e:

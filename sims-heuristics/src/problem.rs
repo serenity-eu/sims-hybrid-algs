@@ -246,6 +246,8 @@ pub struct Problem<T: ImageSet<D>, const D: usize> {
     pub objectives: [ObjectiveType<T, D>; D],
     /// Max values of objectives
     pub max_objectives: pareto::Objectives<D>,
+    /// Objective bounds (min, max) for normalization - used for scaling in scalarization
+    pub objective_bounds: Option<Vec<[u64; 2]>>,
     /// Raw instance data for accessing resolution and incidence angle
     pub raw_instance: SIMSProblemInstanceRaw,
     /// Phantom data to maintain type parameter T
@@ -349,6 +351,7 @@ impl<T: ImageSet<D>, const D: usize> Problem<T, D> {
             overlap_matrix,
             objectives,
             max_objectives,
+            objective_bounds: None, // Will be set later if provided
             raw_instance: raw,
             _phantom: std::marker::PhantomData,
         })
@@ -406,6 +409,12 @@ impl<T: ImageSet<D>, const D: usize> Problem<T, D> {
             .collect()
     }
 
+    /// Set objective bounds for normalization in scalarization
+    /// Bounds should be [[min, max], [min, max], ...] for each objective
+    pub fn set_objective_bounds(&mut self, bounds: Vec<[u64; 2]>) {
+        self.objective_bounds = Some(bounds);
+    }
+
     /// Create a builder for this problem
     #[must_use]
     pub const fn builder(raw_data: SIMSProblemInstanceRaw) -> ProblemBuilder<T, D> {
@@ -431,6 +440,7 @@ impl<T: ImageSet<D>, const D: usize> Default for Problem<T, D> {
             overlap_matrix: Vec::new(),
             objectives,
             max_objectives: [0; D],
+            objective_bounds: None,
             raw_instance: SIMSProblemInstanceRaw::default(),
             _phantom: std::marker::PhantomData,
         }
