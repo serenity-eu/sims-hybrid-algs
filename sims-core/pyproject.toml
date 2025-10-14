@@ -21,8 +21,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "ruff==0.13.3"
+    "ruff==0.14.0"
 ]
+
+[tool.uv.build-backend]
+module-name = "sims.core"
 
 [tool.uv.sources]
 sims-problem = { path = "../sims-problem" }
