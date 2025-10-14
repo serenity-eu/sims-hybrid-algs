@@ -235,10 +235,10 @@ class CoverageGridPoint(FrontGeneratorStrategy):
             ef_interval.max_value = new_max_interval
         max_interval = ef_interval.find_largest_interval()
         actual_obj_index = constraint_indices[id_constraint_objective]
-        if ef_array[id_constraint_objective] == self.nadir_objectives_values[actual_obj_index]:
-            ef_array[id_constraint_objective] = self.best_objective_values[actual_obj_index]
-        else:
-            if max_interval is not None:
+        if max_interval is not None:
+            if ef_array[id_constraint_objective] == self.nadir_objectives_values[actual_obj_index]:
+                ef_array[id_constraint_objective] = self.best_objective_values[actual_obj_index]
+            else:
                 ef_array[id_constraint_objective] = int((max_interval[0] + max_interval[1]) / 2)
         else:
             ef_array[id_constraint_objective] = self.best_objective_values[actual_obj_index] + 1
