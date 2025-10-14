@@ -203,7 +203,8 @@ def run_sims_solver(
                 'min_cost': 'cost',
                 'cloud_coverage': 'cloudy_area', 
                 'min_max_incidence_angle': 'max_incidence_angle',
-                'min_resolutions_sum': 'min_resolutions_sum'
+                'min_resolutions_sum': 'min_resolutions_sum',
+                'min_resolution': 'min_resolutions_sum'  # Alias for singular form
             }
             
             # Extract objective values dynamically based on objectives array
@@ -226,8 +227,8 @@ def run_sims_solver(
                         assert attr_value > 0, f"Cost must be > 0, got {attr_value} in solution: {solution}"
                     elif obj_name in ['cloud_coverage', 'min_max_incidence_angle']:
                         assert attr_value >= 0, f"{obj_name} must be >= 0, got {attr_value} in solution: {solution}"
-                    elif obj_name == 'min_resolutions_sum':
-                        assert attr_value >= 0, f"Min resolution sum must be >= 0, got {attr_value} in solution: {solution}"
+                    elif obj_name in ['min_resolutions_sum', 'min_resolution']:
+                        assert attr_value >= 0, f"Min resolution must be >= 0, got {attr_value} in solution: {solution}"
                     
                     # Collect values for this objective
                     if obj_name not in objective_values:
