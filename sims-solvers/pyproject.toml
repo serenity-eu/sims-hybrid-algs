@@ -27,10 +27,7 @@ dependencies = [
 [project.scripts]
 sims_solvers = "sims_solvers.main:main"
 
-[tool.pdm.build]
-source-includes = ["sims_solvers/"]
-
-[tool.pdm.build.wheel-data]
-data = [
-    { path = "sims_solvers/mzn_models/*.mzn", relative-to = "sims_solvers/" },
-]
+[tool.uv.build-backend]
+module-name = "sims_solvers"
+module-root = ""
+source-include = ["sims_solvers/mzn_models/*.mzn"]
