@@ -294,8 +294,8 @@ class TestMilpInstances:
         
         # Configuration for medium instances with 3 objectives
         objectives = ["min_cost", "cloud_coverage", "min_resolution"]
-        # timeout = 3540  # 59 minutes for medium instances
-        timeout = 120
+        timeout = 3540  # 59 minutes for medium instances
+        # timeout = 120
         test_name = "solve_milp_3d_medium"
         
         # Run the test
@@ -330,7 +330,7 @@ class TestMilpInstances:
         
         # Configuration for large instances with 3 objectives
         objectives = ["min_cost", "cloud_coverage", "min_resolution"]
-        timeout = 3540  # 59 minutes for large instances
+        timeout = 3500
         test_name = "solve_milp_3d_large"
         
         # Run the test

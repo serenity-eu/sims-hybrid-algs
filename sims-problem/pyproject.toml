@@ -12,20 +12,20 @@ classifiers = [
 ]
 dynamic = ["version"]
 dependencies = [
-    "plotly>=6.2.0",
+    "plotly>=6.3.1",
     "pymoo>=0.6.1.5",
-    "rich>=14.1.0",
+    "rich>=14.2.0",
     "sims-solvers",
 ]
 
 [project.optional-dependencies]
 test = [
     "pytest>=8.4.1",
-    "pytest-cov>=6.2.1",
+    "pytest-cov>=7.0.0",
 ]
 dev = [
     "pytest>=8.4.1",
-    "pytest-cov>=6.2.1",
+    "pytest-cov>=7.0.0",
     "black",
     "ruff",
 ]
@@ -84,9 +84,9 @@ exclude_lines = [
 
 [dependency-groups]
 dev = [
-    "maturin>=1.9.3",
+    "maturin>=1.9.6",
     "patchelf>=0.17.2.4",
     "pymoo>=0.6.1.5",
     "pytest>=8.4.1",
-    "pytest-cov>=6.2.1",
+    "pytest-cov>=7.0.0",
 ]

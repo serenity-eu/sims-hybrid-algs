@@ -41,5 +41,5 @@ sims-solvers = { workspace = true }
 sims-problem = { path = "sims-problem" }
 
 [build-system]
-requires = ["pdm-backend"]
-build-backend = "pdm.backend"
+requires = ["uv_build>=0.9.2,<0.10.0"]
+build-backend = "uv_build"
