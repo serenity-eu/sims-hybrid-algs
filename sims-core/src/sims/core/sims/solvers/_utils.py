@@ -39,6 +39,7 @@ def run_sims_solver(
     front_strategy: FrontStrategy,
     objectives: list[str],
     enable_trace: bool = False,
+    include_dominated: bool = False,
 ):
     import sys
     print("DEBUG: run_sims_solver called", flush=True)
@@ -269,7 +270,8 @@ def run_sims_solver(
                 algorithm="MILP",
                 num_objectives=len(objectives),
                 objective_bounds=objective_bounds,
-                reference_point=reference_point
+                reference_point=reference_point,
+                include_dominated=include_dominated
             )
             
             print(f"DEBUG: sims_problem.generate_trace returned: {type(trace_data)}", flush=True)

@@ -543,5 +543,216 @@ class TestLagosNigeria30Trace:
             print(f"   • Exploration ratio: PLS explored {pls_trace.metadata['solution_count']//len(pls_result.pareto_front)}x more than final Pareto")
 
 
+class TestDominanceFiltering:
+    """Test suite for temporal dominance filtering functionality"""
+    
+    def test_filtering_with_include_dominated_parameter(self):
+        """
+        Comprehensive test for include_dominated parameter in PLS solver.
+        
+        Tests:
+        1. include_dominated=True: All explored solutions in trace
+        2. include_dominated=False: Only solutions non-dominated at discovery time
+        3. Eventual domination tracking in dominated.bin
+        4. Solution count validation
+        5. Dominated indices correctness
+        """
+        print("\n" + "="*80)
+        print("Testing Dominance Filtering with include_dominated Parameter")
+        print("="*80)
+        
+        # Create a problem that will explore multiple solutions
+        # Using overlapping coverage to ensure diverse exploration
+        problem = sims_problem.SimsDiscreteProblem(
+            num_images=8,
+            universe=8,
+            images=[[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6], [6, 7], [0, 7]],
+            costs=[10, 12, 15, 11, 13, 14, 16, 18],
+            clouds=[[], [1], [], [3], [], [5], [], [7]],
+            areas=[2, 2, 2, 2, 2, 2, 2, 2],
+            max_cloud_area=3,
+            resolution=[10, 12, 14, 11, 13, 15, 16, 17],
+            incidence_angle=[30, 32, 35, 31, 33, 36, 38, 40]
+        )
+        
+        # Test 1: Run PLS with include_dominated=True (include all explored)
+        print("\n--- Test 1: include_dominated=True (include all explored solutions) ---")
+        
+        result_all = sims_problem.solve_with_pls(
+            problem,
+            objectives=["min_cost", "cloud_coverage"],
+            timeout=timedelta(seconds=10),
+            max_iterations=100,
+            include_dominated=True  # Keep all explored solutions
+        )
+        
+        if result_all.trace is None:
+            pytest.skip("Trace not generated")
+        
+        trace_all = parse_trace_data(result_all.trace)
+        
+        print(f"✓ Explored solutions (all): {trace_all.metadata['solution_count']}")
+        print(f"✓ Final Pareto front: {len(result_all.final_solutions)}")
+        
+        # Skip test if PLS didn't explore enough solutions for meaningful testing
+        if trace_all.metadata['solution_count'] <= len(result_all.final_solutions):
+            pytest.skip(f"PLS explored only {trace_all.metadata['solution_count']} solutions, need more for filtering test")
+        
+        print(f"✓ Exploration ratio: {trace_all.metadata['solution_count'] / len(result_all.final_solutions):.2f}x")
+        
+        # Validate that we have more explored than final
+        assert trace_all.metadata['solution_count'] > len(result_all.final_solutions), \
+            "With include_dominated=True, should have more explored solutions than final Pareto"
+        
+        # Count dominated solutions in trace_all
+        dominated_count_all = sum(1 for d in trace_all.dominated if d)
+        non_dominated_count_all = trace_all.metadata['solution_count'] - dominated_count_all
+        
+        print(f"✓ Dominated solutions: {dominated_count_all}")
+        print(f"✓ Non-dominated solutions: {non_dominated_count_all}")
+        
+        # Test 2: Run PLS with include_dominated=False (filter out dominated at discovery)
+        print("\n--- Test 2: include_dominated=False (filter dominated at discovery) ---")
+        
+        result_filtered = sims_problem.solve_with_pls(
+            problem,
+            objectives=["min_cost", "cloud_coverage"],
+            timeout=timedelta(seconds=10),
+            max_iterations=100,
+            include_dominated=False  # Filter out dominated solutions
+        )
+        
+        if result_filtered.trace is None:
+            pytest.skip("Trace not generated for filtered case")
+        
+        trace_filtered = parse_trace_data(result_filtered.trace)
+        
+        print(f"✓ Solutions after filtering: {trace_filtered.metadata['solution_count']}")
+        print(f"✓ Final Pareto front: {len(result_filtered.final_solutions)}")
+        print(f"✓ Filtered out: {trace_all.metadata['solution_count'] - trace_filtered.metadata['solution_count']} solutions")
+        
+        # Validate filtering reduced solution count
+        assert trace_filtered.metadata['solution_count'] < trace_all.metadata['solution_count'], \
+            "Filtering should reduce the number of solutions in trace"
+        
+        assert trace_filtered.metadata['solution_count'] >= len(result_filtered.final_solutions), \
+            "Filtered trace should have at least as many solutions as final Pareto"
+        
+        # Test 3: Validate dominated.bin structure for filtered trace
+        print("\n--- Test 3: Validating dominated.bin structure ---")
+        
+        # In filtered trace, some solutions may show eventual domination
+        # (non-dominated at discovery but dominated by later solutions)
+        dominated_count_filtered = sum(1 for d in trace_filtered.dominated if d)
+        eventually_dominated = dominated_count_filtered
+        
+        print(f"✓ Solutions in filtered trace: {trace_filtered.metadata['solution_count']}")
+        print(f"✓ Eventually dominated (by later solutions): {eventually_dominated}")
+        print(f"✓ Never dominated: {trace_filtered.metadata['solution_count'] - eventually_dominated}")
+        
+        # The filtered trace should have fewer or equal dominated solutions than unfiltered
+        # (because we already filtered out those dominated at discovery)
+        assert eventually_dominated <= dominated_count_all, \
+            "Filtered trace should not have more dominated solutions than unfiltered"
+        
+        # Test 4: Validate dominated indices refer to valid positions
+        print("\n--- Test 4: Validating domination indices ---")
+        
+        # Parse dominated.bin as u32 indices (not just bool)
+        files_filtered = extract_trace_archive(result_filtered.trace)
+        dominated_indices_filtered = []
+        for i in range(trace_filtered.metadata['solution_count']):
+            offset = i * 4
+            index = struct.unpack('<I', files_filtered['dominated.bin'][offset:offset+4])[0]
+            dominated_indices_filtered.append(index)
+        
+        # Validate indices
+        max_valid_index = trace_filtered.metadata['solution_count'] - 1
+        u32_max = 0xFFFFFFFF
+        
+        print(f"\nDebug: Filtered trace has {trace_filtered.metadata['solution_count']} solutions")
+        print(f"Debug: First 5 objectives: {trace_filtered.objectives[:5]}")
+        print(f"Debug: First 5 domination indices: {dominated_indices_filtered[:5]}")
+        
+        for i, dom_idx in enumerate(dominated_indices_filtered):
+            if dom_idx != u32_max:  # If dominated
+                assert 0 <= dom_idx <= max_valid_index, \
+                    f"Solution {i} has invalid domination index {dom_idx} (max: {max_valid_index})"
+                assert dom_idx != i, \
+                    f"Solution {i} cannot dominate itself"
+                
+                # Validate that the dominating solution actually dominates
+                dom_obj = trace_filtered.objectives[dom_idx]
+                sol_obj = trace_filtered.objectives[i]
+                
+                print(f"Debug: Solution {i} {sol_obj} dominated by solution {dom_idx} {dom_obj}?")
+                
+                # Check domination: dom_obj <= sol_obj on all objectives and < on at least one
+                all_leq = all(dom_obj[j] <= sol_obj[j] for j in range(len(dom_obj)))
+                any_less = any(dom_obj[j] < sol_obj[j] for j in range(len(dom_obj)))
+                
+                assert all_leq and any_less, \
+                    f"Solution {dom_idx} doesn't actually dominate solution {i}: {dom_obj} vs {sol_obj}"
+        
+        valid_indices = [idx for idx in dominated_indices_filtered if idx != u32_max]
+        print(f"✓ All {len(valid_indices)} domination indices are valid")
+        print(f"✓ {dominated_indices_filtered.count(u32_max)} solutions never dominated (index = MAX)")
+        
+        # Test 5: Validate temporal ordering
+        print("\n--- Test 5: Validating temporal dominance property ---")
+        
+        # For filtered trace: solutions should be non-dominated at their discovery time
+        # This means checking against only PREVIOUS solutions (temporal order)
+        temporal_violations = 0
+        
+        for i in range(1, len(trace_filtered.objectives)):
+            current_obj = trace_filtered.objectives[i]
+            
+            # Check if dominated by any PREVIOUS solution (temporal check)
+            for j in range(i):
+                prev_obj = trace_filtered.objectives[j]
+                
+                # Check if prev dominates current
+                all_leq = all(prev_obj[k] <= current_obj[k] for k in range(len(prev_obj)))
+                any_less = any(prev_obj[k] < current_obj[k] for k in range(len(prev_obj)))
+                
+                if all_leq and any_less:
+                    temporal_violations += 1
+                    print(f"  ⚠️  Solution {i} was dominated at discovery by solution {j}")
+                    break
+        
+        assert temporal_violations == 0, \
+            f"Found {temporal_violations} solutions that were dominated at discovery time (should be filtered out)"
+        
+        print(f"✓ No temporal violations: all {trace_filtered.metadata['solution_count']} solutions were non-dominated at discovery")
+        
+        # Test 6: Compare solution quality between filtered and unfiltered
+        print("\n--- Test 6: Comparing final Pareto quality ---")
+        
+        # Both should produce similar final Pareto fronts
+        # (filtering only affects trace, not final result)
+        print(f"✓ Final Pareto size (all): {len(result_all.final_solutions)}")
+        print(f"✓ Final Pareto size (filtered): {len(result_filtered.final_solutions)}")
+        
+        # The final Pareto fronts should be similar in size
+        # (may not be identical due to random exploration, but should be close)
+        size_ratio = len(result_filtered.final_solutions) / len(result_all.final_solutions)
+        assert 0.8 <= size_ratio <= 1.2, \
+            f"Final Pareto sizes differ significantly: {len(result_all.final_solutions)} vs {len(result_filtered.final_solutions)}"
+        
+        print(f"✓ Final Pareto sizes are similar (ratio: {size_ratio:.2f})")
+        
+        # Summary
+        print("\n" + "="*80)
+        print("✅ ALL DOMINANCE FILTERING TESTS PASSED")
+        print("="*80)
+        print(f"Trace size reduction: {trace_all.metadata['solution_count']} → {trace_filtered.metadata['solution_count']} ")
+        print(f"Solutions filtered out: {trace_all.metadata['solution_count'] - trace_filtered.metadata['solution_count']} "
+              f"({100 * (1 - trace_filtered.metadata['solution_count'] / trace_all.metadata['solution_count']):.1f}% reduction)")
+        print("Temporal dominance property: ✓ Verified")
+        print("Domination indices: ✓ All valid")
+        print("Final Pareto quality: ✓ Preserved")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
