@@ -594,7 +594,8 @@ def solve_with_pls(
     neighborhood_size_min: int = 1,
     neighborhood_size_max: int = 6,
     trace: bool = True,
-    objective_bounds: Optional[list[list[int]]] = None
+    objective_bounds: Optional[list[list[int]]] = None,
+    include_dominated: bool = False
 ) -> SolvingResult:
     """
     Solve the SIMS problem using Pareto Local Search (heuristic algorithm).
@@ -627,6 +628,9 @@ def solve_with_pls(
             Format: [[obj0_min, obj0_max], [obj1_min, obj1_max], ...]
             Length must match the number of objectives. If None, bounds are calculated from explored solutions.
             Example: [[2000000, 7000000], [0, 500000], [200, 500]] for 3D problem
+        include_dominated: If False, filters out solutions dominated at discovery time from trace (default: False).
+            When False: only solutions that were non-dominated at discovery time are included in trace.
+            When True: all explored solutions are included in trace (larger trace, shows full exploration).
         
     Returns:
         When trace=True (default): SolvingResult containing solutions and trace
@@ -904,7 +908,8 @@ def generate_trace(
     algorithm: str,
     num_objectives: int,
     objective_bounds: list[list[int]],
-    reference_point: list[int]
+    reference_point: list[int],
+    include_dominated: bool = False
 ) -> bytes:
     """
     Creates a gzipped tar archive containing binary optimization trace data.
@@ -925,6 +930,7 @@ def generate_trace(
         num_objectives: Number of objectives (2, 3, or 4)
         objective_bounds: Bounds for each objective [[min, max], ...]
         reference_point: Reference point for hypervolume calculation
+        include_dominated: If False, filters out solutions dominated at discovery time (default: False)
         
     Returns:
         Compressed tar archive as bytes
@@ -939,10 +945,11 @@ def generate_trace(
             sims_problem.Solution.create([1, 3, 7], 1200, 300, 500000, 40, 900),
         ]
         
-        # Create trace archive
+        # Create trace archive (only non-dominated solutions)
         archive_bytes = sims_problem.generate_trace(
             solutions, ["min_cost", "cloud_coverage", "max_incidence_angle"], 
-            "MILP", 3, [[0, 10000], [0, 1000], [0, 2000]], [10000, 1000, 2000]
+            "MILP", 3, [[0, 10000], [0, 1000], [0, 2000]], [10000, 1000, 2000],
+            include_dominated=False
         )
         
         # Save to file

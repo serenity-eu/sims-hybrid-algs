@@ -147,7 +147,8 @@ impl PlsConfig {
     neighborhood_size_min=1,
     neighborhood_size_max=6,
     trace=true,
-    objective_bounds=None
+    objective_bounds=None,
+    include_dominated=false
 ))]
 pub fn solve_with_pls(
     sims_instance: &SimsDiscreteProblem,
@@ -163,6 +164,7 @@ pub fn solve_with_pls(
     neighborhood_size_max: u32,
     trace: bool,
     objective_bounds: Option<Vec<Vec<u64>>>,
+    include_dominated: bool,
 ) -> PyResult<SolvingResult> {
     debug!(
         "solve_with_pls_monolith called with {} objectives",
@@ -388,6 +390,19 @@ pub fn solve_with_pls(
             if trace {
                 info!("Generating 2D optimization trace archive");
                 
+                // Compute dominance info (filtering + domination indices in one pass)
+                let dominance_info = if include_dominated {
+                    // Don't filter, but still compute domination indices
+                    trace::compute_dominance_info(explored_solutions, false)
+                } else {
+                    info!("Filtering dominated solutions from trace");
+                    // Filter and compute domination indices
+                    trace::compute_dominance_info(explored_solutions, true)
+                };
+                
+                let trace_solutions = dominance_info.solutions;
+                let domination_indices = Some(dominance_info.domination_indices);
+                
                 // Use provided objective bounds or calculate from solutions
                 let (trace_objective_bounds, reference_point) = if let Some(provided_bounds) = &objective_bounds {
                     // Validate provided bounds
@@ -417,18 +432,19 @@ pub fn solve_with_pls(
                     info!("Using provided objective bounds: {:?}", bounds_vec);
                     (bounds_vec, ref_point)
                 } else {
-                    // Calculate from explored solutions
-                    trace::calculate_objective_bounds_from_solutions(&explored_solutions)
+                    // Calculate from trace solutions (filtered or not)
+                    trace::calculate_objective_bounds_from_solutions(&trace_solutions)
                         .map_err(|e| PyValueError::new_err(format!("Failed to calculate objective bounds: {}", e)))?
                 };
                 
                 let trace_archive = trace::create_optimization_trace_archive(
-                    explored_solutions,
+                    trace_solutions,
                     objectives,
                     timeout.as_micros() as u64,
                     "PLS-2D".to_string(),
                     trace_objective_bounds,
                     reference_point,
+                    domination_indices,
                 )
                 .map_err(|e| {
                     PyValueError::new_err(format!("Failed to create trace archive: {}", e))
@@ -591,6 +607,19 @@ pub fn solve_with_pls(
             if trace {
                 info!("Generating 3D optimization trace archive");
                 
+                // Compute dominance info (filtering + domination indices in one pass)
+                let dominance_info = if include_dominated {
+                    // Don't filter, but still compute domination indices
+                    trace::compute_dominance_info(explored_solutions, false)
+                } else {
+                    info!("Filtering dominated solutions from trace");
+                    // Filter and compute domination indices
+                    trace::compute_dominance_info(explored_solutions, true)
+                };
+                
+                let trace_solutions = dominance_info.solutions;
+                let domination_indices = Some(dominance_info.domination_indices);
+                
                 // Use provided objective bounds or calculate from solutions
                 let (trace_objective_bounds, reference_point) = if let Some(provided_bounds) = &objective_bounds {
                     // Validate provided bounds
@@ -620,18 +649,19 @@ pub fn solve_with_pls(
                     info!("Using provided objective bounds: {:?}", bounds_vec);
                     (bounds_vec, ref_point)
                 } else {
-                    // Calculate from explored solutions
-                    trace::calculate_objective_bounds_from_solutions(&explored_solutions)
+                    // Calculate from trace solutions (filtered or not)
+                    trace::calculate_objective_bounds_from_solutions(&trace_solutions)
                         .map_err(|e| PyValueError::new_err(format!("Failed to calculate objective bounds: {}", e)))?
                 };
                 
                 let trace_archive = trace::create_optimization_trace_archive(
-                    explored_solutions,
+                    trace_solutions,
                     objectives,
                     timeout.as_micros() as u64,
                     "PLS-3D".to_string(),
                     trace_objective_bounds,
                     reference_point,
+                    domination_indices,
                 )
                 .map_err(|e| {
                     PyValueError::new_err(format!("Failed to create trace archive: {}", e))
@@ -795,6 +825,19 @@ pub fn solve_with_pls(
             if trace {
                 info!("Generating 4D optimization trace archive");
                 
+                // Compute dominance info (filtering + domination indices in one pass)
+                let dominance_info = if include_dominated {
+                    // Don't filter, but still compute domination indices
+                    trace::compute_dominance_info(explored_solutions, false)
+                } else {
+                    info!("Filtering dominated solutions from trace");
+                    // Filter and compute domination indices
+                    trace::compute_dominance_info(explored_solutions, true)
+                };
+                
+                let trace_solutions = dominance_info.solutions;
+                let domination_indices = Some(dominance_info.domination_indices);
+                
                 // Use provided objective bounds or calculate from solutions
                 let (trace_objective_bounds, reference_point) = if let Some(provided_bounds) = &objective_bounds {
                     // Validate provided bounds
@@ -824,18 +867,19 @@ pub fn solve_with_pls(
                     info!("Using provided objective bounds: {:?}", bounds_vec);
                     (bounds_vec, ref_point)
                 } else {
-                    // Calculate from explored solutions
-                    trace::calculate_objective_bounds_from_solutions(&explored_solutions)
+                    // Calculate from trace solutions (filtered or not)
+                    trace::calculate_objective_bounds_from_solutions(&trace_solutions)
                         .map_err(|e| PyValueError::new_err(format!("Failed to calculate objective bounds: {}", e)))?
                 };
                 
                 let trace_archive = trace::create_optimization_trace_archive(
-                    explored_solutions,
+                    trace_solutions,
                     objectives,
                     timeout.as_micros() as u64,
                     "PLS-4D".to_string(),
                     trace_objective_bounds,
                     reference_point,
+                    domination_indices,
                 )
                 .map_err(|e| {
                     PyValueError::new_err(format!("Failed to create trace archive: {}", e))

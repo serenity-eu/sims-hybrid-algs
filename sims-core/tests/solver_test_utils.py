@@ -249,7 +249,7 @@ def format_ratio_string(ratio: tuple[int, int]) -> str:
     return f"{ratio[0]}_{ratio[1]}"
 
 
-def get_timeout_for_instance_size(instances: List[str], base_timeout: int = 3300) -> int:
+def get_timeout_for_instance_size(instances: List[str], base_timeout: int = 20) -> int:
     """
     Get appropriate timeout based on instance size.
     
@@ -264,7 +264,6 @@ def get_timeout_for_instance_size(instances: List[str], base_timeout: int = 3300
     # For large instances, use a reduced timeout to ensure completion before pytest timeout (3600s)
     for instance in instances:
         if instance in LARGE_INSTANCES:
-            # 50 minutes for large instances (leaves 10 min buffer for pytest's 60 min timeout)
-            return 3000
+            return 180 # 3 minutes for large instances
     
     return base_timeout  

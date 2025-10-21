@@ -16,6 +16,7 @@ def solve(
     front_strategy: FrontStrategy,
     objectives: list[str],
     enable_trace: bool = False,
+    include_dominated: bool = False,
 ):
     return _utils.run_sims_solver(
         problem_instance,
@@ -26,4 +27,5 @@ def solve(
         front_strategy,
         objectives,
         enable_trace,
+        include_dominated,
     )

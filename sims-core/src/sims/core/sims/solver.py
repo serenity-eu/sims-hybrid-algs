@@ -20,15 +20,16 @@ def solve(
     initial_population: list[Solution] | None = None,
     enable_trace: bool = False,
     objective_bounds: list[list[int]] | None = None,
+    include_dominated: bool = False,
 ) -> SolverResult:
     match solver_type:
         case SolverType.OR_TOOLS:
             return ortools.solve(
-                problem_instance, problem_path, timeout_s, output_path, front_strategy, objectives, enable_trace
+                problem_instance, problem_path, timeout_s, output_path, front_strategy, objectives, enable_trace, include_dominated
             )
         case SolverType.GUROBI:
             return gurobi.solve(
-                problem_instance, problem_path, timeout_s, output_path, front_strategy, objectives, enable_trace
+                problem_instance, problem_path, timeout_s, output_path, front_strategy, objectives, enable_trace, include_dominated
             )
         case SolverType.PLS:
             return pareto_local_search.solve(
@@ -38,6 +39,7 @@ def solve(
                 initial_population,
                 enable_trace=enable_trace,
                 objective_bounds=objective_bounds,
+                include_dominated=include_dominated,
             )
         case _:
             raise ValueError(f"Solver type {solver_type} is not supported")
@@ -56,6 +58,7 @@ def solve_with_two_phases(
     dry_run: bool = False,
     enable_pls_trace: bool = False,
     objective_bounds: list[list[int]] | None = None,
+    include_dominated: bool = False,
 ) -> TwoPhaseSolverResult:
     exact_solver_result = None
     pls_result = None
@@ -83,6 +86,7 @@ def solve_with_two_phases(
                 objectives,
                 front_strategy,
                 enable_trace=enable_pls_trace,  # Enable tracing for exact solver too
+                include_dominated=include_dominated,
             )
 
         log.info(
@@ -112,6 +116,7 @@ def solve_with_two_phases(
                 initial_population=initial_population,
                 enable_trace=enable_pls_trace,
                 objective_bounds=objective_bounds,
+                include_dominated=include_dominated,
             )
 
             log.info(f"[{problem_instance.name}][solve_with_two_phases] - PLS found {len(pls_result.pareto_front)} solutions")

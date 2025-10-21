@@ -25,6 +25,116 @@ struct TraceMetadata {
     second_phase_start_index: Option<usize>,
 }
 
+/// Result of dominance computation containing filtered solutions and domination mapping
+pub struct DominanceInfo<const D: usize> {
+    /// Filtered solutions (non-dominated at discovery if filtering was requested, all if not)
+    pub solutions: Vec<SolutionFingerprint<D>>,
+    /// Domination indices for the solutions in the `solutions` vec (u32::MAX = not dominated)
+    /// When filter_dominated=true: shows eventual domination by later solutions
+    /// When filter_dominated=false: shows domination by any solution in the set
+    pub domination_indices: Vec<u32>,
+}
+
+/// Computes dominance information for a set of solutions.
+/// 
+/// This function performs dominance checks efficiently in a single pass and returns both:
+/// - Filtered solutions (if filter_dominated=true, only solutions non-dominated at discovery time)
+/// - Domination indices showing eventual domination relationships
+/// 
+/// When filtering (filter_dominated=true):
+/// - Keeps solutions that were non-dominated at discovery time (temporal order)
+/// - Computes eventual domination: shows if kept solutions are later dominated
+/// - Example: S0 kept (non-dominated at t=10), but dominated.bin shows dominated by S2 (at t=30)
+/// 
+/// # Arguments
+/// * `solutions` - Vector of solutions (will be sorted by timestamp before processing)
+/// * `filter_dominated` - If true, filters out solutions dominated at discovery; if false, keeps all
+/// 
+/// # Returns
+/// DominanceInfo containing solutions and their domination indices
+pub fn compute_dominance_info<const D: usize>(
+    mut solutions: Vec<SolutionFingerprint<D>>,
+    filter_dominated: bool,
+) -> DominanceInfo<D> {
+    // Sort by timestamp first to ensure temporal order (discovery order)
+    solutions.sort_by_key(|s| s.timestamp);
+    
+    if filter_dominated {
+        // Single-pass filtering with eventual domination tracking
+        let mut filtered_solutions: Vec<SolutionFingerprint<D>> = Vec::new();
+        let mut domination_indices: Vec<u32> = Vec::new();
+        
+        'next_solution: for (sol_idx, new_solution) in solutions.into_iter().enumerate() {
+            let current_kept_idx = filtered_solutions.len() as u32;
+            
+            // Single pass: check against all kept solutions
+            for (kept_idx, kept_solution) in filtered_solutions.iter().enumerate() {
+                // Is new solution dominated by this kept solution?
+                if new_solution.is_dominated_by(kept_solution.objectives()) {
+                    // Dominated at discovery → skip it
+                    continue 'next_solution;
+                }
+                
+                // Does the new solution dominate this kept one?
+                if new_solution.dominates(kept_solution.objectives()) {
+                    // Update domination index only if not already dominated
+                    if domination_indices[kept_idx] == u32::MAX {
+                        domination_indices[kept_idx] = current_kept_idx;
+                    }
+                }
+            }
+            
+            // Not dominated at discovery → keep it
+            filtered_solutions.push(new_solution);
+            domination_indices.push(u32::MAX); // Not dominated yet
+        }
+        
+        DominanceInfo {
+            solutions: filtered_solutions,
+            domination_indices,
+        }
+    } else {
+        // No filtering: keep all solutions, compute domination indices
+        let mut domination_indices = Vec::with_capacity(solutions.len());
+        
+        for (i, solution) in solutions.iter().enumerate() {
+            let dominating_index = 'find_dominator: {
+                for (j, other_solution) in solutions.iter().enumerate() {
+                    if i != j && solution.is_dominated_by(other_solution.objectives()) {
+                        break 'find_dominator j as u32;
+                    }
+                }
+                u32::MAX
+            };
+            
+            domination_indices.push(dominating_index);
+        }
+        
+        DominanceInfo {
+            solutions,
+            domination_indices,
+        }
+    }
+}
+
+
+/// Filters dominated solutions from a list of solutions.
+/// 
+/// Returns only non-dominated solutions, maintaining temporal order.
+/// A solution is kept if it was non-dominated at the time of its discovery
+/// (i.e., not dominated by any previously discovered solution).
+/// 
+/// # Arguments
+/// * `solutions` - Vector of solutions sorted by timestamp
+/// 
+/// # Returns
+/// Filtered vector containing only non-dominated solutions
+pub fn filter_dominated_solutions<const D: usize>(
+    solutions: Vec<SolutionFingerprint<D>>
+) -> Vec<SolutionFingerprint<D>> {
+    compute_dominance_info(solutions, true).solutions
+}
+
 /// Creates a gzipped tar archive containing binary optimization trace data
 ///
 /// This function creates a compressed archive containing detailed optimization traces
@@ -40,6 +150,9 @@ struct TraceMetadata {
 /// * `objectives` - Names of the objectives (e.g., ["min_cost", "cloud_coverage", "max_incidence_angle"])
 /// * `total_duration_us` - Total optimization duration in microseconds
 /// * `algorithm` - Name of the optimization algorithm used
+/// * `objective_bounds` - Bounds for each objective
+/// * `reference_point` - Reference point for hypervolume computation
+/// * `precomputed_domination` - Optional pre-computed domination indices to avoid recomputation
 ///
 /// # Returns
 /// Compressed tar archive as bytes
@@ -70,10 +183,11 @@ pub fn create_optimization_trace_archive<const D: usize>(
     algorithm: String,
     objective_bounds: Vec<[u64; 2]>,
     reference_point: Vec<u64>,
+    precomputed_domination: Option<Vec<u32>>,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    // Sort solutions by timestamp (should already be sorted, but ensure it)
-    let mut solutions = explored_solutions;
-    solutions.sort_by_key(|a| a.timestamp);
+    // Keep solutions in original order (PLS discovery order)
+    // Timestamps are still stored for each solution in timestamp.bin
+    let solutions = explored_solutions;
 
     if solutions.is_empty() {
         return Err("Cannot create trace archive from empty solution list".into());
@@ -81,18 +195,30 @@ pub fn create_optimization_trace_archive<const D: usize>(
 
     // Create binary data
     let objectives_data = create_objectives_binary(&solutions)?;
-    let dominated_data = create_dominated_binary(&solutions)?;
+    let dominated_data = match precomputed_domination {
+        Some(ref indices) => {
+            // Use precomputed indices for both dominated.bin and hypervolume computation
+            let dominated_bin = create_dominated_binary_from_indices(indices)?;
+            let hypervolume_data = create_hypervolume_binary_with_indices(&solutions, &objective_bounds, &reference_point, indices)?;
+            (dominated_bin, hypervolume_data)
+        },
+        None => {
+            // Compute domination and use for both
+            let dominated_bin = create_dominated_binary(&solutions)?;
+            let hypervolume_data = create_hypervolume_binary(&solutions, &objective_bounds, &reference_point)?;
+            (dominated_bin, hypervolume_data)
+        }
+    };
     let timestamp_data = create_timestamp_binary(&solutions)?;
-    let hypervolume_data = create_hypervolume_binary(&solutions, &objective_bounds, &reference_point)?;
     
     let metadata_data = create_metadata_json(&solutions, objectives, total_duration_us, algorithm, None, objective_bounds, reference_point)?;
 
     // Create tar archive in memory
     let archive_data = create_tar_archive(
         objectives_data,
-        dominated_data,
+        dominated_data.0,
         timestamp_data,
-        hypervolume_data,
+        dominated_data.1,
         metadata_data,
     )?;
 
@@ -150,6 +276,19 @@ fn create_dominated_binary<const N: usize>(
     Ok(data)
 }
 
+/// Creates dominated.bin from pre-computed domination indices
+fn create_dominated_binary_from_indices(
+    indices: &[u32],
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let mut data = Vec::with_capacity(indices.len() * 4);
+    
+    for &index in indices {
+        data.extend_from_slice(&index.to_le_bytes());
+    }
+    
+    Ok(data)
+}
+
 /// Creates timestamp.bin - binary file with timestamps in u32 LE format
 fn create_timestamp_binary<const D: usize>(
     solutions: &[SolutionFingerprint<D>],
@@ -191,6 +330,22 @@ fn create_hypervolume_binary<const N: usize>(
         let dominated_bytes = &dominated_data[byte_offset..byte_offset + 4];
         let dominated_idx = u32::from_le_bytes(dominated_bytes.try_into().unwrap());
         dominated_indices.push(dominated_idx);
+    }
+    
+    create_hypervolume_binary_with_indices(solutions, objective_bounds, reference_point, &dominated_indices)
+}
+
+/// Creates hypervolume.bin using pre-computed domination indices
+fn create_hypervolume_binary_with_indices<const N: usize>(
+    solutions: &[SolutionFingerprint<N>],
+    objective_bounds: &[[u64; 2]],
+    reference_point: &[u64],
+    dominated_indices: &[u32],
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let num_solutions = solutions.len();
+    
+    if num_solutions == 0 {
+        return Ok(Vec::new());
     }
     
     // Find indices where hypervolume actually changes
@@ -459,12 +614,14 @@ pub fn generate_trace(
     num_objectives: usize,
     objective_bounds: Vec<[u64; 2]>,
     reference_point: Vec<u64>,
+    include_dominated: Option<bool>,
 ) -> PyResult<Vec<u8>> {
     // Convert solutions to the format expected by trace generation
+    let include_dominated = include_dominated.unwrap_or(false);
     match num_objectives {
-        2 => generate_trace_impl::<2>(solutions, objectives, algorithm, objective_bounds, reference_point),
-        3 => generate_trace_impl::<3>(solutions, objectives, algorithm, objective_bounds, reference_point),
-        4 => generate_trace_impl::<4>(solutions, objectives, algorithm, objective_bounds, reference_point),
+        2 => generate_trace_impl::<2>(solutions, objectives, algorithm, objective_bounds, reference_point, include_dominated),
+        3 => generate_trace_impl::<3>(solutions, objectives, algorithm, objective_bounds, reference_point, include_dominated),
+        4 => generate_trace_impl::<4>(solutions, objectives, algorithm, objective_bounds, reference_point, include_dominated),
         _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "Unsupported number of objectives. Only 2, 3, or 4 objectives are supported.",
         )),
@@ -478,6 +635,7 @@ fn generate_trace_impl<const D: usize>(
     algorithm: String,
     objective_bounds: Vec<[u64; 2]>,
     reference_point: Vec<u64>,
+    include_dominated: bool,
 ) -> PyResult<Vec<u8>> {
     if objectives.len() != D {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
@@ -519,7 +677,12 @@ fn generate_trace_impl<const D: usize>(
     // Sort solutions by timestamp (should already be sorted, but ensure it)
     explored_solutions.sort_by_key(|s| s.timestamp);
 
-    // Call the existing trace generation function
+    // Filter dominated solutions if requested using the extracted helper function
+    if !include_dominated {
+        explored_solutions = filter_dominated_solutions(explored_solutions);
+    }
+
+    // Call the existing trace generation function (no pre-computed domination for this path)
     let archive_bytes = create_optimization_trace_archive(
         explored_solutions,
         objectives,
@@ -527,6 +690,7 @@ fn generate_trace_impl<const D: usize>(
         algorithm,
         objective_bounds,
         reference_point,
+        None,  // Will compute domination inside create_optimization_trace_archive
     )
     .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Trace generation failed: {}", e)))?;
 

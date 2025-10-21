@@ -27,6 +27,7 @@ def solve(
     neighborhood_size_max: int = 6,
     enable_trace: bool = False,
     objective_bounds: list[list[int]] | None = None,
+    include_dominated: bool = False,
 ) -> SolverResult:
     """
     Solve the SIMS problem using Pareto Local Search via sims_problem.solve_with_pls.
@@ -44,6 +45,7 @@ def solve(
         neighborhood_size_max: Maximum neighborhood size for local search
         enable_trace: Whether to enable tracing for debugging/analysis
         objective_bounds: Optional list of [min, max] bounds for each objective (for trace generation)
+        include_dominated: If False, filters out dominated solutions from traces (default: False)
     
     Returns:
         SolverResult: The solving result with Pareto front solutions
