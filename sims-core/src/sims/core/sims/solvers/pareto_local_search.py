@@ -69,12 +69,13 @@ def solve(
 
     if initial_population is not None:
         # Convert initial population to sims_problem.Solution format
+        # Note: -1 sentinel values mean "not set" for optional objectives, convert to None
         initial_population_sims = [
             sims_problem.Solution.create(
                 selected_images=list(sol.selected_images),
-                cost=sol.cost,
-                cloudy_area=sol.cloudy_area,
-                timestamp_us=sol.timestamp_s.microseconds,  # Convert to microseconds
+                cost=sol.cost if sol.cost != -1 else None,  # Pass None for unset objective
+                cloudy_area=sol.cloudy_area if sol.cloudy_area != -1 else None,  # Pass None for unset objective
+                timestamp_us=int(sol.timestamp_s.total_seconds() * 1_000_000),  # Convert to total microseconds
                 max_incidence_angle=sol.max_incidence_angle if sol.max_incidence_angle != -1 else None,
                 min_resolutions_sum=sol.min_resolutions_sum if sol.min_resolutions_sum != -1 else None
             ) for sol in initial_population

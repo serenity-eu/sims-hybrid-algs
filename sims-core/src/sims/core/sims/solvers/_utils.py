@@ -240,13 +240,13 @@ def run_sims_solver(
             objective_bounds = []
             for obj_name in objectives:
                 values = objective_values[obj_name]
-                min_val, max_val = min(values), max(values)
+                min_val, max_val = int(min(values)), int(max(values))
                 
                 objective_bounds.append([min_val, max_val])
                 log.info(f"Calculated bounds for {obj_name}: [{min_val}, {max_val}]")
             
             # Compute reference_point as max + 1 for each objective (as done in Rust code)
-            reference_point = [bound[1] + 1 for bound in objective_bounds]
+            reference_point = [int(bound[1] + 1) for bound in objective_bounds]
             
             log.info(f"Calculated objective_bounds from data: {objective_bounds}")
             log.info(f"Computed reference_point from bounds: {reference_point}")

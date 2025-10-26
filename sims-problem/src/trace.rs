@@ -652,8 +652,8 @@ fn generate_trace_impl<const D: usize>(
         let obj_values: pareto::Objectives<D> = std::array::from_fn(|i| {
             let objective_name = &objectives[i];
             match objective_name.as_str() {
-                "min_cost" => solution.cost,
-                "cloud_coverage" => solution.cloudy_area,
+                "min_cost" => solution.cost.expect("min_cost should be set"),
+                "cloud_coverage" => solution.cloudy_area.expect("cloud_coverage should be set"),
                 "min_max_incidence_angle" => solution.max_incidence_angle.expect("min_max_incidence_angle should be set"),
                 "min_resolution" => solution.min_resolutions_sum.expect("min_resolutions_sum should be set"),
                 _ => unreachable!()

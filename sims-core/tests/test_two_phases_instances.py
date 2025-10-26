@@ -26,26 +26,60 @@ logger = logging.getLogger(__name__)
 
 
 # Load objective bounds from JSON file
-def load_objective_bounds() -> dict[str, list[list[int]]]:
-    """Load objective bounds from tests/data/objective_bounds.json"""
+def load_objective_bounds() -> tuple[list[str], dict[str, list[list[int]]]]:
+    """Load objective bounds from tests/data/objective_bounds.json
+    
+    Returns:
+        Tuple of (objective_names, bounds_dict)
+    """
     bounds_file = Path(__file__).parent / "data" / "objective_bounds.json"
     if not bounds_file.exists():
         logger.warning(f"Objective bounds file not found: {bounds_file}")
-        return {}
+        return [], {}
     
     with open(bounds_file, 'r') as f:
         data = json.load(f)
     
-    return data.get("bounds", {})
+    return data.get("objectives", []), data.get("bounds", {})
 
 
 # Load bounds once at module level
-OBJECTIVE_BOUNDS = load_objective_bounds()
+OBJECTIVE_NAMES, OBJECTIVE_BOUNDS = load_objective_bounds()
 
 
-def get_objective_bounds_for_instance(instance_name: str) -> list[list[int]] | None:
-    """Get objective bounds for a specific instance from the loaded data."""
-    return OBJECTIVE_BOUNDS.get(instance_name)
+def get_objective_bounds_for_instance(instance_name: str, objectives: list[str]) -> list[list[int]] | None:
+    """Get objective bounds for a specific instance, filtered by the specified objectives.
+    
+    Only returns bounds if ALL requested objectives are available in the bounds data.
+    Otherwise returns None (solver will work without bounds).
+    
+    Args:
+        instance_name: Name of the instance
+        objectives: List of objective names being used (e.g., ["min_cost", "cloud_coverage"])
+        
+    Returns:
+        List of bounds matching the specified objectives, or None if not all objectives have bounds
+    """
+    all_bounds = OBJECTIVE_BOUNDS.get(instance_name)
+    if not all_bounds or not OBJECTIVE_NAMES:
+        return None
+    
+    # Check if all requested objectives are in the bounds data
+    filtered_bounds = []
+    for obj in objectives:
+        if obj not in OBJECTIVE_NAMES:
+            # Objective not in bounds file - return None so solver works without bounds
+            logger.info(f"Objective '{obj}' not found in bounds file, solver will run without bounds")
+            return None
+        
+        idx = OBJECTIVE_NAMES.index(obj)
+        if idx < len(all_bounds):
+            filtered_bounds.append(all_bounds[idx])
+        else:
+            logger.warning(f"Objective {obj} index {idx} out of bounds for {instance_name}")
+            return None
+    
+    return filtered_bounds
 
 
 def run_two_phase_solver_with_validation(
@@ -77,8 +111,8 @@ def run_two_phase_solver_with_validation(
     instance_name = Path(instance_path).stem
     ratio_str = format_ratio_string(ratio)
     
-    # Get objective bounds for this instance
-    objective_bounds = get_objective_bounds_for_instance(instance_name)
+    # Get objective bounds for this instance, filtered by the objectives being used
+    objective_bounds = get_objective_bounds_for_instance(instance_name, objectives)
     
     logger.info(f"Running two-phase solver on instance {instance_name}")
     logger.info(f"Objectives: {objectives}")

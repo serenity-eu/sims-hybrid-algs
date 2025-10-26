@@ -22,9 +22,9 @@ pub struct Solution {
     #[pyo3(get, set)]
     pub selected_images: HashSet<usize>,
     #[pyo3(get, set)]
-    pub cost: u64,
+    pub cost: Option<u64>,
     #[pyo3(get, set)]
-    pub cloudy_area: u64,
+    pub cloudy_area: Option<u64>,
     #[pyo3(get, set)]
     pub timestamp: Duration, // Using Duration for timedelta compatibility
     #[pyo3(get, set)]
@@ -62,20 +62,45 @@ impl Solution {
     #[staticmethod]
     pub fn create(
         selected_images: Vec<usize>,
-        cost: u64,
-        cloudy_area: u64,
+        cost: Option<u64>,
+        cloudy_area: Option<u64>,
         timestamp_us: u64,
         max_incidence_angle: Option<u64>,
         min_resolutions_sum: Option<u64>,
-    ) -> Self {
-        Self {
+    ) -> PyResult<Self> {
+        // Count how many objectives are set
+        let mut objectives_set = 0;
+        if cost.is_some() {
+            objectives_set += 1;
+        }
+        if cloudy_area.is_some() {
+            objectives_set += 1;
+        }
+        if max_incidence_angle.is_some() {
+            objectives_set += 1;
+        }
+        if min_resolutions_sum.is_some() {
+            objectives_set += 1;
+        }
+        
+        // Require at least 2 objectives to be set
+        if objectives_set < 2 {
+            return Err(PyValueError::new_err(
+                format!(
+                    "At least 2 objectives must be set (got {}). Provide non-None values for at least 2 of: cost, cloudy_area, max_incidence_angle, min_resolutions_sum",
+                    objectives_set
+                )
+            ));
+        }
+        
+        Ok(Self {
             selected_images: selected_images.into_iter().collect(),
             cost,
             cloudy_area,
             timestamp: Duration::from_micros(timestamp_us),
             max_incidence_angle,
             min_resolutions_sum,
-        }
+        })
     }
 
     /// Convert solution to JSON-compatible dictionary
@@ -223,8 +248,13 @@ impl Solution {
         let (computed_cost, computed_cloudy_area, computed_max_angle, computed_min_res) =
             self.compute_objectives(problem)?;
 
-        let cost_valid = self.cost == computed_cost;
-        let cloudy_area_valid = self.cloudy_area == computed_cloudy_area;
+        let cost_valid = self.cost
+            .map(|stored| stored == computed_cost)
+            .unwrap_or(true); // If not set, consider valid
+
+        let cloudy_area_valid = self.cloudy_area
+            .map(|stored| stored == computed_cloudy_area)
+            .unwrap_or(true); // If not set, consider valid
 
         let max_angle_valid = self
             .max_incidence_angle
@@ -244,17 +274,22 @@ impl Solution {
         let (computed_cost, computed_cloudy_area, computed_max_angle, computed_min_res) =
             self.compute_objectives(problem)?;
 
-        if self.cost != computed_cost {
-            println!("Fixing cost from {} to {}", self.cost, computed_cost);
-            self.cost = computed_cost;
+        // Only fix if the objective is set and incorrect
+        if let Some(cost) = self.cost {
+            if cost != computed_cost {
+                println!("Fixing cost from {} to {}", cost, computed_cost);
+                self.cost = Some(computed_cost);
+            }
         }
 
-        if self.cloudy_area != computed_cloudy_area {
-            println!(
-                "Fixing cloudy area from {} to {}",
-                self.cloudy_area, computed_cloudy_area
-            );
-            self.cloudy_area = computed_cloudy_area;
+        if let Some(cloudy_area) = self.cloudy_area {
+            if cloudy_area != computed_cloudy_area {
+                println!(
+                    "Fixing cloudy area from {} to {}",
+                    cloudy_area, computed_cloudy_area
+                );
+                self.cloudy_area = Some(computed_cloudy_area);
+            }
         }
 
         // Update optional objectives if they were invalid (u64::MAX)
@@ -271,20 +306,32 @@ impl Solution {
     
     /// Get objectives as a 2D array (cost, cloudy_area)
     pub fn objectives_2d(&self) -> Objectives<2> {
-        [self.cost, self.cloudy_area]
+        [
+            self.cost.unwrap_or(u64::MAX),
+            self.cloudy_area.unwrap_or(u64::MAX)
+        ]
     }
     
     /// Get objectives as a 3D array (cost, cloudy_area, max_incidence_angle)
     pub fn objectives_3d(&self) -> Objectives<3> {
         let max_angle = self.max_incidence_angle.unwrap_or(u64::MAX);
-        [self.cost, self.cloudy_area, max_angle]
+        [
+            self.cost.unwrap_or(u64::MAX),
+            self.cloudy_area.unwrap_or(u64::MAX),
+            max_angle
+        ]
     }
     
     /// Get objectives as a 4D array (cost, cloudy_area, max_incidence_angle, min_resolutions_sum)
     pub fn objectives_4d(&self) -> Objectives<4> {
         let max_angle = self.max_incidence_angle.unwrap_or(u64::MAX);
         let min_res = self.min_resolutions_sum.unwrap_or(u64::MAX);
-        [self.cost, self.cloudy_area, max_angle, min_res]
+        [
+            self.cost.unwrap_or(u64::MAX),
+            self.cloudy_area.unwrap_or(u64::MAX),
+            max_angle,
+            min_res
+        ]
     }
 }
 
