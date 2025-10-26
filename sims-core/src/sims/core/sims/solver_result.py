@@ -403,12 +403,13 @@ class SolverResult:
             # Create a mapping of objective names to values
             obj_map = {obj_name: objective_values[i] for i, obj_name in enumerate(objectives) if i < len(objective_values)}
             
+            # Ensure all objective values are converted to integers (CSV parsing may return floats)
             solution = Solution(
                 selected_images=frozenset(selected_images),
-                cost=obj_map.get("min_cost", -1),
-                cloudy_area=obj_map.get("cloud_coverage", -1),
-                min_resolutions_sum=obj_map.get("min_resolution", -1),
-                max_incidence_angle=obj_map.get("min_max_incidence_angle", -1),
+                cost=int(obj_map.get("min_cost", -1)),
+                cloudy_area=int(obj_map.get("cloud_coverage", -1)),
+                min_resolutions_sum=int(obj_map.get("min_resolution", -1)) if obj_map.get("min_resolution", -1) != -1 else None,
+                max_incidence_angle=int(obj_map.get("min_max_incidence_angle", -1)) if obj_map.get("min_max_incidence_angle", -1) != -1 else None,
                 timestamp_s=timedelta(seconds=float(timestamp_s)),
             )
             # Only fix objectives if we have a problem instance

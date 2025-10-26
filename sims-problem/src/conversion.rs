@@ -9,19 +9,19 @@ use crate::solution::Solution;
 fn extract_objective_values<const D: usize>(
     objectives: &[u64],
     problem: &Problem<BitsetEncodedSolution<D>, D>,
-) -> (u64, u64, Option<u64>, Option<u64>) {
-    let mut cost = 0u64;
-    let mut cloudy_area = 0u64;
+) -> (Option<u64>, Option<u64>, Option<u64>, Option<u64>) {
+    let mut cost: Option<u64> = None;
+    let mut cloudy_area: Option<u64> = None;
     let mut min_resolutions_sum: Option<u64> = None;
     let mut max_incidence_angle: Option<u64> = None;
 
     for (i, objective_type) in problem.objectives.iter().enumerate() {
         match objective_type {
             ObjectiveType::TotalCost => {
-                cost = objectives[i];
+                cost = Some(objectives[i]);
             }
             ObjectiveType::CloudyArea => {
-                cloudy_area = objectives[i];
+                cloudy_area = Some(objectives[i]);
             }
             ObjectiveType::MinResolution => {
                 min_resolutions_sum = Some(objectives[i]);
@@ -69,7 +69,7 @@ impl
         let (cost, cloudy_area, min_resolutions_sum, max_incidence_angle) =
             extract_objective_values(&pls_solution.objectives, problem);
 
-        debug!("Created 2D Python solution: cost={cost}, cloudy_area={cloudy_area}");
+        debug!("Created 2D Python solution: cost={cost:?}, cloudy_area={cloudy_area:?}");
 
         Solution::create(
             selected_images,
@@ -79,6 +79,7 @@ impl
             max_incidence_angle,
             min_resolutions_sum,
         )
+        .expect("PLS solution should always have at least 2 objectives set")
     }
 }
 
@@ -110,7 +111,7 @@ impl
         let (cost, cloudy_area, min_resolutions_sum, max_incidence_angle) =
             extract_objective_values(&pls_solution.objectives, problem);
 
-        debug!("Created 3D Python solution: cost={cost}, cloudy_area={cloudy_area}, min_resolutions_sum={min_resolutions_sum:?}, max_incidence_angle={max_incidence_angle:?}");
+        debug!("Created 3D Python solution: cost={cost:?}, cloudy_area={cloudy_area:?}, min_resolutions_sum={min_resolutions_sum:?}, max_incidence_angle={max_incidence_angle:?}");
 
         Solution::create(
             selected_images,
@@ -120,6 +121,7 @@ impl
             max_incidence_angle,
             min_resolutions_sum,
         )
+        .expect("PLS solution should always have at least 2 objectives set")
     }
 }
 
@@ -137,7 +139,9 @@ impl
         ),
     ) -> Self {
         let (pls_solution, problem) = val;
-        let timestamp_us = pls_solution.timestamp().as_micros() as u64; // Debug logging: Show raw PLS solution data
+        let timestamp_us = pls_solution.timestamp().as_micros() as u64;
+        
+        // Debug logging: Show raw PLS solution data
         let selected_images: Vec<usize> = pls_solution.selected_images().collect();
         debug!(
             "Converting 4D PLS solution: {} selected images, objectives: {:?}",
@@ -149,7 +153,7 @@ impl
         let (cost, cloudy_area, min_resolutions_sum, max_incidence_angle) =
             extract_objective_values(&pls_solution.objectives, problem);
 
-        debug!("Created 4D Python solution: cost={cost}, cloudy_area={cloudy_area}, min_resolutions_sum={min_resolutions_sum:?}, max_incidence_angle={max_incidence_angle:?}");
+        debug!("Created 4D Python solution: cost={cost:?}, cloudy_area={cloudy_area:?}, min_resolutions_sum={min_resolutions_sum:?}, max_incidence_angle={max_incidence_angle:?}");
 
         Solution::create(
             selected_images,
@@ -159,5 +163,6 @@ impl
             max_incidence_angle,
             min_resolutions_sum,
         )
+        .expect("PLS solution should always have at least 2 objectives set")
     }
 }

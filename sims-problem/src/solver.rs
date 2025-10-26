@@ -1059,8 +1059,8 @@ pub fn solve_with_milp(
 
         // Extract objective values
         let milp_objectives = milp_solution.objectives();
-        let cost = milp_objectives.first().copied().unwrap_or(0.0) as u64;
-        let cloudy_area = milp_objectives.get(1).copied().unwrap_or(0.0) as u64;
+        let cost = milp_objectives.first().copied().map(|v| v as u64);
+        let cloudy_area = milp_objectives.get(1).copied().map(|v| v as u64);
 
         // Handle optional objectives
         let min_resolution_sum = if milp_objectives.len() > 2 {
@@ -1083,10 +1083,10 @@ pub fn solve_with_milp(
             i as u64 * 1000, // Simple timestamp based on index
             max_incidence_angle,
             min_resolution_sum,
-        );
+        )?;
 
         debug!(
-            "Converted MILP solution {}: cost={}, cloudy_area={}, selected_images={:?}",
+            "Converted MILP solution {}: cost={:?}, cloudy_area={:?}, selected_images={:?}",
             i,
             py_solution.cost,
             py_solution.cloudy_area,

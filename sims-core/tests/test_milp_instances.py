@@ -18,7 +18,7 @@ from sims.core.sims.solver_config import FrontStrategy
 from solver_test_utils import (
     SolverTestResult, SMALL_INSTANCES, MEDIUM_INSTANCES, LARGE_INSTANCES,
     create_problem_instance, create_temp_output_dir, validate_solver_result,
-    log_solution_details, save_test_artifacts
+    log_solution_details, save_test_artifacts, get_timeout_for_instance_size
 )
 
 logger = logging.getLogger(__name__)
@@ -153,7 +153,7 @@ class TestMilpInstances:
         
         # Configuration for small instances with 2 objectives
         objectives = ["min_cost", "cloud_coverage"]
-        timeout = 3540  # 59 minutes for small instances
+        timeout = get_timeout_for_instance_size([filename])
         test_name = "solve_milp_2d_small"
         
         # Run the test
@@ -188,7 +188,7 @@ class TestMilpInstances:
         
         # Configuration for medium instances with 2 objectives
         objectives = ["min_cost", "cloud_coverage"]
-        timeout = 3540  # 59 minutes for medium instances
+        timeout = get_timeout_for_instance_size([filename])
         test_name = "solve_milp_2d_medium"
         
         # Run the test
@@ -223,7 +223,7 @@ class TestMilpInstances:
         
         # Configuration for large instances with 2 objectives
         objectives = ["min_cost", "cloud_coverage"]
-        timeout = 3540  # 59 minutes for large instances
+        timeout = get_timeout_for_instance_size([filename])
         test_name = "solve_milp_2d_large"
         
         # Run the test
@@ -259,7 +259,7 @@ class TestMilpInstances:
         
         # Configuration for small instances with 3 objectives
         objectives = ["min_cost", "cloud_coverage", "min_resolution"]
-        timeout = 3540  # 59 minutes for small instances
+        timeout = get_timeout_for_instance_size([filename])
         test_name = "solve_milp_3d_small"
         
         # Run the test
@@ -294,8 +294,7 @@ class TestMilpInstances:
         
         # Configuration for medium instances with 3 objectives
         objectives = ["min_cost", "cloud_coverage", "min_resolution"]
-        timeout = 3540  # 59 minutes for medium instances
-        # timeout = 120
+        timeout = get_timeout_for_instance_size([filename])
         test_name = "solve_milp_3d_medium"
         
         # Run the test
@@ -330,7 +329,7 @@ class TestMilpInstances:
         
         # Configuration for large instances with 3 objectives
         objectives = ["min_cost", "cloud_coverage", "min_resolution"]
-        timeout = 3500
+        timeout = get_timeout_for_instance_size([filename])
         test_name = "solve_milp_3d_large"
         
         # Run the test
@@ -366,7 +365,7 @@ class TestMilpInstances:
         
         # Configuration for small instances with 4 objectives
         objectives = ["min_cost", "cloud_coverage", "min_resolution", "min_max_incidence_angle"]
-        timeout = 3540  # 59 minutes for small instances
+        timeout = get_timeout_for_instance_size([filename])
         test_name = "solve_milp_4d_small"
         
         # Run the test
@@ -401,7 +400,7 @@ class TestMilpInstances:
         
         # Configuration for medium instances with 4 objectives
         objectives = ["min_cost", "cloud_coverage", "min_resolution", "min_max_incidence_angle"]
-        timeout = 3540  # 59 minutes for medium instances
+        timeout = get_timeout_for_instance_size([filename])
         test_name = "solve_milp_4d_medium"
         
         # Run the test
@@ -436,7 +435,7 @@ class TestMilpInstances:
         
         # Configuration for large instances with 4 objectives
         objectives = ["min_cost", "cloud_coverage", "min_resolution", "min_max_incidence_angle"]
-        timeout = 3540  # 59 minutes for large instances
+        timeout = get_timeout_for_instance_size([filename])
         test_name = "solve_milp_4d_large"
         
         # Run the test

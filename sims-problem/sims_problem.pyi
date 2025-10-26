@@ -247,21 +247,23 @@ class Solution:
     Represents a solution to the SIMS problem.
     
     A solution contains the set of selected satellite images and the resulting
-    objective values (cost, cloudy area coverage, and optionally resolution and incidence angle).
+    objective values. All objective fields (cost, cloudy_area, max_incidence_angle,
+    min_resolutions_sum) are optional to support different optimization scenarios.
+    At least 2 objectives must be set (validated at creation time).
     
     Attributes:
         selected_images: Set of selected image indices
-        cost: Total cost of selected images
-        cloudy_area: Total cloudy area in the solution
+        cost: Total cost of selected images (None if not optimizing cost)
+        cloudy_area: Total cloudy area in the solution (None if not optimizing clouds)
         timestamp: Time when solution was found (as timedelta from start)
-        max_incidence_angle: Maximum incidence angle among selected images (optional)
-        min_resolutions_sum: Sum of minimum resolutions for all fragments (optional)
+        max_incidence_angle: Maximum incidence angle among selected images (None if not optimizing)
+        min_resolutions_sum: Sum of minimum resolutions for all fragments (None if not optimizing)
     """
     
     # Properties (can be read and written)
     selected_images: set[int]
-    cost: int
-    cloudy_area: int
+    cost: Optional[int]
+    cloudy_area: Optional[int]
     timestamp: timedelta
     max_incidence_angle: Optional[int]
     min_resolutions_sum: Optional[int]
@@ -278,8 +280,8 @@ class Solution:
     @staticmethod
     def create(
         selected_images: list[int],
-        cost: int,
-        cloudy_area: int,
+        cost: Optional[int],
+        cloudy_area: Optional[int],
         timestamp_us: int,
         max_incidence_angle: Optional[int] = None,
         min_resolutions_sum: Optional[int] = None,
@@ -287,16 +289,21 @@ class Solution:
         """
         Create a new solution instance.
         
+        At least 2 objectives must be set (not None) for multi-objective optimization.
+        
         Args:
             selected_images: List of selected image indices
-            cost: Total cost of the solution
-            cloudy_area: Total cloudy area in the solution
+            cost: Total cost of the solution (None if not optimizing cost)
+            cloudy_area: Total cloudy area in the solution (None if not optimizing clouds)
             timestamp_us: Timestamp in microseconds from algorithm start
-            max_incidence_angle: Maximum incidence angle among selected images (for 4D optimization)
-            min_resolutions_sum: Sum of minimum resolutions per fragment (for 4D optimization)
+            max_incidence_angle: Maximum incidence angle among selected images (None if not optimizing)
+            min_resolutions_sum: Sum of minimum resolutions per fragment (None if not optimizing)
             
         Returns:
             New Solution instance
+            
+        Raises:
+            ValueError: If fewer than 2 objectives are set (not None)
         """
         ...
     

@@ -12,6 +12,7 @@ dependencies = [
     "aiohttp==3.12.15",
     "geojson==3.2.0",
     "geopandas==1.1.1",
+    "matplotlib>=3.8.0",
     "numpy==2.3.3",
     "pymoo==0.6.1.5",
     "shapely==2.1.2",
