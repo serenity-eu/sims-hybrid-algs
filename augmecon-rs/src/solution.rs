@@ -282,6 +282,8 @@ impl ParetoFront {
             .collect();
 
         // Check if we already have a solution with these rounded objective values
+        // Use epsilon based on decimal places: 0.5 * 10^(-decimal_places)
+        let epsilon = 0.5 / f64::from(10u32.pow(decimal_places));
         let is_duplicate = self.solutions.iter().any(|existing| {
             if existing.objective_values.len() != rounded_objectives.len() {
                 return false;
@@ -291,12 +293,7 @@ impl ParetoFront {
                 .objective_values
                 .iter()
                 .zip(rounded_objectives.iter())
-                .all(|(&existing_val, &new_val)| {
-                    let factor = f64::from(10u32.pow(decimal_places));
-                    let existing_rounded = (existing_val * factor).round() / factor;
-                    let new_rounded = (new_val * factor).round() / factor;
-                    (existing_rounded - new_rounded).abs() < f64::EPSILON
-                })
+                .all(|(&existing_val, &new_val)| (existing_val - new_val).abs() < epsilon)
         });
 
         if is_duplicate {

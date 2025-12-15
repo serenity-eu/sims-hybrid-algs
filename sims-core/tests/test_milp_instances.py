@@ -68,7 +68,7 @@ def run_solver_with_validation(
         
         # Call solver.solve with correct parameters
         result = solve(
-            solver_type=SolverType.GUROBI,
+            solver_type=SolverType.PYTHON_MILP,
             problem_instance=problem_instance,
             problem_path=Path(instance_path),
             timeout_s=timeout,
@@ -435,7 +435,7 @@ class TestMilpInstances:
         
         # Configuration for large instances with 4 objectives
         objectives = ["min_cost", "cloud_coverage", "min_resolution", "min_max_incidence_angle"]
-        timeout = get_timeout_for_instance_size([filename])
+        timeout = 600  # 10 minutes timeout
         test_name = "solve_milp_4d_large"
         
         # Run the test

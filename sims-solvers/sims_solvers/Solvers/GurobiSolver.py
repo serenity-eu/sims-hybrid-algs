@@ -108,11 +108,22 @@ class GurobiSolver(Solver):
             # objective ranges
             obj_range = []
             for i in constraint_indices:
-                obj_range.append(abs(best_constrain_obj_list[i] - nadir_constrain_obj_list[i]))
+                range_val = abs(best_constrain_obj_list[i] - nadir_constrain_obj_list[i])
+                if range_val == 0:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.critical(f"DIVISION BY ZERO: Objective {i} has zero range! "
+                                  f"best={best_constrain_obj_list[i]}, nadir={nadir_constrain_obj_list[i]}")
+                obj_range.append(range_val)
             
             # Main objective: selected objective + delta * sum_{k=2,..p}(10^(k-1)*slack[k] / range[k])
             slack_range_sum = 0
             for i in range(len(constraint_indices)):
+                if obj_range[i] == 0:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.critical(f"SKIPPING objective {constraint_indices[i]} in slack calculation due to zero range")
+                    continue  # Skip this objective entirely to avoid division by zero
                 slack_range_sum += slack_vars[i]/(10 ** i * obj_range[i])
 
             obj = self.model.objectives[main_obj_index] + (delta * slack_range_sum)

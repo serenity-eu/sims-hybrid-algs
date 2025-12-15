@@ -272,30 +272,50 @@ impl<const D: usize> SIMSModifiable<D> for VecEncodedSolution<D> {
         timer: &crate::timer::Timer,
         is_deterministic: bool,
     ) -> Vec<Self> {
-        let removal_candidates_lists: Vec<Vec<usize>> = if k == 1 {
-            self.selected_images()
-                .filter_map(|selected_image| {
-                    if self.is_replaceable(selected_image, problem) {
-                        return Some(vec![selected_image]);
-                    }
-                    return None;
-                })
-                .collect()
-        } else {
-            self.worst_selected_images(problem, is_deterministic)
-                .into_iter()
-                .combinations(k as usize)
-                .collect()
+        use tracing::debug_span;
+        
+        let candidates_span = debug_span!("find_removal_candidates", k = k);
+        let removal_candidates_lists: Vec<Vec<usize>> = {
+            let _guard = candidates_span.enter();
+            if k == 1 {
+                self.selected_images()
+                    .filter_map(|selected_image| {
+                        if self.is_replaceable(selected_image, problem) {
+                            Some(vec![selected_image])
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            } else {
+                self.worst_selected_images(problem, is_deterministic)
+                    .into_iter()
+                    .combinations(k as usize)
+                    .collect()
+            }
         };
 
         let mut residual_solutions: Vec<Self> = Vec::new();
 
-        for removal_candidates in removal_candidates_lists {
-            if let Some(mut residual_problem) =
+        let solve_span = debug_span!("solve_residual_problems", num_problems = removal_candidates_lists.len());
+        let _solve_guard = solve_span.enter();
+
+        for (idx, removal_candidates) in removal_candidates_lists.into_iter().enumerate() {
+            let problem_span = debug_span!("residual_problem", problem_index = idx);
+            let _problem_guard = problem_span.enter();
+            
+            let create_span = debug_span!("create_residual_problem");
+            let residual_problem_opt = {
+                let _create_guard = create_span.enter();
                 self.create_residual_problem(removal_candidates, problem, is_deterministic)
-            {
-                let neighborhood_iter =
-                    residual_problem.solve::<NdTreeSolutionSet<ResidualSolution<D>, D>>(timer);
+            };
+            
+            if let Some(mut residual_problem) = residual_problem_opt {
+                let solve_residual_span = debug_span!("solve_residual");
+                let neighborhood_iter = {
+                    let _solve_residual_guard = solve_residual_span.enter();
+                    residual_problem.solve::<NdTreeSolutionSet<ResidualSolution<D>, D>>(timer)
+                };
                 residual_solutions.extend(neighborhood_iter);
             }
             if timer.is_expired() {

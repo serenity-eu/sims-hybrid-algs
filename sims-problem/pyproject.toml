@@ -37,7 +37,7 @@ cache-keys = [{file = "pyproject.toml"}, {file = "Cargo.toml"}, {file = "**/*.rs
 sims-solvers = { workspace = true }
 
 [tool.maturin]
-features = ["pyo3/extension-module"]
+features = ["pyo3/extension-module", "milp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

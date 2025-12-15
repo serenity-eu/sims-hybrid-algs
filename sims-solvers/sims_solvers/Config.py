@@ -24,6 +24,7 @@ class Config:
         cores: int,
         threads: int,
         objectives: list[str] | None = None,
+        max_solutions_count: int | None = None,
     ):
         self.minizinc_data: bool = minizinc_data
         self.data_name: str = instance_name
@@ -42,6 +43,8 @@ class Config:
         self.threads: int = threads
         # Default to all 4 objectives if not specified
         self.objectives: list[str] = objectives or ["min_cost", "cloud_coverage", "min_resolution", "min_max_incidence_angle"]
+        # Maximum number of solutions to generate (None = unlimited)
+        self.max_solutions_count: int | None = max_solutions_count
 
     @classmethod
     def from_args(cls) -> "Config":
@@ -124,7 +127,7 @@ class Config:
         )
 
     def initialize_cores(self, solver, check_solver=True):
-        """If the solver supports parallelization, use twice the number of available cores. By default, we assume that it does."""
+        """If the solver supports parallelization, use all available logical CPUs. By default, we assume that it does."""
         if not check_solver:
             print(
                 "Check if the solver supports parallelization. By default, we assume that it does."
@@ -132,7 +135,8 @@ class Config:
         if not check_solver or "-p" in solver.stdFlags:
             if self.cores is None:
                 self.cores = multiprocessing.cpu_count()
-            self.threads = self.cores * 2
+            # Use logical CPU count for threads (already accounts for hyperthreading)
+            self.threads = multiprocessing.cpu_count()
         else:
             self.cores = 1
             self.threads = 1

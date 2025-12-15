@@ -184,12 +184,20 @@ where
             );
             let _solution_guard = solution_span.enter();
 
-            let neighbors = solution.neighborhood(
-                self.neigborhood_structure,
-                self.problem,
-                timer,
-                self.is_deterministic,
+            // Instrument neighborhood generation separately
+            let neighborhood_generation_span = debug_span!(
+                "generate_neighborhood",
+                neighborhood_structure = self.neigborhood_structure
             );
+            let neighbors = {
+                let _gen_guard = neighborhood_generation_span.enter();
+                solution.neighborhood(
+                    self.neigborhood_structure,
+                    self.problem,
+                    timer,
+                    self.is_deterministic,
+                )
+            };
             let neighbor_count = neighbors.len();
 
             tracing::debug!(
@@ -199,7 +207,7 @@ where
 
             let neighbor_evaluation_span =
                 debug_span!("evaluate_neighbors", neighbor_count = neighbor_count);
-            let _evaluation_guard = neighbor_evaluation_span.enter();
+            let evaluation_guard = neighbor_evaluation_span.enter();
 
             for (neighbor_index, neighbor) in neighbors.into_iter().enumerate() {
                 if self.process_neighbor(
@@ -215,7 +223,12 @@ where
                     break 'population;
                 }
             }
+            
+            drop(evaluation_guard);
 
+            // Instrument the explored neighborhood size update
+            let update_span = debug_span!("update_explored_neighborhood_size");
+            let _update_guard = update_span.enter();
             self.explored_solutions
                 .update_explored_neighborhood_size(&solution, self.neigborhood_structure);
         }

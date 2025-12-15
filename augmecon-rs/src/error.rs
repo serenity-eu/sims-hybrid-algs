@@ -149,6 +149,10 @@ pub enum AugmeconError {
     /// Error reading Excel files
     #[error("Excel reading error: {0}")]
     ExcelError(#[from] calamine::Error),
+
+    /// Solver not supported (disabled at compile time)
+    #[error("Unsupported solver: {0}")]
+    UnsupportedSolver(String),
 }
 
 /// Result type used throughout the AUGMECON library

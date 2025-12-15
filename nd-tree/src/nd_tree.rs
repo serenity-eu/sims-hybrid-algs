@@ -3,6 +3,7 @@ use slotmap::{DefaultKey, SlotMap};
 use std::{array, marker::PhantomData, vec};
 
 use pareto::{Dominance, HasObjectives, MoSolution, Objectives};
+use tracing::trace;
 
 /// A solution in D-dimensional objective space.
 #[derive(Clone, std::fmt::Debug, PartialEq, Eq)]
@@ -411,13 +412,19 @@ where
 
     #[must_use]
     pub fn contains(&self, solution: &T) -> bool {
+        trace!("contains() called for solution: {:?}", solution.objectives());
+        
         let Some(root_key) = self.root else {
+            trace!("  No root, returning false");
             return false;
         };
 
         let mut stack = vec![root_key];
+        let mut nodes_visited = 0;
+        let mut nodes_skipped = 0;
 
         while let Some(node_key) = stack.pop() {
+            nodes_visited += 1;
             let node = &self.arena[node_key];
 
             // Get node bounds
@@ -427,20 +434,60 @@ where
                 }
             };
 
-            // Use MoSolution dominance methods for bounds checking
-            // Skip this subtree if solution is outside the bounds [ideal, nadir]
-            if solution.is_covered_by(ideal) || solution.covers(nadir) {
+            trace!(
+                "  Visiting node #{}, ideal: {:?}, nadir: {:?}",
+                nodes_visited,
+                ideal,
+                nadir
+            );
+
+            // Bounds checking: skip this subtree if solution is outside [ideal, nadir]
+            // For minimization: ideal has the best (smallest) values, nadir has worst (largest) values
+            // A solution is within bounds if all objectives are in range [ideal[i], nadir[i]]
+            // Note: We cannot use covers/is_covered_by here because they check dominance relations,
+            // not coordinate-wise bounds. A solution at [10,30] with ideal=[10,10] and nadir=[30,30]
+            // is within bounds coordinate-wise, but doesn't dominate ideal.
+            let within_bounds = solution.objectives().iter()
+                .zip(ideal.iter().zip(nadir.iter()))
+                .all(|(sol_obj, (ideal_obj, nadir_obj))| {
+                    // For minimization: ideal <= solution <= nadir
+                    sol_obj >= ideal_obj && sol_obj <= nadir_obj
+                });
+            
+            trace!(
+                "    within_bounds={} (checking if {:?} is in [{:?}, {:?}])",
+                within_bounds,
+                solution.objectives(),
+                ideal,
+                nadir
+            );
+
+            if !within_bounds {
+                nodes_skipped += 1;
+                trace!("    SKIPPING this subtree (solution outside bounds)");
                 continue; // Solution cannot be in this subtree, skip
             }
 
             match node {
                 Node::Leaf { solutions, .. } => {
+                    trace!("    Leaf node with {} solutions", solutions.len());
+                    for (i, sol) in solutions.iter().enumerate() {
+                        trace!("      Solution[{}]: {:?}", i, sol.objectives());
+                    }
+                    
                     // Check if the solution exists in this leaf
                     if solutions.contains(solution) {
+                        trace!(
+                            "  FOUND! Visited {} nodes, skipped {}",
+                            nodes_visited,
+                            nodes_skipped
+                        );
                         return true;
                     }
+                    trace!("    Not found in this leaf");
                 }
                 Node::Internal { children, .. } => {
+                    trace!("    Internal node with {} children", children.len());
                     // Add children to stack for further exploration
                     for &child_key in children {
                         stack.push(child_key);
@@ -449,6 +496,11 @@ where
             }
         }
 
+        trace!(
+            "  NOT FOUND after visiting {} nodes, skipped {}",
+            nodes_visited,
+            nodes_skipped
+        );
         false
     }
 

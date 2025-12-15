@@ -18,6 +18,7 @@ dependencies = [
     "numpy>=2.3.3",
     "maturin>=1.9.6",
     "plotly>=6.3.1",
+    "markdown>=3.10",
     "sims-core",
     "sims-solvers",
     "sims-problem",

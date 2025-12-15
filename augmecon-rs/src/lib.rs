@@ -232,7 +232,10 @@ pub mod epsilon_constraint;
 pub mod error;
 pub mod flag;
 pub mod gpba;
+pub mod gpba_phases;
 pub mod grid;
+/// Interval management for adaptive Pareto front exploration
+pub mod interval_manager;
 pub mod model;
 pub mod options;
 pub mod problem_utils;
@@ -241,6 +244,7 @@ pub mod single_objective;
 pub mod solution;
 pub mod solver;
 pub mod solver_enum;
+pub mod timer;
 
 // Re-export main types for convenient access
 pub use error::{AugmeconError, Result};

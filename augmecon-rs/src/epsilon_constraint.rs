@@ -28,14 +28,34 @@ use crate::{
     error::{AugmeconError, Result},
     model::MultiObjectiveProblem,
     options::Options,
-    solution::{self, Solution},
+    solution::{self, HasObjectives, Solution},
 };
-use good_lp::{
-    constraint, variable, Expression, Solution as GoodLpSolution, SolverModel, WithTimeLimit,
-    coin_cbc, default_solver, highs,
-};
+use good_lp::solvers::lp_solvers::{GurobiSolver, WithMaxSeconds};
+#[cfg(feature = "coin_cbc")]
+use good_lp::solvers::coin_cbc;
+#[cfg(feature = "highs")]
+use good_lp::solvers::highs;
+#[cfg(feature = "scip")]
+use good_lp::solvers::scip;
+use good_lp::{constraint, variable, Expression, Solution as GoodLpSolution, SolverModel};
 use std::collections::HashMap;
 use std::time::Duration;
+
+/// Create the default solver (Gurobi via lp-solvers)
+fn create_solver() -> good_lp::solvers::lp_solvers::LpSolver<GurobiSolver> {
+    let gurobi = GurobiSolver::new();
+    good_lp::solvers::lp_solvers::LpSolver(gurobi)
+}
+
+/// Create solver with time limit
+fn create_solver_with_timeout(
+    timeout: Duration,
+) -> good_lp::solvers::lp_solvers::LpSolver<GurobiSolver> {
+    #[allow(clippy::cast_possible_truncation, reason = "Timeout duration in seconds is expected to fit in u32 for Gurobi solver API - values over 4.2 billion seconds (136 years) are not realistic")]
+    let seconds = timeout.as_secs() as u32;
+    let gurobi = GurobiSolver::new().with_max_seconds(seconds);
+    good_lp::solvers::lp_solvers::LpSolver(gurobi)
+}
 
 /// Solution with additional slack variable values for bypass coefficient optimization
 #[derive(Debug, Clone)]
@@ -211,15 +231,53 @@ impl<'a> EpsilonConstraintBuilder<'a> {
         );
 
         match self.options.solver {
-            crate::solver_enum::Solver::Default => {
-                Ok(self.solve_with_default_solver_impl(prob_vars, &augmented_primary, *direction, &slack_vars, &penalty_sum, epsilon_augmentation))
-            }
-            crate::solver_enum::Solver::CoinCbc => {
-                Ok(self.solve_with_coin_cbc_solver_impl(prob_vars, &augmented_primary, *direction, &slack_vars, &penalty_sum, epsilon_augmentation))
-            }
-            crate::solver_enum::Solver::HiGHS => {
-                Ok(self.solve_with_highs_solver_impl(prob_vars, &augmented_primary, *direction, &slack_vars, &penalty_sum, epsilon_augmentation))
-            }
+            crate::solver_enum::Solver::Default => Ok(self.solve_with_default_solver_impl(
+                prob_vars,
+                &augmented_primary,
+                *direction,
+                &slack_vars,
+                &penalty_sum,
+                epsilon_augmentation,
+            )),
+            #[cfg(feature = "coin_cbc")]
+            crate::solver_enum::Solver::CoinCbc => Ok(self.solve_with_coin_cbc_impl(
+                prob_vars,
+                &augmented_primary,
+                *direction,
+                &slack_vars,
+                &penalty_sum,
+                epsilon_augmentation,
+            )),
+            #[cfg(not(feature = "coin_cbc"))]
+            crate::solver_enum::Solver::CoinCbc => Err(AugmeconError::UnsupportedSolver(
+                "CoinCbc solver is not available. Enable the 'coin_cbc' feature to use it.".to_string(),
+            )),
+            #[cfg(feature = "highs")]
+            crate::solver_enum::Solver::HiGHS => Ok(self.solve_with_highs_impl(
+                prob_vars,
+                &augmented_primary,
+                *direction,
+                &slack_vars,
+                &penalty_sum,
+                epsilon_augmentation,
+            )),
+            #[cfg(not(feature = "highs"))]
+            crate::solver_enum::Solver::HiGHS => Err(AugmeconError::UnsupportedSolver(
+                "HiGHS solver is not available. Enable the 'highs' feature to use it.".to_string(),
+            )),
+            #[cfg(feature = "scip")]
+            crate::solver_enum::Solver::SCIP => Ok(self.solve_with_scip_impl(
+                prob_vars,
+                &augmented_primary,
+                *direction,
+                &slack_vars,
+                &penalty_sum,
+                epsilon_augmentation,
+            )),
+            #[cfg(not(feature = "scip"))]
+            crate::solver_enum::Solver::SCIP => Err(AugmeconError::UnsupportedSolver(
+                "SCIP solver is not available. Enable the 'scip' feature to use it.".to_string(),
+            )),
         }
     }
 
@@ -265,15 +323,57 @@ impl<'a> EpsilonConstraintBuilder<'a> {
         );
 
         match self.options.solver {
-            crate::solver_enum::Solver::Default => {
-                Ok(self.solve_with_slack_default_solver_impl(prob_vars, &augmented_primary, *direction, &slack_vars, &penalty_sum, epsilon_augmentation, timeout))
-            }
-            crate::solver_enum::Solver::CoinCbc => {
-                Ok(self.solve_with_slack_coin_cbc_solver_impl(prob_vars, &augmented_primary, *direction, &slack_vars, &penalty_sum, epsilon_augmentation, timeout))
-            }
-            crate::solver_enum::Solver::HiGHS => {
-                Ok(self.solve_with_slack_highs_solver_impl(prob_vars, &augmented_primary, *direction, &slack_vars, &penalty_sum, epsilon_augmentation, timeout))
-            }
+            crate::solver_enum::Solver::Default => Ok(self.solve_with_slack_default_solver_impl(
+                prob_vars,
+                &augmented_primary,
+                *direction,
+                &slack_vars,
+                &penalty_sum,
+                epsilon_augmentation,
+                timeout,
+            )),
+            #[cfg(feature = "coin_cbc")]
+            crate::solver_enum::Solver::CoinCbc => Ok(self.solve_with_slack_coin_cbc_impl(
+                prob_vars,
+                &augmented_primary,
+                *direction,
+                &slack_vars,
+                &penalty_sum,
+                epsilon_augmentation,
+                timeout,
+            )),
+            #[cfg(not(feature = "coin_cbc"))]
+            crate::solver_enum::Solver::CoinCbc => Err(AugmeconError::UnsupportedSolver(
+                "CoinCbc solver is not available. Enable the 'coin_cbc' feature to use it.".to_string(),
+            )),
+            #[cfg(feature = "highs")]
+            crate::solver_enum::Solver::HiGHS => Ok(self.solve_with_slack_highs_impl(
+                prob_vars,
+                &augmented_primary,
+                *direction,
+                &slack_vars,
+                &penalty_sum,
+                epsilon_augmentation,
+                timeout,
+            )),
+            #[cfg(not(feature = "highs"))]
+            crate::solver_enum::Solver::HiGHS => Err(AugmeconError::UnsupportedSolver(
+                "HiGHS solver is not available. Enable the 'highs' feature to use it.".to_string(),
+            )),
+            #[cfg(feature = "scip")]
+            crate::solver_enum::Solver::SCIP => Ok(self.solve_with_slack_scip_impl(
+                prob_vars,
+                &augmented_primary,
+                *direction,
+                &slack_vars,
+                &penalty_sum,
+                epsilon_augmentation,
+                timeout,
+            )),
+            #[cfg(not(feature = "scip"))]
+            crate::solver_enum::Solver::SCIP => Err(AugmeconError::UnsupportedSolver(
+                "SCIP solver is not available. Enable the 'scip' feature to use it.".to_string(),
+            )),
         }
     }
 
@@ -489,21 +589,22 @@ impl<'a> EpsilonConstraintBuilder<'a> {
                 prob_vars.maximise(augmented_primary.clone())
             }
         };
-        
-        let mut model = default_solver(problem);
 
+        let mut model = problem.using(create_solver());
+
+        // Note: LpSolver (Gurobi) doesn't expose set_parameter method
         // Apply solver parameters if the solver supports them
-        if self.options.solver.supports_parameters() {
-            for (key, value) in &self.options.solver_parameters {
-                log::debug!("Default solver: Setting parameter: {key} = {value}");
-                model.set_parameter(key, value);
-            }
-        } else if !self.options.solver_parameters.is_empty() {
-            log::warn!(
-                "Default solver does not support parameters, but {} parameters were specified",
-                self.options.solver_parameters.len()
-            );
-        }
+        // if self.options.solver.supports_parameters() {
+        //     for (key, value) in &self.options.solver_parameters {
+        //         log::debug!("Default solver: Setting parameter: {key} = {value}");
+        //         model.set_parameter(key, value);
+        //     }
+        // } else if !self.options.solver_parameters.is_empty() {
+        //     log::warn!(
+        //         "Default solver does not support parameters, but {} parameters were specified",
+        //         self.options.solver_parameters.len()
+        //     );
+        // }
 
         // Add constraints
         self.add_constraints_to_model(&mut model, slack_vars);
@@ -516,7 +617,13 @@ impl<'a> EpsilonConstraintBuilder<'a> {
 
         match model.solve() {
             Ok(solution) => {
-                let sol = self.extract_solution(&solution, penalty_sum, augmented_primary, epsilon_augmentation, slack_vars);
+                let sol = self.extract_solution(
+                    &solution,
+                    penalty_sum,
+                    augmented_primary,
+                    epsilon_augmentation,
+                    slack_vars,
+                );
                 Some(sol)
             }
             Err(e) => {
@@ -526,118 +633,7 @@ impl<'a> EpsilonConstraintBuilder<'a> {
         }
     }
 
-    /// Solve with COIN-OR CBC solver implementation
-    fn solve_with_coin_cbc_solver_impl(
-        &self,
-        prob_vars: good_lp::ProblemVariables,
-        augmented_primary: &Expression,
-        direction: crate::model::ObjectiveDirection,
-        slack_vars: &HashMap<usize, good_lp::Variable>,
-        penalty_sum: &Expression,
-        epsilon_augmentation: f64,
-    ) -> std::option::Option<solution::Solution> {
-        let problem = match direction {
-            crate::model::ObjectiveDirection::Minimize => {
-                prob_vars.minimise(augmented_primary.clone())
-            }
-            crate::model::ObjectiveDirection::Maximize => {
-                prob_vars.maximise(augmented_primary.clone())
-            }
-        };
-        
-        let mut model = coin_cbc(problem);
-
-        // Apply solver parameters if the solver supports them
-        if self.options.solver.supports_parameters() {
-            for (key, value) in &self.options.solver_parameters {
-                log::debug!("COIN-OR CBC solver: Setting parameter: {key} = {value}");
-                model.set_parameter(key, value);
-            }
-        } else if !self.options.solver_parameters.is_empty() {
-            log::warn!(
-                "COIN-OR CBC solver does not support parameters, but {} parameters were specified",
-                self.options.solver_parameters.len()
-            );
-        }
-
-        // Add constraints
-        self.add_constraints_to_model(&mut model, slack_vars);
-
-        // Solve the problem
-        log::debug!(
-            "Solving epsilon-constraint problem with {} epsilon constraints",
-            self.epsilon_values.len()
-        );
-
-        match model.solve() {
-            Ok(solution) => {
-                let sol = self.extract_solution(&solution, penalty_sum, augmented_primary, epsilon_augmentation, slack_vars);
-                Some(sol)
-            }
-            Err(e) => {
-                log::debug!("Epsilon-constraint problem failed: {e:?}");
-                None
-            }
-        }
-    }
-
-    /// Solve with `HiGHS` solver implementation
-    fn solve_with_highs_solver_impl(
-        &self,
-        prob_vars: good_lp::ProblemVariables,
-        augmented_primary: &Expression,
-        direction: crate::model::ObjectiveDirection,
-        slack_vars: &HashMap<usize, good_lp::Variable>,
-        penalty_sum: &Expression,
-        epsilon_augmentation: f64,
-    ) -> Option<Solution> {
-        let problem = match direction {
-            crate::model::ObjectiveDirection::Minimize => {
-                prob_vars.minimise(augmented_primary.clone())
-            }
-            crate::model::ObjectiveDirection::Maximize => {
-                prob_vars.maximise(augmented_primary.clone())
-            }
-        };
-        
-        let mut model = highs(problem);
-
-        // Apply solver parameters if the solver supports them (HiGHS doesn't support generic parameters)
-        if self.options.solver.supports_parameters() {
-            for (key, value) in &self.options.solver_parameters {
-                log::debug!("HiGHS solver: Setting parameter: {key} = {value}");
-                // Note: HiGHS doesn't have a generic set_parameter method
-                // Parameters would need to be handled differently for HiGHS
-            }
-        } else if !self.options.solver_parameters.is_empty() {
-            log::warn!(
-                "HiGHS solver does not support parameters, but {} parameters were specified",
-                self.options.solver_parameters.len()
-            );
-        }
-
-        // Add constraints
-        self.add_constraints_to_model(&mut model, slack_vars);
-
-        // Solve the problem
-        log::debug!(
-            "Solving epsilon-constraint problem with {} epsilon constraints",
-            self.epsilon_values.len()
-        );
-
-        match model.solve() {
-            Ok(solution) => {
-                let sol = self.extract_solution(&solution, penalty_sum, augmented_primary, epsilon_augmentation, slack_vars);
-                Some(sol)
-            }
-            Err(e) => {
-                log::debug!("Epsilon-constraint problem failed: {e:?}");
-                None
-            }
-        }
-    }
-
-    /// Solve with slack - Default solver implementation
+    /// Solve with slack - Default solver implementation (uses Gurobi via lp-solvers)
     fn solve_with_slack_default_solver_impl(
         &self,
         prob_vars: good_lp::ProblemVariables,
@@ -656,53 +652,57 @@ impl<'a> EpsilonConstraintBuilder<'a> {
                 prob_vars.maximise(augmented_primary.clone())
             }
         };
-        
-        let mut model = default_solver(problem);
 
-        // Apply solver parameters if the solver supports them
-        if self.options.solver.supports_parameters() {
-            for (key, value) in &self.options.solver_parameters {
-                log::debug!("Default solver slack: Setting parameter: {key} = {value}");
-                model.set_parameter(key, value);
-            }
-        } else if !self.options.solver_parameters.is_empty() {
-            log::warn!(
-                "Default solver does not support parameters, but {} parameters were specified",
-                self.options.solver_parameters.len()
-            );
-        }
+        let mut model = if let Some(timeout_duration) = timeout {
+            problem.using(create_solver_with_timeout(timeout_duration))
+        } else {
+            problem.using(create_solver())
+        };
 
         // Add constraints
         self.add_constraints_to_model(&mut model, slack_vars);
 
-        // Apply timeout if specified
-        let final_model = if let Some(timeout_duration) = timeout {
-            log::debug!("Applying timeout of {timeout_duration:?} to epsilon-constraint solver");
-            model.with_time_limit(timeout_duration.as_secs_f64())
-        } else {
-            model
-        };
-
-        // Solve the problem
-        log::debug!(
-            "Solving epsilon-constraint problem with {} epsilon constraints and slack variables",
-            self.epsilon_values.len()
+        // Solve the problem - log what we're optimizing and the constraints
+        log::info!(
+            "Solving ε-constraint: optimize obj[{}], constraints: {:?}, timeout: {}s",
+            self.primary_objective,
+            self.epsilon_values,
+            timeout.map_or(0, |t| t.as_secs())
         );
 
-        match final_model.solve() {
+        match model.solve() {
             Ok(solution) => {
-                let sol = self.extract_solution_with_slack(&solution, penalty_sum, augmented_primary, epsilon_augmentation, slack_vars);
+                let sol = self.extract_solution_with_slack(
+                    &solution,
+                    penalty_sum,
+                    augmented_primary,
+                    epsilon_augmentation,
+                    slack_vars,
+                );
+                log::info!(
+                    "ε-constraint solved: obj[{}]={:.2}, feasible={}, slacks present={}",
+                    self.primary_objective,
+                    sol.solution.objectives()[self.primary_objective],
+                    sol.solution.feasible,
+                    !sol.slack_values.is_empty()
+                );
                 Some(sol)
             }
             Err(e) => {
-                log::debug!("Epsilon-constraint problem failed: {e:?}");
+                log::info!(
+                    "ε-constraint INFEASIBLE: obj[{}], constraints: {:?}",
+                    self.primary_objective,
+                    self.epsilon_values
+                );
+                log::debug!("Infeasibility reason: {e:?}");
                 None
             }
         }
     }
 
-    /// Solve with slack - COIN-OR CBC solver implementation
-    fn solve_with_slack_coin_cbc_solver_impl(
+    /// Solve with `CoinCbc` solver implementation
+    #[cfg(feature = "coin_cbc")]
+    fn solve_with_coin_cbc_impl(
         &self,
         prob_vars: good_lp::ProblemVariables,
         augmented_primary: &Expression,
@@ -710,7 +710,176 @@ impl<'a> EpsilonConstraintBuilder<'a> {
         slack_vars: &HashMap<usize, good_lp::Variable>,
         penalty_sum: &Expression,
         epsilon_augmentation: f64,
-        timeout: Option<Duration>,
+    ) -> Option<Solution> {
+        let problem = match direction {
+            crate::model::ObjectiveDirection::Minimize => {
+                prob_vars.minimise(augmented_primary.clone())
+            }
+            crate::model::ObjectiveDirection::Maximize => {
+                prob_vars.maximise(augmented_primary.clone())
+            }
+        };
+
+        let mut model = problem.using(coin_cbc::coin_cbc);
+
+        // Apply solver parameters if specified
+        for (key, value) in &self.options.solver_parameters {
+            log::debug!("CoinCbc solver: Setting parameter: {key} = {value}");
+            model.set_parameter(key, value);
+        }
+
+        // Add constraints
+        self.add_constraints_to_model(&mut model, slack_vars);
+
+        // Solve the problem
+        log::debug!(
+            "Solving epsilon-constraint problem with {} epsilon constraints using CoinCbc",
+            self.epsilon_values.len()
+        );
+
+        match model.solve() {
+            Ok(solution) => {
+                let sol = self.extract_solution(
+                    &solution,
+                    penalty_sum,
+                    augmented_primary,
+                    epsilon_augmentation,
+                    slack_vars,
+                );
+                Some(sol)
+            }
+            Err(e) => {
+                log::debug!("Epsilon-constraint problem failed with CoinCbc: {e:?}");
+                None
+            }
+        }
+    }
+
+    /// Solve with `HiGHS` solver implementation
+    #[cfg(feature = "highs")]
+    fn solve_with_highs_impl(
+        &self,
+        prob_vars: good_lp::ProblemVariables,
+        augmented_primary: &Expression,
+        direction: crate::model::ObjectiveDirection,
+        slack_vars: &HashMap<usize, good_lp::Variable>,
+        penalty_sum: &Expression,
+        epsilon_augmentation: f64,
+    ) -> Option<Solution> {
+        let problem = match direction {
+            crate::model::ObjectiveDirection::Minimize => {
+                prob_vars.minimise(augmented_primary.clone())
+            }
+            crate::model::ObjectiveDirection::Maximize => {
+                prob_vars.maximise(augmented_primary.clone())
+            }
+        };
+
+        let mut model = problem.using(highs::highs);
+
+        // Note: HiGHS solver doesn't support generic parameter setting via set_parameter
+        if !self.options.solver_parameters.is_empty() {
+            log::warn!(
+                "HiGHS solver does not support generic parameters, ignoring {} parameters",
+                self.options.solver_parameters.len()
+            );
+        }
+
+        // Add constraints
+        self.add_constraints_to_model(&mut model, slack_vars);
+
+        // Solve the problem
+        log::debug!(
+            "Solving epsilon-constraint problem with {} epsilon constraints using HiGHS",
+            self.epsilon_values.len()
+        );
+
+        match model.solve() {
+            Ok(solution) => {
+                let sol = self.extract_solution(
+                    &solution,
+                    penalty_sum,
+                    augmented_primary,
+                    epsilon_augmentation,
+                    slack_vars,
+                );
+                Some(sol)
+            }
+            Err(e) => {
+                log::debug!("Epsilon-constraint problem failed with HiGHS: {e:?}");
+                None
+            }
+        }
+    }
+
+    /// Solve with SCIP solver implementation
+    #[cfg(feature = "scip")]
+    fn solve_with_scip_impl(
+        &self,
+        prob_vars: good_lp::ProblemVariables,
+        augmented_primary: &Expression,
+        direction: crate::model::ObjectiveDirection,
+        slack_vars: &HashMap<usize, good_lp::Variable>,
+        penalty_sum: &Expression,
+        epsilon_augmentation: f64,
+    ) -> Option<Solution> {
+        let problem = match direction {
+            crate::model::ObjectiveDirection::Minimize => {
+                prob_vars.minimise(augmented_primary.clone())
+            }
+            crate::model::ObjectiveDirection::Maximize => {
+                prob_vars.maximise(augmented_primary.clone())
+            }
+        };
+
+        let mut model = problem.using(scip::scip);
+
+        // Note: SCIP solver doesn't support generic parameter setting via set_parameter
+        if !self.options.solver_parameters.is_empty() {
+            log::warn!(
+                "SCIP solver does not support generic parameters, ignoring {} parameters",
+                self.options.solver_parameters.len()
+            );
+        }
+
+        // Add constraints
+        self.add_constraints_to_model(&mut model, slack_vars);
+
+        // Solve the problem
+        log::debug!(
+            "Solving epsilon-constraint problem with {} epsilon constraints using SCIP",
+            self.epsilon_values.len()
+        );
+
+        match model.solve() {
+            Ok(solution) => {
+                let sol = self.extract_solution(
+                    &solution,
+                    penalty_sum,
+                    augmented_primary,
+                    epsilon_augmentation,
+                    slack_vars,
+                );
+                Some(sol)
+            }
+            Err(e) => {
+                log::debug!("Epsilon-constraint problem failed with SCIP: {e:?}");
+                None
+            }
+        }
+    }
+
+    /// Solve with slack - `CoinCbc` solver implementation
+    #[cfg(feature = "coin_cbc")]
+    fn solve_with_slack_coin_cbc_impl(
+        &self,
+        prob_vars: good_lp::ProblemVariables,
+        augmented_primary: &Expression,
+        direction: crate::model::ObjectiveDirection,
+        slack_vars: &HashMap<usize, good_lp::Variable>,
+        penalty_sum: &Expression,
+        epsilon_augmentation: f64,
+        _timeout: Option<Duration>,
     ) -> Option<SolutionWithSlack> {
         let problem = match direction {
             crate::model::ObjectiveDirection::Minimize => {
@@ -720,53 +889,58 @@ impl<'a> EpsilonConstraintBuilder<'a> {
                 prob_vars.maximise(augmented_primary.clone())
             }
         };
-        
-        let mut model = coin_cbc(problem);
 
-        // Apply solver parameters if the solver supports them
-        if self.options.solver.supports_parameters() {
-            for (key, value) in &self.options.solver_parameters {
-                log::debug!("COIN-OR CBC solver slack: Setting parameter: {key} = {value}");
-                model.set_parameter(key, value);
-            }
-        } else if !self.options.solver_parameters.is_empty() {
-            log::warn!(
-                "COIN-OR CBC solver does not support parameters, but {} parameters were specified",
-                self.options.solver_parameters.len()
-            );
+        let mut model = problem.using(coin_cbc::coin_cbc);
+
+        // Apply solver parameters if specified
+        for (key, value) in &self.options.solver_parameters {
+            log::debug!("CoinCbc solver: Setting parameter: {key} = {value}");
+            model.set_parameter(key, value);
         }
 
         // Add constraints
         self.add_constraints_to_model(&mut model, slack_vars);
 
-        // Apply timeout if specified
-        let final_model = if let Some(timeout_duration) = timeout {
-            log::debug!("Applying timeout of {timeout_duration:?} to epsilon-constraint solver");
-            model.with_time_limit(timeout_duration.as_secs_f64())
-        } else {
-            model
-        };
-
         // Solve the problem
-        log::debug!(
-            "Solving epsilon-constraint problem with {} epsilon constraints and slack variables",
-            self.epsilon_values.len()
+        log::info!(
+            "Solving ε-constraint: optimize obj[{}], constraints: {:?} using CoinCbc",
+            self.primary_objective,
+            self.epsilon_values
         );
 
-        match final_model.solve() {
+        match model.solve() {
             Ok(solution) => {
-                let sol = self.extract_solution_with_slack(&solution, penalty_sum, augmented_primary, epsilon_augmentation, slack_vars);
+                let sol = self.extract_solution_with_slack(
+                    &solution,
+                    penalty_sum,
+                    augmented_primary,
+                    epsilon_augmentation,
+                    slack_vars,
+                );
+                log::info!(
+                    "ε-constraint solved: obj[{}]={:.2}, feasible={}, slacks present={}",
+                    self.primary_objective,
+                    sol.solution.objectives()[self.primary_objective],
+                    sol.solution.feasible,
+                    !sol.slack_values.is_empty()
+                );
                 Some(sol)
             }
             Err(e) => {
-                log::debug!("Epsilon-constraint problem failed: {e:?}");
+                log::info!(
+                    "ε-constraint INFEASIBLE: obj[{}], constraints: {:?}",
+                    self.primary_objective,
+                    self.epsilon_values
+                );
+                log::debug!("Infeasibility reason: {e:?}");
                 None
             }
         }
     }
 
     /// Solve with slack - `HiGHS` solver implementation
-    fn solve_with_slack_highs_solver_impl(
+    #[cfg(feature = "highs")]
+    fn solve_with_slack_highs_impl(
         &self,
         prob_vars: good_lp::ProblemVariables,
         augmented_primary: &Expression,
@@ -774,7 +948,7 @@ impl<'a> EpsilonConstraintBuilder<'a> {
         slack_vars: &HashMap<usize, good_lp::Variable>,
         penalty_sum: &Expression,
         epsilon_augmentation: f64,
-        timeout: Option<Duration>,
+        _timeout: Option<Duration>,
     ) -> Option<SolutionWithSlack> {
         let problem = match direction {
             crate::model::ObjectiveDirection::Minimize => {
@@ -784,19 +958,13 @@ impl<'a> EpsilonConstraintBuilder<'a> {
                 prob_vars.maximise(augmented_primary.clone())
             }
         };
-        
-        let mut model = highs(problem);
 
-        // Apply solver parameters if the solver supports them (HiGHS doesn't support generic parameters)
-        if self.options.solver.supports_parameters() {
-            for (key, value) in &self.options.solver_parameters {
-                log::debug!("HiGHS solver slack: Setting parameter: {key} = {value}");
-                // Note: HiGHS doesn't have a generic set_parameter method
-                // Parameters would need to be handled differently for HiGHS
-            }
-        } else if !self.options.solver_parameters.is_empty() {
+        let mut model = problem.using(highs::highs);
+
+        // Note: HiGHS solver doesn't support generic parameter setting via set_parameter
+        if !self.options.solver_parameters.is_empty() {
             log::warn!(
-                "HiGHS solver does not support parameters, but {} parameters were specified",
+                "HiGHS solver does not support generic parameters, ignoring {} parameters",
                 self.options.solver_parameters.len()
             );
         }
@@ -804,27 +972,109 @@ impl<'a> EpsilonConstraintBuilder<'a> {
         // Add constraints
         self.add_constraints_to_model(&mut model, slack_vars);
 
-        // Apply timeout if specified
-        let final_model = if let Some(timeout_duration) = timeout {
-            log::debug!("Applying timeout of {timeout_duration:?} to epsilon-constraint solver");
-            model.with_time_limit(timeout_duration.as_secs_f64())
-        } else {
-            model
-        };
-
         // Solve the problem
-        log::debug!(
-            "Solving epsilon-constraint problem with {} epsilon constraints and slack variables",
-            self.epsilon_values.len()
+        log::info!(
+            "Solving ε-constraint: optimize obj[{}], constraints: {:?} using HiGHS",
+            self.primary_objective,
+            self.epsilon_values
         );
 
-        match final_model.solve() {
+        match model.solve() {
             Ok(solution) => {
-                let sol = self.extract_solution_with_slack(&solution, penalty_sum, augmented_primary, epsilon_augmentation, slack_vars);
+                let sol = self.extract_solution_with_slack(
+                    &solution,
+                    penalty_sum,
+                    augmented_primary,
+                    epsilon_augmentation,
+                    slack_vars,
+                );
+                log::info!(
+                    "ε-constraint solved: obj[{}]={:.2}, feasible={}, slacks present={}",
+                    self.primary_objective,
+                    sol.solution.objectives()[self.primary_objective],
+                    sol.solution.feasible,
+                    !sol.slack_values.is_empty()
+                );
                 Some(sol)
             }
             Err(e) => {
-                log::debug!("Epsilon-constraint problem failed: {e:?}");
+                log::info!(
+                    "ε-constraint INFEASIBLE: obj[{}], constraints: {:?}",
+                    self.primary_objective,
+                    self.epsilon_values
+                );
+                log::debug!("Infeasibility reason: {e:?}");
+                None
+            }
+        }
+    }
+
+    /// Solve with slack - SCIP solver implementation
+    #[cfg(feature = "scip")]
+    fn solve_with_slack_scip_impl(
+        &self,
+        prob_vars: good_lp::ProblemVariables,
+        augmented_primary: &Expression,
+        direction: crate::model::ObjectiveDirection,
+        slack_vars: &HashMap<usize, good_lp::Variable>,
+        penalty_sum: &Expression,
+        epsilon_augmentation: f64,
+        _timeout: Option<Duration>,
+    ) -> Option<SolutionWithSlack> {
+        let problem = match direction {
+            crate::model::ObjectiveDirection::Minimize => {
+                prob_vars.minimise(augmented_primary.clone())
+            }
+            crate::model::ObjectiveDirection::Maximize => {
+                prob_vars.maximise(augmented_primary.clone())
+            }
+        };
+
+        let mut model = problem.using(scip::scip);
+
+        // Note: SCIP solver doesn't support generic parameter setting via set_parameter
+        if !self.options.solver_parameters.is_empty() {
+            log::warn!(
+                "SCIP solver does not support generic parameters, ignoring {} parameters",
+                self.options.solver_parameters.len()
+            );
+        }
+
+        // Add constraints
+        self.add_constraints_to_model(&mut model, slack_vars);
+
+        // Solve the problem
+        log::info!(
+            "Solving ε-constraint: optimize obj[{}], constraints: {:?} using SCIP",
+            self.primary_objective,
+            self.epsilon_values
+        );
+
+        match model.solve() {
+            Ok(solution) => {
+                let sol = self.extract_solution_with_slack(
+                    &solution,
+                    penalty_sum,
+                    augmented_primary,
+                    epsilon_augmentation,
+                    slack_vars,
+                );
+                log::info!(
+                    "ε-constraint solved: obj[{}]={:.2}, feasible={}, slacks present={}",
+                    self.primary_objective,
+                    sol.solution.objectives()[self.primary_objective],
+                    sol.solution.feasible,
+                    !sol.slack_values.is_empty()
+                );
+                Some(sol)
+            }
+            Err(e) => {
+                log::info!(
+                    "ε-constraint INFEASIBLE: obj[{}], constraints: {:?}",
+                    self.primary_objective,
+                    self.epsilon_values
+                );
+                log::debug!("Infeasibility reason: {e:?}");
                 None
             }
         }

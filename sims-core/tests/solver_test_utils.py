@@ -31,19 +31,22 @@ class SolverTestResult:
 # Instance groups for testing based on actual data
 SMALL_INSTANCES = [
     "lagos_nigeria_30.dzn", "mexico_city_30.dzn", "paris_30.dzn", 
-    "rio_de_janeiro_30.dzn", "tokyo_bay_30.dzn"
-]
-
-MEDIUM_INSTANCES = [
+    "rio_de_janeiro_30.dzn", "tokyo_bay_30.dzn",
     "lagos_nigeria_50.dzn", "mexico_city_50.dzn", "paris_50.dzn",
     "rio_de_janeiro_50.dzn", "tokyo_bay_50.dzn"
 ]
 
-LARGE_INSTANCES = [
+MEDIUM_INSTANCES = [
     "lagos_nigeria_100.dzn", "mexico_city_100.dzn", "paris_100.dzn",
-    "rio_de_janeiro_100.dzn", "tokyo_bay_100.dzn",
+    "rio_de_janeiro_100.dzn", "tokyo_bay_100.dzn"
+]
+
+LARGE_INSTANCES = [
     "lagos_nigeria_145.dzn", "mexico_city_150.dzn", "paris_150.dzn", 
-    "rio_de_janeiro_150.dzn", "tokyo_bay_150.dzn",
+    "rio_de_janeiro_150.dzn", "tokyo_bay_150.dzn"
+]
+
+HUGE_INSTANCES = [
     "mexico_city_200.dzn", "paris_200.dzn", "rio_de_janeiro_200.dzn", "tokyo_bay_200.dzn"
 ]
 
@@ -154,21 +157,30 @@ def log_solution_details(result, logger: logging.Logger):
         
         logger.info(f"Total solutions: {exact_solutions + pls_solutions}")
         
-    elif hasattr(result, 'pareto_front') and result.pareto_front:
-        num_solutions = len(result.pareto_front)
-        first_solution = result.pareto_front[0]
-        logger.info(f"Found {num_solutions} solutions")
-        logger.info(f"First solution - cost: {first_solution.cost}, cloudy_area: {first_solution.cloudy_area}, selected_images: {len(first_solution.selected_images)}")
+    elif hasattr(result, 'pareto_front'):
+        pf = result.pareto_front
+        logger.debug(f"pareto_front type: {type(pf)}, value: {pf}, is None: {pf is None}, len: {len(pf) if pf is not None else 'N/A'}")
+        if pf is not None:
+            num_solutions = len(pf)
+            if num_solutions > 0:
+                first_solution = pf[0]
+                logger.info(f"Found {num_solutions} solutions")
+                logger.info(f"First solution - cost: {first_solution.cost}, cloudy_area: {first_solution.cloudy_area}, selected_images: {len(first_solution.selected_images)}")
+            else:
+                logger.warning("Pareto front is empty")
+        else:
+            logger.warning("Pareto front is None")
     else:
-        logger.warning("No solutions found")
+        logger.warning("Result has no pareto_front attribute")
 
 
-def save_test_artifacts(artifacts_manager, test_name: str, instance_name: str, 
-                       result, test_type: str, objectives: List[str], 
-                       execution_time: float, logger: logging.Logger, 
-                       ratio: Optional[str] = None, test_failed: bool = False,
+def save_test_artifacts(artifacts_manager, test_name: str, instance_name: str,
+                       result, test_type: str, objectives: List[str],
+                       execution_time: float, logger: logging.Logger,
+                       ratio: Optional[str] = None, iteration: Optional[int] = None,
+                       test_failed: bool = False,
                        failure_exception: Optional[Exception] = None):
-    """Save test artifacts (JSON result and trace data) for a test run."""
+    """Save test artifacts (JSON result, trace data, and profiling trace data) for a test run."""
     if not artifacts_manager:
         return
     
@@ -186,8 +198,12 @@ def save_test_artifacts(artifacts_manager, test_name: str, instance_name: str,
     if ratio:
         result_data["ratio"] = ratio
     
-    # Extract trace data
+    if iteration is not None:
+        result_data["iteration"] = iteration
+    
+    # Extract trace data and profiling trace data
     trace_data = None
+    profiling_trace_data = None
     failure_info = None
     
     # Prepare failure information if test failed
@@ -210,6 +226,10 @@ def save_test_artifacts(artifacts_manager, test_name: str, instance_name: str,
         if hasattr(result, 'trace_data') and result.trace_data:
             trace_data = result.trace_data
         
+        # Get profiling trace data from TwoPhaseSolverResult
+        if hasattr(result, 'profiling_trace_data') and result.profiling_trace_data:
+            profiling_trace_data = result.profiling_trace_data
+        
     elif result is not None:
         # Handle regular solver results
         num_solutions = len(result.pareto_front) if result.pareto_front else 0
@@ -231,17 +251,26 @@ def save_test_artifacts(artifacts_manager, test_name: str, instance_name: str,
         # Get trace data
         if hasattr(result, 'trace_data') and result.trace_data:
             trace_data = result.trace_data
+        
+        # Get profiling trace data
+        if hasattr(result, 'profiling_trace_data') and result.profiling_trace_data:
+            profiling_trace_data = result.profiling_trace_data
     
     # Save artifacts with failure information
     artifacts_manager.save_test_result(
         test_name=test_name,
         instance_name=instance_name,
         result_data=result_data,
+        ratio=ratio,
+        iteration=iteration,
         trace_data=trace_data,
+        profiling_trace_data=profiling_trace_data,
         test_failed=test_failed,
         failure_info=failure_info
     )
-    logger.info(f"Artifacts saved for {test_name}/{instance_name} (failed: {test_failed})")
+    
+    iter_str = f" (iteration {iteration})" if iteration is not None else ""
+    logger.info(f"Artifacts saved for {test_name}/{instance_name}{iter_str} (failed: {test_failed})")
 
 
 def format_ratio_string(ratio: tuple[int, int]) -> str:
@@ -251,21 +280,38 @@ def format_ratio_string(ratio: tuple[int, int]) -> str:
 
 def get_timeout_for_instance_size(instances: List[str], base_timeout: int = 60) -> int:
     """
-    Get appropriate timeout based on instance size.
+    Get appropriate timeout based on instance size to produce ~10 solutions on average.
+    
+    Timeouts are optimized based on empirical analysis to produce approximately 10 solutions
+    per instance across all instances of each size category.
     
     Args:
         instances: List of instance filenames to determine size category
-        base_timeout: Base timeout in seconds (default 55 minutes)
+        base_timeout: Base timeout in seconds (unused, kept for compatibility)
     
     Returns:
-        Timeout in seconds
+        Timeout in seconds optimized for ~10 solutions
     """
-    return 3600  # Default to 60 minutes for small/medium instances
-
-    # Check if any instance is in LARGE_INSTANCES
-    # For large instances, use a reduced timeout to ensure completion before pytest timeout (3600s)
+    # Check instance sizes and return optimal timeout for ~10 solutions
     for instance in instances:
-        if instance in LARGE_INSTANCES:
-            return 600 # 10 minutes for large instances
+        # Extract size from instance name (e.g., "paris_30.dzn" -> 30)
+        instance_name = Path(instance).stem
+        parts = instance_name.rsplit('_', 1)
+        if len(parts) > 1 and parts[1].isdigit():
+            size = int(parts[1])
+            
+            # Return optimal timeout based on size
+            if size == 30:
+                return 30  # 20 seconds for size 30
+            elif size == 50:
+                return 45  # 45 seconds for size 50
+            elif size == 100:
+                return 3600 # 1 hour for size 100
+            elif size in [145, 150]:
+                # return 12000  # 200 minutes for size 145-150
+                return 3600 # 1 hour for size 145-150
+            elif size == 200:
+                return 43200  # 12 hours for size 200
     
-    return base_timeout  
+    # Default fallback if size cannot be determined
+    raise ValueError("Cannot determine instance size for timeout selection")

@@ -100,7 +100,7 @@
 use log::{debug, info, warn};
 use rayon::prelude::*;
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::{
     bounds::BoundsCalculator,
@@ -111,6 +111,7 @@ use crate::{
     model::MultiObjectiveProblem,
     options::Options,
     solution::{ParetoFront, Solution},
+    timer::Timer,
 };
 
 /// Main AUGMECON solver struct
@@ -127,10 +128,8 @@ pub struct Augmecon {
     total_models: usize,
     /// Flag array for tracking grid point status and skip logic
     flag_array: Option<FlagArray>,
-    /// Start time for timeout tracking
-    start_time: Option<Instant>,
-    /// Total timeout duration
-    timeout_duration: Option<Duration>,
+    /// Timer for timeout tracking
+    timer: Option<Timer>,
 }
 
 impl Augmecon {
@@ -164,6 +163,10 @@ impl Augmecon {
             .map(|(_, direction)| *direction)
             .collect();
 
+        let timer = options
+            .process_timeout
+            .map(|secs| Timer::start(Duration::from_secs(secs)));
+
         Ok(Self {
             problem,
             flag_array: if options.flag_array {
@@ -171,52 +174,22 @@ impl Augmecon {
             } else {
                 None
             },
-            timeout_duration: options.process_timeout.map(Duration::from_secs),
+            timer,
             options,
             pareto_front: ParetoFront::new(objective_directions),
             models_solved: 0,
             total_models,
-            start_time: None,
         })
-    }
-
-    /// Initialize timeout tracking
-    fn start_timeout_tracking(&mut self) {
-        if self.timeout_duration.is_some() {
-            self.start_time = Some(Instant::now());
-            info!(
-                "Timeout tracking started with duration: {:?}",
-                self.timeout_duration
-            );
-        }
     }
 
     /// Check if the timeout has been reached
     fn is_timeout_reached(&self) -> bool {
-        if let (Some(start), Some(duration)) = (self.start_time, self.timeout_duration) {
-            let elapsed = start.elapsed();
-            let is_expired = elapsed >= duration;
-            if is_expired {
-                warn!("Timeout reached: elapsed = {elapsed:?}, limit = {duration:?}");
-            }
-            is_expired
-        } else {
-            false
-        }
+        self.timer.as_ref().is_some_and(Timer::is_expired)
     }
 
     /// Get remaining timeout duration
     fn get_remaining_timeout(&self) -> Option<Duration> {
-        if let (Some(start), Some(duration)) = (self.start_time, self.timeout_duration) {
-            let elapsed = start.elapsed();
-            if elapsed >= duration {
-                Some(Duration::ZERO)
-            } else {
-                Some(duration - elapsed)
-            }
-        } else {
-            None
-        }
+        self.timer.as_ref().map(Timer::remaining)
     }
 
     /// Solve the multi-objective optimization problem
@@ -237,7 +210,10 @@ impl Augmecon {
             self.problem.num_objectives()
         );
         println!("DEBUG: Grid points: {:?}", self.options.grid_points);
-        println!("DEBUG: Timeout: {:?}", self.timeout_duration);
+        println!(
+            "DEBUG: Timeout: {:?}",
+            self.timer.as_ref().map(Timer::duration)
+        );
 
         info!(
             "Starting AUGMECON solver for problem: {}",
@@ -245,10 +221,7 @@ impl Augmecon {
         );
         info!("Number of objectives: {}", self.problem.num_objectives());
         info!("Grid points: {:?}", self.options.grid_points);
-        info!("Timeout: {:?}", self.timeout_duration);
-
-        // Initialize timeout tracking
-        self.start_timeout_tracking();
+        info!("Timeout: {:?}", self.timer.as_ref().map(Timer::duration));
 
         // Step 1: Calculate payoff table
         println!("DEBUG: Step 1 - Calculating payoff table");
@@ -310,8 +283,7 @@ impl Augmecon {
         info!("Calculating payoff table using shared bounds calculator...");
 
         let bounds_calculator = BoundsCalculator::new(&self.problem, &self.options);
-        let payoff_table =
-            bounds_calculator.calculate_payoff_table(self.get_remaining_timeout())?;
+        let payoff_table = bounds_calculator.calculate_payoff_table(self.timer.as_ref())?;
 
         // Update models solved count
         self.models_solved += payoff_table.len();

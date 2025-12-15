@@ -139,7 +139,8 @@ class SatelliteImageMosaicSelectionGeneralModel(GenericModel, ABC):
 
     def assert_resolution(self, selected_images: list[int], resolution: float) -> None:
         calculated_total_resolution = self.calculate_resolution(selected_images)
-        assert calculated_total_resolution == resolution
+        # Use approximate equality for floating-point comparison (tolerance: 1e-6)
+        assert abs(calculated_total_resolution - resolution) < 1e-6, f"Resolution mismatch: expected {resolution}, got {calculated_total_resolution}"
 
     def calculate_resolution(self, selected_images: list[int]) -> float:
         calculated_total_resolution: float = 0.0

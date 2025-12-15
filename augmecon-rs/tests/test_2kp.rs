@@ -160,10 +160,9 @@ fn create_2kp_model(model_name: &str) -> MultiObjectiveProblem {
         println!("DEBUG: Adding constraint {constraint_idx} with capacity {capacity}");
         let mut constraint_expr = Expression::from(0.0);
         // sum(a[constraint_idx][i] * model.x[i] for i in model.ITEMS) <= b[constraint_idx][0]
-        for item_idx in 0..num_items {
-            let weight = weights[constraint_idx][item_idx];
+        for (item_idx, &weight_val) in weights[constraint_idx].iter().enumerate().take(num_items) {
             if let Some(&var) = problem.var_map.get(&format!("x{item_idx}")) {
-                constraint_expr += weight * var;
+                constraint_expr += weight_val * var;
             }
         }
         problem.add_constraint(constraint!(constraint_expr <= capacity));
@@ -179,10 +178,9 @@ fn create_2kp_model(model_name: &str) -> MultiObjectiveProblem {
         );
         // Ensure we only take 2 objectives for 2KP
         let mut objective_expr = Expression::from(0.0);
-        for item_idx in 0..num_items {
-            let profit = profits[obj_idx][item_idx];
+        for (item_idx, &profit_val) in profits[obj_idx].iter().enumerate().take(num_items) {
             if let Some(&var) = problem.var_map.get(&format!("x{item_idx}")) {
-                objective_expr += profit * var;
+                objective_expr += profit_val * var;
             }
         }
         problem.add_objective(objective_expr, ObjectiveDirection::Maximize);

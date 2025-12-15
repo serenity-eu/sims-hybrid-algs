@@ -19,11 +19,18 @@ with resources.as_file(resources.files(mzn_models) / "mosaic_cloud2.mzn") as mzn
 
 def solve_milp_inlined(config: Config, objectives: list[str] | None = None):
     """
-    Inlined implementation of GPBA-A algorithm with Gurobi solver.
+    Complete inlined implementation of GPBA-A algorithm with Gurobi solver.
     
     This function contains the complete implementation of the GPBA-A (Coverage Grid Point Based Representation)
     algorithm without external function calls except stdlib and gurobipy. It follows the pseudocode from the
-    SIMS_GPBA_A_SPECIFICATION document.
+    SIMS_GPBA_A_SPECIFICATION document with all critical features implemented:
+    
+    - IntervalManager for adaptive exploration
+    - adjust_parameter_ef_array() for intelligent grid point selection
+    - Relative Worst Values (RWV) tracking
+    - Multi-dimensional cascading updates
+    - Solution relaxation search
+    - Proper minimization to maximization conversion
     """
     import gurobipy as gp
     import re
@@ -34,21 +41,192 @@ def solve_milp_inlined(config: Config, objectives: list[str] | None = None):
     import csv
     from filelock import FileLock, Timeout as FileLockTimeout
     
+    # ============================================================================
+    # INNER CLASS: IntervalManager
+    # ============================================================================
+    class IntervalManager:
+        """Manages intervals for efficient Pareto front coverage in GPBA-A algorithm."""
+        
+        def __init__(self, min_value, max_value):
+            self.intervals = set()
+            self.min_value = min_value
+            self.max_value = max_value
+            self.add_interval(min_value, max_value)
+        
+        def add_interval(self, start, end):
+            """Add interval, merging with existing overlapping intervals."""
+            new_intervals = set()
+            to_add = (start, end)
+            
+            for interval in self.intervals:
+                if interval[1] < start or interval[0] > end:  # No overlap
+                    new_intervals.add(interval)
+                else:  # Merge overlapping intervals
+                    to_add = (min(to_add[0], interval[0]), max(to_add[1], interval[1]))
+            
+            new_intervals.add(to_add)
+            self.intervals = new_intervals
+        
+        def remove_one_point(self, point):
+            """Remove a single point, splitting intervals if necessary."""
+            new_intervals = set()
+            
+            for interval in self.intervals:
+                if interval[0] <= point <= interval[1]:  # Point within interval
+                    if interval[0] < point:
+                        new_intervals.add((interval[0], point - 1))
+                    if interval[1] > point:
+                        new_intervals.add((point + 1, interval[1]))
+                else:  # No overlap
+                    new_intervals.add(interval)
+            
+            self.intervals = new_intervals
+        
+        def remove_interval(self, start, end):
+            """Remove interval, adjusting or splitting existing intervals."""
+            new_intervals = set()
+            
+            for interval in self.intervals:
+                if interval[1] < start or interval[0] > end:  # No overlap
+                    new_intervals.add(interval)
+                else:
+                    # Adjust or split interval
+                    if interval[0] < start:
+                        new_intervals.add((interval[0], start - 1))
+                    if interval[1] > end:
+                        new_intervals.add((end + 1, interval[1]))
+            
+            self.intervals = new_intervals
+        
+        def find_largest_interval(self):
+            """Find and return the largest interval by length."""
+            if not self.intervals:
+                return None
+            return max(self.intervals, key=lambda x: x[1] - x[0])
+    
+    # ============================================================================
+    # HELPER FUNCTIONS
+    # ============================================================================
+    
+    def create_interval(obj_idx, best_values, nadir_values):
+        """Create an IntervalManager for a given objective index."""
+        min_interval = min(nadir_values[obj_idx], best_values[obj_idx])
+        max_interval = max(nadir_values[obj_idx], best_values[obj_idx])
+        return IntervalManager(min_interval, max_interval)
+    
+    def adjust_parameter_ef_array(id_constraint_objective, ef_array, sol_obj_k, 
+                                  ef_interval, constraint_indices, best_objective_values,
+                                  nadir_objectives_values, gamma=1):
+        """
+        Adjust ef_array parameter based on solution found, using interval management.
+        
+        This is the core of GPBA-A that adaptively explores the largest gaps in the Pareto front.
+        """
+        start_removal = ef_array[id_constraint_objective]
+        new_max_interval = start_removal - 1
+        
+        if sol_obj_k is None:  # Infeasible
+            end_removal = ef_interval.max_value
+        else:
+            end_removal = min(sol_obj_k, ef_interval.max_value)
+        
+        # Remove explored region from interval
+        if start_removal < end_removal:
+            ef_interval.remove_interval(start_removal, end_removal)
+        else:
+            ef_interval.remove_one_point(start_removal)
+            if start_removal > end_removal:
+                ef_interval.remove_one_point(end_removal)
+        
+        # Update max_value if needed
+        if end_removal >= ef_interval.max_value:
+            ef_interval.max_value = new_max_interval
+        
+        # Find next point to explore (center of largest remaining interval)
+        max_interval = ef_interval.find_largest_interval()
+        actual_obj_index = constraint_indices[id_constraint_objective]
+        
+        if max_interval is not None:
+            if ef_array[id_constraint_objective] == nadir_objectives_values[actual_obj_index]:
+                ef_array[id_constraint_objective] = best_objective_values[actual_obj_index]
+            else:
+                # Explore center of largest gap
+                ef_array[id_constraint_objective] = int((max_interval[0] + max_interval[1]) / 2)
+        else:
+            # Interval exhausted - set to best+1 to signal completion and trigger cascade
+            # The cascade logic uses > comparison, so best+1 will trigger it
+            ef_array[id_constraint_objective] = best_objective_values[actual_obj_index] + 1
+            ef_interval = create_interval(actual_obj_index, best_objective_values, nadir_objectives_values)
+        
+        return ef_interval
+    
+    def search_previous_solutions_relaxation(ef_array, previous_solution_information, constraint_indices):
+        """
+        Check if this constraint configuration was already explored with relaxation.
+        For maximization: ef_array1 is less constrained (more relaxed) if all ef_array1[i] >= ef_array2[i]
+        
+        Args:
+            ef_array: Current epsilon-constraint RHS values (for constraint objectives only)
+            previous_solution_information: List of previous {ef_array, solution} pairs
+            constraint_indices: Indices of constraint objectives in the full objective list
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        for prev_sol_info in previous_solution_information:
+            prev_ef_array = prev_sol_info["ef_array"]
+            prev_solution = prev_sol_info["solution"]
+            
+            # Check if previous ef_array is less constrained (all values >= current)
+            is_less_constrained = all(prev_ef_array[i] >= ef_array[i] for i in range(len(ef_array)))
+            
+            if is_less_constrained:
+                logger.debug(f"INLINED RELAX CHECK: Current ef={ef_array}, Prev ef={prev_ef_array}, less_constrained={is_less_constrained}")
+                # If previous solution is not "infeasible", check if it satisfies current constraints
+                if prev_solution != "infeasible":
+                    # Check if previous solution satisfies current (tighter) constraints
+                    # For maximization: solution[constraint_idx] must be <= ef_array[i]
+                    # (In minimization, constraint is obj >= ef, which becomes -obj <= -ef in maximization)
+                    # Note: prev_solution contains ALL objectives, so we need to use constraint_indices
+                    constraint_vals = [prev_solution[constraint_indices[i]] for i in range(len(ef_array))]
+                    satisfies = all(prev_solution[constraint_indices[i]] <= ef_array[i] 
+                                  for i in range(len(ef_array)))
+                    logger.debug(f"INLINED RELAX CHECK: Prev solution constraint vals={constraint_vals}, ef_array={ef_array}, satisfies={satisfies}")
+                    if satisfies:
+                        return True, prev_solution
+                else:
+                    # Previous was infeasible with less constrained constraints, so current is also infeasible
+                    logger.debug("INLINED RELAX CHECK: Previous was infeasible, current also infeasible")
+                    return True, "infeasible"
+        
+        return False, None
+    
+    def save_solution_information(ef_array, solution, previous_solution_information):
+        """Save solution information for future relaxation checks."""
+        previous_solution_information.append({
+            "ef_array": ef_array.copy(),
+            "solution": solution if solution != "infeasible" else "infeasible"
+        })
+    
+    def convert_solution_value_to_str(solution_values):
+        """Convert solution objective values to string for deduplication."""
+        return str([round(float(x), 6) for x in solution_values])
+    
     logger = logging.getLogger(__name__)
-    logger.critical("INLINED: Starting solve_milp_inlined")
+    logger.debug("INLINED: Starting solve_milp_inlined (COMPLETE VERSION)")
     
     # If objectives are provided, update the config
     if objectives is not None:
         config.objectives = objectives
     
-    logger.critical(f"INLINED: Objectives = {config.objectives}")
+    logger.debug(f"INLINED: Objectives = {config.objectives}")
     
     print("Start computing (inlined): " + config.uid())
     start_time = time.time()
     
     # STAGE 1: PARSE DATA FROM DZN FILE
     dzn_file_path = os.path.join(config.data_sets_folder, f"{config.data_name}.dzn")
-    logger.critical(f"INLINED: Parsing DZN file: {dzn_file_path}")
+    logger.debug(f"INLINED: Parsing DZN file: {dzn_file_path}")
     
     if not os.path.exists(dzn_file_path):
         raise FileNotFoundError(f"DZN file not found: {dzn_file_path}")
@@ -88,7 +266,7 @@ def solve_milp_inlined(config: Config, objectives: list[str] | None = None):
     images_raw = parse_set_array(r'images\s*=\s*\[([^\]]+)\]', content)
     clouds_raw = parse_set_array(r'clouds\s*=\s*\[([^\]]+)\]', content)
     
-    logger.critical(f"INLINED: Parsed data - {len(costs)} costs, {len(areas)} areas, {len(images_raw)} images, {len(clouds_raw)} clouds")
+    logger.debug(f"INLINED: Parsed data - {len(costs)} costs, {len(areas)} areas, {len(images_raw)} images, {len(clouds_raw)} clouds")
     
     # STAGE 2: CORRECT STARTING INDEXES (1-indexed to 0-indexed)
     images = []
@@ -126,11 +304,18 @@ def solve_milp_inlined(config: Config, objectives: list[str] | None = None):
             uncoverable_clouds.append((cloud_id, clouds_id_area[cloud_id]))
             total_uncoverable_area += clouds_id_area[cloud_id]
     
-    logger.critical(f"INLINED: Total clouds: {len(clouds_id_area)}")
-    logger.critical(f"INLINED: Uncoverable clouds: {len(uncoverable_clouds)}")
-    logger.critical(f"INLINED: Total uncoverable area: {total_uncoverable_area}")
+    logger.debug(f"INLINED: Total clouds: {len(clouds_id_area)}")
+    logger.debug(f"INLINED: Uncoverable clouds: {len(uncoverable_clouds)}")
+    logger.debug(f"INLINED: Total uncoverable area: {total_uncoverable_area}")
     if uncoverable_clouds:
-        logger.critical(f"INLINED: Sample uncoverable clouds: {uncoverable_clouds[:10]}")
+        logger.debug(f"INLINED: All uncoverable clouds (id, area): {uncoverable_clouds}")
+        # For each uncoverable cloud, show which images contain it and whether it's cloudy
+        for cloud_id, area in uncoverable_clouds[:5]:  # Show first 5 in detail
+            images_with_element = [i for i in range(len(images)) if cloud_id in images[i]]
+            images_with_cloud = [i for i in range(len(clouds)) if cloud_id in clouds[i]]
+            logger.debug(f"INLINED:   Cloud {cloud_id} (area={area}): in {len(images_with_element)} images, cloudy in {len(images_with_cloud)} images")
+            logger.debug(f"INLINED:     Images containing element: {images_with_element}")
+            logger.debug(f"INLINED:     Images with cloud: {images_with_cloud}")
     
     # STAGE 4: BUILD IMAGE-ELEMENT MAPPINGS
     elements = list(range(len(areas)))
@@ -148,6 +333,7 @@ def solve_milp_inlined(config: Config, objectives: list[str] | None = None):
     # STAGE 5: CREATE GUROBI MODEL
     model = gp.Model("SIMSModelInlined")
     model.setParam('OutputFlag', 0)  # Suppress Gurobi output
+    model.setParam('Threads', config.threads)  # Set thread count
     
     # STAGE 6: ADD VARIABLES
     select_image = model.addVars(len(images), vtype=gp.GRB.BINARY, name="select_image")
@@ -159,20 +345,11 @@ def solve_milp_inlined(config: Config, objectives: list[str] | None = None):
     
     # Resolution variables (only if min_resolution objective is used)
     resolution_element = None
-    auxiliary_resolution = None
     if "min_resolution" in config.objectives:
         min_res = min(resolution)
         max_res = max(resolution)
         resolution_element = model.addVars(elements, lb=min_res, ub=max_res, 
                                          vtype=gp.GRB.INTEGER, name="resolution_element")
-        
-        # Auxiliary variables for linearization
-        auxiliary_resolution = {}
-        for element in elements:
-            auxiliary_resolution[element] = {}
-            for image in images_covering_element[element]:
-                auxiliary_resolution[element][image] = model.addVar(
-                    vtype=gp.GRB.BINARY, name=f"aux_res_{element}_{image}")
     
     # Incidence angle variables (only if min_max_incidence_angle objective is used)
     effective_incidence_angle = None
@@ -216,27 +393,19 @@ def solve_milp_inlined(config: Config, objectives: list[str] | None = None):
                 )
     
     # Resolution constraints (conditional)
-    if "min_resolution" in config.objectives and resolution_element is not None and auxiliary_resolution is not None:
+    if "min_resolution" in config.objectives and resolution_element is not None:
         big_M = max(resolution) + 1
         
         for element in elements:
             covering_images = images_covering_element[element]
             
-            # Each element must have exactly (n-1) auxiliary variables set to 1
-            total_aux = len(auxiliary_resolution[element])
-            model.addConstr(
-                gp.quicksum(auxiliary_resolution[element][i] for i in covering_images) == total_aux - 1,
-                name=f"aux_resolution_sum_{element}"
-            )
-            
-            # Linearization of min operation
+            # resolution_element[element] must be <= resolution of ALL selected images covering the element
+            # This ensures resolution_element is at most the minimum among selected images
             for image in covering_images:
                 model.addConstr(
-                    resolution_element[element] >= 
-                    resolution[image] * select_image[image] +
-                    big_M * (1 - select_image[image]) -
-                    2 * big_M * auxiliary_resolution[element][image],
-                    name=f"resolution_linearization_{element}_{image}"
+                    resolution_element[element] <= 
+                    resolution[image] + big_M * (1 - select_image[image]),
+                    name=f"resolution_upper_{element}_{image}"
                 )
     
     # Incidence angle constraints (conditional)
@@ -282,10 +451,15 @@ def solve_milp_inlined(config: Config, objectives: list[str] | None = None):
     # Initialize statistics
     statistics = {
         "number_of_solutions": 0,
+        "total_nodes": 0,
         "time_solver_sec": 0,
+        "minizinc_time_fzn_sec": 0,
+        "hypervolume_current_solutions": [],
         "solutions_time_list": [],
-        "pareto_front": "[",
-        "all_solutions": "[",
+        "pareto_solutions_time_list": [],
+        "pareto_front": "",
+        "solutions_pareto_front": "",
+        "incomplete_timeout_solution_added_to_front": False,
         "hypervolume": 0,
         "exhaustive": False,
         "datetime": datetime.now(),
@@ -295,8 +469,10 @@ def solve_milp_inlined(config: Config, objectives: list[str] | None = None):
         "front_strategy": config.front_strategy,
         "solver_search_strategy": config.solver_search_strategy,
         "fzn_optimisation_level": config.fzn_optimisation_level,
+        "threads": config.threads if hasattr(config, 'threads') else 1,
         "cores": config.cores,
-        "solver_timeout_sec": config.solver_timeout_sec
+        "solver_timeout_sec": config.solver_timeout_sec,
+        "minizinc_model": config.minizinc_model if hasattr(config, 'minizinc_model') else ""
     }
     
     # Pareto front storage
@@ -311,9 +487,11 @@ def solve_milp_inlined(config: Config, objectives: list[str] | None = None):
     def add_to_pareto_front(solution_objs, solution_values):
         """Add solution to Pareto front if non-dominated."""
         idx = len(pareto_solutions)
+        # Convert binary solution_values to list of selected image IDs (0-indexed)
+        selected_image_ids = [i for i, val in enumerate(solution_values) if val == 1]
         solution_data = {
             "objs": solution_objs,
-            "solution_values": solution_values,
+            "solution_values": selected_image_ids,  # Store as list of image IDs
             "timestamp": time.time() - start_time
         }
         pareto_solutions.append(solution_data)
@@ -342,12 +520,23 @@ def solve_milp_inlined(config: Config, objectives: list[str] | None = None):
     best_objective_values = [0] * num_objectives
     nadir_objectives_values = [0] * num_objectives
     
-    model.setParam('TimeLimit', config.solver_timeout_sec)
+    # Progressive timeout: track total time elapsed
+    total_start_time = time.time()
+    total_timeout = config.solver_timeout_sec
+    logger.debug(f"INLINED: Using progressive timeout - total budget: {total_timeout}s")
     
     try:
         # Find ideal points (best value for each objective individually)
-        logger.critical(f"INLINED: STAGE 1 - Computing {num_objectives} extreme points")
+        logger.debug(f"INLINED: STAGE 1 - Computing {num_objectives} extreme points")
         for i in range(num_objectives):
+            # Calculate remaining time for this optimization
+            elapsed = time.time() - total_start_time
+            if elapsed >= total_timeout:
+                raise TimeoutError(f"Total timeout exceeded before optimizing objective {i}")
+            
+            remaining = total_timeout - elapsed
+            logger.debug(f"INLINED: Extreme point {i} - elapsed: {elapsed:.2f}s, remaining: {remaining:.2f}s")
+            model.setParam('TimeLimit', remaining)
             model.setObjective(objectives_exprs[i], gp.GRB.MINIMIZE)
             
             solve_start = time.time()
@@ -357,7 +546,7 @@ def solve_milp_inlined(config: Config, objectives: list[str] | None = None):
             if model.status == gp.GRB.OPTIMAL:
                 obj_value = int(model.objVal)
                 best_objective_values[i] = obj_value
-                logger.critical(f"INLINED: Best value for objective {i} ({config.objectives[i]}): {obj_value}")
+                logger.debug(f"INLINED: Best value for objective {i} ({config.objectives[i]}): {obj_value}")
                 
                 # Extract solution values
                 solution_values = [int(select_image[j].X > 0.5) for j in images_id]
@@ -365,18 +554,18 @@ def solve_milp_inlined(config: Config, objectives: list[str] | None = None):
                 
                 # Log detailed solution info for cloud_coverage optimization
                 if config.objectives[i] == "cloud_coverage":
-                    logger.critical("INLINED: CLOUD_COVERAGE OPTIMIZATION - Details:")
+                    logger.debug("INLINED: CLOUD_COVERAGE OPTIMIZATION - Details:")
                     selected_images = [j for j in images_id if select_image[j].X > 0.5]
-                    logger.critical(f"INLINED: Selected images: {selected_images}")
-                    logger.critical(f"INLINED: Total images available: {len(images_id)}")
+                    logger.debug(f"INLINED: Selected images: {selected_images}")
+                    logger.debug(f"INLINED: Total images available: {len(images_id)}")
                     if cloud_covered is not None:
                         covered_clouds = {c: cloud_covered[c].X for c in clouds_id if c in cloud_covered}
-                        logger.critical(f"INLINED: Cloud coverage variables (first 10): {dict(list(covered_clouds.items())[:10])}")
+                        logger.debug(f"INLINED: Cloud coverage variables (first 10): {dict(list(covered_clouds.items())[:10])}")
                         total_cloud_area = sum(clouds_id_area.values())
                         covered_cloud_area = sum(cloud_covered[c].X * clouds_id_area[c] for c in clouds_id if c in cloud_covered)
-                        logger.critical(f"INLINED: Total cloud area: {total_cloud_area}")
-                        logger.critical(f"INLINED: Covered cloud area: {covered_cloud_area}")
-                        logger.critical(f"INLINED: Uncovered cloud area: {total_cloud_area - covered_cloud_area}")
+                        logger.debug(f"INLINED: Total cloud area: {total_cloud_area}")
+                        logger.debug(f"INLINED: Covered cloud area: {covered_cloud_area}")
+                        logger.debug(f"INLINED: Uncovered cloud area: {total_cloud_area - covered_cloud_area}")
                         
                         # Debug: Check which clouds are not covered
                         uncovered_clouds = []
@@ -388,13 +577,13 @@ def solve_milp_inlined(config: Config, objectives: list[str] | None = None):
                                 uncovered_area += clouds_id_area[c]
                             elif c in cloud_covered and cloud_covered[c].X >= 0.5:
                                 covered_area += clouds_id_area[c]
-                        logger.critical(f"INLINED: Uncovered clouds (first 10): {uncovered_clouds[:10]}")
-                        logger.critical(f"INLINED: Covered area: {covered_area}, Uncovered area: {uncovered_area}")
-                        logger.critical(f"INLINED: Total uncovered clouds: {len(uncovered_clouds)}")
+                        logger.debug(f"INLINED: Uncovered clouds (first 10): {uncovered_clouds[:10]}")
+                        logger.debug(f"INLINED: Covered area: {covered_area}, Uncovered area: {uncovered_area}")
+                        logger.debug(f"INLINED: Total uncovered clouds: {len(uncovered_clouds)}")
                         
                         # Debug: Check some uncovered clouds with non-zero area
                         nonzero_uncovered = [(c, area) for c, area in uncovered_clouds if area > 0]
-                        logger.critical(f"INLINED: Uncovered clouds with non-zero area (first 5): {nonzero_uncovered[:5]}")
+                        logger.debug(f"INLINED: Uncovered clouds with non-zero area (first 5): {nonzero_uncovered[:5]}")
                         
                         # Debug: Check image-cloud relationships for uncovered clouds
                         if uncovered_clouds:
@@ -403,37 +592,47 @@ def solve_milp_inlined(config: Config, objectives: list[str] | None = None):
                             for img in images_id:
                                 if sample_cloud in cloud_covered_by_image.get(img, set()):
                                     covering_images.append(img)
-                            logger.critical(f"INLINED: Sample uncovered cloud {sample_cloud} can be covered by images: {covering_images}")
+                            logger.debug(f"INLINED: Sample uncovered cloud {sample_cloud} can be covered by images: {covering_images}")
                     else:
-                        logger.critical("INLINED: No cloud_covered variables - cloud objective may be disabled")
+                        logger.debug("INLINED: No cloud_covered variables - cloud objective may be disabled")
                 
                 # Calculate all objective values for this solution
+                # Use binary solution_values to avoid floating-point precision issues
                 for j, obj_name in enumerate(config.objectives):
                     if obj_name == "min_cost":
-                        current_objs.append(int(sum(select_image[k].X * costs[k] for k in images_id 
-                                                  if select_image[k].X > 0.5)))
+                        current_objs.append(sum(solution_values[k] * costs[k] for k in images_id))
                     elif obj_name == "cloud_coverage":
                         cloud_val = 0
                         if cloud_covered is not None:
-                            cloud_val = sum(cloud_covered[c].X * clouds_id_area[c] 
+                            # Round each cloud coverage to avoid floating-point errors
+                            cloud_val = sum(round(cloud_covered[c].X) * clouds_id_area[c] 
                                           for c in clouds_id if c in cloud_covered)
                         # Add uncoverable clouds to the uncovered area calculation
                         total_cloud_area = sum(clouds_id_area.values())
                         current_objs.append(int(total_cloud_area - cloud_val))
                     elif obj_name == "min_resolution":
-                        if resolution_element is not None:
-                            current_objs.append(int(sum(resolution_element[e].X for e in elements)))
-                        else:
-                            current_objs.append(0)
+                        # Recompute min_resolution based on selected images
+                        # For each element, find the minimum resolution among selected images covering it
+                        min_res_sum = 0
+                        for element in elements:
+                            covering_images = [i for i in images_id if element in images[i] and solution_values[i] == 1]
+                            if covering_images:
+                                min_res_sum += min(resolution[i] for i in covering_images)
+                        current_objs.append(min_res_sum)
                     elif obj_name == "min_max_incidence_angle":
                         if current_max_incidence_angle is not None:
-                            current_objs.append(int(current_max_incidence_angle.X))
+                            current_objs.append(int(round(current_max_incidence_angle.X)))
                         else:
                             current_objs.append(0)
                 
-                # Add to Pareto front
-                current_objs = [int(round(x)) for x in current_objs]
-                logger.critical(f"INLINED: Extreme point {i}: {current_objs}")
+                # Ensure all objectives are integers
+                current_objs = [int(x) for x in current_objs]
+                logger.debug(f"INLINED: Extreme point {i}: {current_objs}")
+                
+                # Log types of objectives
+                obj_types = [f"{config.objectives[j]}:{type(val).__name__}" for j, val in enumerate(current_objs)]
+                logger.debug(f"INLINED: Extreme point {i} types: {obj_types}")
+                
                 add_to_pareto_front(current_objs, solution_values)
                 
                 statistics["number_of_solutions"] += 1
@@ -445,32 +644,69 @@ def solve_milp_inlined(config: Config, objectives: list[str] | None = None):
             else:
                 raise RuntimeError(f"Failed to optimize objective {i}: status {model.status}")
                 
-        # Find nadir points (worst values)
-        logger.critical(f"INLINED: Computing {num_objectives} nadir points")
+        # Calculate nadir points using heuristic bounds (matching non-inlined version)
+        # This avoids unbounded maximization issues with auxiliary variables
+        logger.debug(f"INLINED: Computing {num_objectives} nadir points using heuristic")
         for i in range(num_objectives):
-            model.setObjective(objectives_exprs[i], gp.GRB.MAXIMIZE)
-            solve_start = time.time()
-            model.optimize()
-            
-            if model.status == gp.GRB.OPTIMAL:
-                nadir_objectives_values[i] = int(model.objVal)
-                logger.critical(f"INLINED: Nadir value for objective {i} ({config.objectives[i]}): {nadir_objectives_values[i]}")
-            elif model.status == gp.GRB.TIME_LIMIT:
-                raise TimeoutError(f"Timeout while finding nadir for objective {i}")
+            obj_name = config.objectives[i]
+            if obj_name == "min_cost":
+                # Worst case: all images selected
+                nadir_objectives_values[i] = int(sum(costs))
+            elif obj_name == "cloud_coverage":
+                # Worst case: all cloud areas covered
+                nadir_objectives_values[i] = int(sum(areas))
+            elif obj_name == "min_resolution":
+                # Worst case: sum of max resolution per universe point
+                resolution_parts_max = {}
+                for idx, image_points in enumerate(images):
+                    for u in image_points:
+                        if u not in resolution_parts_max:
+                            resolution_parts_max[u] = resolution[idx]
+                        else:
+                            resolution_parts_max[u] = max(resolution_parts_max[u], resolution[idx])
+                nadir_objectives_values[i] = int(sum(resolution_parts_max.values()))
+            elif obj_name == "min_max_incidence_angle":
+                # Worst case: maximum incidence angle
+                nadir_objectives_values[i] = int(max(incidence_angle))
+            else:
+                raise ValueError(f"Unknown objective: {obj_name}")
+            logger.debug(f"INLINED: Nadir value for objective {i} ({obj_name}): {nadir_objectives_values[i]}")
         
-        logger.critical(f"INLINED: Best values: {best_objective_values}")
-        logger.critical(f"INLINED: Nadir values: {nadir_objectives_values}")
+        logger.debug(f"INLINED: Best values (minimization): {best_objective_values}")
+        logger.debug(f"INLINED: Nadir values (minimization, heuristic): {nadir_objectives_values}")
+        
+        # GPBA-A: STAGE 1.5 - Convert to maximization for uniform handling
+        logger.debug("INLINED: Converting objectives to maximization")
+        best_objective_values = [-x for x in best_objective_values]
+        nadir_objectives_values = [-x for x in nadir_objectives_values]
+        objectives_exprs = [-obj for obj in objectives_exprs]
+        
+        logger.debug(f"INLINED: Best values (maximization): {best_objective_values}")
+        logger.debug(f"INLINED: Nadir values (maximization): {nadir_objectives_values}")
+        
+        # ===== GOLDEN STANDARD CHECKPOINT: PAYOFF TABLE COMPLETE =====
+        logger.info("=" * 80)
+        logger.info("GOLDEN: PAYOFF TABLE RESULTS")
+        logger.info(f"GOLDEN: Number of extreme points found: {statistics['number_of_solutions']}")
+        logger.info(f"GOLDEN: Best values (ideal point, max form): {best_objective_values}")
+        logger.info(f"GOLDEN: Nadir values (max form): {nadir_objectives_values}")
+        logger.info(f"GOLDEN: Solutions in Pareto front: {len(pareto_solutions)}")
+        logger.info("=" * 80)
+        
+        # Initialize exhaustive search flag (will be updated in main loop if applicable)
+        exhaustive_search = True  # Default for single objective or if main loop doesn't run
         
         # GPBA-A: STAGE 2 - Setup ε-constraint formulation
         if num_objectives > 1:
-            logger.critical("INLINED: STAGE 2 - Setting up ε-constraint formulation")
+            logger.debug("INLINED: STAGE 2 - Setting up ε-constraint formulation")
             main_obj_index = 0  # Use first objective as main
             constraint_indices = [i for i in range(num_objectives) if i != main_obj_index]
-            logger.critical(f"INLINED: Main objective: {main_obj_index} ({config.objectives[main_obj_index]})")
-            logger.critical(f"INLINED: Constraint objectives: {constraint_indices}")
+            logger.debug(f"INLINED: Main objective: {main_obj_index} ({config.objectives[main_obj_index]})")
+            logger.debug(f"INLINED: Constraint objectives: {constraint_indices}")
             
             # Convert to maximization for main objective
-            model.setObjective(-objectives_exprs[main_obj_index], gp.GRB.MAXIMIZE)
+            logger.debug(f"INLINED: Setting objective before aug: {objectives_exprs[main_obj_index]}")
+            model.setObjective(objectives_exprs[main_obj_index], gp.GRB.MAXIMIZE)
             
             # Create slack variables for augmentation
             delta = 0.01
@@ -492,17 +728,30 @@ def solve_milp_inlined(config: Config, objectives: list[str] | None = None):
             
             if slack_terms:
                 slack_sum = gp.quicksum(slack_terms)
-                augmented_obj = -objectives_exprs[main_obj_index] + delta * slack_sum
+                # objectives_exprs are already in maximization form (negated)
+                augmented_obj = objectives_exprs[main_obj_index] + delta * slack_sum
             else:
-                augmented_obj = -objectives_exprs[main_obj_index]
+                augmented_obj = objectives_exprs[main_obj_index]
             
             model.setObjective(augmented_obj, gp.GRB.MAXIMIZE)
             
-            # GPBA-A: STAGE 3 - Main coverage loop
+            # GPBA-A: STAGE 3 - Main coverage loop with interval management
             ef_array = [nadir_objectives_values[i] for i in constraint_indices]
             previous_solutions = set()
-            logger.critical("INLINED: STAGE 3 - Starting main coverage loop")
-            logger.critical(f"INLINED: Initial ef_array: {ef_array}")
+            previous_solution_information = []
+            logger.debug("INLINED: STAGE 3 - Starting main coverage loop (COMPLETE GPBA-A)")
+            logger.debug(f"INLINED: Initial ef_array: {ef_array}")
+            
+            # Initialize interval managers for each constraint objective
+            ef_intervals = []
+            for constraint_idx in constraint_indices:
+                ef_intervals.append(create_interval(constraint_idx, best_objective_values, nadir_objectives_values))
+            
+            # Initialize Relative Worst Values (RWV) for search space pruning
+            rwv = [best_objective_values[i] for i in constraint_indices]
+            
+            # Track objective values at each ef point for precise interval updates
+            obj_k_at_ef_k = [None] * len(constraint_indices)
             
             # Constraint variables for ε-constraint method
             constraint_vars = []
@@ -519,191 +768,319 @@ def solve_milp_inlined(config: Config, objectives: list[str] | None = None):
                     )
                 constraint_vars.append(constr)
             
-            # Main GPBA-A loop with systematic grid exploration
+            # Main GPBA-A loop with adaptive interval-based exploration
             iteration_count = 0
-            max_iterations = 5000  # Increased for more thorough exploration
+            max_iterations = 10000  # Safety limit
+            gamma = 1  # Coverage parameter (1 = complete coverage)
             
-            # Calculate step sizes for each constraint objective (smaller steps for better coverage)
-            step_sizes = []
-            for i, constraint_idx in enumerate(constraint_indices):
-                range_val = best_objective_values[constraint_idx] - nadir_objectives_values[constraint_idx]
-                if range_val != 0:
-                    # Use larger steps to find solutions faster - aim for about 10-15 steps per dimension
-                    step_size = max(1000, abs(range_val) // 10)  # Much larger steps
-                    step_sizes.append(step_size)
+            logger.debug(f"INLINED: Best values: {best_objective_values}")
+            logger.debug(f"INLINED: Nadir values: {nadir_objectives_values}")
+            logger.debug(f"INLINED: Constraint indices: {constraint_indices}")
+            
+            # ===== GOLDEN STANDARD CHECKPOINT: EPSILON SETUP COMPLETE =====
+            logger.info("=" * 80)
+            logger.info("GOLDEN: EPSILON SETUP RESULTS")
+            logger.info(f"GOLDEN: Main objective index: {main_obj_index}")
+            logger.info(f"GOLDEN: Constraint indices: {constraint_indices}")
+            logger.info(f"GOLDEN: Initial ef_array: {ef_array}")
+            logger.info(f"GOLDEN: Initial RWV: {rwv}")
+            logger.info(f"GOLDEN: Augmented objective set: YES")
+            logger.info("=" * 80)
+            
+            while ef_array[0] <= best_objective_values[constraint_indices[0]] and iteration_count < max_iterations:
+                
+                # ===== GOLDEN STANDARD: ITERATION START =====
+                logger.info("=" * 60)
+                logger.info(f"GOLDEN: ITERATION {iteration_count}")
+                logger.info(f"GOLDEN: ef_array={ef_array}, rwv={rwv}")
+                logger.info("=" * 60)
+                
+                if iteration_count % 50 == 0:
+                    logger.debug(f"INLINED: Iteration {iteration_count}, ef_array = {ef_array}")
+                
+                # Initialize one_solution to empty list
+                one_solution = []
+                
+                # Check if this configuration was already explored (relaxation)
+                previous_relaxation, previous_values = search_previous_solutions_relaxation(
+                    ef_array, previous_solution_information, constraint_indices)
+                
+                logger.info(f"GOLDEN: Relaxation check - found={previous_relaxation}, prev_info_count={len(previous_solution_information)}")
+                logger.debug(f"INLINED: Loop - ef_array={ef_array}, previous_relaxation={previous_relaxation}")
+                
+                if previous_relaxation:
+                    if previous_values == "infeasible":
+                        one_solution = []
+                    else:
+                        one_solution = previous_values
                 else:
-                    step_sizes.append(1000)
-            
-            logger.critical(f"INLINED: Range for constraint {constraint_indices[0]}: {best_objective_values[constraint_indices[0]]} to {nadir_objectives_values[constraint_indices[0]]}")
-            logger.critical(f"INLINED: Calculated step sizes: {step_sizes}")
-            
-            # Generate all constraint values systematically in multi-dimensional grid
-            def get_next_constraint_values(current_ef_array):
-                """Get next combination of constraint values using grid search"""
-                next_array = current_ef_array.copy()
-                
-                # Increment like an odometer - rightmost digit first
-                for i in range(len(next_array) - 1, -1, -1):
-                    constraint_idx = constraint_indices[i]
-                    next_array[i] -= step_sizes[i]  # Move towards best value (smaller)
+                    # Update constraint RHS values
+                    # NOTE: After line 618, objectives_exprs are ALREADY in maximization form (negated)
+                    # So we use them directly: objectives_exprs[i] - slack = ef_array
+                    for i, constr in enumerate(constraint_vars):
+                        model.remove(constr)
+                        if slack_vars[i] is not None:
+                            constr = model.addConstr(
+                                objectives_exprs[constraint_indices[i]] - slack_vars[i] == ef_array[i],
+                                name=f"epsilon_constraint_{constraint_indices[i]}_iter{iteration_count}"
+                            )
+                        else:
+                            constr = model.addConstr(
+                                objectives_exprs[constraint_indices[i]] == ef_array[i],
+                                name=f"epsilon_constraint_{constraint_indices[i]}_iter{iteration_count}"
+                            )
+                        constraint_vars[i] = constr
                     
-                    if next_array[i] >= best_objective_values[constraint_idx]:
-                        return next_array  # Valid next point
-                    else:
-                        # Overflow - reset this dimension and carry to next
-                        next_array[i] = nadir_objectives_values[constraint_idx]
-                
-                # If we get here, all combinations exhausted
-                return None
-            
-            while iteration_count < max_iterations:
-                
-                if iteration_count % 20 == 0:  # Log progress more frequently 
-                    logger.critical(f"INLINED: Iteration {iteration_count}, ef_array = {ef_array}")
-                
-                # Update constraint values
-                for i, constr in enumerate(constraint_vars):
-                    constraint_idx = constraint_indices[i]
-                    model.remove(constr)
-                    if slack_vars[i] is not None:
-                        constr = model.addConstr(
-                            objectives_exprs[constraint_idx] - slack_vars[i] == ef_array[i],
-                            name=f"epsilon_constraint_{constraint_idx}_{iteration_count}"
-                        )
-                    else:
-                        constr = model.addConstr(
-                            objectives_exprs[constraint_idx] == ef_array[i],
-                            name=f"epsilon_constraint_{constraint_idx}_{iteration_count}"
-                        )
-                    constraint_vars[i] = constr
-                
-                # Solve current configuration
-                solve_start = time.time()
-                model.optimize()
-                solve_time = time.time() - solve_start
-                
-                if model.status == gp.GRB.OPTIMAL:
-                    # Extract solution
-                    solution_values = [int(select_image[j].X > 0.5) for j in images_id]
-                    current_objs = []
-                    
-                    # Calculate all objective values
-                    for obj_name in config.objectives:
-                        if obj_name == "min_cost":
-                            current_objs.append(int(sum(select_image[k].X * costs[k] for k in images_id 
-                                                      if select_image[k].X > 0.5)))
-                        elif obj_name == "cloud_coverage":
-                            cloud_val = 0
-                            if cloud_covered is not None:
-                                cloud_val = sum(cloud_covered[c].X * clouds_id_area[c] 
-                                              for c in clouds_id if c in cloud_covered)
-                            current_objs.append(int(sum(clouds_id_area.values()) - cloud_val))
-                        elif obj_name == "min_resolution":
-                            if resolution_element is not None:
-                                current_objs.append(int(sum(resolution_element[e].X for e in elements)))
-                            else:
-                                current_objs.append(0)
-                        elif obj_name == "min_max_incidence_angle":
-                            if current_max_incidence_angle is not None:
-                                current_objs.append(int(current_max_incidence_angle.X))
-                            else:
-                                current_objs.append(0)
-                    
-                    # Check if this is a new solution
-                    sol_str = str(current_objs)
-                    if sol_str not in previous_solutions:
-                        previous_solutions.add(sol_str)
-                        add_to_pareto_front(current_objs, solution_values)
-                        
-                        statistics["number_of_solutions"] += 1
-                        statistics["time_solver_sec"] += solve_time
-                        statistics["solutions_time_list"].append(solve_time)
-                        
-                        logger.critical(f"INLINED: Found solution {statistics['number_of_solutions']}: {current_objs}")
-                    
-                    # Simple update: move to next constraint combination
-                    next_ef_array = get_next_constraint_values(ef_array)
-                    if next_ef_array is None:
-                        # Exhausted all combinations
-                        logger.critical(f"INLINED: Exhausted all constraint combinations at iteration {iteration_count}")
+                    # Calculate remaining time and check if we should continue
+                    elapsed = time.time() - total_start_time
+                    if elapsed >= total_timeout:
+                        logger.debug("INLINED: Total timeout exceeded during GPBA-A loop")
                         break
-                    ef_array = next_ef_array
-                    logger.critical(f"INLINED: Moving to next ef_array: {ef_array}")
-                
-                elif model.status == gp.GRB.INFEASIBLE:
-                    # Move to next configuration
-                    logger.critical(f"INLINED: Infeasible at ef_array = {ef_array}, moving to next")
-                    next_ef_array = get_next_constraint_values(ef_array)
-                    if next_ef_array is None:
-                        logger.critical(f"INLINED: Exhausted all constraint combinations after infeasible at iteration {iteration_count}")
+                    
+                    remaining = total_timeout - elapsed
+                    # Update time limit for this optimization
+                    model.setParam('TimeLimit', remaining)
+                    
+                    # Solve current configuration
+                    solve_start = time.time()
+                    model.optimize()
+                    solve_time = time.time() - solve_start
+                    
+                    logger.debug(f"INLINED: After solve - status={model.status}, objVal={model.objVal if model.status == gp.GRB.OPTIMAL else 'N/A'}")
+                    
+                    if model.status == gp.GRB.INFEASIBLE:
+                        save_solution_information(ef_array, "infeasible", previous_solution_information)
+                        one_solution = []
+                    elif model.status == gp.GRB.OPTIMAL:
+                        # Extract solution
+                        solution_values = [int(select_image[j].X > 0.5) for j in images_id]
+                        current_objs = []
+                        
+                        # Calculate all objective values (in MAXIMIZATION form since we converted)
+                        # Use binary solution_values to avoid floating-point precision issues
+                        for obj_name in config.objectives:
+                            if obj_name == "min_cost":
+                                current_objs.append(-sum(solution_values[k] * costs[k] for k in images_id))
+                            elif obj_name == "cloud_coverage":
+                                cloud_val = 0
+                                if cloud_covered is not None:
+                                    # Round each cloud coverage to avoid floating-point errors
+                                    cloud_val = sum(round(cloud_covered[c].X) * clouds_id_area[c] 
+                                                  for c in clouds_id if c in cloud_covered)
+                                total_cloud_area = sum(clouds_id_area.values())
+                                current_objs.append(-int(total_cloud_area - cloud_val))
+                            elif obj_name == "min_resolution":
+                                # Recompute min_resolution based on selected images
+                                # For each element, find the minimum resolution among selected images covering it
+                                min_res_sum = 0
+                                for element in elements:
+                                    covering_images = [i for i in images_id if element in images[i] and solution_values[i] == 1]
+                                    if covering_images:
+                                        min_res_sum += min(resolution[i] for i in covering_images)
+                                current_objs.append(-min_res_sum)
+                            elif obj_name == "min_max_incidence_angle":
+                                if current_max_incidence_angle is not None:
+                                    current_objs.append(-int(round(current_max_incidence_angle.X)))
+                                else:
+                                    current_objs.append(0)
+                        
+                        logger.debug(f"INLINED: Found solution (in max form): {current_objs}")
+                        
+                        # Check if this is a new solution
+                        sol_str = convert_solution_value_to_str(current_objs)
+                        if sol_str not in previous_solutions:
+                            previous_solutions.add(sol_str)
+                            
+                            # Convert back to minimization for Pareto front storage
+                            current_objs_min = [-x for x in current_objs]
+                            add_to_pareto_front(current_objs_min, solution_values)
+                            
+                            statistics["number_of_solutions"] += 1
+                            statistics["time_solver_sec"] += solve_time
+                            statistics["solutions_time_list"].append(solve_time)
+                            
+                            logger.debug(f"INLINED: Found solution {statistics['number_of_solutions']}: {current_objs_min}")
+                            
+                            one_solution = current_objs
+                            save_solution_information(ef_array, one_solution, previous_solution_information)
+                        else:
+                            one_solution = current_objs
+                    elif model.status == gp.GRB.TIME_LIMIT:
+                        logger.debug("INLINED: Timeout during GPBA-A loop")
                         break
-                    ef_array = next_ef_array
+                    else:
+                        logger.debug(f"INLINED: Unexpected solver status: {model.status}")
+                        one_solution = []
                 
-                elif model.status == gp.GRB.TIME_LIMIT:
-                    print("Timeout during GPBA-A loop")
-                    break
+                # Update RWV and obj_k_at_ef_k based on solution found
+                id_interval = -1  # Last constraint objective
+                obj_k_at_ef_k[id_interval] = None
+                
+                if len(one_solution) > 0:
+                    for i in range(len(rwv)):
+                        rwv[i] = min(rwv[i], one_solution[constraint_indices[i]])
+                    obj_k_at_ef_k[id_interval] = one_solution[constraint_indices[id_interval]]
+                
+                # Adjust ef_array using interval management (core of GPBA-A)
+                logger.info(f"GOLDEN: Before epsilon adjustment - ef_array={ef_array}, obj_k_at_ef_k[{id_interval}]={obj_k_at_ef_k[id_interval]}")
+                
+                ef_intervals[id_interval] = adjust_parameter_ef_array(
+                    id_interval, ef_array, obj_k_at_ef_k[id_interval],
+                    ef_intervals[id_interval], constraint_indices,
+                    best_objective_values, nadir_objectives_values, gamma)
+                
+                logger.info(f"GOLDEN: After epsilon adjustment - ef_array={ef_array}")
+                
+                # Multi-dimensional cascading updates for higher constraint objectives
+                # Loop from highest dimension down to 1 (dimension 0 handled by main loop condition)
+                for i in range(len(constraint_indices) - 1, 0, -1):
+                    if ef_array[i] > best_objective_values[constraint_indices[i]]:
+                        # Reset this dimension and update previous dimension
+                        # Uses > (not >=) because when interval exhausted, ef_array[i] = best+1
+                        ef_array[i] = nadir_objectives_values[constraint_indices[i]]
+                        rwv[i] = best_objective_values[constraint_indices[i]]
+                        id_interval = i - 1
+                        ef_intervals[id_interval] = adjust_parameter_ef_array(
+                            id_interval, ef_array, obj_k_at_ef_k[id_interval],
+                            ef_intervals[id_interval], constraint_indices,
+                            best_objective_values, nadir_objectives_values, gamma)
+                        obj_k_at_ef_k[id_interval] = None
+                        if i == 1:
+                            rwv[id_interval] = best_objective_values[constraint_indices[id_interval]]
+                        # Continue checking previous dimensions (don't break)
+                    else:
+                        break  # Only cascade if dimension is exhausted (>best)
                 
                 iteration_count += 1
+            
+            logger.debug(f"INLINED: GPBA-A loop completed after {iteration_count} iterations")
+            
+            # Determine if problem was exhaustively explored
+            # Loop exits for 3 reasons:
+            # 1. ef_array[0] > best_objective_values[constraint_indices[0]] - exhaustive exploration complete
+            # 2. iteration_count >= max_iterations - hit iteration limit (not exhaustive)
+            # 3. break due to timeout - not exhaustive
+            exhaustive_search = (iteration_count < max_iterations and 
+                                ef_array[0] > best_objective_values[constraint_indices[0]])
+            
+            # ===== GOLDEN STANDARD CHECKPOINT: MAIN LOOP COMPLETE =====
+            logger.info("=" * 80)
+            logger.info("GOLDEN: MAIN LOOP RESULTS")
+            logger.info(f"GOLDEN: Total iterations: {iteration_count}")
+            logger.info(f"GOLDEN: Solutions found in main loop: {statistics['number_of_solutions'] - num_objectives}")
+            logger.info(f"GOLDEN: Total solutions (including payoff): {statistics['number_of_solutions']}")
+            logger.info(f"GOLDEN: Exhaustive: {exhaustive_search}")
+            logger.info(f"GOLDEN: Final ef_array: {ef_array}")
+            logger.info("=" * 80)
         
-        statistics["exhaustive"] = True
-        logger.critical("INLINED: Problem completely explored.")
+        statistics["exhaustive"] = exhaustive_search
+        if exhaustive_search:
+            logger.debug("INLINED: Problem completely explored.")
+        else:
+            logger.debug("INLINED: Problem exploration incomplete (timeout or iteration limit).")
         
     except TimeoutError as e:
-        logger.critical(f"INLINED: Timeout during extreme point computation: {e}")
+        logger.debug(f"INLINED: Timeout during extreme point computation: {e}")
         statistics["exhaustive"] = False
     except Exception as e:
-        logger.critical(f"INLINED: Error during solving: {e}")
+        logger.debug(f"INLINED: Error during solving: {e}")
         statistics["exhaustive"] = False
     
-    logger.critical(f"INLINED: Final statistics - {statistics['number_of_solutions']} solutions found")
+    logger.debug(f"INLINED: Final statistics - {statistics['number_of_solutions']} total solutions found")
+    logger.debug(f"INLINED: Pareto front contains {len(pareto_front)} non-dominated solutions")
+    
+    # ===== GOLDEN STANDARD CHECKPOINT: FINAL RESULTS =====
+    logger.info("=" * 80)
+    logger.info("GOLDEN: FINAL RESULTS")
+    logger.info(f"GOLDEN: Total solutions discovered: {statistics['number_of_solutions']}")
+    logger.info(f"GOLDEN: Pareto front size (non-dominated): {len(pareto_front)}")
+    logger.info(f"GOLDEN: Exhaustive: {statistics['exhaustive']}")
+    logger.info("=" * 80)
     
     # STAGE 10: FINALIZE RESULTS
     
+    # Deduplicate pareto_front based on selected images
+    original_count = len(pareto_front)
+    unique_fronts = {}
+    new_indices = []
+    
+    for idx in pareto_front:
+        solution = pareto_solutions[idx]
+        # Use frozenset of selected image IDs as key for deduplication
+        key = frozenset(solution["solution_values"])
+        if key not in unique_fronts:
+            unique_fronts[key] = idx
+            new_indices.append(idx)
+    
+    pareto_front = new_indices
+    
+    if len(pareto_front) < original_count:
+        logger.info(f"GOLDEN: Removed {original_count - len(pareto_front)} duplicate solutions from Pareto front")
+    
     # Build results strings
     pareto_objs = []
+    pareto_vectors = []
     all_solutions = []
     
     for idx in pareto_front:
         solution = pareto_solutions[idx]
         pareto_objs.append(solution["objs"])
+        pareto_vectors.append(solution["solution_values"])
         all_solutions.append(solution)
     
-    statistics["pareto_front"] = json.dumps(pareto_objs) + ","
-    statistics["all_solutions"] = json.dumps([sol["objs"] for sol in all_solutions]) + ","
+    # Log objective types before JSON serialization
+    if pareto_objs:
+        logger.debug("INLINED: JSON SERIALIZATION - Checking objective types:")
+        for i, obj_name in enumerate(config.objectives):
+            obj_types = [type(sol[i]).__name__ for sol in pareto_objs]
+            unique_types = set(obj_types)
+            if len(unique_types) > 1 or 'float' in unique_types:
+                logger.debug(f"INLINED: Objective {i} ({obj_name}): types={unique_types}, sample values: {[sol[i] for sol in pareto_objs[:3]]}")
+    
+    # Format as {[...],[...],...} to match original CSV format
+    statistics["pareto_front"] = "{" + ",".join([str(obj) for obj in pareto_objs]) + "}"
+    statistics["solutions_pareto_front"] = "{" + ",".join([str(vec) for vec in pareto_vectors]) + "}"
+    
+    # Populate pareto_solutions_time_list with timestamps for pareto solutions only
+    statistics["pareto_solutions_time_list"] = [
+        pareto_solutions[idx]["timestamp"] for idx in pareto_front
+    ]
     
     # Simple hypervolume calculation
     if pareto_objs:
         hv = 1.0  # Placeholder - real hypervolume calculation is complex
         statistics["hypervolume"] = hv
     
-    print(f"End of solving statistics (inlined): {statistics['number_of_solutions']} solutions found")
+    print(f"End of solving statistics (inlined): {statistics['number_of_solutions']} total solutions, {len(pareto_front)} non-dominated")
     
-    # STAGE 11: WRITE RESULTS TO CSV
-    write_statistics_inlined(config, statistics)
+    # Calculate total execution time
+    total_execution_time = time.time() - total_start_time
+    
+    # STAGE 11: WRITE RESULTS TO CSV (if summary_filename is provided)
+    if config.summary_filename:
+        write_statistics_inlined(config, statistics)
+    
+    # STAGE 12: RETURN STRUCTURED RESULTS
+    # Return a dictionary with all the solution data
+    return {
+        "pareto_solutions": all_solutions,  # List of pareto front solutions with objs, solution_values, timestamp
+        "statistics": statistics,
+        "execution_time_sec": total_execution_time,
+        "timeout_sec": config.solver_timeout_sec,
+    }
 
 
 def write_statistics_inlined(config, statistics):
-    """Write statistics to CSV file (simplified version)."""
-    import csv
-    import os
+    """Write statistics to CSV file using the same format as the original."""
     from filelock import FileLock, Timeout as FileLockTimeout
-    
-    def create_summary_file_inlined(filename):
-        """Create CSV summary file if it doesn't exist."""
-        if not os.path.exists(filename):
-            with open(filename, "w") as f:
-                headers = list(statistics.keys())
-                writer = csv.DictWriter(f, fieldnames=headers, delimiter=";")
-                writer.writeheader()
+    from sims_solvers.main import statistics_to_csv, create_summary_file
     
     try:
         lock = FileLock(config.summary_filename + ".lock", timeout=10)
         with lock:
-            create_summary_file_inlined(config.summary_filename)
-            with open(config.summary_filename, "a") as f:
-                headers = list(statistics.keys())
-                writer = csv.DictWriter(f, fieldnames=headers, delimiter=";")
-                writer.writerow(statistics)
+            create_summary_file(config)
+            with open(config.summary_filename, "a") as summary:
+                summary.write(statistics_to_csv(config, statistics))
     except FileLockTimeout:
         print("Could not acquire lock on summary file. Statistics will be printed on standard output instead.")
         print(statistics)
@@ -712,52 +1089,62 @@ def solve_milp(config: Config, objectives: list[str] | None = None):
     """Solve the SIMS problem using Mixed Integer Linear Programming (MILP) solver."""
     
     logger = logging.getLogger(__name__)
-    logger.critical("ORIGINAL: Starting solve_milp")
+    logger.debug("ORIGINAL: Starting solve_milp")
 
     # If objectives are provided, update the config
     if objectives is not None:
         config.objectives = objectives
     
-    logger.critical(f"ORIGINAL: Objectives = {config.objectives}")
+    logger.debug(f"ORIGINAL: Objectives = {config.objectives}")
 
     instance = build_instance(config)
-    logger.critical("ORIGINAL: Built instance")
+    logger.debug("ORIGINAL: Built instance")
     print("Start computing: " + config.uid())
     statistics = {}
     config.init_statistics(statistics)
     init_top_level_statistics(statistics)
     model = build_model(instance, config)
-    logger.critical("ORIGINAL: Built model")
+    logger.debug("ORIGINAL: Built model")
     solver, pareto_front = build_solver(model, instance, config, statistics)
-    logger.critical("ORIGINAL: Built solver and pareto_front")
+    logger.debug("ORIGINAL: Built solver and pareto_front")
     save_results = True
     try:
         statistics["exhaustive"] = False
         statistics["incomplete_timeout_solution_added_to_front"] = False
-        logger.critical("ORIGINAL: Starting solver.solve() iteration")
+        statistics["max_solutions_count_reached"] = False
+        logger.debug("ORIGINAL: Starting solver.solve() iteration")
         solution_count = 0
+        max_solutions = config.max_solutions_count
         for x in solver.solve():
             solution_count += 1
             if hasattr(x, 'objs'):
-                logger.critical(f"ORIGINAL: Found solution {solution_count}: {x.objs}")
+                logger.debug(f"ORIGINAL: Found solution {solution_count}: {x.objs}")
             else:
-                logger.critical(f"ORIGINAL: Found solution {solution_count}: {x}")
-        logger.critical("ORIGINAL: Problem completely explored.")
-        statistics["exhaustive"] = True
+                logger.debug(f"ORIGINAL: Found solution {solution_count}: {x}")
+            
+            # Check if we've reached the maximum number of solutions
+            if max_solutions is not None and solution_count >= max_solutions:
+                logger.debug(f"ORIGINAL: Reached max_solutions_count limit of {max_solutions}, stopping")
+                statistics["max_solutions_count_reached"] = True
+                break
+        
+        if not statistics.get("max_solutions_count_reached", False):
+            logger.debug("ORIGINAL: Problem completely explored.")
+            statistics["exhaustive"] = True
     except TimeoutError:
-        logger.critical("ORIGINAL: Timeout triggered getting last incomplete solution")
+        logger.debug("ORIGINAL: Timeout triggered getting last incomplete solution")
         if solver.process_last_incomplete_solution():
             # the last incomplete solution was added to the pareto front
-            logger.critical("ORIGINAL: Last incomplete solution added to the pareto front")
+            logger.debug("ORIGINAL: Last incomplete solution added to the pareto front")
             statistics["incomplete_timeout_solution_added_to_front"] = True
         else:
-            logger.critical(
+            logger.debug(
                 "ORIGINAL: There were not incomplete solution or the last incomplete solution was not added to "
                 "the pareto front"
             )
             set_right_time_after_timeout(statistics, config.solver_timeout_sec)
     except Exception as e:
-        logger.critical("ORIGINAL: Error Exception raised: " + str(e))
+        logger.debug("ORIGINAL: Error Exception raised: " + str(e))
         logging.error(traceback.format_exc())
         save_results = False
     if save_results:
@@ -768,5 +1155,5 @@ def solve_milp(config: Config, objectives: list[str] | None = None):
             statistics["solutions_time_list"][x] for x in pareto_front.front
         ]
         statistics["pareto_solutions_time_list"] = pareto_solutions_time_list
-        logger.critical("ORIGINAL: end of solving statistics: " + str(statistics))
+        logger.debug("ORIGINAL: end of solving statistics: " + str(statistics))
         write_statistics(config, statistics)

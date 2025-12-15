@@ -23,6 +23,12 @@ def pytest_addoption(parser):
         default=None,
         help="Name for the test run to organize artifacts"
     )
+    parser.addoption(
+        "--use-pseudo-solver",
+        action="store_true",
+        default=False,
+        help="Use pseudo-solver with pre-recorded solutions instead of real solver"
+    )
 
 
 @pytest.fixture(scope="session")
@@ -60,6 +66,12 @@ def mzn_model_path():
 def timeout():
     """Fixture providing the timeout for tests."""
     return TIMEOUT_SECONDS
+
+
+@pytest.fixture
+def use_pseudo_solver(request):
+    """Fixture providing whether to use pseudo-solver mode."""
+    return request.config.getoption("--use-pseudo-solver")
 
 
 class TestArtifactsManager:
@@ -104,13 +116,32 @@ class TestArtifactsManager:
         test_name: str,
         instance_name: str,
         result_data: dict,
+        ratio: Optional[str] = None,
+        iteration: Optional[int] = None,
         trace_data: Optional[bytes] = None,
+        profiling_trace_data: Optional[bytes] = None,
         test_failed: bool = False,
         failure_info: Optional[dict] = None
     ):
-        """Save test results and trace data to artifacts directory."""
-        # Create test-specific directory
+        """Save test results and trace data to artifacts directory.
+        
+        Creates directory structure:
+        - test_artifacts/test_name/instance_name/ratio/iterN/
+        
+        Args:
+            profiling_trace_data: Chrome profiling trace data in JSON format
+        """
+        # Build path: test_name/instance_name/ratio/iterN
         test_dir = self.artifacts_dir / test_name / instance_name
+        
+        if ratio:
+            # Add ratio subfolder (e.g., "100_0", "20_80")
+            test_dir = test_dir / ratio
+        
+        if iteration is not None:
+            # Add iteration subfolder (e.g., "iter0", "iter1")
+            test_dir = test_dir / f"iter{iteration}"
+        
         test_dir.mkdir(parents=True, exist_ok=True)
         
         # Save JSON result
@@ -125,6 +156,13 @@ class TestArtifactsManager:
             # Just write it directly to the file
             with open(trace_file, 'wb') as f:
                 f.write(trace_data)
+        
+        # Save profiling trace data if available
+        if profiling_trace_data:
+            profiling_trace_file = test_dir / "profiling_trace.json"
+            # profiling_trace_data is Chrome trace JSON format
+            with open(profiling_trace_file, 'wb') as f:
+                f.write(profiling_trace_data)
         
         # Save failure information if test failed
         if test_failed and failure_info:

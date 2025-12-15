@@ -26,8 +26,10 @@ def solve(
     neighborhood_size_min: int = 1,
     neighborhood_size_max: int = 6,
     enable_trace: bool = False,
+    enable_profiling_trace: bool = False,
     objective_bounds: list[list[int]] | None = None,
     include_dominated: bool = False,
+    pareto_archive: str = "nd-tree",
 ) -> SolverResult:
     """
     Solve the SIMS problem using Pareto Local Search via sims_problem.solve_with_pls.
@@ -36,7 +38,7 @@ def solve(
         problem_instance: The SIMS problem instance to solve
         problem_path: Path to the problem file (not used in new implementation)
         timeout_s: Timeout in seconds
-        output_path: Output path (not used in new implementation) 
+        output_path: Output path (not used in new implementation)
         objectives: List of objectives to optimize
         initial_population: Initial population of solutions (optional)
         initial_population_size: Size of initial population when not providing custom initial_population
@@ -44,8 +46,10 @@ def solve(
         neighborhood_size_min: Minimum neighborhood size for local search
         neighborhood_size_max: Maximum neighborhood size for local search
         enable_trace: Whether to enable tracing for debugging/analysis
+        enable_profiling_trace: Whether to enable Chrome profiling trace for performance analysis
         objective_bounds: Optional list of [min, max] bounds for each objective (for trace generation)
         include_dominated: If False, filters out dominated solutions from traces (default: False)
+        pareto_archive: Pareto archive implementation ("nd-tree", "linked-list", "vector")
     
     Returns:
         SolverResult: The solving result with Pareto front solutions
@@ -101,7 +105,9 @@ def solve(
             neighborhood_size_min=neighborhood_size_min,
             neighborhood_size_max=neighborhood_size_max,
             trace=enable_trace,
-            objective_bounds=objective_bounds
+            profiling_trace=enable_profiling_trace,
+            objective_bounds=objective_bounds,
+            pareto_archive=pareto_archive
         )
 
     except Exception as e:
@@ -141,5 +147,6 @@ def solve(
         problem_instance=problem_instance,
         front_strategy=None,
         pareto_front_snapshots=[],
-        trace_data=solving_result.trace
+        trace_data=solving_result.trace,
+        profiling_trace_data=solving_result.profiling_trace_data if hasattr(solving_result, 'profiling_trace_data') else None
     )
