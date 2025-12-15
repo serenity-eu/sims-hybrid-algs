@@ -9,11 +9,36 @@ use crate::{
     options::Options,
     solution::Solution,
 };
-use good_lp::{
-    coin_cbc, default_solver, highs, Solution as GoodLpSolution, SolverModel,
-    WithTimeLimit,
-};
+use good_lp::solvers::lp_solvers::{GurobiSolver, WithMaxSeconds};
+#[cfg(feature = "coin_cbc")]
+use good_lp::solvers::coin_cbc;
+#[cfg(feature = "highs")]
+use good_lp::solvers::highs;
+#[cfg(feature = "scip")]
+use good_lp::solvers::scip;
+use good_lp::{Solution as GoodLpSolution, SolverModel};
 use std::time::Duration;
+
+/// Create the default solver (Gurobi via lp-solvers)
+fn create_gurobi_solver() -> good_lp::solvers::lp_solvers::LpSolver<GurobiSolver> {
+    println!("DEBUG: Creating Gurobi solver via lp-solvers");
+    let gurobi = GurobiSolver::new();
+    good_lp::solvers::lp_solvers::LpSolver(gurobi)
+}
+
+/// Create solver with time limit
+fn create_gurobi_solver_with_timeout(
+    timeout: Duration,
+) -> good_lp::solvers::lp_solvers::LpSolver<GurobiSolver> {
+    println!(
+        "DEBUG: Creating Gurobi solver via lp-solvers with {}s timeout",
+        timeout.as_secs()
+    );
+    #[allow(clippy::cast_possible_truncation, reason = "Timeout duration in seconds is expected to fit in u32 for Gurobi solver API - values over 4.2 billion seconds (136 years) are not realistic")]
+    let seconds = timeout.as_secs() as u32;
+    let gurobi = GurobiSolver::new().with_max_seconds(seconds);
+    good_lp::solvers::lp_solvers::LpSolver(gurobi)
+}
 
 /// Solver for single-objective optimization problems
 pub struct SingleObjectiveSolver<'a> {
@@ -95,12 +120,26 @@ impl<'a> SingleObjectiveSolver<'a> {
         // Create and solve with the selected solver - each branch handles its own type
         match self.options.solver {
             crate::solver_enum::Solver::Default => {
-                let model = if matches!(direction, crate::model::ObjectiveDirection::Minimize) {
-                    prob_vars.minimise(objective_expr).using(default_solver)
+                let model = if let Some(timeout_duration) = effective_timeout {
+                    if matches!(direction, crate::model::ObjectiveDirection::Minimize) {
+                        prob_vars
+                            .minimise(objective_expr)
+                            .using(create_gurobi_solver_with_timeout(timeout_duration))
+                    } else {
+                        prob_vars
+                            .maximise(objective_expr)
+                            .using(create_gurobi_solver_with_timeout(timeout_duration))
+                    }
+                } else if matches!(direction, crate::model::ObjectiveDirection::Minimize) {
+                    prob_vars
+                        .minimise(objective_expr)
+                        .using(create_gurobi_solver())
                 } else {
-                    prob_vars.maximise(objective_expr).using(default_solver)
+                    prob_vars
+                        .maximise(objective_expr)
+                        .using(create_gurobi_solver())
                 };
-                // Default solver doesn't support parameters or timeout
+                // Note: Gurobi via lp-solvers doesn't expose set_parameter method
                 if !self.options.solver_parameters.is_empty() {
                     println!(
                         "DEBUG: Solver {} does not support parameters, ignoring {} parameters",
@@ -110,57 +149,45 @@ impl<'a> SingleObjectiveSolver<'a> {
                 }
                 self.solve_with_model_common(model, objective_index)
             }
+            #[cfg(feature = "coin_cbc")]
             crate::solver_enum::Solver::CoinCbc => {
-                let mut model = if matches!(direction, crate::model::ObjectiveDirection::Minimize) {
-                    prob_vars.minimise(objective_expr).using(coin_cbc)
+                let model = if matches!(direction, crate::model::ObjectiveDirection::Minimize) {
+                    prob_vars.minimise(objective_expr).using(coin_cbc::coin_cbc)
                 } else {
-                    prob_vars.maximise(objective_expr).using(coin_cbc)
+                    prob_vars.maximise(objective_expr).using(coin_cbc::coin_cbc)
                 };
-                // Apply solver parameters
-                for (key, value) in &self.options.solver_parameters {
-                    println!(
-                        "DEBUG: Setting {} parameter: {key} = {value}",
-                        self.options.solver.name()
-                    );
-                    model.set_parameter(key, value);
-                }
-                // Apply timeout if specified
-                if let Some(timeout_duration) = effective_timeout {
-                    println!("DEBUG: Setting timeout: {timeout_duration:?}");
-                    model = model.with_time_limit(timeout_duration.as_secs_f64());
-                }
                 self.solve_with_model_common(model, objective_index)
             }
+            #[cfg(not(feature = "coin_cbc"))]
+            crate::solver_enum::Solver::CoinCbc => Err(AugmeconError::UnsupportedSolver(
+                "CoinCbc solver is not available. Enable the 'coin_cbc' feature to use it.".to_string(),
+            )),
+            #[cfg(feature = "highs")]
             crate::solver_enum::Solver::HiGHS => {
-                let mut model = if matches!(direction, crate::model::ObjectiveDirection::Minimize) {
-                    prob_vars.minimise(objective_expr).using(highs)
+                let model = if matches!(direction, crate::model::ObjectiveDirection::Minimize) {
+                    prob_vars.minimise(objective_expr).using(highs::highs)
                 } else {
-                    prob_vars.maximise(objective_expr).using(highs)
+                    prob_vars.maximise(objective_expr).using(highs::highs)
                 };
-                // Apply solver parameters if the solver supports them
-                if self.options.solver.supports_parameters() {
-                    for (key, value) in &self.options.solver_parameters {
-                        println!(
-                            "DEBUG: Setting {} parameter: {key} = {value}",
-                            self.options.solver.name()
-                        );
-                        // Note: HiGHS doesn't support generic set_parameter method
-                        // Parameters would need to be handled differently for HiGHS
-                    }
-                } else if !self.options.solver_parameters.is_empty() {
-                    println!(
-                        "WARNING: {} solver does not support parameters, but {} parameters were specified",
-                        self.options.solver.name(),
-                        self.options.solver_parameters.len()
-                    );
-                }
-                // Apply timeout if specified
-                if let Some(timeout_duration) = effective_timeout {
-                    println!("DEBUG: Setting timeout: {timeout_duration:?}");
-                    model = model.with_time_limit(timeout_duration.as_secs_f64());
-                }
                 self.solve_with_model_common(model, objective_index)
             }
+            #[cfg(not(feature = "highs"))]
+            crate::solver_enum::Solver::HiGHS => Err(AugmeconError::UnsupportedSolver(
+                "HiGHS solver is not available. Enable the 'highs' feature to use it.".to_string(),
+            )),
+            #[cfg(feature = "scip")]
+            crate::solver_enum::Solver::SCIP => {
+                let model = if matches!(direction, crate::model::ObjectiveDirection::Minimize) {
+                    prob_vars.minimise(objective_expr).using(scip::scip)
+                } else {
+                    prob_vars.maximise(objective_expr).using(scip::scip)
+                };
+                self.solve_with_model_common(model, objective_index)
+            }
+            #[cfg(not(feature = "scip"))]
+            crate::solver_enum::Solver::SCIP => Err(AugmeconError::UnsupportedSolver(
+                "SCIP solver is not available. Enable the 'scip' feature to use it.".to_string(),
+            )),
         }
     }
 
@@ -191,26 +218,21 @@ impl<'a> SingleObjectiveSolver<'a> {
             println!("DEBUG: Single objective optimization failed: {e:?}");
             AugmeconError::OptimizationError(format!("Single objective optimization failed: {e:?}"))
         })?;
-        println!("DEBUG: Model solved successfully");
+        log::debug!("Single-objective problem solved successfully");
 
-        // Extract variable values
-        println!("DEBUG: Extracting variable values...");
+        // Extract variable values (don't log individual variables, too verbose)
         let mut variable_values = std::collections::HashMap::new();
         for (name, &var) in &self.problem.var_map {
             let val = solution.value(var);
-            println!("DEBUG: Variable {name}: {val}");
-            log::debug!("Variable {name}: {val}");
             variable_values.insert(name.clone(), val);
         }
 
         // Calculate objective values by evaluating expressions with the solution
-        println!("DEBUG: Calculating objective values...");
         let mut objective_values = Vec::with_capacity(self.problem.num_objectives());
         for i in 0..self.problem.num_objectives() {
             if i < self.problem.objectives.len() {
                 let (obj_expr, _) = &self.problem.objectives[i];
                 let obj_value = obj_expr.eval_with(&solution);
-                println!("DEBUG: Objective {i}: {obj_value}");
                 log::debug!("Objective {i}: {obj_value}");
                 objective_values.push(obj_value);
             } else {
@@ -220,6 +242,93 @@ impl<'a> SingleObjectiveSolver<'a> {
 
         println!("DEBUG: Single objective solve completed successfully");
         Ok(Solution::new(objective_values, variable_values))
+    }
+
+    /// Solve single-objective optimization with MAXIMIZATION
+    ///
+    /// This is used to compute nadir points by finding the worst (maximum) value for each objective.
+    /// Matches Python's behavior: `model.setObjective(objectives_exprs[i], gp.GRB.MAXIMIZE)`
+    ///
+    /// # Errors
+    /// Returns error if optimization fails or problem is infeasible
+    pub fn solve_objective_maximized(
+        &self,
+        objective_index: usize,
+        timeout: Option<Duration>,
+    ) -> Result<Solution> {
+        log::debug!("Solving single objective (MAXIMIZED) for objective {objective_index} with timeout: {timeout:?}");
+
+        if objective_index >= self.problem.num_objectives() {
+            return Err(AugmeconError::InvalidObjectiveCount(objective_index));
+        }
+
+        // Use the problem's existing variables
+        let prob_vars = self.problem.variables.clone();
+
+        // Build the objective expression
+        let objective_expr = if objective_index < self.problem.objectives.len() {
+            let (obj_expr, _obj_direction) = &self.problem.objectives[objective_index];
+            obj_expr.clone()
+        } else {
+            good_lp::Expression::from(0.0)
+        };
+
+        // Combine timeout parameter with options timeout
+        let effective_timeout =
+            timeout.or_else(|| self.options.process_timeout.map(Duration::from_secs));
+
+        // Create and solve with the selected solver - ALWAYS MAXIMIZING
+        match self.options.solver {
+            crate::solver_enum::Solver::Default => {
+                let model = if let Some(timeout_duration) = effective_timeout {
+                    // FORCE MAXIMIZATION regardless of original direction
+                    prob_vars
+                        .maximise(objective_expr)
+                        .using(create_gurobi_solver_with_timeout(timeout_duration))
+                } else {
+                    // FORCE MAXIMIZATION regardless of original direction
+                    prob_vars
+                        .maximise(objective_expr)
+                        .using(create_gurobi_solver())
+                };
+
+                if !self.options.solver_parameters.is_empty() {
+                    println!(
+                        "DEBUG: Solver {} does not support parameters, ignoring {} parameters",
+                        self.options.solver.name(),
+                        self.options.solver_parameters.len()
+                    );
+                }
+                self.solve_with_model_common(model, objective_index)
+            }
+            #[cfg(feature = "coin_cbc")]
+            crate::solver_enum::Solver::CoinCbc => {
+                let model = prob_vars.maximise(objective_expr).using(coin_cbc::coin_cbc);
+                self.solve_with_model_common(model, objective_index)
+            }
+            #[cfg(not(feature = "coin_cbc"))]
+            crate::solver_enum::Solver::CoinCbc => Err(AugmeconError::UnsupportedSolver(
+                "CoinCbc solver is not available. Enable the 'coin_cbc' feature to use it.".to_string(),
+            )),
+            #[cfg(feature = "highs")]
+            crate::solver_enum::Solver::HiGHS => {
+                let model = prob_vars.maximise(objective_expr).using(highs::highs);
+                self.solve_with_model_common(model, objective_index)
+            }
+            #[cfg(not(feature = "highs"))]
+            crate::solver_enum::Solver::HiGHS => Err(AugmeconError::UnsupportedSolver(
+                "HiGHS solver is not available. Enable the 'highs' feature to use it.".to_string(),
+            )),
+            #[cfg(feature = "scip")]
+            crate::solver_enum::Solver::SCIP => {
+                let model = prob_vars.maximise(objective_expr).using(scip::scip);
+                self.solve_with_model_common(model, objective_index)
+            }
+            #[cfg(not(feature = "scip"))]
+            crate::solver_enum::Solver::SCIP => Err(AugmeconError::UnsupportedSolver(
+                "SCIP solver is not available. Enable the 'scip' feature to use it.".to_string(),
+            )),
+        }
     }
 
     /// Solve single-objective optimization with additional constraints
@@ -283,12 +392,26 @@ impl<'a> SingleObjectiveSolver<'a> {
         // Create and solve with the selected solver - each branch handles its own type
         match self.options.solver {
             crate::solver_enum::Solver::Default => {
-                let model = if matches!(direction, crate::model::ObjectiveDirection::Minimize) {
-                    prob_vars.minimise(objective_expr).using(default_solver)
+                let model = if let Some(timeout_duration) = effective_timeout {
+                    if matches!(direction, crate::model::ObjectiveDirection::Minimize) {
+                        prob_vars
+                            .minimise(objective_expr)
+                            .using(create_gurobi_solver_with_timeout(timeout_duration))
+                    } else {
+                        prob_vars
+                            .maximise(objective_expr)
+                            .using(create_gurobi_solver_with_timeout(timeout_duration))
+                    }
+                } else if matches!(direction, crate::model::ObjectiveDirection::Minimize) {
+                    prob_vars
+                        .minimise(objective_expr)
+                        .using(create_gurobi_solver())
                 } else {
-                    prob_vars.maximise(objective_expr).using(default_solver)
+                    prob_vars
+                        .maximise(objective_expr)
+                        .using(create_gurobi_solver())
                 };
-                // Default solver doesn't support parameters or timeout
+                // Note: Gurobi via lp-solvers doesn't expose set_parameter method
                 if !self.options.solver_parameters.is_empty() {
                     println!(
                         "DEBUG: [solve_objective_with_constraints] Solver {} does not support parameters, ignoring {} parameters",
@@ -298,57 +421,45 @@ impl<'a> SingleObjectiveSolver<'a> {
                 }
                 self.solve_with_constraints_common(model, objective_index, additional_constraints)
             }
+            #[cfg(feature = "coin_cbc")]
             crate::solver_enum::Solver::CoinCbc => {
-                let mut model = if matches!(direction, crate::model::ObjectiveDirection::Minimize) {
-                    prob_vars.minimise(objective_expr).using(coin_cbc)
+                let model = if matches!(direction, crate::model::ObjectiveDirection::Minimize) {
+                    prob_vars.minimise(objective_expr).using(coin_cbc::coin_cbc)
                 } else {
-                    prob_vars.maximise(objective_expr).using(coin_cbc)
+                    prob_vars.maximise(objective_expr).using(coin_cbc::coin_cbc)
                 };
-                // Apply solver parameters
-                for (key, value) in &self.options.solver_parameters {
-                    println!(
-                        "DEBUG: [solve_objective_with_constraints] Setting {} parameter: {key} = {value}",
-                        self.options.solver.name()
-                    );
-                    model.set_parameter(key, value);
-                }
-                // Apply timeout if specified
-                if let Some(timeout_duration) = effective_timeout {
-                    println!("DEBUG: [solve_objective_with_constraints] Setting timeout: {timeout_duration:?}");
-                    model = model.with_time_limit(timeout_duration.as_secs_f64());
-                }
                 self.solve_with_constraints_common(model, objective_index, additional_constraints)
             }
+            #[cfg(not(feature = "coin_cbc"))]
+            crate::solver_enum::Solver::CoinCbc => Err(AugmeconError::UnsupportedSolver(
+                "CoinCbc solver is not available. Enable the 'coin_cbc' feature to use it.".to_string(),
+            )),
+            #[cfg(feature = "highs")]
             crate::solver_enum::Solver::HiGHS => {
-                let mut model = if matches!(direction, crate::model::ObjectiveDirection::Minimize) {
-                    prob_vars.minimise(objective_expr).using(highs)
+                let model = if matches!(direction, crate::model::ObjectiveDirection::Minimize) {
+                    prob_vars.minimise(objective_expr).using(highs::highs)
                 } else {
-                    prob_vars.maximise(objective_expr).using(highs)
+                    prob_vars.maximise(objective_expr).using(highs::highs)
                 };
-                // Apply solver parameters if the solver supports them
-                if self.options.solver.supports_parameters() {
-                    for (key, value) in &self.options.solver_parameters {
-                        println!(
-                            "DEBUG: [solve_objective_with_constraints] Setting {} parameter: {key} = {value}",
-                            self.options.solver.name()
-                        );
-                        // Note: HiGHS doesn't support generic set_parameter method
-                        // Parameters would need to be handled differently for HiGHS
-                    }
-                } else if !self.options.solver_parameters.is_empty() {
-                    println!(
-                        "WARNING: [solve_objective_with_constraints] {} solver does not support parameters, but {} parameters were specified",
-                        self.options.solver.name(),
-                        self.options.solver_parameters.len()
-                    );
-                }
-                // Apply timeout if specified
-                if let Some(timeout_duration) = effective_timeout {
-                    println!("DEBUG: [solve_objective_with_constraints] Setting timeout: {timeout_duration:?}");
-                    model = model.with_time_limit(timeout_duration.as_secs_f64());
-                }
                 self.solve_with_constraints_common(model, objective_index, additional_constraints)
             }
+            #[cfg(not(feature = "highs"))]
+            crate::solver_enum::Solver::HiGHS => Err(AugmeconError::UnsupportedSolver(
+                "HiGHS solver is not available. Enable the 'highs' feature to use it.".to_string(),
+            )),
+            #[cfg(feature = "scip")]
+            crate::solver_enum::Solver::SCIP => {
+                let model = if matches!(direction, crate::model::ObjectiveDirection::Minimize) {
+                    prob_vars.minimise(objective_expr).using(scip::scip)
+                } else {
+                    prob_vars.maximise(objective_expr).using(scip::scip)
+                };
+                self.solve_with_constraints_common(model, objective_index, additional_constraints)
+            }
+            #[cfg(not(feature = "scip"))]
+            crate::solver_enum::Solver::SCIP => Err(AugmeconError::UnsupportedSolver(
+                "SCIP solver is not available. Enable the 'scip' feature to use it.".to_string(),
+            )),
         }
     }
 

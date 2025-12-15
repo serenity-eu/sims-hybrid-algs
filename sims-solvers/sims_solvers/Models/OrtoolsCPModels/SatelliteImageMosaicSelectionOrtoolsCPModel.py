@@ -52,22 +52,47 @@ class SatelliteImageMosaicSelectionOrtoolsCPModel(OrtoolsCPModel, SatelliteImage
         for cloud in self.sims_instance.clouds_id_area:
             self.cloud_covered[cloud] = self.ortools_solver_model.NewBoolVar(f"cloud_covered{cloud}")
             self.cloud_area[cloud] = self.ortools_solver_model.NewIntVar(0, self.sims_instance.clouds_id_area[cloud], f"cloud_area{cloud}")
+        
+        # Add variables for incidence angle objective
+        self.effective_incidence_angle = [
+            self.ortools_solver_model.NewIntVar(0, max(self.sims_instance.incidence_angle), f"effective_incidence{i}")
+            for i in range(len(self.sims_instance.images))
+        ]
 
     def add_constraints_to_model(self) -> None:
         """Add constraints to the OrTools CP model."""
+        # Config must be provided and contain valid objectives
+        if not self.config:
+            raise ValueError("Config is required but was not provided")
+        if not hasattr(self.config, 'objectives'):
+            raise ValueError("Config must contain 'objectives' attribute")
+        
+        objectives_to_use = self.config.objectives
+        
+        # Coverage constraint - always required
         for i in range(len(self.sims_instance.areas)):
             images_covering_element = self.get_images_covering_element(i)
             self.constraints.append(self.ortools_solver_model.AddAtLeastOne(self.select_image[j] for j in images_covering_element))
 
-        for cloud in self.cloud_area:
-            potential_images_covering_cloud = self.get_images_covering_cloud(cloud)
-            for i in potential_images_covering_cloud:
-                self.ortools_solver_model.Add(self.cloud_covered[cloud] == 1).OnlyEnforceIf(self.select_image[i])
-            self.constraints.append(self.ortools_solver_model.AddAtLeastOne(self.select_image[i] for i in potential_images_covering_cloud).OnlyEnforceIf(
-                self.cloud_covered[cloud]))
-            self.constraints.append(self.ortools_solver_model.Add(self.cloud_area[cloud] == 0).OnlyEnforceIf(self.cloud_covered[cloud]))
-            self.constraints.append(self.ortools_solver_model.Add(self.cloud_area[cloud] == self.sims_instance.clouds_id_area[cloud]).OnlyEnforceIf(
-                self.cloud_covered[cloud].Not()))
+        # Cloud constraints - only add if cloud_coverage objective is used
+        if "cloud_coverage" in objectives_to_use:
+            for cloud in self.cloud_area:
+                potential_images_covering_cloud = self.get_images_covering_cloud(cloud)
+                for i in potential_images_covering_cloud:
+                    self.ortools_solver_model.Add(self.cloud_covered[cloud] == 1).OnlyEnforceIf(self.select_image[i])
+                self.constraints.append(self.ortools_solver_model.AddAtLeastOne(self.select_image[i] for i in potential_images_covering_cloud).OnlyEnforceIf(
+                    self.cloud_covered[cloud]))
+                self.constraints.append(self.ortools_solver_model.Add(self.cloud_area[cloud] == 0).OnlyEnforceIf(self.cloud_covered[cloud]))
+                self.constraints.append(self.ortools_solver_model.Add(self.cloud_area[cloud] == self.sims_instance.clouds_id_area[cloud]).OnlyEnforceIf(
+                    self.cloud_covered[cloud].Not()))
+        
+        # Incidence angle constraints - only add if min_max_incidence_angle objective is used
+        if "min_max_incidence_angle" in objectives_to_use:
+            for i in range(len(self.sims_instance.images)):
+                # If image is not selected, effective incidence is 0
+                self.ortools_solver_model.Add(self.effective_incidence_angle[i] == 0).OnlyEnforceIf(self.select_image[i].Not())
+                # If image is selected, effective incidence equals actual incidence angle
+                self.ortools_solver_model.Add(self.effective_incidence_angle[i] == self.sims_instance.incidence_angle[i]).OnlyEnforceIf(self.select_image[i])
 
     def define_objectives(self) -> None:
         """Define optimization objectives based on configuration."""
@@ -133,23 +158,18 @@ class SatelliteImageMosaicSelectionOrtoolsCPModel(OrtoolsCPModel, SatelliteImage
         self.objectives.append(self.total_resolution)
     
     def _define_incidence_angle_objective(self) -> None:
-        """Define incidence angle objective"""
-        # For now, this is a placeholder since the original model doesn't implement it
-        # You may need to implement this based on the specific requirements
-        max_incidence = self.ortools_solver_model.NewIntVar(0, max(self.sims_instance.incidence_angle), "min_max_incidence_angle")
-        # Add constraints for incidence angle here
-        self.objectives.append(max_incidence)
-        # self.objectives.append(self.total_resolution)
-        #
-        # # incidence angle objective
-        # self.current_max_incidence_angle = self.ortools_solver_model.NewIntVar(min(self.sims_instance.incidence_angle),
-        #                                                         max(self.sims_instance.incidence_angle),
-        #                                                         "max_incidence_angle")
-        # self.ortools_solver_model.AddMaxEquality(self.current_max_incidence_angle,
-        #                           [self.sims_instance.incidence_angle[i] * self.select_image[i]
-        #                            for i in range(len(self.sims_instance.images))])
-        #
-        # self.objectives.append(self.current_max_incidence_angle)
+        """Define incidence angle objective - minimize the maximum incidence angle among selected images"""
+        self.current_max_incidence_angle = self.ortools_solver_model.NewIntVar(
+            0,  # Can be 0 if no images selected (though coverage constraint prevents this)
+            max(self.sims_instance.incidence_angle),
+            "max_incidence_angle"
+        )
+        # Set current_max_incidence_angle to be the maximum of all effective_incidence_angle values
+        self.ortools_solver_model.AddMaxEquality(
+            self.current_max_incidence_angle,
+            self.effective_incidence_angle
+        )
+        self.objectives.append(self.current_max_incidence_angle)
 
     def get_images_covering_element(self, element: int) -> list[int]:
         """Get list of image indices that cover the specified element.
@@ -182,6 +202,13 @@ class SatelliteImageMosaicSelectionOrtoolsCPModel(OrtoolsCPModel, SatelliteImage
         selected_images = [index for index in range(len(self.select_image)) if
                            self.solver_values[index] == 1]
         return selected_images
+
+    # for testing only
+    def print_solution_values_model_values(self) -> None:
+        """Print the values of selected images for debugging purposes."""
+        for index in range(len(self.select_image)):
+            if self.solver_values[index] == 1:
+                print(f"Image {index} is selected with a value of {self.solver_values[index]}")
 
     def tackle_numerical_problems(self) -> None:
         """Handle numerical problems in the model (currently no implementation)."""

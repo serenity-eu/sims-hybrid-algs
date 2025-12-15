@@ -230,11 +230,11 @@ fn three_kp_model(model_name: &str) -> MultiObjectiveProblem {
     }
 
     // Create constraints using the weights and capacities
-    for (constraint_idx, capacity) in capacities.iter().enumerate() {
+    for (weight_row, capacity) in weights.iter().zip(capacities.iter()) {
         let mut total_weight = Expression::from(0.0);
-        for i in 0..n_items {
+        for (i, &weight_val) in weight_row.iter().enumerate().take(n_items) {
             if let Some(&var) = problem.var_map.get(&format!("x{i}")) {
-                total_weight += weights[constraint_idx][i] * var;
+                total_weight += weight_val * var;
             }
         }
         problem.add_constraint(constraint!(total_weight <= *capacity));

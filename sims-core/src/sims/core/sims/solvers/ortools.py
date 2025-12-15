@@ -17,6 +17,7 @@ def solve(
     objectives: list[str],
     enable_trace: bool = False,
     include_dominated: bool = False,
+    max_solutions_count: int | None = None,
 ):
     return _utils.run_sims_solver(
         problem_instance,
@@ -28,4 +29,5 @@ def solve(
         objectives,
         enable_trace,
         include_dominated,
+        max_solutions_count,
     )

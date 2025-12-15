@@ -6,18 +6,21 @@
 /// Available LP/MILP solvers for AUGMECON optimization
 ///
 /// This enum provides access to common solvers supported by `good_lp`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Solver {
     /// Default solver provided by `good_lp` (usually CBC)
+    #[default]
     Default,
     /// COIN-OR CBC solver - open source MILP solver
     CoinCbc,
     /// `HiGHS` solver - high performance linear programming solver
     HiGHS,
+    /// SCIP solver - Solving Constraint Integer Programs
+    #[allow(clippy::upper_case_acronyms, reason = "SCIP is the official name of the solver and should remain capitalized")]
+    SCIP,
 }
 
 impl Solver {
-    
     /// Get a human-readable name for the solver
     #[must_use]
     pub const fn name(self) -> &'static str {
@@ -25,22 +28,18 @@ impl Solver {
             Self::Default => "Default",
             Self::CoinCbc => "COIN-OR CBC",
             Self::HiGHS => "HiGHS",
+            Self::SCIP => "SCIP",
         }
     }
-    
+
     /// Check if this solver supports setting custom parameters
     #[must_use]
     pub const fn supports_parameters(self) -> bool {
         match self {
             Self::CoinCbc => true,
-            Self::Default | Self::HiGHS => false, // HiGHS doesn't support generic parameters
+            // Gurobi via lp-solvers and HiGHS don't support generic parameter setting
+            Self::Default | Self::HiGHS | Self::SCIP => false,
         }
-    }
-}
-
-impl Default for Solver {
-    fn default() -> Self {
-        Self::Default
     }
 }
 
@@ -52,13 +51,15 @@ impl std::fmt::Display for Solver {
 
 impl std::str::FromStr for Solver {
     type Err = String;
-    
+
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "default" => Ok(Self::Default),
-            "coin_cbc" | "cbc" | "coin-cbc" => Ok(Self::CoinCbc),
-            "highs" | "hi_ghs" => Ok(Self::HiGHS),
-            _ => Err(format!("Unknown solver: {s}. Available solvers: default, coin_cbc, highs")),
+            "coin_cbc" => Ok(Self::CoinCbc),
+            "highs" => Ok(Self::HiGHS),
+            _ => Err(format!(
+                "Unknown solver: {s}. Available solvers: default, coin_cbc, highs"
+            )),
         }
     }
 }

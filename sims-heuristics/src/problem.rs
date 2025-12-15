@@ -317,6 +317,7 @@ impl<T: ImageSet<D>, const D: usize> Problem<T, D> {
 
         // Create overlap matrix (same as from_raw)
         let mut overlap_matrix: Vec<Vec<usize>> = vec![vec![0; raw.num_images]; raw.num_images];
+        #[allow(clippy::needless_range_loop, reason = "Iterator pattern would require multiple mutable borrows of overlap_matrix, which violates borrow checker rules")]
         for i in 0..raw.num_images {
             for j in 0..=i {
                 let common_elements = raw.images[i]

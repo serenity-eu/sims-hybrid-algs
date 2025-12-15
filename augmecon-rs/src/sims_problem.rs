@@ -36,6 +36,19 @@ use crate::{
 use good_lp::{constraint, Expression};
 use std::collections::HashSet;
 
+/// Objectives available for the SIMS problem
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SimsObjective {
+    /// Minimize total cost (objective 0)
+    MinCost,
+    /// Minimize cloudy/uncovered area (objective 1)
+    CloudCoverage,
+    /// Minimize sum of minimum resolutions (objective 2)
+    MinResolution,
+    /// Minimize maximum incidence angle (objective 3)
+    MaxIncidenceAngle,
+}
+
 /// Configuration for the Satellite Image Selection Problem
 #[derive(Debug, Clone)]
 pub struct SimsInstance {
@@ -51,11 +64,13 @@ pub struct SimsInstance {
     pub images: Vec<HashSet<usize>>,
     /// For each image: set of cloud entities it can cover
     pub image_clouds: Vec<HashSet<usize>>,
+    /// List of actual cloud IDs (universe element indices that are clouds)
+    pub cloud_ids: Vec<usize>,
     /// Cost of each image
     pub costs: Vec<f64>,
     /// Area of each universe point
     pub areas: Vec<f64>,
-    /// Area of each cloud entity
+    /// Area of each cloud entity (indexed by universe element ID)
     pub cloud_areas: Vec<f64>,
     /// Resolution of each image (higher is better)
     pub resolution: Vec<f64>,
@@ -79,9 +94,10 @@ impl SimsInstance {
             max_cloud_area,
             images: vec![HashSet::new(); num_images],
             image_clouds: vec![HashSet::new(); num_images],
+            cloud_ids: vec![],
             costs: vec![0.0; num_images],
             areas: vec![1.0; universe_size],
-            cloud_areas: vec![1.0; num_clouds],
+            cloud_areas: vec![1.0; universe_size],
             resolution: vec![1.0; num_images],
             incidence_angle: vec![0.0; num_images],
         }
@@ -122,6 +138,40 @@ impl SimsInstance {
         self.incidence_angle[image_idx] = angle;
     }
 
+    /// Calculate heuristic nadir bounds for specified objectives
+    /// This matches Python's `get_nadir_bound_estimation()` method
+    #[must_use]
+    pub fn calculate_nadir_heuristic(&self, objectives: &[SimsObjective]) -> Vec<f64> {
+        objectives.iter().map(|obj| {
+            match obj {
+                SimsObjective::MinCost => {
+                    // Worst case: all images selected
+                    self.costs.iter().sum()
+                }
+                SimsObjective::CloudCoverage => {
+                    // Worst case: all cloud areas covered
+                    self.areas.iter().sum()
+                }
+                SimsObjective::MinResolution => {
+                    // Worst case: sum of max resolution per universe point
+                    let mut resolution_parts_max = vec![0.0; self.universe_size];
+                    for (idx, image) in self.images.iter().enumerate() {
+                        for &u in image {
+                            if resolution_parts_max[u] < self.resolution[idx] {
+                                resolution_parts_max[u] = self.resolution[idx];
+                            }
+                        }
+                    }
+                    resolution_parts_max.iter().sum()
+                }
+                SimsObjective::MaxIncidenceAngle => {
+                    // Worst case: maximum incidence angle
+                    self.incidence_angle.iter().fold(0.0_f64, |acc, &x| acc.max(x))
+                }
+            }
+        }).collect()
+    }
+
     /// Get the set of images that contain each universe point (`L_k` in the MILP model)
     fn get_universe_point_images(&self) -> Vec<HashSet<usize>> {
         let mut point_images = vec![HashSet::new(); self.universe_size];
@@ -145,19 +195,22 @@ impl SimsInstance {
         }
 
         // y_c: binary variables for cloud coverage (equations 14-15)
-        for c in 0..self.num_clouds {
-            let var_name = format!("y_{c}");
+        // Use actual cloud IDs (universe element indices) as variable indices
+        for &cloud_id in &self.cloud_ids {
+            let var_name = format!("y_{cloud_id}");
             problem.add_variable(var_name, VariableType::Binary);
         }
 
         // r_k: auxiliary variables for minimum resolution of each universe point (equations 11-12)
+        // Upper bound is set to max resolution to prevent unbounded maximization during nadir calculation
+        let max_resolution = self.resolution.iter().fold(0.0_f64, |acc, &x| acc.max(x));
         for k in 0..self.universe_size {
             let var_name = format!("r_{k}");
             problem.add_variable(
                 var_name,
                 VariableType::Continuous {
                     min: Some(0.0),
-                    max: None,
+                    max: Some(max_resolution),
                 },
             );
         }
@@ -172,11 +225,13 @@ impl SimsInstance {
         }
 
         // maxf: auxiliary variable for maximum incidence angle (equation 13)
+        // Upper bound is set to max incidence angle to prevent unbounded maximization during nadir calculation
+        let max_incidence = self.incidence_angle.iter().fold(0.0_f64, |acc, &x| acc.max(x));
         problem.add_variable(
             "maxf".to_string(),
             VariableType::Continuous {
                 min: Some(0.0),
-                max: None,
+                max: Some(max_incidence),
             },
         );
 
@@ -200,18 +255,38 @@ impl SimsInstance {
         }
 
         // Constraint 2: Cloud coverage constraints (equation 15)
-        // Sum_{i: c in P_{ic}} x_i >= y_c, for all c in C
-        for c in 0..self.num_clouds {
+        // Lower bound: Sum_{i: c in P_{ic}} x_i >= y_c, for all c in C
+        // Upper bound: Sum_{i: c in P_{ic}} x_i <= y_c * num_images, for all c in C
+        // The upper bound ensures that if any image covering cloud c is selected,
+        // then y_c must be 1 (cloud is covered). This prevents the optimizer from
+        // setting y_c = 0 when images are selected during maximization.
+        // Special case: if cloud is uncoverable (no images can cover it), set y_c = 0
+        for &c in &self.cloud_ids {
             let mut cloud_coverage_expr = Expression::from(0.0);
+            let mut has_covering_images = false;
+
             for i in 0..self.num_images {
                 if self.image_clouds[i].contains(&c) {
                     if let Some(&var) = problem.var_map.get(&format!("x_{i}")) {
                         cloud_coverage_expr += var;
+                        has_covering_images = true;
                     }
                 }
             }
+
             if let Some(&y_var) = problem.var_map.get(&format!("y_{c}")) {
-                problem.add_constraint(constraint!(cloud_coverage_expr >= y_var));
+                if has_covering_images {
+                    // Lower bound: Sum of covering images >= y_c
+                    problem.add_constraint(constraint!(cloud_coverage_expr.clone() >= y_var));
+                    // Upper bound: Sum of covering images <= y_c * num_images
+                    // This forces y_c = 1 if any covering image is selected
+                    #[allow(clippy::cast_precision_loss, reason = "Number of images is always much less than 2^53, so f64 conversion is safe")]
+                    let upper_bound_expr = y_var * (self.num_images as f64);
+                    problem.add_constraint(constraint!(cloud_coverage_expr <= upper_bound_expr));
+                } else {
+                    // Uncoverable cloud: must set y_c = 0 to avoid infeasibility
+                    problem.add_constraint(constraint!(y_var == 0.0));
+                }
             }
         }
     }
@@ -275,52 +350,77 @@ impl SimsInstance {
         }
     }
 
-    /// Add all objective functions
-    fn add_objectives(&self, problem: &mut MultiObjectiveProblem) {
+    /// Add objective functions
+    /// If objectives is None, adds all objectives. Otherwise, only adds the specified objectives.
+    fn add_objectives(&self, problem: &mut MultiObjectiveProblem, objectives: Option<&HashSet<SimsObjective>>) {
+        // Helper to check if objective should be added
+        let should_add = |obj: SimsObjective| objectives.is_none_or(|set| set.contains(&obj));
+
         // Objective 1: Minimize total cost (equation 9)
-        // min Sum_{P_i in I} x_i * w_i
-        let mut cost_expr = Expression::from(0.0);
-        for i in 0..self.num_images {
-            if let Some(&x_var) = problem.var_map.get(&format!("x_{i}")) {
-                cost_expr += self.costs[i] * x_var;
+        if should_add(SimsObjective::MinCost) {
+            let mut cost_expr = Expression::from(0.0);
+            for i in 0..self.num_images {
+                if let Some(&x_var) = problem.var_map.get(&format!("x_{i}")) {
+                    cost_expr += self.costs[i] * x_var;
+                }
             }
+            problem.add_objective(cost_expr, ObjectiveDirection::Minimize);
         }
-        problem.add_objective(cost_expr, ObjectiveDirection::Minimize);
 
         // Objective 2: Minimize cloudy area (equation 14)
-        // min -Sum_{c in C} y_c * A_c (negated because we want to minimize uncovered cloud area)
-        let mut cloud_area_expr = Expression::from(0.0);
-        for c in 0..self.num_clouds {
-            if let Some(&y_var) = problem.var_map.get(&format!("y_{c}")) {
-                // Note: The MILP uses -Sum, but since we're minimizing, we want to minimize uncovered area
-                // So we minimize Sum_{c} (1 - y_c) * A_c = Sum_c A_c - Sum_c y_c * A_c
-                // Which is equivalent to minimizing -Sum_c y_c * A_c + constant
-                cloud_area_expr -= self.cloud_areas[c] * y_var;
+        if should_add(SimsObjective::CloudCoverage) {
+            let total_cloud_area: f64 = self
+                .cloud_ids
+                .iter()
+                .map(|&cloud_id| self.cloud_areas[cloud_id])
+                .sum();
+
+            let mut cloud_area_expr = Expression::from(total_cloud_area);
+            for &cloud_id in &self.cloud_ids {
+                if let Some(&y_var) = problem.var_map.get(&format!("y_{cloud_id}")) {
+                    cloud_area_expr -= self.cloud_areas[cloud_id] * y_var;
+                }
             }
+            problem.add_objective(cloud_area_expr, ObjectiveDirection::Minimize);
         }
-        problem.add_objective(cloud_area_expr, ObjectiveDirection::Minimize);
 
         // Objective 3: Minimize sum of minimum resolutions (equation 12)
-        // min Sum_{k in U} r_k
-        let mut resolution_expr = Expression::from(0.0);
-        for k in 0..self.universe_size {
-            if let Some(&r_var) = problem.var_map.get(&format!("r_{k}")) {
-                resolution_expr += r_var;
+        if should_add(SimsObjective::MinResolution) {
+            let mut resolution_expr = Expression::from(0.0);
+            for k in 0..self.universe_size {
+                if let Some(&r_var) = problem.var_map.get(&format!("r_{k}")) {
+                    resolution_expr += r_var;
+                }
             }
+            problem.add_objective(resolution_expr, ObjectiveDirection::Minimize);
         }
-        problem.add_objective(resolution_expr, ObjectiveDirection::Minimize);
 
         // Objective 4: Minimize maximum incidence angle (equation 13)
-        // min maxf
-        if let Some(&maxf_var) = problem.var_map.get("maxf") {
-            problem.add_objective(Expression::from(maxf_var), ObjectiveDirection::Minimize);
+        if should_add(SimsObjective::MaxIncidenceAngle) {
+            if let Some(&maxf_var) = problem.var_map.get("maxf") {
+                problem.add_objective(Expression::from(maxf_var), ObjectiveDirection::Minimize);
+            }
         }
     }
 }
 
 /// Create a SIMS multi-objective optimization problem following the MILP model
+/// 
+/// # Arguments
+/// * `config` - The SIMS instance configuration
+/// * `objectives` - Optional set of objectives to include. If None, all objectives are added.
 #[must_use]
 pub fn create_sims_problem(config: &SimsInstance) -> MultiObjectiveProblem {
+    create_sims_problem_with_objectives(config, None)
+}
+
+/// Create a SIMS problem with specific objectives
+#[must_use]
+#[allow(clippy::implicit_hasher, reason = "Public API uses standard HashSet for simplicity - users can convert if needed")]
+pub fn create_sims_problem_with_objectives(
+    config: &SimsInstance,
+    objectives: Option<&HashSet<SimsObjective>>,
+) -> MultiObjectiveProblem {
     let mut problem = MultiObjectiveProblem::new();
 
     // Create all variables and get point-image mapping
@@ -330,8 +430,8 @@ pub fn create_sims_problem(config: &SimsInstance) -> MultiObjectiveProblem {
     config.add_coverage_constraints(&mut problem);
     config.add_resolution_constraints(&mut problem, &point_images);
 
-    // Add all objectives
-    config.add_objectives(&mut problem);
+    // Add objectives (all or subset)
+    config.add_objectives(&mut problem, objectives);
 
     problem
 }

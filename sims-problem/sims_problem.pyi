@@ -428,16 +428,19 @@ class SolvingResult:
     """
     Results from solving a SIMS problem instance.
     
-    Contains the final Pareto-optimal solutions and optionally a binary trace archive.
+    Contains the final Pareto-optimal solutions and optionally a binary trace archive
+    and Chrome tracing profiling data.
     
     Attributes:
         final_solutions: List of final Pareto-optimal solutions found
         trace: Optional binary trace archive of the optimization process
+        profiling_trace_data: Optional Chrome tracing JSON profiling data (bytes)
     """
     
     # Properties (can be read and written)
     final_solutions: list[Solution]
     trace: Optional[bytes]
+    profiling_trace_data: Optional[bytes]
     
     def __new__(
         cls,
@@ -462,6 +465,22 @@ class SolvingResult:
         Args:
             final_solutions: Final Pareto-optimal solutions
             trace: Binary trace archive of optimization process
+        """
+        ...
+    
+    @staticmethod
+    def with_trace_and_profiling(
+        final_solutions: list[Solution],
+        trace: bytes,
+        profiling_trace_data: bytes
+    ) -> SolvingResult:
+        """
+        Create a new SolvingResult with both trace archive and profiling data.
+        
+        Args:
+            final_solutions: Final Pareto-optimal solutions
+            trace: Binary trace archive of optimization process
+            profiling_trace_data: Chrome tracing JSON profiling data
         """
         ...
 
@@ -568,7 +587,10 @@ def solve_with_pls(
     neighborhood_size_min: int = 1,
     neighborhood_size_max: int = 6,
     trace: Literal[False] = False,
-    objective_bounds: Optional[list[list[int]]] = None
+    objective_bounds: Optional[list[list[int]]] = None,
+    include_dominated: bool = False,
+    pareto_archive: Literal["nd-tree", "linked-list", "vector"] = "nd-tree",
+    profiling_trace: bool = False
 ) -> SolvingResult: ...
 
 @overload
@@ -585,7 +607,10 @@ def solve_with_pls(
     neighborhood_size_min: int = 1,
     neighborhood_size_max: int = 6,
     trace: Literal[True] = True,
-    objective_bounds: Optional[list[list[int]]] = None
+    objective_bounds: Optional[list[list[int]]] = None,
+    include_dominated: bool = False,
+    pareto_archive: Literal["nd-tree", "linked-list", "vector"] = "nd-tree",
+    profiling_trace: bool = False
 ) -> SolvingResult: ...
 
 def solve_with_pls(
@@ -602,13 +627,15 @@ def solve_with_pls(
     neighborhood_size_max: int = 6,
     trace: bool = True,
     objective_bounds: Optional[list[list[int]]] = None,
-    include_dominated: bool = False
+    include_dominated: bool = False,
+    pareto_archive: Literal["nd-tree", "linked-list", "vector"] = "nd-tree",
+    profiling_trace: bool = False
 ) -> SolvingResult:
     """
     Solve the SIMS problem using Pareto Local Search (heuristic algorithm).
     
     This is a fast heuristic algorithm that finds good approximate Pareto-optimal solutions.
-    Supports both 2D optimization (cost + cloud coverage) and 4D optimization 
+    Supports both 2D optimization (cost + cloud coverage) and 4D optimization
     (cost + cloud coverage + resolution + incidence angle).
     
     Args:
@@ -638,6 +665,15 @@ def solve_with_pls(
         include_dominated: If False, filters out solutions dominated at discovery time from trace (default: False).
             When False: only solutions that were non-dominated at discovery time are included in trace.
             When True: all explored solutions are included in trace (larger trace, shows full exploration).
+        pareto_archive: Type of data structure to use for storing Pareto-optimal solutions (default: "nd-tree").
+            Valid values:
+            - "nd-tree": Nd-tree based archive (BTree for 2D/3D, NdTree for 4D) - fastest for most cases
+            - "linked-list": Linked list based archive - good for small solution sets
+            - "vector": Vector based archive - simple but slower for large solution sets
+        profiling_trace: Whether to capture Chrome tracing profiling data (default: False).
+            When True, captures detailed performance profiling information in Chrome tracing JSON format.
+            The profiling data will be available in result.profiling_trace_data as bytes.
+            Can be visualized in chrome://tracing or other compatible tools.
         
     Returns:
         When trace=True (default): SolvingResult containing solutions and trace
@@ -678,10 +714,22 @@ def solve_with_pls(
         
         # Generate plots with custom output path
         result = solve_with_pls(
-            problem, 
-            plots=True, 
+            problem,
+            plots=True,
             plot_output_path="my_pareto_front.svg"
         )
+        
+        # Use different Pareto archive implementations
+        result_ndtree = solve_with_pls(problem, pareto_archive="nd-tree")  # default, fastest
+        result_linked = solve_with_pls(problem, pareto_archive="linked-list")  # for small sets
+        result_vector = solve_with_pls(problem, pareto_archive="vector")  # simple implementation
+        
+        # Enable Chrome tracing profiling
+        result = solve_with_pls(problem, profiling_trace=True)
+        if result.profiling_trace_data:
+            # Save profiling data for visualization in chrome://tracing
+            with open("profiling.json", "wb") as f:
+                f.write(result.profiling_trace_data)
     """
     ...
 

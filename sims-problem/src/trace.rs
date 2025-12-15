@@ -10,7 +10,7 @@ use std::io::{Read, Write};
 use std::time::Duration;
 
 use crate::solution::Solution;
-use crate::hypervolume::{compute_hypervolume, hypervolume_4d_min_generic, hypervolume_2d_min_generic, hypervolume_3d_min_generic, HVNumeric};
+use crate::hypervolume::{hypervolume_4d_min_generic, hypervolume_2d_min_generic, hypervolume_3d_min_generic};
 
 /// Represents metadata about an optimization trace
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -64,7 +64,7 @@ pub fn compute_dominance_info<const D: usize>(
         let mut filtered_solutions: Vec<SolutionFingerprint<D>> = Vec::new();
         let mut domination_indices: Vec<u32> = Vec::new();
         
-        'next_solution: for (sol_idx, new_solution) in solutions.into_iter().enumerate() {
+        'next_solution: for new_solution in solutions.into_iter() {
             let current_kept_idx = filtered_solutions.len() as u32;
             
             // Single pass: check against all kept solutions
@@ -352,8 +352,7 @@ fn create_hypervolume_binary_with_indices<const N: usize>(
     // These are solutions that were non-dominated when discovered (dominated[i] > i or u32::MAX)
     let mut hypervolume_change_indices = Vec::new();
     
-    for i in 0..num_solutions {
-        let dominated_by = dominated_indices[i];
+    for (i, &dominated_by) in dominated_indices.iter().enumerate().take(num_solutions) {
         
         // Solution was non-dominated at discovery if:
         // - dominated[i] > i (dominated by future solution)  
@@ -385,7 +384,7 @@ fn create_hypervolume_binary_with_indices<const N: usize>(
                 // Convert to points format for hypervolume computation
                 let mut point = Vec::new();
                 for obj_idx in 0..N {
-                    point.push(solutions[i].objectives().iter().nth(obj_idx).copied().unwrap_or(0));
+                    point.push(solutions[i].objectives().get(obj_idx).copied().unwrap_or(0));
                 }
                 pareto_front.push(point);
             }
@@ -455,17 +454,7 @@ fn compute_scaled_hypervolume(
     }
     
     // Scale reference point (should always be 1.0 with this normalization)
-    let mut scaled_reference = Vec::new();
-    for (i, &ref_value) in reference_point.iter().enumerate() {
-        let min_bound = objective_bounds[i][0] as f64;
-        
-        let scaled_ref = if ref_value as f64 > min_bound {
-            (ref_value as f64 - min_bound) / (ref_value as f64 - min_bound)
-        } else {
-            1.0 // Use 1.0 as reference if bounds are equal
-        };
-        scaled_reference.push(scaled_ref);
-    }
+    let scaled_reference = vec![1.0; reference_point.len()];
     
     // Use optimized hypervolume computation functions from hypervolume.rs
     let result = match dimension {
@@ -479,7 +468,7 @@ fn compute_scaled_hypervolume(
         },
         4 => {
             let mut mutable_front = scaled_front;
-            hypervolume_4d_min_generic(&mut mutable_front, &scaled_reference).to_f64()
+            hypervolume_4d_min_generic(&mut mutable_front, &scaled_reference)
         },
         _ => return Err(format!("Hypervolume computation not supported for {} dimensions", dimension).into()),
     };
@@ -828,6 +817,7 @@ struct TraceData {
     objectives: Vec<u8>,
     dominated: Vec<u8>,
     timestamps: Vec<u8>,
+    #[allow(dead_code, reason = "Field used during trace data extraction")]
     hypervolume: Vec<u8>,
     metadata: TraceMetadata,
 }
@@ -988,8 +978,7 @@ fn create_hypervolume_binary_from_raw_data(
     // These are solutions that were non-dominated when discovered (dominated[i] > i or u32::MAX)
     let mut hypervolume_change_indices = Vec::new();
     
-    for i in 0..num_solutions {
-        let dominated_by = dominated_indices[i];
+    for (i, &dominated_by) in dominated_indices.iter().enumerate().take(num_solutions) {
         
         // Solution was non-dominated at discovery if:
         // - dominated[i] > i (dominated by future solution)  
@@ -1053,8 +1042,8 @@ fn create_hypervolume_binary_from_raw_data(
         }
         
         // Ensure hypervolume is within bounds
-        let bounded_hv = current_hv.min(1.0).max(0.0);
-        assert!(bounded_hv >= 0.0 && bounded_hv <= 1.0, 
+        let bounded_hv = current_hv.clamp(0.0, 1.0);
+        assert!((0.0..=1.0).contains(&bounded_hv),
             "Hypervolume value {} is out of bounds [0.0, 1.0]", bounded_hv);
         
         // Write hypervolume value to the correct position using slice access
@@ -1144,7 +1133,7 @@ fn compute_scaled_hypervolume_4d(
         normalize_objective(reference_point[3], norm_bounds_3),  // This will be 1.0
     ];
     
-    Ok(hypervolume_4d_min_generic(&mut normalized_solutions, &normalized_ref))
+    Ok(hypervolume_4d_min_generic(&mut normalized_solutions, &normalized_ref) as f64)
 }
 
 fn normalize_objective(value: u64, bounds: [u64; 2]) -> f64 {
@@ -1172,12 +1161,15 @@ fn extract_ratio_from_algorithm(algorithm: &str) -> Vec<u8> {
     vec![50, 50]
 }
 
+type ObjectiveBoundsAndRefPoint = (Vec<[u64; 2]>, Vec<u64>);
+
 /// Calculates objective bounds and reference point from merged objective data
+#[allow(dead_code, reason = "Helper function for potential future use")]
 fn calculate_objective_bounds_and_ref_point(
     merged_objectives: &[u8], 
     num_objectives: usize
 ) -> PyResult<(Vec<[u64; 2]>, Vec<u64>)> {
-    if merged_objectives.len() % (num_objectives * 8) != 0 {
+    if !merged_objectives.len().is_multiple_of(num_objectives * 8) {
         return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
             "Invalid objective data length"
         ));
@@ -1213,7 +1205,7 @@ fn calculate_objective_bounds_and_ref_point(
 /// Calculates objective bounds and reference point from solution fingerprints
 pub fn calculate_objective_bounds_from_solutions<const N: usize>(
     solutions: &[SolutionFingerprint<N>]
-) -> Result<(Vec<[u64; 2]>, Vec<u64>), Box<dyn std::error::Error>> {
+) -> Result<ObjectiveBoundsAndRefPoint, Box<dyn std::error::Error>> {
     if solutions.is_empty() {
         return Err("Cannot calculate objective bounds from empty solution list".into());
     }
@@ -1225,7 +1217,7 @@ pub fn calculate_objective_bounds_from_solutions<const N: usize>(
     // Find min and max for each objective
     for solution in solutions {
         for obj_idx in 0..num_objectives {
-            let obj_value = solution.objectives().iter().nth(obj_idx).copied().unwrap_or(0);
+            let obj_value = solution.objectives().get(obj_idx).copied().unwrap_or(0);
             min_values[obj_idx] = min_values[obj_idx].min(obj_value);
             max_values[obj_idx] = max_values[obj_idx].max(obj_value);
         }

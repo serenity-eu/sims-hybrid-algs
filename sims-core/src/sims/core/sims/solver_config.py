@@ -8,6 +8,11 @@ class SolverType(StrEnum):
     OR_TOOLS = "ortools-py"
     PLS = "pls"
     GUROBI = "gurobi"
+    PYTHON_MILP = "python-milp"
+    RUST_MILP = "rust-milp"
+    CBC = "coin_cbc"
+    HIGHS = "highs"
+    SCIP = "scip"
 
     def __repr__(self) -> str:
         match self:
@@ -17,6 +22,16 @@ class SolverType(StrEnum):
                 return "Pareto Local Search"
             case SolverType.GUROBI:
                 return "Gurobi"
+            case SolverType.PYTHON_MILP:
+                return "Python MILP (Inlined)"
+            case SolverType.RUST_MILP:
+                return "Rust MILP"
+            case SolverType.CBC:
+                return "COIN-OR CBC"
+            case SolverType.HIGHS:
+                return "HiGHS"
+            case SolverType.SCIP:
+                return "SCIP"
             case _:
                 return "Unknown"
 

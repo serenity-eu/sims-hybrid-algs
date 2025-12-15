@@ -40,6 +40,7 @@ def run_sims_solver(
     objectives: list[str],
     enable_trace: bool = False,
     include_dominated: bool = False,
+    max_solutions_count: int | None = None,
 ):
     import sys
     print("DEBUG: run_sims_solver called", flush=True)
@@ -79,6 +80,7 @@ def run_sims_solver(
         cores=4,
         threads=8,
         objectives=objectives,
+        max_solutions_count=max_solutions_count,
     )
 
     log.debug("Running command SIMS solver.")

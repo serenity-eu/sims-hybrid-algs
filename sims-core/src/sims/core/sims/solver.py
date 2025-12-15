@@ -4,7 +4,7 @@ from pathlib import Path
 from .problem import ProblemInstance
 from .solver_config import FrontStrategy, SolverType, TwoPhaseSolverConfig
 from .solver_result import Solution, SolverResult, TwoPhaseSolverResult
-from .solvers import gurobi, ortools, pareto_local_search
+from .solvers import gurobi, ortools, pareto_local_search, python_milp
 
 log = logging.getLogger(Path(__file__).stem)
 
@@ -19,17 +19,24 @@ def solve(
     front_strategy: FrontStrategy = FrontStrategy.NON_APLICABLE,
     initial_population: list[Solution] | None = None,
     enable_trace: bool = False,
+    enable_profiling_trace: bool = False,
     objective_bounds: list[list[int]] | None = None,
     include_dominated: bool = False,
+    max_solutions_count: int | None = None,
+    pareto_archive: str = "nd-tree",
 ) -> SolverResult:
     match solver_type:
         case SolverType.OR_TOOLS:
             return ortools.solve(
-                problem_instance, problem_path, timeout_s, output_path, front_strategy, objectives, enable_trace, include_dominated
+                problem_instance, problem_path, timeout_s, output_path, front_strategy, objectives, enable_trace, include_dominated, max_solutions_count
             )
         case SolverType.GUROBI:
             return gurobi.solve(
-                problem_instance, problem_path, timeout_s, output_path, front_strategy, objectives, enable_trace, include_dominated
+                problem_instance, problem_path, timeout_s, output_path, front_strategy, objectives, enable_trace, include_dominated, max_solutions_count
+            )
+        case SolverType.PYTHON_MILP:
+            return python_milp.solve(
+                problem_instance, problem_path, timeout_s, output_path, front_strategy, objectives, enable_trace, include_dominated, max_solutions_count
             )
         case SolverType.PLS:
             return pareto_local_search.solve(
@@ -38,8 +45,10 @@ def solve(
                 objectives,
                 initial_population,
                 enable_trace=enable_trace,
+                enable_profiling_trace=enable_profiling_trace,
                 objective_bounds=objective_bounds,
                 include_dominated=include_dominated,
+                pareto_archive=pareto_archive,
             )
         case _:
             raise ValueError(f"Solver type {solver_type} is not supported")
@@ -57,8 +66,11 @@ def solve_with_two_phases(
     objectives: list[str],
     dry_run: bool = False,
     enable_pls_trace: bool = False,
+    enable_profiling_trace: bool = False,
     objective_bounds: list[list[int]] | None = None,
     include_dominated: bool = False,
+    max_solutions_count: int | None = None,
+    pareto_archive: str = "nd-tree",
 ) -> TwoPhaseSolverResult:
     exact_solver_result = None
     pls_result = None
@@ -87,6 +99,7 @@ def solve_with_two_phases(
                 front_strategy,
                 enable_trace=enable_pls_trace,  # Enable tracing for exact solver too
                 include_dominated=include_dominated,
+                max_solutions_count=max_solutions_count,
             )
 
         log.info(
@@ -115,8 +128,10 @@ def solve_with_two_phases(
                 objectives,
                 initial_population=initial_population,
                 enable_trace=enable_pls_trace,
+                enable_profiling_trace=enable_profiling_trace,
                 objective_bounds=objective_bounds,
                 include_dominated=include_dominated,
+                pareto_archive=pareto_archive,
             )
 
             log.info(f"[{problem_instance.name}][solve_with_two_phases] - PLS found {len(pls_result.pareto_front)} solutions")

@@ -8,9 +8,9 @@ use crate::{
     model::MultiObjectiveProblem,
     options::Options,
     single_objective::SingleObjectiveSolver,
+    timer::Timer,
 };
 use good_lp::constraint;
-use std::time::Duration;
 
 /// Calculator for optimization bounds (ideal and nadir points)
 pub struct BoundsCalculator<'a> {
@@ -28,30 +28,43 @@ impl<'a> BoundsCalculator<'a> {
     /// Calculate ideal and nadir points by solving single-objective problems
     ///
     /// Returns (`ideal_point`, `nadir_point`) where:
-    /// - `ideal_point`[i] = best possible value for objective i
-    /// - `nadir_point`[i] = worst value for objective i when others are optimal
+    /// - `ideal_point`[i] = best possible value for objective i (minimizing it)
+    /// - `nadir_point`[i] = worst possible value for objective i (maximizing it)
+    ///
+    /// This matches Python's GPBA implementation which computes nadir by maximizing each objective.
     ///
     /// # Errors
     /// Returns error if any single-objective optimization fails
-    pub fn calculate_bounds(&self, timeout: Option<Duration>) -> Result<(Vec<f64>, Vec<f64>)> {
+    pub fn calculate_bounds(&self, timer: Option<&Timer>) -> Result<(Vec<f64>, Vec<f64>)> {
         let num_objectives = self.problem.num_objectives();
         let mut ideal = vec![f64::NEG_INFINITY; num_objectives];
         let mut nadir = vec![f64::INFINITY; num_objectives];
 
         // Calculate payoff table by optimizing each objective
-        let payoff_table = self.calculate_payoff_table(timeout)?;
+        let payoff_table = self.calculate_payoff_table(timer)?;
 
-        // Extract ideal and nadir from payoff table
-        for (i, ideal_val) in ideal.iter_mut().enumerate() {
-            // Ideal point: best value each objective can achieve
-            *ideal_val = payoff_table[i][i];
+        // Extract ideal from payoff table
+        // Ideal point: best value each objective can achieve (diagonal elements = minimization result)
+        for i in 0..num_objectives {
+            ideal[i] = payoff_table[i][i];
+        }
 
-            // Nadir point: worst value when other objectives are optimal
-            for (j, nadir_val) in nadir.iter_mut().enumerate() {
-                if i != j {
-                    *nadir_val = nadir_val.min(payoff_table[j][i]);
-                }
+        // Nadir point: worst value for each objective by MAXIMIZING it
+        // This matches Python's behavior: model.setObjective(objectives_exprs[i], gp.GRB.MAXIMIZE)
+        log::debug!("Computing nadir points by maximizing each objective");
+        for (i, nadir_value) in nadir.iter_mut().enumerate().take(num_objectives) {
+            let timeout = timer.map(Timer::remaining);
+            let solution = SingleObjectiveSolver::new(self.problem, self.options)
+                .solve_objective_maximized(i, timeout)?;
+
+            if !solution.feasible {
+                return Err(AugmeconError::OptimizationError(format!(
+                    "Nadir computation for objective {i} failed - infeasible"
+                )));
             }
+
+            *nadir_value = solution.objective_values[i];
+            log::debug!("Nadir value for objective {i}: {nadir_value}");
         }
 
         log::debug!("Calculated ideal point: {ideal:?}");
@@ -66,9 +79,11 @@ impl<'a> BoundsCalculator<'a> {
     /// 1. Optimize each objective independently (diagonal elements)
     /// 2. For each objective i, fix it at its optimal value and optimize all other objectives
     ///
+    /// The `timer` reference is used to get the remaining timeout for each solver invocation.
+    ///
     /// # Errors
     /// Returns error if any single-objective optimization fails or problem is infeasible
-    pub fn calculate_payoff_table(&self, timeout: Option<Duration>) -> Result<Vec<Vec<f64>>> {
+    pub fn calculate_payoff_table(&self, timer: Option<&Timer>) -> Result<Vec<Vec<f64>>> {
         let num_objectives = self.problem.num_objectives();
         let mut payoff_table = vec![vec![0.0; num_objectives]; num_objectives];
 
@@ -80,6 +95,7 @@ impl<'a> BoundsCalculator<'a> {
         log::debug!("Phase 1: Calculating diagonal elements");
         for (i, row) in payoff_table.iter_mut().enumerate() {
             println!("DEBUG: Solving single objective {i}");
+            let timeout = timer.map(Timer::remaining);
             let solution = SingleObjectiveSolver::new(self.problem, self.options)
                 .solve_objective(i, timeout)?;
 
@@ -118,6 +134,7 @@ impl<'a> BoundsCalculator<'a> {
                 if i != j {
                     log::debug!("Optimizing objective {j} with constraint on objective {i}");
 
+                    let timeout = timer.map(Timer::remaining);
                     let solution = SingleObjectiveSolver::new(self.problem, self.options)
                         .solve_objective_with_constraints(j, &additional_constraints, timeout)?;
 

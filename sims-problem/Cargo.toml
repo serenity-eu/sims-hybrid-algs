@@ -11,7 +11,7 @@ crate-type = ["cdylib"]
 [features]
 default = []
 plotting = ["pls/plotting"]
-milp = ["augmecon"]
+milp = ["augmecon", "augmecon/coin_cbc"]
 
 [dependencies]
 pyo3 = { version = "0.25.1", features = ["extension-module"] }
@@ -25,3 +25,6 @@ tar = "0.4"
 flate2 = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "fmt"] }
+tracing-chrome = "0.7"

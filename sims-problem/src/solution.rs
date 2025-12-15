@@ -44,7 +44,10 @@ impl Eq for Solution {}
 impl Hash for Solution {
     fn hash<H: Hasher>(&self, state: &mut H) {
         // Hash based on selected_images only, like in the Python version
-        for &image in &self.selected_images {
+        // Sort the images first to ensure consistent hashing regardless of HashSet iteration order
+        let mut sorted_images: Vec<usize> = self.selected_images.iter().copied().collect();
+        sorted_images.sort_unstable();
+        for image in sorted_images {
             image.hash(state);
         }
     }
@@ -123,7 +126,9 @@ impl Solution {
 
     /// Get selected images as a list
     pub fn get_selected_images_list(&self) -> Vec<usize> {
-        self.selected_images.iter().cloned().collect()
+        let mut images: Vec<usize> = self.selected_images.iter().cloned().collect();
+        images.sort_unstable();
+        images
     }
 
     /// Add an image to the selection
@@ -346,6 +351,9 @@ pub struct SolvingResult {
     /// Binary trace archive of the optimization process (None if trace=False)
     #[pyo3(get, set)]
     pub trace: Option<Vec<u8>>,
+    /// Chrome tracing JSON profiling data (None if profiling_trace=False)
+    #[pyo3(get, set)]
+    pub profiling_trace_data: Option<Vec<u8>>,
 }
 
 #[pymethods]
@@ -355,6 +363,7 @@ impl SolvingResult {
         Self {
             final_solutions,
             trace: None,
+            profiling_trace_data: None,
         }
     }
 
@@ -366,6 +375,20 @@ impl SolvingResult {
         Self {
             final_solutions,
             trace: Some(trace),
+            profiling_trace_data: None,
+        }
+    }
+
+    #[staticmethod]
+    pub fn with_trace_and_profiling(
+        final_solutions: Vec<Solution>,
+        trace: Vec<u8>,
+        profiling_trace_data: Vec<u8>,
+    ) -> Self {
+        Self {
+            final_solutions,
+            trace: Some(trace),
+            profiling_trace_data: Some(profiling_trace_data),
         }
     }
 }

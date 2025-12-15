@@ -53,7 +53,37 @@ where
     }
 
     fn contains(&self, solution: &T) -> bool {
-        self.binary_search(solution).is_ok()
+        // Binary search only checks first objective, so we need to verify exact match
+        match self.binary_search(solution) {
+            Ok(pos) => {
+                // Found a solution with same first objective, check if it's exactly the same
+                self.vec_set[pos] == *solution
+            }
+            Err(pos) => {
+                // Check solutions around the position that might have same first objective
+                let first_obj = solution.objectives()[0];
+                
+                // Check backwards from position
+                let mut idx = pos;
+                while idx > 0 && self.vec_set[idx - 1].objectives()[0] == first_obj {
+                    idx -= 1;
+                    if self.vec_set[idx] == *solution {
+                        return true;
+                    }
+                }
+                
+                // Check forward from position
+                idx = pos;
+                while idx < self.vec_set.len() && self.vec_set[idx].objectives()[0] == first_obj {
+                    if self.vec_set[idx] == *solution {
+                        return true;
+                    }
+                    idx += 1;
+                }
+                
+                false
+            }
+        }
     }
 
     fn try_insert(&mut self, solution: &T) -> bool {
@@ -70,20 +100,8 @@ where
                 was_inserted = false;
             }
             Err(position) => {
-                let mut first_equal_pos = position;
-                // Use first objective for sorting (this maintains compatibility with existing sort behavior)
-                let current_objective = if position < self.vec_set.len() {
-                    self.vec_set[position].objectives()[0]
-                } else {
-                    // If position is at the end, use the last element's objective
-                    self.vec_set[self.vec_set.len() - 1].objectives()[0]
-                };
-                while first_equal_pos > 0
-                    && self.vec_set[first_equal_pos - 1].objectives()[0] == current_objective
-                {
-                    first_equal_pos -= 1;
-                }
-                if self.vec_set[..first_equal_pos]
+                // Check if new solution is dominated by ANY existing solution
+                if self.vec_set
                     .iter()
                     .any(|s| solution.is_covered_by(s.objectives()))
                 {
@@ -99,18 +117,20 @@ where
             let size_before = self.vec_set.len();
             let mut to_remove = Vec::new();
 
-            let start_index = self.last_added_position;
-            let potentially_dominated_solutions = &self.vec_set[start_index..];
-            for (index, potentially_dominated) in potentially_dominated_solutions.iter().enumerate()
-            {
-                let original_index = start_index + index;
-                if potentially_dominated.is_covered_by(solution.objectives()) {
-                    to_remove.push(original_index);
+            // Check ALL solutions for dominance by the newly inserted solution
+            for (index, existing) in self.vec_set.iter().enumerate() {
+                if index != self.last_added_position && existing.is_dominated_by(solution.objectives()) {
+                    to_remove.push(index);
                 }
             }
 
-            for index in to_remove.iter().rev() {
-                self.vec_set.remove(*index);
+            // Remove dominated solutions in reverse order to maintain indices
+            for &index in to_remove.iter().rev() {
+                self.vec_set.remove(index);
+                // Adjust last_added_position if we removed something before it
+                if index < self.last_added_position {
+                    self.last_added_position -= 1;
+                }
             }
 
             let size_after = self.vec_set.len();

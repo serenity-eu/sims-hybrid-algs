@@ -57,7 +57,12 @@ class Solution:
         return self.selected_images.__hash__()
 
     def validate(self, problem: SimsDiscreteProblem) -> bool:
-        coverage = frozenset.union(*(frozenset(problem.images[i]) for i in self.selected_images))
+        if not self.selected_images:
+            coverage = frozenset()
+        else:
+            # Use frozenset.union correctly with an iterable of sets
+            coverage_sets = [frozenset(problem.images[i]) for i in self.selected_images]
+            coverage = frozenset().union(*coverage_sets)
         is_valid = len(coverage) == problem.universe
         if not is_valid:
             uncovered_elements = sorted(set(range(problem.universe)) - coverage)
@@ -297,6 +302,7 @@ class SolverResult:
     front_strategy: Optional[FrontStrategy] = None
     pareto_front_snapshots: list[ParetoFrontSnapshot] = field(default_factory=list)
     trace_data: Optional[bytes] = None  # trace data for debugging/analysis (raw bytes)
+    profiling_trace_data: Optional[bytes] = None  # Chrome profiling trace data in JSON format
 
     def to_dict(self, full=False) -> dict:
         result_dict = {
@@ -542,15 +548,22 @@ class TwoPhaseSolverResult:
     discarded_solutions: list[Solution] | None = None
     added_solutions: list[Solution] | None = None
     _trace_data: bytes | None = field(default=None, init=False)
+    _profiling_trace_data: bytes | None = field(default=None, init=False)
 
     def __post_init__(self):
-        """Compute merged trace data after initialization."""
+        """Compute merged trace data and profiling trace data after initialization."""
         self._trace_data = self._compute_merged_trace_data()
+        self._profiling_trace_data = self._compute_merged_profiling_trace_data()
 
     @property
     def trace_data(self) -> bytes | None:
         """Get the merged trace data from both phases."""
         return self._trace_data
+
+    @property
+    def profiling_trace_data(self) -> bytes | None:
+        """Get the merged profiling trace data from both phases."""
+        return self._profiling_trace_data
 
     def _compute_merged_trace_data(self) -> bytes | None:
         """Compute merged trace data from exact and PLS solver results."""
@@ -581,6 +594,43 @@ class TwoPhaseSolverResult:
             return self.exact_solver_result.trace_data
         elif pls_has_trace and self.pls_result:
             return self.pls_result.trace_data
+        else:
+            return None
+
+    def _compute_merged_profiling_trace_data(self) -> bytes | None:
+        """Compute merged profiling trace data from exact and PLS solver results."""
+        exact_has_profiling_trace = (self.exact_solver_result is not None and
+                                    self.exact_solver_result.profiling_trace_data is not None)
+        pls_has_profiling_trace = (self.pls_result is not None and
+                                  self.pls_result.profiling_trace_data is not None)
+        
+        if exact_has_profiling_trace and pls_has_profiling_trace:
+            # Both phases have profiling traces - merge them
+            assert self.exact_solver_result is not None and self.exact_solver_result.profiling_trace_data is not None
+            assert self.pls_result is not None and self.pls_result.profiling_trace_data is not None
+            
+            import json
+            
+            try:
+                exact_trace = json.loads(self.exact_solver_result.profiling_trace_data.decode('utf-8'))
+                pls_trace = json.loads(self.pls_result.profiling_trace_data.decode('utf-8'))
+                
+                # Merge trace events - both should be arrays
+                if isinstance(exact_trace, list) and isinstance(pls_trace, list):
+                    combined_trace = exact_trace + pls_trace
+                    return json.dumps(combined_trace).encode('utf-8')
+                else:
+                    log.warning("Profiling traces are not in expected array format, returning exact trace only")
+                    return self.exact_solver_result.profiling_trace_data
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                log.warning(f"Failed to merge profiling traces: {e}, returning exact trace only")
+                return self.exact_solver_result.profiling_trace_data
+        elif exact_has_profiling_trace:
+            assert self.exact_solver_result is not None
+            return self.exact_solver_result.profiling_trace_data
+        elif pls_has_profiling_trace:
+            assert self.pls_result is not None
+            return self.pls_result.profiling_trace_data
         else:
             return None
 

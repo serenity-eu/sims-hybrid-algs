@@ -1,0 +1,533 @@
+"""Integration tests for solve_milp_inlined functionality using real data instances.
+
+Tests multiple solver configurations on different instance groups similar to
+the MILP real data integration tests, but using solve_milp_inlined function.
+"""
+
+import logging
+import time
+from pathlib import Path
+from typing import List, Optional
+
+import pytest
+from dataclasses import dataclass
+
+from sims_solvers.solve import solve_milp_inlined
+from sims_solvers.Config import Config
+
+# Import trace generation modules
+import sims_problem
+from sims.core.sims.problem import ProblemInstance
+from sims.core.sims.solver_result import SolverResult
+
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class TestResult:
+    """Result of a solve_milp test execution."""
+    instance_name: str
+    objectives: List[str]
+    execution_time: float
+    success: bool
+    error_message: Optional[str] = None
+
+
+# Instance groups for testing based on actual data in /home/hlvlad/code/sims-hybrid-algs/sims-problem/tests/data
+SMALL_INSTANCES = [
+    "lagos_nigeria_30.dzn", "rio_de_janeiro_30.dzn", "tokyo_bay_30.dzn", 
+    "mexico_city_30.dzn", "paris_30.dzn"
+]
+
+MEDIUM_INSTANCES = [
+    "lagos_nigeria_50.dzn", "rio_de_janeiro_50.dzn", "tokyo_bay_50.dzn",
+    "mexico_city_50.dzn", "paris_50.dzn"
+]
+
+LARGE_INSTANCES = [
+    "lagos_nigeria_100.dzn", "rio_de_janeiro_100.dzn", "tokyo_bay_100.dzn",
+    "mexico_city_100.dzn", "paris_100.dzn", "lagos_nigeria_145.dzn"
+]
+
+
+def create_test_config(dzn_file_path: str, mzn_model_path: str, test_artifacts_dir: str, timeout: int = 300, test_type: str = "") -> Config:
+    """Create a test configuration for solving MILP problems."""
+    # Create a unique subdirectory for this test run
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")  # datetime-based timestamp
+    instance_name = Path(dzn_file_path).stem
+    # Include test type (2d/3d/4d) in subdirectory name to distinguish between different objective counts
+    subdir_name = f"{instance_name}_{test_type}_{timestamp}" if test_type else f"{instance_name}_{timestamp}"
+    test_subdir = Path(test_artifacts_dir) / subdir_name
+    test_subdir.mkdir(exist_ok=True)
+    
+    return Config(
+        minizinc_data=False,
+        instance_name=Path(dzn_file_path).stem,
+        data_sets_folder=Path(dzn_file_path).parent,
+        input_mzn=Path(mzn_model_path),
+        dzn_dir=Path(dzn_file_path).parent,
+        solver_name="gurobi",
+        problem_name="sims",
+        front_strategy="gpba-a",
+        solver_timeout_sec=timeout,
+        summary_filename=str(test_subdir / "test_summary.csv"),
+        solver_search_strategy="free_search",
+        fzn_optimisation_level=1,
+        cores=7,
+        threads=14
+    )
+
+
+def run_solve_milp_inlined_with_validation(
+    dzn_file_path: str,
+    mzn_model_path: str,
+    test_artifacts_dir: str,
+    objectives: List[str],
+    timeout: int,
+    logger: logging.Logger,
+    test_type: str = ""
+) -> TestResult:
+    """
+    Run solve_milp_inlined with the given configuration and validate results.
+    
+    Args:
+        dzn_file_path: Path to the DZN instance file
+        mzn_model_path: Path to the MZN model file
+        objectives: List of objectives to optimize
+        timeout: Solver timeout in seconds
+        logger: Logger instance
+    
+    Returns:
+        TestResult with execution details and success status
+    """
+    instance_name = Path(dzn_file_path).stem
+    logger.info(f"Running solve_milp_inlined on instance {instance_name}")
+    logger.info(f"Objectives: {objectives}")
+    logger.info(f"Timeout: {timeout}s")
+    
+    start_time = time.time()
+    
+    try:
+        # Create configuration
+        config = create_test_config(dzn_file_path, mzn_model_path, test_artifacts_dir, timeout, test_type)
+        test_subdir = Path(config.summary_filename).parent
+        
+        logger.info(f"Test artifacts will be stored in: {test_subdir}")
+        
+        # Call solve_milp_inlined with the configuration
+        solve_milp_inlined(config=config, objectives=objectives)
+        
+        execution_time = time.time() - start_time
+        logger.info(f"Execution completed successfully in {execution_time:.2f} seconds")
+        
+        # Validate that we got some result (solve_milp returns None)
+        logger.info("solve_milp completed without exceptions")
+        
+        # Check if summary file was created (indicates successful execution)
+        summary_file = Path(config.summary_filename)
+        if summary_file.exists():
+            logger.info(f"Summary file created: {config.summary_filename}")
+            with open(config.summary_filename, 'r') as f:
+                summary_content = f.read()
+                if summary_content.strip():
+                    logger.info("Summary file contains data")
+                    logger.info(f"First few lines:\n{summary_content[:200]}...")
+                else:
+                    logger.warning("Summary file is empty")
+        else:
+            logger.warning(f"Summary file was not created at: {config.summary_filename}")
+        
+        # Generate trace file from CSV data
+        if summary_file.exists():
+            try:
+                logger.info("Generating binary trace archive from CSV results...")
+                trace_file = test_subdir / f"{instance_name}_{test_type}_trace.tar.gz"
+                
+                # Create a dummy problem instance for parsing
+                problem_instance = ProblemInstance(
+                    name=instance_name,
+                    problem=None,  # Not needed for CSV parsing
+                )
+                
+                # Parse the CSV file
+                solver_result = SolverResult.from_summary_csv(
+                    input_path=summary_file,
+                    problem_instance=problem_instance,
+                    objectives=objectives
+                )
+                
+                if solver_result.pareto_front:
+                    logger.info(f"Found {len(solver_result.pareto_front)} solutions for trace generation")
+                    
+                    # Convert sims-core Solution objects to sims-problem Solution objects
+                    sims_problem_solutions = []
+                    for solution in solver_result.pareto_front:
+                        # Convert selected_images from frozenset to list
+                        selected_images_list = list(solution.selected_images)
+                        
+                        # Convert timestamp from timedelta to microseconds
+                        timestamp_us = int(solution.timestamp_s.total_seconds() * 1_000_000)
+                        
+                        # Ensure all values are non-negative integers (Rust expects unsigned integers)
+                        cost = max(0, int(solution.cost))
+                        cloudy_area = max(0, int(solution.cloudy_area))
+                        max_incidence_angle = max(0, int(solution.max_incidence_angle)) if solution.max_incidence_angle is not None else None
+                        min_resolutions_sum = max(0, int(solution.min_resolutions_sum)) if solution.min_resolutions_sum is not None else None
+                        
+                        # Create sims_problem.Solution object
+                        sims_solution = sims_problem.Solution.create(
+                            selected_images=selected_images_list,
+                            cost=cost,
+                            cloudy_area=cloudy_area,
+                            timestamp_us=timestamp_us,
+                            max_incidence_angle=max_incidence_angle,
+                            min_resolutions_sum=min_resolutions_sum
+                        )
+                        sims_problem_solutions.append(sims_solution)
+                    
+                    # Generate the trace
+                    trace_bytes = sims_problem.generate_trace(
+                        solutions=sims_problem_solutions,
+                        objectives=objectives,
+                        algorithm="MILP",
+                        num_objectives=len(objectives)
+                    )
+                    
+                    # Save the trace file
+                    trace_file.write_bytes(trace_bytes)
+                    logger.info(f"✅ Generated binary trace archive: {trace_file.name}")
+                else:
+                    logger.warning("No solutions found in CSV for trace generation")
+                    
+            except Exception as trace_error:
+                logger.warning(f"Failed to generate trace file: {trace_error}")
+                # Don't fail the test if trace generation fails, just warn
+        
+        # List all files in the test subdirectory
+        if test_subdir.exists():
+            artifacts = list(test_subdir.glob("*"))
+            logger.info(f"Test artifacts created: {[str(f.name) for f in artifacts]}")
+            logger.info(f"Artifacts location (will persist after test): {test_subdir}")
+        
+        return TestResult(
+            instance_name=instance_name,
+            objectives=objectives,
+            execution_time=execution_time,
+            success=True
+        )
+        
+    except Exception as e:
+        execution_time = time.time() - start_time
+        error_message = str(e)
+        logger.error(f"Execution failed after {execution_time:.2f} seconds: {error_message}")
+        
+        return TestResult(
+            instance_name=instance_name,
+            objectives=objectives,
+            execution_time=execution_time,
+            success=False,
+            error_message=error_message
+        )
+
+
+class TestSolveMILPInlinedIntegration:
+    """Integration tests for solve_milp function using real data instances."""
+
+    @pytest.mark.timeout(3600)  # 1 hour timeout
+    @pytest.mark.parametrize("filename", SMALL_INSTANCES)
+    def test_solve_milp_inlined_2d_on_small_instances(self, filename, test_data_dir, mzn_model_path, test_artifacts_dir, caplog):
+        """Test solve_milp on small instances (30 images) with 2 objectives and reasonable timeout."""
+        caplog.set_level(logging.INFO)
+        logger = logging.getLogger(__name__)
+        
+        # Skip if test instance doesn't exist
+        dzn_file_path = Path(test_data_dir) / filename
+        if not dzn_file_path.exists():
+            pytest.skip(f"Test instance {filename} not found at {dzn_file_path}")
+        
+        # Configuration for small instances
+        objectives = ["min_cost", "cloud_coverage"]
+        timeout = 3540  # 59 minutes for small instances
+        
+        # Run the test
+        result = run_solve_milp_inlined_with_validation(
+            dzn_file_path=str(dzn_file_path),
+            mzn_model_path=mzn_model_path,
+            test_artifacts_dir=test_artifacts_dir,
+            objectives=objectives,
+            timeout=timeout,
+            logger=logger,
+            test_type="2d"
+        )
+        
+        # Assert success
+        if not result.success:
+            pytest.fail(f"solve_milp_inlined failed for {filename}: {result.error_message}")
+        
+        logger.info(f"Small instance {filename} completed successfully in {result.execution_time:.2f}s")
+
+    @pytest.mark.timeout(3600)  # 1 hour timeout
+    @pytest.mark.parametrize("filename", SMALL_INSTANCES)
+    def test_solve_milp_inlined_3d_on_small_instances(self, filename, test_data_dir, mzn_model_path, test_artifacts_dir, caplog):
+        """Test solve_milp on small instances (30 images) with 3 objectives and reasonable timeout."""
+        caplog.set_level(logging.INFO)
+        logger = logging.getLogger(__name__)
+        
+        # Skip if test instance doesn't exist
+        dzn_file_path = Path(test_data_dir) / filename
+        if not dzn_file_path.exists():
+            pytest.skip(f"Test instance {filename} not found at {dzn_file_path}")
+        
+        # Configuration for small instances with 3 objectives
+        objectives = ["min_cost", "cloud_coverage", "min_resolution"]
+        timeout = 3540  # 59 minutes for small instances with 3 objectives
+        
+        # Run the test
+        result = run_solve_milp_inlined_with_validation(
+            dzn_file_path=str(dzn_file_path),
+            mzn_model_path=mzn_model_path,
+            test_artifacts_dir=test_artifacts_dir,
+            objectives=objectives,
+            timeout=timeout,
+            logger=logger,
+            test_type="3d"
+        )
+        
+        # Assert success
+        if not result.success:
+            pytest.fail(f"solve_milp_inlined failed for {filename}: {result.error_message}")
+        
+        logger.info(f"Small instance {filename} (3D) completed successfully in {result.execution_time:.2f}s")
+
+    @pytest.mark.timeout(3600)  # 1 hour timeout
+    @pytest.mark.parametrize("filename", SMALL_INSTANCES)
+    def test_solve_milp_inlined_4d_on_small_instances(self, filename, test_data_dir, mzn_model_path, test_artifacts_dir, caplog):
+        """Test solve_milp on small instances (30 images) with 4 objectives and reasonable timeout."""
+        caplog.set_level(logging.INFO)
+        logger = logging.getLogger(__name__)
+        
+        # Skip if test instance doesn't exist
+        dzn_file_path = Path(test_data_dir) / filename
+        if not dzn_file_path.exists():
+            pytest.skip(f"Test instance {filename} not found at {dzn_file_path}")
+        
+        # Configuration for small instances with 4 objectives
+        objectives = ["min_cost", "cloud_coverage", "min_resolution", "min_max_incidence_angle"]
+        timeout = 3540  # 59 minutes for small instances with 4 objectives
+        
+        # Run the test
+        result = run_solve_milp_inlined_with_validation(
+            dzn_file_path=str(dzn_file_path),
+            mzn_model_path=mzn_model_path,
+            test_artifacts_dir=test_artifacts_dir,
+            objectives=objectives,
+            timeout=timeout,
+            logger=logger,
+            test_type="4d"
+        )
+        
+        # Assert success
+        if not result.success:
+            pytest.fail(f"solve_milp_inlined failed for {filename}: {result.error_message}")
+        
+        logger.info(f"Small instance {filename} (4D) completed successfully in {result.execution_time:.2f}s")
+
+    @pytest.mark.timeout(3600)  # 1 hour timeout
+    @pytest.mark.parametrize("filename", MEDIUM_INSTANCES)
+    def test_solve_milp_inlined_2d_on_medium_instances(self, filename, test_data_dir, mzn_model_path, test_artifacts_dir, caplog):
+        """Test solve_milp on medium instances (around 50 images) with 2 objectives and moderate timeout."""
+        caplog.set_level(logging.INFO)
+        logger = logging.getLogger(__name__)
+        
+        # Skip if test instance doesn't exist
+        dzn_file_path = Path(test_data_dir) / filename
+        if not dzn_file_path.exists():
+            pytest.skip(f"Test instance {filename} not found at {dzn_file_path}")
+        
+        # Configuration for medium instances
+        objectives = ["min_cost", "cloud_coverage"]
+        timeout = 3540  # 59 minutes for medium instances
+        
+        # Run the test
+        result = run_solve_milp_inlined_with_validation(
+            dzn_file_path=str(dzn_file_path),
+            mzn_model_path=mzn_model_path,
+            test_artifacts_dir=test_artifacts_dir,
+            objectives=objectives,
+            timeout=timeout,
+            logger=logger,
+            test_type="2d"
+        )
+        
+        # Assert success
+        if not result.success:
+            pytest.fail(f"solve_milp_inlined failed for {filename}: {result.error_message}")
+        
+        logger.info(f"Medium instance {filename} completed successfully in {result.execution_time:.2f}s")
+
+    @pytest.mark.timeout(3600)  # 1 hour timeout
+    @pytest.mark.parametrize("filename", MEDIUM_INSTANCES)
+    def test_solve_milp_inlined_3d_on_medium_instances(self, filename, test_data_dir, mzn_model_path, test_artifacts_dir, caplog):
+        """Test solve_milp on medium instances (around 50 images) with 3 objectives and moderate timeout."""
+        caplog.set_level(logging.INFO)
+        logger = logging.getLogger(__name__)
+        
+        # Skip if test instance doesn't exist
+        dzn_file_path = Path(test_data_dir) / filename
+        if not dzn_file_path.exists():
+            pytest.skip(f"Test instance {filename} not found at {dzn_file_path}")
+        
+        # Configuration for medium instances with 3 objectives
+        objectives = ["min_cost", "cloud_coverage", "min_resolution"]
+        timeout = 3540  # 59 minutes for medium instances with 3 objectives
+        
+        # Run the test
+        result = run_solve_milp_inlined_with_validation(
+            dzn_file_path=str(dzn_file_path),
+            mzn_model_path=mzn_model_path,
+            test_artifacts_dir=test_artifacts_dir,
+            objectives=objectives,
+            timeout=timeout,
+            logger=logger,
+            test_type="3d"
+        )
+        
+        # Assert success
+        if not result.success:
+            pytest.fail(f"solve_milp_inlined failed for {filename}: {result.error_message}")
+        
+        logger.info(f"Medium instance {filename} (3D) completed successfully in {result.execution_time:.2f}s")
+
+    @pytest.mark.timeout(3600)  # 1 hour timeout
+    @pytest.mark.parametrize("filename", MEDIUM_INSTANCES)
+    def test_solve_milp_inlined_4d_on_medium_instances(self, filename, test_data_dir, mzn_model_path, test_artifacts_dir, caplog):
+        """Test solve_milp on medium instances (around 50 images) with 4 objectives and moderate timeout."""
+        caplog.set_level(logging.INFO)
+        logger = logging.getLogger(__name__)
+        
+        # Skip if test instance doesn't exist
+        dzn_file_path = Path(test_data_dir) / filename
+        if not dzn_file_path.exists():
+            pytest.skip(f"Test instance {filename} not found at {dzn_file_path}")
+        
+        # Configuration for medium instances with 4 objectives
+        objectives = ["min_cost", "cloud_coverage", "min_resolution", "min_max_incidence_angle"]
+        timeout = 3540  # 59 minutes for medium instances with 4 objectives
+        
+        # Run the test
+        result = run_solve_milp_inlined_with_validation(
+            dzn_file_path=str(dzn_file_path),
+            mzn_model_path=mzn_model_path,
+            test_artifacts_dir=test_artifacts_dir,
+            objectives=objectives,
+            timeout=timeout,
+            logger=logger,
+            test_type="4d"
+        )
+        
+        # Assert success
+        if not result.success:
+            pytest.fail(f"solve_milp_inlined failed for {filename}: {result.error_message}")
+        
+        logger.info(f"Medium instance {filename} (4D) completed successfully in {result.execution_time:.2f}s")
+
+    @pytest.mark.timeout(3600)  # 1 hour timeout
+    @pytest.mark.parametrize("filename", LARGE_INSTANCES)
+    def test_solve_milp_inlined_2d_on_large_instances(self, filename, test_data_dir, mzn_model_path, test_artifacts_dir, caplog):
+        """Test solve_milp on large instances (100+ images) with 2 objectives and extended timeout."""
+        caplog.set_level(logging.INFO)
+        logger = logging.getLogger(__name__)
+        
+        # Skip if test instance doesn't exist
+        dzn_file_path = Path(test_data_dir) / filename
+        if not dzn_file_path.exists():
+            pytest.skip(f"Test instance {filename} not found at {dzn_file_path}")
+        
+        # Configuration for large instances
+        objectives = ["min_cost", "cloud_coverage"]
+        timeout = 3540  # 59 minutes for large instances
+        
+        # Run the test
+        result = run_solve_milp_inlined_with_validation(
+            dzn_file_path=str(dzn_file_path),
+            mzn_model_path=mzn_model_path,
+            test_artifacts_dir=test_artifacts_dir,
+            objectives=objectives,
+            timeout=timeout,
+            logger=logger,
+            test_type="2d"
+        )
+        
+        # Assert success
+        if not result.success:
+            pytest.fail(f"solve_milp_inlined failed for {filename}: {result.error_message}")
+        
+        logger.info(f"Large instance {filename} completed successfully in {result.execution_time:.2f}s")
+
+    @pytest.mark.timeout(3600)  # 1 hour timeout
+    @pytest.mark.parametrize("filename", LARGE_INSTANCES)
+    def test_solve_milp_inlined_3d_on_large_instances(self, filename, test_data_dir, mzn_model_path, test_artifacts_dir, caplog):
+        """Test solve_milp on large instances (100+ images) with 3 objectives and extended timeout."""
+        caplog.set_level(logging.INFO)
+        logger = logging.getLogger(__name__)
+        
+        # Skip if test instance doesn't exist
+        dzn_file_path = Path(test_data_dir) / filename
+        if not dzn_file_path.exists():
+            pytest.skip(f"Test instance {filename} not found at {dzn_file_path}")
+        
+        # Configuration for large instances with 3 objectives
+        objectives = ["min_cost", "cloud_coverage", "min_resolution"]
+        timeout = 3540  # 59 minutes for large instances with 3 objectives
+        
+        # Run the test
+        result = run_solve_milp_inlined_with_validation(
+            dzn_file_path=str(dzn_file_path),
+            mzn_model_path=mzn_model_path,
+            test_artifacts_dir=test_artifacts_dir,
+            objectives=objectives,
+            timeout=timeout,
+            logger=logger,
+            test_type="3d"
+        )
+        
+        # Assert success
+        if not result.success:
+            pytest.fail(f"solve_milp_inlined failed for {filename}: {result.error_message}")
+        
+        logger.info(f"Large instance {filename} (3D) completed successfully in {result.execution_time:.2f}s")
+
+    @pytest.mark.timeout(3600)  # 1 hour timeout
+    @pytest.mark.parametrize("filename", LARGE_INSTANCES)
+    def test_solve_milp_inlined_4d_on_large_instances(self, filename, test_data_dir, mzn_model_path, test_artifacts_dir, caplog):
+        """Test solve_milp on large instances (100+ images) with 4 objectives and extended timeout."""
+        caplog.set_level(logging.INFO)
+        logger = logging.getLogger(__name__)
+        
+        # Skip if test instance doesn't exist
+        dzn_file_path = Path(test_data_dir) / filename
+        if not dzn_file_path.exists():
+            pytest.skip(f"Test instance {filename} not found at {dzn_file_path}")
+        
+        # Configuration for large instances with 4 objectives
+        objectives = ["min_cost", "cloud_coverage", "min_resolution", "min_max_incidence_angle"]
+        timeout = 3540  # 59 minutes for large instances with 4 objectives
+        
+        # Run the test
+        result = run_solve_milp_inlined_with_validation(
+            dzn_file_path=str(dzn_file_path),
+            mzn_model_path=mzn_model_path,
+            test_artifacts_dir=test_artifacts_dir,
+            objectives=objectives,
+            timeout=timeout,
+            logger=logger,
+            test_type="4d"
+        )
+        
+        # Assert success
+        if not result.success:
+            pytest.fail(f"solve_milp_inlined failed for {filename}: {result.error_message}")
+        
+        logger.info(f"Large instance {filename} (4D) completed successfully in {result.execution_time:.2f}s")

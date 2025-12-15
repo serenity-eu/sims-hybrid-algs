@@ -130,9 +130,11 @@ class CoverageGridPoint(FrontGeneratorStrategy):
             ef_intervals: List of interval managers for constraint objectives
             constraint_indices: Indices of objectives that are constraints (not main objective)
         """
+        self.logger.critical(f"ORIGINAL: coverage_most_inner_loop START - ef_array={ef_array}, rwv={rwv}")
         gamma = 1  # with the value of 1, the algorithm will find the whole Pareto front if run enough time
         previous_solution_relaxation, previous_solution_values = \
             Saugmecon.search_previous_solutions_relaxation(ef_array, previous_solution_information, min_sense=False)
+        self.logger.critical(f"ORIGINAL: previous_solution_relaxation={previous_solution_relaxation}")
         if previous_solution_relaxation:
             if type(previous_solution_values) is str:
                 # the previous solution is infeasible
@@ -158,12 +160,13 @@ class CoverageGridPoint(FrontGeneratorStrategy):
                     previous_solutions.add(str_objectives_solution_values)
                     formatted_solution = self.process_feasible_solution(solution_sec)
                     one_solution = formatted_solution["objs"]
+                    self.logger.critical(f"ORIGINAL: Found solution (in max form): {one_solution}")
                     Saugmecon.save_solution_information(ef_array, one_solution, previous_solution_information,
                                                         min_sense=False)
 
                     if self.is_a_minimization_model_originally:
                         formatted_solution.solution.objs = [-1 * i for i in formatted_solution.solution.objs]
-                    self.logger.critical(f"ORIGINAL GPBA-A: Found solution: {one_solution}")
+                    self.logger.critical(f"ORIGINAL GPBA-A: Found solution (in min form): {formatted_solution.solution.objs}")
                     yield formatted_solution
                     # todo comment below the line below is for testing purposes, uncomment when necessary
                     try:
@@ -186,10 +189,13 @@ class CoverageGridPoint(FrontGeneratorStrategy):
                 rwv[i] = min(rwv[i], one_solution[constraint_indices[i]])
                 self.obj_k_at_ef_k[i] = rwv[i]
             self.obj_k_at_ef_k[id_interval] = one_solution[constraint_indices[id_interval]]
+        
+        self.logger.critical(f"ORIGINAL: Before adjust - ef_array={ef_array}, obj_k_at_ef_k[{id_interval}]={self.obj_k_at_ef_k[id_interval]}, rwv={rwv}")
 
         # Update all constraint objectives. NOTE: An objective x (with 1 <= x <= p-2, where p-1 is the index of the
         # last objective) is only updated when the ef_array[x+1] > best_value[x+1]
         ef_intervals[id_interval] = self.adjust_parameter_ef_array(id_interval, ef_array, self.obj_k_at_ef_k[id_interval], ef_intervals[id_interval], constraint_indices, gamma)
+        self.logger.critical(f"ORIGINAL: After adjust - ef_array={ef_array}")
         for i in range(len(constraint_indices)-1, 0, -1):
             if ef_array[i] > self.best_objective_values[constraint_indices[i]]:
                 ef_array[i] = self.nadir_objectives_values[constraint_indices[i]]
@@ -216,6 +222,11 @@ class CoverageGridPoint(FrontGeneratorStrategy):
             constraint_indices: Indices of objectives that are constraints (not main objective)
             gamma: Coverage parameter
         """
+        actual_obj_index = constraint_indices[id_constraint_objective]
+        self.logger.critical(f"ORIGINAL adjust_parameter_ef_array: id={id_constraint_objective}, ef_array[{id_constraint_objective}]={ef_array[id_constraint_objective]}, sol_obj_k={sol_obj_k}")
+        self.logger.critical(f"ORIGINAL adjust_parameter_ef_array: actual_obj_index={actual_obj_index}, best[{actual_obj_index}]={self.best_objective_values[actual_obj_index]}, nadir[{actual_obj_index}]={self.nadir_objectives_values[actual_obj_index]}")
+        self.logger.critical(f"ORIGINAL adjust_parameter_ef_array: ef_interval.intervals={ef_interval.intervals}, min={ef_interval.min_value}, max={ef_interval.max_value}")
+        
         # check if the list one_solution is empty
         start_removal = ef_array[id_constraint_objective]
         new_max_interval = start_removal - 1
@@ -224,6 +235,9 @@ class CoverageGridPoint(FrontGeneratorStrategy):
         else:
             # Map from constraint objective index to actual objective index
             end_removal = min(sol_obj_k, ef_interval.max_value)
+        
+        self.logger.critical(f"ORIGINAL adjust_parameter_ef_array: start_removal={start_removal}, end_removal={end_removal}, comparison={start_removal < end_removal}")
+        
         if start_removal < end_removal:
             ef_interval.remove_interval(start_removal, end_removal)
         else:
@@ -234,16 +248,21 @@ class CoverageGridPoint(FrontGeneratorStrategy):
         if end_removal >= ef_interval.max_value:
             ef_interval.max_value = new_max_interval
         max_interval = ef_interval.find_largest_interval()
-        actual_obj_index = constraint_indices[id_constraint_objective]
+        self.logger.critical(f"ORIGINAL adjust_parameter_ef_array: After removal - max_interval={max_interval}, ef_interval.intervals={ef_interval.intervals}")
+        
         if max_interval is not None:
             if ef_array[id_constraint_objective] == self.nadir_objectives_values[actual_obj_index]:
                 ef_array[id_constraint_objective] = self.best_objective_values[actual_obj_index]
+                self.logger.critical(f"ORIGINAL adjust_parameter_ef_array: Was at nadir, jumped to best: {ef_array[id_constraint_objective]}")
             else:
                 ef_array[id_constraint_objective] = int((max_interval[0] + max_interval[1]) / 2)
+                self.logger.critical(f"ORIGINAL adjust_parameter_ef_array: Set to center of max_interval: {ef_array[id_constraint_objective]}")
         else:
             ef_array[id_constraint_objective] = self.best_objective_values[actual_obj_index] + 1
+            self.logger.critical(f"ORIGINAL adjust_parameter_ef_array: No interval left, set to best+1: {ef_array[id_constraint_objective]}")
             # reinitialize the interval manager to avoid stopping the algorithm
             ef_interval = self.create_interval(actual_obj_index)
+            self.logger.critical(f"ORIGINAL adjust_parameter_ef_array: Reinitialized interval: {ef_interval.intervals}")
         return ef_interval
 
     def convert_model_to_maximization(self):

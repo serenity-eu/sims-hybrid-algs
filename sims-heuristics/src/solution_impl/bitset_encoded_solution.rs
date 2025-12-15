@@ -735,17 +735,20 @@ impl<const D: usize> BitsetEncodedSolution<D> {
 
         // Use global objective bounds for normalization if available
         // Otherwise fall back to max_objectives as before
-        let normalization_ranges: Vec<f32> = if let Some(ref bounds) = problem.objective_bounds {
-            bounds.iter().map(|bound| {
-                let range = bound[1] as f32 - bound[0] as f32;
-                if range > 0.0 { range } else { 1.0 }
-            }).collect()
-        } else {
-            // Fallback: use max_objectives (nadir point approximation)
-            problem.max_objectives.iter().map(|&max_val| {
-                if max_val > 0 { max_val as f32 } else { 1.0 }
-            }).collect()
-        };
+        let normalization_ranges: Vec<f32> = problem.objective_bounds.as_ref().map_or_else(
+            || {
+                // Fallback: use max_objectives (nadir point approximation)
+                problem.max_objectives.iter().map(|&max_val| {
+                    if max_val > 0 { max_val as f32 } else { 1.0 }
+                }).collect()
+            },
+            |bounds| {
+                bounds.iter().map(|bound| {
+                    let range = bound[1] as f32 - bound[0] as f32;
+                    if range > 0.0 { range } else { 1.0 }
+                }).collect()
+            }
+        );
 
         raw_comparable_images
             .iter()

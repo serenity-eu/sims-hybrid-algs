@@ -2,7 +2,9 @@
 //!
 //! This example demonstrates how to use different solvers with AUGMECON-RS.
 
-use augmecon::{Augmecon, MultiObjectiveProblem, ObjectiveDirection, Options, VariableType, Solver};
+use augmecon::{
+    Augmecon, MultiObjectiveProblem, ObjectiveDirection, Options, Solver, VariableType,
+};
 use good_lp::constraint;
 use std::error::Error;
 
@@ -25,7 +27,10 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut solver_default = Augmecon::try_new(problem1, options_default)?;
     let solutions_default = solver_default.solve()?;
-    println!("✅ Default solver: Found {} solutions", solutions_default.len());
+    println!(
+        "✅ Default solver: Found {} solutions",
+        solutions_default.len()
+    );
 
     // Test with CoinCbc solver
     println!("\n📊 Testing with CoinCbc solver:");
@@ -59,19 +64,25 @@ fn create_simple_problem() -> MultiObjectiveProblem {
     let mut problem = MultiObjectiveProblem::new();
 
     // Add variables: x and y (continuous, non-negative)
-    problem.add_variable("x".to_string(), VariableType::Continuous {
-        min: Some(0.0),
-        max: Some(10.0),
-    });
-    problem.add_variable("y".to_string(), VariableType::Continuous {
-        min: Some(0.0),
-        max: Some(10.0),
-    });
+    problem.add_variable(
+        "x".to_string(),
+        VariableType::Continuous {
+            min: Some(0.0),
+            max: Some(10.0),
+        },
+    );
+    problem.add_variable(
+        "y".to_string(),
+        VariableType::Continuous {
+            min: Some(0.0),
+            max: Some(10.0),
+        },
+    );
 
     // Get variables and add constraints/objectives
     let x = *problem.var_map.get("x").unwrap();
     let y = *problem.var_map.get("y").unwrap();
-    
+
     // Constraint: x + y <= 10
     problem.add_constraint(constraint!(x + y <= 10.0));
 
