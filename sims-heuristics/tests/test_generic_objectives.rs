@@ -49,8 +49,8 @@ fn test_generic_objectives_2d() {
     let problem_generic = problem_builder_result.unwrap();
 
     assert_eq!(problem_generic.num_objectives(), 2);
-    assert_eq!(problem_generic.objective(0).id(), "total_cost");
-    assert_eq!(problem_generic.objective(1).id(), "cloudy_area");
+    assert_eq!(problem_generic.objective_type(0).id(), "total_cost");
+    assert_eq!(problem_generic.objective_type(1).id(), "cloudy_area");
 
     // Test that both legacy and generic systems produce the same results
     let solution_legacy = BitsetEncodedSolution::from_selected_images(&[0, 1], &problem_legacy);

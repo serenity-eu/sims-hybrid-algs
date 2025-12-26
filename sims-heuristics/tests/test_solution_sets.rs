@@ -60,10 +60,6 @@ impl<const D: usize> pls::solution::ImageSet<D> for TestSolution<D> {
     }
 
     fn set_image(&mut self, _image_index: usize, _selected: bool) {}
-
-    fn clear_parts_counts(&self) -> &[usize] {
-        &[]
-    }
 }
 
 // Implement SIMSCore for TestSolution (needed for EncodedSolution bound)
@@ -81,12 +77,16 @@ impl<const D: usize> pls::solution::SIMSCore<D> for TestSolution<D> {
 
 // Implement SIMSModifiable for TestSolution
 impl<const D: usize> pls::solution::SIMSModifiable<D> for TestSolution<D> {
-    fn clear_parts_counts(&self) -> &[usize] {
-        &[]
+    type Trackers = pls::trackers::StandardTrackerArray<D>;
+
+    fn trackers(&self) -> &Self::Trackers {
+        // For test purposes, we can't create a real tracker without a problem
+        // This is a limitation of the test solution
+        panic!("TestSolution doesn't support trackers")
     }
 
-    fn element_coverage(&self) -> &[usize] {
-        &[]
+    fn trackers_mut(&mut self) -> &mut Self::Trackers {
+        panic!("TestSolution doesn't support trackers")
     }
 
     fn add_image(&mut self, _image_index: usize, _problem: &pls::problem::Problem<Self, D>) {}
@@ -107,10 +107,6 @@ impl<const D: usize> pls::solution::SIMSModifiable<D> for TestSolution<D> {
 
     fn find_best_image_to_remove(&self, _problem: &pls::problem::Problem<Self, D>) -> Option<usize> {
         None
-    }
-
-    fn get_neighborhood(&self, _problem: &pls::problem::Problem<Self, D>) -> Vec<Self> {
-        vec![]
     }
 
     fn neighborhood(
@@ -792,5 +788,250 @@ mod three_dimensional_tests {
         
         assert_eq!(set.len(), 10);
         set.validate::<4>();
+    }
+
+    /// Test case derived from real bug: two non-dominated solutions
+    /// where one implementation kept one and the other kept the other.
+    /// These are actual solutions from `lagos_nigeria_50` test case.
+    #[test]
+    #[allow(clippy::unreadable_literal, reason = "Real data from bug reproduction")]
+    fn test_4d_bug_non_dominated_pair_1() {
+        let sol_a = TestSolution::new([4375200, 105740, 397, 40250], 0);
+        let sol_b = TestSolution::new([3239500, 213005, 373, 44190], 1);
+        
+        // Verify neither dominates the other
+        // sol_b: better in obj1 (3239500 < 4375200), worse in obj2 (213005 > 105740)
+        // sol_b: better in obj3 (373 < 397), worse in obj4 (44190 > 40250)
+        // Therefore: non-dominated
+        
+        // Test all implementations keep both solutions
+        let mut ndtree = NdTreeSolutionSet::<Solution4D, 4>::new("ndtree");
+        assert!(ndtree.try_insert(&sol_a));
+        assert!(ndtree.try_insert(&sol_b), "nd-tree should accept non-dominated solution");
+        assert_eq!(ndtree.len(), 2, "nd-tree should keep both non-dominated solutions");
+        
+        let mut vec_set = VecSolutionSet::<Solution4D, 4>::new("vec");
+        assert!(vec_set.try_insert(&sol_a));
+        assert!(vec_set.try_insert(&sol_b), "vector should accept non-dominated solution");
+        assert_eq!(vec_set.len(), 2, "vector should keep both non-dominated solutions");
+        
+        let mut linkedlist = LinkedListSolutionSet::<Solution4D, 4>::new("linkedlist");
+        assert!(linkedlist.try_insert(&sol_a));
+        assert!(linkedlist.try_insert(&sol_b), "linkedlist should accept non-dominated solution");
+        assert_eq!(linkedlist.len(), 2, "linkedlist should keep both non-dominated solutions");
+    }
+
+    /// Test the same pair in reverse insertion order
+    #[test]
+    #[allow(clippy::unreadable_literal, reason = "Real data from bug reproduction")]
+    fn test_4d_bug_non_dominated_pair_1_reverse() {
+        let sol_a = TestSolution::new([4375200, 105740, 397, 40250], 0);
+        let sol_b = TestSolution::new([3239500, 213005, 373, 44190], 1);
+        
+        // Insert in reverse order
+        let mut ndtree = NdTreeSolutionSet::<Solution4D, 4>::new("ndtree");
+        assert!(ndtree.try_insert(&sol_b));
+        assert!(ndtree.try_insert(&sol_a), "nd-tree should accept non-dominated solution (reverse order)");
+        assert_eq!(ndtree.len(), 2, "nd-tree should keep both non-dominated solutions (reverse)");
+        
+        let mut vec_set = VecSolutionSet::<Solution4D, 4>::new("vec");
+        assert!(vec_set.try_insert(&sol_b));
+        assert!(vec_set.try_insert(&sol_a), "vector should accept non-dominated solution (reverse order)");
+        assert_eq!(vec_set.len(), 2, "vector should keep both non-dominated solutions (reverse)");
+        
+        let mut linkedlist = LinkedListSolutionSet::<Solution4D, 4>::new("linkedlist");
+        assert!(linkedlist.try_insert(&sol_b));
+        assert!(linkedlist.try_insert(&sol_a), "linkedlist should accept non-dominated solution (reverse order)");
+        assert_eq!(linkedlist.len(), 2, "linkedlist should keep both non-dominated solutions (reverse)");
+    }
+
+    /// Test a batch of non-dominated solutions from the actual bug scenario
+    #[test]
+    #[allow(clippy::unreadable_literal, clippy::uninlined_format_args, clippy::redundant_closure_for_method_calls, clippy::stable_sort_primitive, reason = "Real data from bug reproduction")]
+    fn test_4d_bug_batch_consistency() {
+        // Sample of non-dominated solutions from the initial population
+        let solutions = vec![
+            TestSolution::new([4375200, 105740, 397, 40250], 0),
+            TestSolution::new([3239500, 213005, 373, 44190], 1),
+            TestSolution::new([5262380, 50566, 458, 40250], 2),
+            TestSolution::new([5252230, 61142, 333, 36090], 3),
+            TestSolution::new([4784100, 34107, 492, 36090], 4),
+        ];
+        
+        // All implementations should produce identical results
+        let mut ndtree = NdTreeSolutionSet::<Solution4D, 4>::new("ndtree");
+        let mut vec_set = VecSolutionSet::<Solution4D, 4>::new("vec");
+        let mut linkedlist = LinkedListSolutionSet::<Solution4D, 4>::new("linkedlist");
+        
+        for sol in &solutions {
+            ndtree.try_insert(sol);
+            vec_set.try_insert(sol);
+            linkedlist.try_insert(sol);
+        }
+        
+        // All should have same number of solutions
+        let ndtree_len = ndtree.len();
+        let vec_len = vec_set.len();
+        let linkedlist_len = linkedlist.len();
+        
+        assert_eq!(
+            ndtree_len, vec_len,
+            "nd-tree and vector should have same solution count. nd-tree: {}, vector: {}",
+            ndtree_len, vec_len
+        );
+        assert_eq!(
+            vec_len, linkedlist_len,
+            "vector and linkedlist should have same solution count. vector: {}, linkedlist: {}",
+            vec_len, linkedlist_len
+        );
+        
+        // Check that all implementations have the same objectives
+        let mut ndtree_objs: Vec<_> = ndtree.iter().map(|s| s.objectives()).collect();
+        let mut vec_objs: Vec<_> = vec_set.iter().map(|s| s.objectives()).collect();
+        let mut linkedlist_objs: Vec<_> = linkedlist.iter().map(|s| s.objectives()).collect();
+        
+        ndtree_objs.sort();
+        vec_objs.sort();
+        linkedlist_objs.sort();
+        
+        assert_eq!(
+            ndtree_objs, vec_objs,
+            "nd-tree and vector should have identical objective sets"
+        );
+        assert_eq!(
+            vec_objs, linkedlist_objs,
+            "vector and linkedlist should have identical objective sets"
+        );
+    }
+
+    /// Test consistency with a larger batch from real data
+    #[test]
+    #[allow(clippy::unreadable_literal, clippy::uninlined_format_args, clippy::collection_is_never_read, clippy::stable_sort_primitive, reason = "Real data from bug reproduction")]
+    fn test_4d_bug_large_batch_consistency() {
+        // More solutions from the actual divergence scenario
+        let solutions = vec![
+            TestSolution::new([4375200, 105740, 397, 40250], 0),
+            TestSolution::new([5262380, 50566, 458, 40250], 1),
+            TestSolution::new([5252230, 61142, 333, 36090], 2),
+            TestSolution::new([4784100, 34107, 492, 36090], 3),
+            TestSolution::new([5707370, 14424, 492, 35330], 4),
+            TestSolution::new([9123670, 2923, 492, 35330], 5),
+            TestSolution::new([5155000, 30282, 492, 38110], 6),
+            TestSolution::new([5553320, 38749, 401, 36030], 7),
+            TestSolution::new([4588940, 66668, 492, 38070], 8),
+            TestSolution::new([3615480, 194145, 401, 43950], 9),
+            TestSolution::new([3239500, 213005, 373, 44190], 10),
+            TestSolution::new([4511850, 168727, 458, 38850], 11),
+            TestSolution::new([4416210, 96503, 492, 38590], 12),
+            TestSolution::new([5875780, 13470, 492, 35330], 13),
+            TestSolution::new([4970430, 46381, 475, 37210], 14),
+        ];
+        
+        // Test each implementation
+        let mut ndtree = NdTreeSolutionSet::<Solution4D, 4>::new("ndtree");
+        let mut vec_set = VecSolutionSet::<Solution4D, 4>::new("vec");
+        let mut linkedlist = LinkedListSolutionSet::<Solution4D, 4>::new("linkedlist");
+        
+        for sol in &solutions {
+            ndtree.try_insert(sol);
+            vec_set.try_insert(sol);
+            linkedlist.try_insert(sol);
+        }
+        
+        let ndtree_len = ndtree.len();
+        let vec_len = vec_set.len();
+        let linkedlist_len = linkedlist.len();
+        
+        assert_eq!(
+            ndtree_len, vec_len,
+            "nd-tree and vector should have same solution count with large batch. nd-tree: {}, vector: {}",
+            ndtree_len, vec_len
+        );
+        assert_eq!(
+            vec_len, linkedlist_len,
+            "vector and linkedlist should have same solution count with large batch"
+        );
+        
+        // Collect and compare objective sets
+        let mut ndtree_objs: Vec<_> = ndtree.iter().map(|s| *s.objectives()).collect();
+        let mut vec_objs: Vec<_> = vec_set.iter().map(|s| *s.objectives()).collect();
+        let mut linkedlist_objs: Vec<_> = linkedlist.iter().map(|s| *s.objectives()).collect();
+        
+        ndtree_objs.sort();
+        vec_objs.sort();
+        linkedlist_objs.sort();
+        
+        assert_eq!(
+            ndtree_objs, vec_objs,
+            "nd-tree and vector should have identical objective sets in large batch"
+        );
+    }
+
+    /// Test that all implementations agree on dominance for tricky cases
+    #[test]
+    #[allow(clippy::uninlined_format_args, clippy::useless_vec, reason = "Test clarity")]
+    fn test_4d_dominance_consistency_tricky_cases() {
+        // Cases where objectives trade off in complex ways
+        let pairs = vec![
+            // Better in 2, worse in 2
+            ([10, 20, 30, 40], [20, 10, 40, 30]),
+            // Better in 3, worse in 1
+            ([10, 20, 30, 40], [20, 15, 25, 35]),
+            // Better in 1, worse in 3
+            ([10, 20, 30, 40], [5, 25, 35, 45]),
+        ];
+        
+        for (i, (obj_a, obj_b)) in pairs.iter().enumerate() {
+            let sol_a = TestSolution::new(*obj_a, i * 2);
+            let sol_b = TestSolution::new(*obj_b, i * 2 + 1);
+            
+            // Test all implementations
+            let mut ndtree = NdTreeSolutionSet::<Solution4D, 4>::new("ndtree");
+            let mut vec_set = VecSolutionSet::<Solution4D, 4>::new("vec");
+            let mut linkedlist = LinkedListSolutionSet::<Solution4D, 4>::new("linkedlist");
+            
+            let ndtree_a = ndtree.try_insert(&sol_a);
+            let ndtree_b = ndtree.try_insert(&sol_b);
+            
+            let vec_a = vec_set.try_insert(&sol_a);
+            let vec_b = vec_set.try_insert(&sol_b);
+            
+            let linkedlist_a = linkedlist.try_insert(&sol_a);
+            let linkedlist_b = linkedlist.try_insert(&sol_b);
+            
+            // All implementations should agree
+            assert_eq!(
+                ndtree_a, vec_a,
+                "nd-tree and vector disagree on inserting sol_a for pair {}: {:?}",
+                i, obj_a
+            );
+            assert_eq!(
+                ndtree_b, vec_b,
+                "nd-tree and vector disagree on inserting sol_b for pair {}: {:?}",
+                i, obj_b
+            );
+            assert_eq!(
+                vec_a, linkedlist_a,
+                "vector and linkedlist disagree on inserting sol_a for pair {}: {:?}",
+                i, obj_a
+            );
+            assert_eq!(
+                vec_b, linkedlist_b,
+                "vector and linkedlist disagree on inserting sol_b for pair {}: {:?}",
+                i, obj_b
+            );
+            
+            // All should have same final count
+            assert_eq!(
+                ndtree.len(),
+                vec_set.len(),
+                "Final size mismatch between nd-tree and vector for pair {}", i
+            );
+            assert_eq!(
+                vec_set.len(),
+                linkedlist.len(),
+                "Final size mismatch between vector and linkedlist for pair {}", i
+            );
+        }
     }
 }

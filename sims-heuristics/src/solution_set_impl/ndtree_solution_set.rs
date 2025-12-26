@@ -3,6 +3,7 @@ use pareto::{MoSolution, ParetoFront, Random, RandomCollection};
 use std::fmt::Debug;
 
 use crate::solution::ImageSet;
+#[cfg(debug_assertions)]
 use itertools::Itertools;
 
 #[derive(Clone)]
@@ -71,7 +72,10 @@ where
     }
 
     fn insert_unchecked(&mut self, solution: &T) {
-        self.nd_tree.update(solution.clone());
+        // Even in unchecked mode, prevent exact duplicates to maintain archive invariants
+        if !self.nd_tree.contains(solution) {
+            self.nd_tree.update(solution.clone());
+        }
     }
 
     fn len(&self) -> usize {

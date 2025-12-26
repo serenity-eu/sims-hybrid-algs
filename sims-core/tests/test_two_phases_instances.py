@@ -605,7 +605,7 @@ class TestTwoPhaseInstances:
     @pytest.mark.parametrize("ratio", TWO_PHASE_RATIOS)
     def test_solve_two_phase_4d_on_small_instances(self, filename, ratio, iteration, pareto_archive, test_data_dir, mzn_model_path, artifacts_manager, caplog, use_pseudo_solver):
         """Test two-phase solver on small instances (30 images) with 4 objectives and different ratios."""
-        caplog.set_level(logging.INFO)
+        caplog.set_level(logging.DEBUG)
         logger = logging.getLogger(__name__)
         
         # Skip if test instance doesn't exist

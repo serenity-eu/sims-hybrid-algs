@@ -6,7 +6,7 @@ use std::{
 };
 
 use pareto::{HasObjectives, MoSolution, Objectives};
-use tracing::warn;
+use tracing::{instrument, warn};
 
 #[derive(Debug, Clone)]
 pub struct SolutionFingerprint<const D: usize> {
@@ -14,6 +14,7 @@ pub struct SolutionFingerprint<const D: usize> {
     pub objectives: pareto::Objectives<D>,
     pub iteration: u16,
     pub timestamp: Duration,
+    pub selected_images: Vec<usize>,
 }
 
 impl<const D: usize> HasObjectives<D> for SolutionFingerprint<D> {
@@ -104,6 +105,7 @@ impl<const D: usize> ExploredSolutionsData<D> {
         iteration: usize,
         solution: &T,
         time: Duration,
+        selected_images: Vec<usize>,
     ) {
         let hash = Self::hash(solution);
 
@@ -113,6 +115,7 @@ impl<const D: usize> ExploredSolutionsData<D> {
                 objectives: *solution.objectives(),
                 explored_neighborhood_size: 0,
                 timestamp: time,
+                selected_images,
             };
             e.insert(new_entry);
         } else {
@@ -125,6 +128,7 @@ impl<const D: usize> ExploredSolutionsData<D> {
     /// # Panics
     ///
     /// Panics if the solution is not registered in the explored solutions set.
+    #[instrument(level = "debug", skip(self, solution), fields(explored_neighborhood_size))]
     pub fn update_explored_neighborhood_size<T: Hash>(
         &mut self,
         solution: &T,
@@ -218,5 +222,57 @@ impl<const D: usize> ExploredSolutionsData<D> {
     #[must_use]
     pub const fn max_objectives(&self) -> &[u64; D] {
         &self.max_objectives
+    }
+
+    /// Export explored solutions to JSON string
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        use std::fmt::Write;
+        
+        let mut json = String::from("{\n  \"solutions\": [\n");
+        
+        let mut first = true;
+        for (hash, solution) in &self.solutions {
+            if !first {
+                json.push_str(",\n");
+            }
+            first = false;
+            
+            let _ = writeln!(json, "    {{");
+            let _ = writeln!(json, "      \"hash\": {hash},");
+            let _ = writeln!(json, "      \"iteration\": {},", solution.iteration);
+            let _ = writeln!(json, "      \"timestamp_us\": {},", solution.timestamp.as_micros());
+            let _ = writeln!(json, "      \"explored_neighborhood_size\": {},", solution.explored_neighborhood_size);
+            let _ = write!(json, "      \"objectives\": [");
+            for (i, obj) in solution.objectives.iter().enumerate() {
+                if i > 0 {
+                    json.push_str(", ");
+                }
+                let _ = write!(json, "{obj}");
+            }
+            json.push_str("],\n");
+            let _ = write!(json, "      \"selected_images\": [");
+            for (i, img) in solution.selected_images.iter().enumerate() {
+                if i > 0 {
+                    json.push_str(", ");
+                }
+                let _ = write!(json, "{img}");
+            }
+            json.push_str("]\n");
+            json.push_str("    }");
+        }
+        
+        json.push_str("\n  ],\n");
+        let _ = writeln!(json, "  \"num_iterations\": {},", self.num_iterations);
+        json.push_str("  \"max_objectives\": [");
+        for (i, obj) in self.max_objectives.iter().enumerate() {
+            if i > 0 {
+                json.push_str(", ");
+            }
+            let _ = write!(json, "{obj}");
+        }
+        json.push_str("]\n}\n");
+        
+        json
     }
 }

@@ -6,6 +6,7 @@ use crate::{
     problem::{Problem, ScaledObjectiveDeltas},
     residual_problem::ResidualProblem,
     residual_solution::ResidualSolution,
+    trackers::TrackerCollection,
 };
 
 // Re-export solution implementations
@@ -27,14 +28,20 @@ pub trait ImageSet<const D: usize>: Sized {
 
     /// Set an image's selection state
     fn set_image(&mut self, image_index: usize, selected: bool);
-
-    /// Get clear parts counts
-    fn clear_parts_counts(&self) -> &[usize];
 }
 
 /// Core trait for basic SIMS solution operations that all solution types must support
 pub trait SIMSCore<const D: usize>:
-    HasObjectives<D> + MoSolution<D> + ImageSet<D> + Clone + Eq + PartialEq + Hash + Debug + Send + Sync
+    HasObjectives<D>
+    + MoSolution<D>
+    + ImageSet<D>
+    + Clone
+    + Eq
+    + PartialEq
+    + Hash
+    + Debug
+    + Send
+    + Sync
 {
     /// Convert to debug representation
     fn to_debug_solution(&self) -> SIMSSolution;
@@ -70,11 +77,14 @@ pub trait SIMSCore<const D: usize>:
 
 /// Trait for solutions that support modification operations (not applicable to `ResidualSolution`)
 pub trait SIMSModifiable<const D: usize>: SIMSCore<D> {
-    /// Get the clear parts counts
-    fn clear_parts_counts(&self) -> &[usize];
+    /// The type of tracker collection this solution uses.
+    type Trackers: TrackerCollection<D>;
 
-    /// Get the element coverage
-    fn element_coverage(&self) -> &[usize];
+    /// Access the trackers
+    fn trackers(&self) -> &Self::Trackers;
+
+    /// Mutable access to trackers
+    fn trackers_mut(&mut self) -> &mut Self::Trackers;
 
     /// Add an image to the solution
     fn add_image(&mut self, image_index: usize, problem: &Problem<Self, D>);
@@ -94,9 +104,6 @@ pub trait SIMSModifiable<const D: usize>: SIMSCore<D> {
 
     /// Find the best image to remove (for local search)
     fn find_best_image_to_remove(&self, problem: &Problem<Self, D>) -> Option<usize>;
-
-    /// Get neighborhood solutions for local search
-    fn get_neighborhood(&self, problem: &Problem<Self, D>) -> Vec<Self>;
 
     /// Generate neighborhood solutions with specific parameters for Pareto Local Search
     fn neighborhood(

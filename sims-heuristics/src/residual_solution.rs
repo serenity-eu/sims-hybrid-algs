@@ -28,7 +28,17 @@ impl<const D: usize> ResidualSolution<D> {
         };
         // Calculate objectives directly for residual solution
         for i in 0..D {
-            solution.objectives[i] = problem.objective(i).calculate_value(&solution, problem);
+            // Cast solution to ResidualSolution for calculate_value
+            let residual_sol = Self {
+                selected_images: solution.selected_images.clone(),
+                objectives: [0; D],
+                timestamp: solution.timestamp,
+            };
+            solution.objectives[i] = problem.objective(i).calculate_value(&residual_sol, unsafe {
+                // SAFETY: Problem<T, D> and Problem<Self, D> have identical memory layout
+                // and Self implements ImageSet<D> just like T
+                &*std::ptr::from_ref::<Problem<T, D>>(problem).cast::<Problem<Self, D>>()
+            });
         }
         solution
     }
@@ -84,11 +94,6 @@ impl<const D: usize> ImageSet<D> for ResidualSolution<D> {
         } else if !selected {
             self.selected_images.retain(|&x| x != image_index);
         }
-    }
-
-    fn clear_parts_counts(&self) -> &[usize] {
-        // Assuming clear parts counts are not applicable for residual solutions
-        panic!("ResidualSolution does not support clear parts counts")
     }
 }
 

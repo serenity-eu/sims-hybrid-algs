@@ -1,5 +1,5 @@
 use log::debug;
-use pls::objectives::ObjectiveType;
+use pls::objectives::ObjectiveState;
 use pls::problem::Problem;
 use pls::solution::{bitset_encoded_solution::BitsetEncodedSolution, EncodedSolution};
 
@@ -15,24 +15,20 @@ fn extract_objective_values<const D: usize>(
     let mut min_resolutions_sum: Option<u64> = None;
     let mut max_incidence_angle: Option<u64> = None;
 
-    for (i, objective_type) in problem.objectives.iter().enumerate() {
-        match objective_type {
-            ObjectiveType::TotalCost => {
+    for (i, objective_state) in problem.objectives.iter().enumerate() {
+        match objective_state {
+            ObjectiveState::TotalCost { .. } => {
                 cost = Some(objectives[i]);
             }
-            ObjectiveType::CloudyArea => {
+            ObjectiveState::CloudyArea { .. } => {
                 cloudy_area = Some(objectives[i]);
             }
-            ObjectiveType::MinResolution => {
+            ObjectiveState::MinResolution { .. } => {
                 min_resolutions_sum = Some(objectives[i]);
             }
-            ObjectiveType::MaxIncidenceAngle => {
+            ObjectiveState::MaxIncidenceAngle { .. } => {
                 max_incidence_angle = Some(objectives[i]);
             }
-            _ => panic!(
-                "Unsupported objective type: {:?} at index {}",
-                objective_type, i
-            ),
         }
     }
 

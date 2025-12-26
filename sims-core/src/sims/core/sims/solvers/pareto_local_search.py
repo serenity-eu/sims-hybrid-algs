@@ -30,6 +30,7 @@ def solve(
     objective_bounds: list[list[int]] | None = None,
     include_dominated: bool = False,
     pareto_archive: str = "nd-tree",
+    is_deterministic: bool = True,
 ) -> SolverResult:
     """
     Solve the SIMS problem using Pareto Local Search via sims_problem.solve_with_pls.
@@ -50,6 +51,7 @@ def solve(
         objective_bounds: Optional list of [min, max] bounds for each objective (for trace generation)
         include_dominated: If False, filters out dominated solutions from traces (default: False)
         pareto_archive: Pareto archive implementation ("nd-tree", "linked-list", "vector")
+        is_deterministic: Whether to use deterministic mode (default: True)
     
     Returns:
         SolverResult: The solving result with Pareto front solutions
@@ -99,7 +101,7 @@ def solve(
             plot_output_path=None,
             timeout=timeout,
             max_iterations=max_iterations,
-            is_deterministic=False,
+            is_deterministic=is_deterministic,
             initial_population_size=initial_population_size,
             initial_population=initial_population_sims,
             neighborhood_size_min=neighborhood_size_min,
