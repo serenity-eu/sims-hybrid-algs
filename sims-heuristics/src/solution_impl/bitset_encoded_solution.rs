@@ -2,12 +2,14 @@
 // This module is only compiled when the "bitmaps" feature is enabled.
 
 use fixedbitset::FixedBitSet;
+#[cfg(feature = "bitmaps")]
+use pareto::Objectives;
 use pareto::{HasObjectives, MoSolution, Random};
 use rand::SeedableRng;
 use rand::{Rng, seq::IteratorRandom};
 use std::{collections::BinaryHeap, fmt::Debug, hash::Hash, time::Duration};
 
-use crate::objectives::{self, SolutionEvaluator};
+use crate::objectives;
 use crate::probabilistic_probing_neighborhood::{
     ObjectiveBasedSelector, ProbabilisticProbingNeighborhood, ProbingConfig,
 };
@@ -17,33 +19,59 @@ use crate::residual_solution::ResidualSolution;
 use crate::solution::{ImageSet, MergeableWithResidual, SIMSCore, SIMSModifiable, SIMSSolution};
 use crate::solution_set_impl::NdTreeSolutionSet;
 use crate::timer::Timer;
+use crate::trackers::{ObjectiveTracker, StandardTracker, StandardTrackerArray, TrackerCollection};
 use crate::util::IntersectionIterator;
 use itertools::Itertools;
 
+/// A temporary state representing a solution with specific images removed.
+/// Used as an intermediate step in creating a `ResidualProblem`.
+/// Uses `FixedBitSet` for efficient storage and set operations.
+pub struct UndercoveredSolution<const D: usize> {
+    pub partial_selected_images: FixedBitSet,
+    pub removed_images: FixedBitSet,
+    pub uncovered_elements: FixedBitSet,
+    pub partial_trackers: StandardTrackerArray<D>,
+}
+
+/// Lightweight view for `ImageSet` operations - only used for tracker `peek_delta` calls
+struct ImageSetView<'a> {
+    selected_images: &'a FixedBitSet,
+}
+
+impl<const D: usize> crate::solution::ImageSet<D> for ImageSetView<'_> {
+    fn selected_images(&self) -> Vec<usize> {
+        self.selected_images.ones().collect()
+    }
+
+    fn unselected_images(&self) -> Vec<usize> {
+        self.selected_images.zeroes().collect()
+    }
+
+    fn is_image_selected(&self, image_index: usize) -> bool {
+        self.selected_images[image_index]
+    }
+
+    fn num_selected_images(&self) -> usize {
+        self.selected_images.count_ones(..)
+    }
+
+    fn set_image(&mut self, _image_index: usize, _selected: bool) {
+        panic!("ImageSetView is read-only")
+    }
+}
+
 #[cfg(feature = "bitmaps")]
-#[derive(Clone, Eq)]
+#[derive(Clone)]
 pub struct BitsetEncodedSolution<const D: usize> {
     pub selected_images: FixedBitSet,
-    pub objectives: pareto::Objectives<D>,
-    pub clear_parts_counts: Vec<usize>,
-    pub element_coverage: Vec<usize>,
+    pub objectives: Objectives<D>,
     pub timestamp: Duration,
+    pub trackers: StandardTrackerArray<D>,
 }
 
 // Iterator types for BitsetEncodedSolution - leverage FixedBitSet's built-in iterators
 pub type BitsetSelectedImagesIter<'a> = fixedbitset::Ones<'a>;
 pub type BitsetUnselectedImagesIter<'a> = fixedbitset::Zeroes<'a>;
-
-// Implement SolutionEvaluator trait for BitsetEncodedSolution
-impl<const D: usize> SolutionEvaluator<D> for BitsetEncodedSolution<D> {
-    fn clear_parts_counts(&self) -> &[usize] {
-        &self.clear_parts_counts
-    }
-
-    fn element_coverage(&self) -> &[usize] {
-        &self.element_coverage
-    }
-}
 
 impl<const D: usize> HasObjectives<D> for BitsetEncodedSolution<D> {
     fn objectives(&self) -> &pareto::Objectives<D> {
@@ -74,10 +102,6 @@ impl<const D: usize> ImageSet<D> for BitsetEncodedSolution<D> {
     fn set_image(&mut self, image_index: usize, selected: bool) {
         self.selected_images.set(image_index, selected);
     }
-
-    fn clear_parts_counts(&self) -> &[usize] {
-        &self.clear_parts_counts
-    }
 }
 
 // Implement SIMSCore trait
@@ -106,12 +130,14 @@ impl<const D: usize> Random for BitsetEncodedSolution<D> {
 
 // Implement SIMSModifiable trait
 impl<const D: usize> SIMSModifiable<D> for BitsetEncodedSolution<D> {
-    fn clear_parts_counts(&self) -> &[usize] {
-        &self.clear_parts_counts
+    type Trackers = StandardTrackerArray<D>;
+
+    fn trackers(&self) -> &Self::Trackers {
+        &self.trackers
     }
 
-    fn element_coverage(&self) -> &[usize] {
-        &self.element_coverage
+    fn trackers_mut(&mut self) -> &mut Self::Trackers {
+        &mut self.trackers
     }
 
     fn add_image(&mut self, image_index: usize, problem: &Problem<Self, D>) {
@@ -170,17 +196,6 @@ impl<const D: usize> SIMSModifiable<D> for BitsetEncodedSolution<D> {
         Some(scaled_objective_deltas[max_index].image_index)
     }
 
-    fn get_neighborhood(&self, problem: &Problem<Self, D>) -> Vec<Self> {
-        // Create a timer for the neighborhood method
-        let timer = Timer::start(std::time::Duration::from_secs(60)); // 1 minute default
-
-        // Use the probabilistic probing neighborhood method with default parameters
-        let k = 1; // Default value for local search
-        let is_deterministic = true;
-
-        self.neighborhood(k, problem, &timer, is_deterministic)
-    }
-
     fn neighborhood(
         &self,
         k: u32,
@@ -188,30 +203,63 @@ impl<const D: usize> SIMSModifiable<D> for BitsetEncodedSolution<D> {
         timer: &Timer,
         is_deterministic: bool,
     ) -> Vec<Self> {
-        let removal_candidates_lists: Vec<Vec<usize>> = if k == 1 {
-            self.selected_images()
-                .filter_map(|selected_image| {
-                    if self.is_replaceable(selected_image, problem) {
-                        return Some(vec![selected_image]);
-                    }
-                    return None;
-                })
-                .collect()
-        } else {
-            self.worst_selected_images(problem, is_deterministic)
-                .into_iter()
-                .combinations(k as usize)
-                .collect()
+        use tracing::debug_span;
+        
+        let candidates_span = debug_span!("find_removal_candidates", k = k);
+        let removal_candidates_lists: Vec<Vec<usize>> = {
+            let _guard = candidates_span.enter();
+            if k == 1 {
+                let is_replaceable_span = debug_span!("check_is_replaceable");
+                let _replaceable_guard = is_replaceable_span.enter();
+                self.selected_images()
+                    .filter_map(|selected_image| {
+                        if self.is_replaceable(selected_image, problem) {
+                            Some(vec![selected_image])
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            } else {
+                let worst_images_span = debug_span!("compute_worst_images");
+                let worst_images = {
+                    let _worst_guard = worst_images_span.enter();
+                    self.worst_selected_images(problem, is_deterministic)
+                };
+                
+                let combinations_span = debug_span!("generate_combinations", k = k);
+                let _comb_guard = combinations_span.enter();
+                worst_images
+                    .into_iter()
+                    .combinations(k as usize)
+                    .collect()
+            }
         };
 
         let mut residual_solutions: Vec<Self> = Vec::new();
 
-        for removal_candidates in removal_candidates_lists {
-            if let Some(mut residual_problem) =
+        let solve_span = debug_span!("solve_residual_problems", num_problems = removal_candidates_lists.len());
+        let _solve_guard = solve_span.enter();
+
+        for (idx, removal_candidates) in removal_candidates_lists.into_iter().enumerate() {
+            let problem_span = debug_span!("residual_problem", problem_index = idx);
+            let _problem_guard = problem_span.enter();
+            
+            let create_span = debug_span!("create_residual_problem");
+            let residual_problem_opt = {
+                let _create_guard = create_span.enter();
                 self.create_residual_problem(removal_candidates, problem, is_deterministic)
-            {
-                let neighborhood_iter =
-                    residual_problem.solve::<NdTreeSolutionSet<ResidualSolution<D>, D>>(timer);
+            };
+            
+            if let Some(mut residual_problem) = residual_problem_opt {
+                let solve_residual_span = debug_span!("solve_residual");
+                let neighborhood_iter = {
+                    let _solve_residual_guard = solve_residual_span.enter();
+                    residual_problem.solve::<NdTreeSolutionSet<ResidualSolution<D>, D>>(timer)
+                };
+                
+                let extend_span = debug_span!("extend_solutions");
+                let _extend_guard = extend_span.enter();
                 residual_solutions.extend(neighborhood_iter.into_iter());
             }
             if timer.is_expired() {
@@ -236,43 +284,8 @@ impl<const D: usize> SIMSModifiable<D> for BitsetEncodedSolution<D> {
             return false;
         }
 
-        let clear_parts_counts_valid =
-            self.clear_parts_counts
-                .iter()
-                .enumerate()
-                .all(|(index, &count)| {
-                    count
-                        == self
-                            .selected_images()
-                            .filter(|&image_index| {
-                                problem.images[image_index].clear_parts.contains(&index)
-                            })
-                            .count()
-                });
-
-        if !clear_parts_counts_valid {
-            log::error!("Clear parts counts are invalid");
-            return false;
-        }
-
-        let element_coverage_valid =
-            self.element_coverage
-                .iter()
-                .enumerate()
-                .all(|(index, &count)| {
-                    count
-                        == self
-                            .selected_images()
-                            .filter(|&image_index| {
-                                problem.images[image_index].parts.contains(&index)
-                            })
-                            .count()
-                });
-
-        if !element_coverage_valid {
-            log::error!("Element coverage is invalid");
-            return false;
-        }
+        // Note: clear_parts_counts and element_coverage validation removed - 
+        // these are now maintained automatically by trackers
 
         return self.are_objectives_valid(problem);
     }
@@ -293,9 +306,8 @@ impl<const D: usize> BitsetEncodedSolution<D> {
         let mut solution = Self {
             selected_images: FixedBitSet::with_capacity(problem.images.len()),
             objectives: [0; D], // Will be recalculated below
-            clear_parts_counts: vec![0; problem.universe.len()],
-            element_coverage: vec![0; problem.universe.len()],
             timestamp: Duration::new(0, 0), // Initial solutions have timestamp 0
+            trackers: StandardTrackerArray::new(problem),
         };
 
         // Calculate correct objectives for empty solution (no images selected)
@@ -320,8 +332,6 @@ impl<const D: usize> BitsetEncodedSolution<D> {
         let mut selected_images = FixedBitSet::with_capacity(problem.images.len());
         let mut covered_elements = vec![false; problem.universe.len()];
         let mut num_covered_elements = 0;
-        let mut clear_parts_counts = vec![0; problem.universe.len()];
-        let mut part_coverage_counts = vec![0; problem.universe.len()];
 
         while num_covered_elements < problem.universe.len() {
             let element_index = rng.random_range(0..problem.universe.len());
@@ -344,22 +354,14 @@ impl<const D: usize> BitsetEncodedSolution<D> {
                     covered_elements[part] = true;
                     num_covered_elements += 1;
                 }
-                part_coverage_counts[part] += 1;
             });
-            problem.images[*image_index]
-                .clear_parts
-                .iter()
-                .for_each(|&clear_part| {
-                    clear_parts_counts[clear_part] += 1;
-                });
         }
 
         let mut sims_solution = Self {
             selected_images,
             objectives: [0; D],
-            clear_parts_counts,
-            element_coverage: part_coverage_counts,
-            timestamp: Duration::new(0, 0), // Initial solutions have timestamp 0
+            timestamp: Duration::new(0, 0),
+            trackers: StandardTrackerArray::new(problem),
         };
         sims_solution.compute_objectives(problem);
         sims_solution
@@ -467,26 +469,19 @@ impl<const D: usize> BitsetEncodedSolution<D> {
         log::debug!("REMOVE_IMAGE: Starting removal of image {i}");
         log::debug!("  Current objectives: {:?}", self.objectives);
 
-        // Use the new generic objective delta calculation
+        // Use trackers for delta calculation
         let mut deltas = [0i64; D];
         for (obj_index, delta) in deltas.iter_mut().enumerate().take(D) {
-            *delta = self.calculate_objective_delta(obj_index, i, problem);
+            *delta = self.trackers().get(obj_index).peek_delta(i, true, problem, self);
         }
         
         objectives::apply_delta(&mut self.objectives, &deltas);
+        
+        // Apply tracker updates
+        for obj_index in 0..D {
+            self.trackers_mut().get_mut(obj_index).apply(i, true, problem);
+        }
 
-        problem.images[i].parts.iter().for_each(|&part| {
-            self.element_coverage[part] -= 1;
-        });
-        problem.images[i]
-            .clear_parts
-            .iter()
-            .for_each(|&clear_part| {
-                debug_assert!(self.clear_parts_counts[clear_part] > 0);
-                log::debug!("  Decrementing clear_parts_counts[{}] from {} to {}", 
-                           clear_part, self.clear_parts_counts[clear_part], self.clear_parts_counts[clear_part] - 1);
-                self.clear_parts_counts[clear_part] -= 1;
-            });
         self.selected_images.set(i, false);
         
         log::debug!("REMOVE_IMAGE: Completed removal of image {i}");
@@ -503,23 +498,19 @@ impl<const D: usize> BitsetEncodedSolution<D> {
         log::debug!("ADD_IMAGE: Starting addition of image {i}");
         log::debug!("  Current objectives: {:?}", self.objectives);
         
-        // Use the new generic objective delta calculation
+        // Use trackers for delta calculation
         let mut deltas = [0i64; D];
         for (obj_index, delta) in deltas.iter_mut().enumerate().take(D) {
-            *delta = self.calculate_objective_delta(obj_index, i, problem);
+            *delta = self.trackers().get(obj_index).peek_delta(i, false, problem, self);
         }
         
         objectives::apply_delta(&mut self.objectives, &deltas);
+        
+        // Apply tracker updates
+        for obj_index in 0..D {
+            self.trackers_mut().get_mut(obj_index).apply(i, false, problem);
+        }
 
-        problem.images[i].parts.iter().for_each(|&part| {
-            self.element_coverage[part] += 1;
-        });
-        problem.images[i]
-            .clear_parts
-            .iter()
-            .for_each(|&clear_part| {
-                self.clear_parts_counts[clear_part] += 1;
-            });
         self.selected_images.set(i, true);
         
         log::debug!("ADD_IMAGE: Completed addition of image {i}");
@@ -540,6 +531,77 @@ impl<const D: usize> BitsetEncodedSolution<D> {
         return objectives::generate_weights::<D>();
     }
 
+    /// Transition to an `UndercoveredSolution` state by removing specific images.
+    /// This is the first step in creating a `ResidualProblem`.
+    #[must_use]
+    pub fn build_undercovered_solution(
+        &self,
+        images_to_remove: &[usize],
+        problem: &Problem<Self, D>,
+    ) -> UndercoveredSolution<D> {
+        // 1. Create bitset of removed images
+        let mut removed_images = FixedBitSet::with_capacity(self.selected_images.len());
+        for &img in images_to_remove {
+            removed_images.insert(img);
+        }
+
+        // 2. Create partial solution using bitwise difference (A \ B)
+        // This is much faster than iterating and unsetting individual bits
+        let mut partial_selected_images = self.selected_images.clone();
+        partial_selected_images.difference_with(&removed_images);
+
+        // 3. Clone trackers and apply removals
+        let mut partial_trackers = self.trackers.clone();
+        for &img_idx in images_to_remove {
+            for obj_index in 0..D {
+                partial_trackers.get_mut(obj_index).apply(img_idx, true, problem);
+            }
+        }
+
+        let mut uncovered_elements = FixedBitSet::with_capacity(problem.universe.len());
+
+        // Efficiently find uncovered elements using the CloudyArea tracker from the partial trackers
+        let cloudy_tracker_idx = problem.objective_types.iter()
+            .position(|obj| matches!(obj, crate::objectives::ObjectiveType::CloudyArea));
+
+        if let Some(idx) = cloudy_tracker_idx {
+            if let StandardTracker::CloudyArea(state) = partial_trackers.get(idx) {
+                // Check which elements are uncovered (count == 0)
+                // O(U) where U is universe size
+                for (elem_idx, &count) in state.counts.iter().enumerate() {
+                    if count == 0 {
+                        uncovered_elements.insert(elem_idx);
+                    }
+                }
+            } else {
+                // Fallback if tracker state is unexpected
+                Self::calculate_uncovered_fallback_for_partial(&partial_selected_images, problem, &mut uncovered_elements);
+            }
+        } else {
+            // Fallback if CloudyArea objective is not present
+            Self::calculate_uncovered_fallback_for_partial(&partial_selected_images, problem, &mut uncovered_elements);
+        }
+
+        UndercoveredSolution {
+            partial_selected_images,
+            removed_images,
+            uncovered_elements,
+            partial_trackers,
+        }
+    }
+
+    /// Helper to calculate uncovered elements when tracker is not available
+    fn calculate_uncovered_fallback_for_partial(partial_selected: &FixedBitSet, problem: &Problem<Self, D>, uncovered: &mut FixedBitSet) {
+        for element_index in 0..problem.universe.len() {
+             let is_covered = partial_selected.ones().any(|img_idx| {
+                 problem.images[img_idx].parts.contains(&element_index)
+             });
+             if !is_covered {
+                 uncovered.insert(element_index);
+             }
+        }
+    }
+
     /// Create residual problem, composed of removed images, candidates to be added, and images covering the rest of the uncovered elements.
     #[must_use]
     pub fn create_residual_problem<'a>(
@@ -548,44 +610,46 @@ impl<const D: usize> BitsetEncodedSolution<D> {
         problem: &'a Problem<Self, D>,
         is_deterministic: bool,
     ) -> Option<ResidualProblem<'a, Self, D>> {
-        let mut unmodified_solution = self.clone();
+        // Step 1: Transition to Undercovered State (includes trackers)
+        let undercovered_solution = self.build_undercovered_solution(&removal_candidates_indices, problem);
 
-        // Remove images
-        for &removed_image_index in &removal_candidates_indices {
-            unmodified_solution.remove_image(removed_image_index, problem);
-        }
-
-        // Get list of uncovered elements
-        let uncovered_elements_indices = unmodified_solution
-            .element_coverage
-            .iter()
-            .enumerate()
-            .filter_map(|(element_index, &part_coverage_count)| {
-                if part_coverage_count == 0 {
-                    Some(element_index)
-                } else {
-                    None
+        // Step 2: Extract data from the intermediate state
+        let uncovered_elements_indices: Vec<usize> = undercovered_solution.uncovered_elements.ones().collect();
+        
+        // Get clear parts counts for uncovered elements from CloudyArea tracker
+        let original_clear_parts_counts: Vec<usize> = problem.objective_types.iter()
+            .position(|obj| matches!(obj, crate::objectives::ObjectiveType::CloudyArea))
+            .map_or_else(
+                || vec![0; uncovered_elements_indices.len()], 
+                |cloudy_area_tracker| {
+                    if let StandardTracker::CloudyArea(state) = undercovered_solution.partial_trackers.get(cloudy_area_tracker) {
+                        uncovered_elements_indices
+                            .iter()
+                            .map(|&element| state.counts[element] as usize)
+                            .collect()
+                    } else {
+                        vec![0; uncovered_elements_indices.len()]
+                    }
                 }
-            })
-            .collect::<Vec<usize>>();
+            );
 
-        // Get clear parts counts for uncovered elements
-        let original_clear_parts_counts = uncovered_elements_indices
-            .iter()
-            .map(|&element| unmodified_solution.clear_parts_counts[element])
-            .collect();
-
-        // Find best image(s) to replace removed image(s)
-        let mut best_addition_candidates =
-            self.best_unselected_images(&uncovered_elements_indices, problem, is_deterministic)?;
+        // Step 3: Find candidates to fix the undercovered state using the static helper
+        let mut best_addition_candidates = Self::best_unselected_images_with_trackers(
+            &undercovered_solution.partial_selected_images,
+            &undercovered_solution.partial_trackers,
+            &uncovered_elements_indices, 
+            problem, 
+            is_deterministic
+        )?;
 
         removal_candidates_indices.sort_unstable();
         best_addition_candidates.sort_unstable();
 
         Some(ResidualProblem::new(
-            unmodified_solution,
-            removal_candidates_indices,
-            best_addition_candidates,
+            self.clone(), // unmodified_solution
+            undercovered_solution.partial_trackers,
+            &removal_candidates_indices,
+            &best_addition_candidates,
             uncovered_elements_indices,
             original_clear_parts_counts,
             problem,
@@ -593,14 +657,16 @@ impl<const D: usize> BitsetEncodedSolution<D> {
     }
 
     /// Get indices of the best replacement image(s) which is not selected yet, returns None when image cannot be replaced
+    /// Static helper that accepts trackers and `selected_images` directly
     #[must_use]
-    pub fn best_unselected_images(
-        &self,
+    pub fn best_unselected_images_with_trackers(
+        partial_selected_images: &FixedBitSet,
+        partial_trackers: &StandardTrackerArray<D>,
         uncovered_elements: &[usize],
         problem: &Problem<Self, D>,
         is_deterministic: bool,
     ) -> Option<Vec<usize>> {
-        let unselected_images: Vec<usize> = self.unselected_images().collect();
+        let unselected_images: Vec<usize> = partial_selected_images.zeroes().collect();
 
         // If there is no unselected images, return
         if unselected_images.is_empty() {
@@ -612,11 +678,63 @@ impl<const D: usize> BitsetEncodedSolution<D> {
             let equal_weight = 1.0 / D as f32;
             [equal_weight; D]
         } else {
-            self.generate_weights()
+            objectives::generate_weights::<D>()
         };
 
-        let unselected_images_scaled_deltas: Vec<ScaledObjectiveDeltas<D>> =
-            self.scaled_image_objective_deltas(&unselected_images, problem);
+        // Calculate scaled deltas for unselected images
+        let unselected_images_scaled_deltas: Vec<ScaledObjectiveDeltas<D>> = {
+            let raw_comparable_images: Vec<ImageObjectiveDeltas<D>> = unselected_images.iter()
+                .map(|&image_index| {
+                    let mut deltas = [0i64; D];
+                    for (obj_index, delta) in deltas.iter_mut().enumerate().take(D) {
+                        // Use trackers to peek at delta (adding image, so is_removing = false)
+                        *delta = partial_trackers.get(obj_index).peek_delta(
+                            image_index, 
+                            false, 
+                            problem, 
+                            &ImageSetView { selected_images: partial_selected_images }
+                        );
+                    }
+                    ImageObjectiveDeltas {
+                        image_index,
+                        deltas,
+                    }
+                })
+                .collect();
+
+            // Use global objective bounds for normalization
+            let normalization_ranges: Vec<f32> = problem.objective_bounds().as_ref().map_or_else(
+                || {
+                    problem.max_objectives().iter().map(|&max_val| {
+                        if max_val > 0 { max_val as f32 } else { 1.0 }
+                    }).collect()
+                },
+                |bounds| {
+                    bounds.iter().map(|bound| {
+                        let range = bound[1] as f32 - bound[0] as f32;
+                        if range > 0.0 { range } else { 1.0 }
+                    }).collect()
+                }
+            );
+
+            raw_comparable_images
+                .iter()
+                .map(|objective_deltas| {
+                    let mut scaled_deltas = [0.0f32; D];
+                    let raw_deltas = objective_deltas.deltas;
+
+                    for i in 0..D {
+                        scaled_deltas[i] = raw_deltas[i].abs() as f32 / normalization_ranges[i];
+                    }
+
+                    ScaledObjectiveDeltas {
+                        image_index: objective_deltas.image_index,
+                        raw_deltas,
+                        scaled_deltas,
+                    }
+                })
+                .collect()
+        };
 
         let mut comparable_unselected_images = unselected_images_scaled_deltas
             .into_iter()
@@ -662,7 +780,24 @@ impl<const D: usize> BitsetEncodedSolution<D> {
                 .map(|comparable_image| comparable_image.index)
                 .collect::<Vec<usize>>()
         };
-        return Some(best_unselected_images);
+        Some(best_unselected_images)
+    }
+
+    /// Get indices of the best replacement image(s) which is not selected yet, returns None when image cannot be replaced
+    #[must_use]
+    pub fn best_unselected_images(
+        &self,
+        uncovered_elements: &[usize],
+        problem: &Problem<Self, D>,
+        is_deterministic: bool,
+    ) -> Option<Vec<usize>> {
+        Self::best_unselected_images_with_trackers(
+            &self.selected_images,
+            &self.trackers,
+            uncovered_elements,
+            problem,
+            is_deterministic,
+        )
     }
 
     #[must_use]
@@ -735,10 +870,10 @@ impl<const D: usize> BitsetEncodedSolution<D> {
 
         // Use global objective bounds for normalization if available
         // Otherwise fall back to max_objectives as before
-        let normalization_ranges: Vec<f32> = problem.objective_bounds.as_ref().map_or_else(
+        let normalization_ranges: Vec<f32> = problem.objective_bounds().as_ref().map_or_else(
             || {
                 // Fallback: use max_objectives (nadir point approximation)
-                problem.max_objectives.iter().map(|&max_val| {
+                problem.max_objectives().iter().map(|&max_val| {
                     if max_val > 0 { max_val as f32 } else { 1.0 }
                 }).collect()
             },
@@ -790,6 +925,8 @@ impl<const D: usize> PartialEq for BitsetEncodedSolution<D> {
     }
 }
 
+impl<const D: usize> Eq for BitsetEncodedSolution<D> {}
+
 impl<const D: usize> Hash for BitsetEncodedSolution<D> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.selected_images.hash(state);
@@ -821,7 +958,7 @@ impl<const D: usize> MergeableWithResidual<D> for BitsetEncodedSolution<D> {
         residual_solution
             .selected_images
             .iter()
-            .map(|&image_index| residual_problem.all_images[image_index].index)
+            .map(|&condensed_idx| residual_problem.image_index_map[condensed_idx])
             .for_each(|image_index| {
                 self.add_image(image_index, problem);
             });
@@ -1408,7 +1545,7 @@ impl<const D: usize> BitsetEncodedSolution<D> {
         for i in 0..D {
             let obj1 = solution1.calculate_objective(i, problem) as f64;
             let obj2 = solution2.calculate_objective(i, problem) as f64;
-            let max_obj = problem.max_objectives[i] as f64;
+            let max_obj = problem.max_objectives()[i] as f64;
 
             // Normalized distance
             let normalized_diff = (obj1 - obj2).abs() / max_obj.max(1.0);

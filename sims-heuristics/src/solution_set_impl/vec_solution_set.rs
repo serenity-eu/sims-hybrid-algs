@@ -23,11 +23,49 @@ where
         }
     }
 
-    fn binary_search(&self, solution: &T) -> Result<usize, usize> {
+    fn binary_search_objectives(&self, solution: &T) -> Result<usize, usize> {
         self.vec_set
-            .binary_search_by_key(solution.objectives().first().unwrap(), |s| {
-                *s.objectives().first().unwrap()
-            })
+            .binary_search_by(|s| s.objectives().cmp(solution.objectives()))
+    }
+
+    /// Check if an exact duplicate exists (same objectives AND same `selected_images`).
+    /// Uses binary search to find objective range, then checks only solutions with matching objectives.
+    /// Returns true if duplicate found, false otherwise.
+    fn contains_exact_duplicate(&self, solution: &T) -> bool {
+        match self.binary_search_objectives(solution) {
+            Ok(pos) => {
+                // Found at least one solution with same objectives
+                // Check backward from pos for all solutions with same objectives
+                let mut check_pos = pos;
+                loop {
+                    if self.vec_set[check_pos] == *solution {
+                        return true;
+                    }
+                    if check_pos == 0 {
+                        break;
+                    }
+                    check_pos -= 1;
+                    if self.vec_set[check_pos].objectives() != solution.objectives() {
+                        break;
+                    }
+                }
+                // Check forward from pos+1 for all solutions with same objectives
+                check_pos = pos + 1;
+                while check_pos < self.vec_set.len()
+                    && self.vec_set[check_pos].objectives() == solution.objectives()
+                {
+                    if self.vec_set[check_pos] == *solution {
+                        return true;
+                    }
+                    check_pos += 1;
+                }
+                false
+            }
+            Err(_) => {
+                // No solution with same objectives exists
+                false
+            }
+        }
     }
 }
 
@@ -53,37 +91,7 @@ where
     }
 
     fn contains(&self, solution: &T) -> bool {
-        // Binary search only checks first objective, so we need to verify exact match
-        match self.binary_search(solution) {
-            Ok(pos) => {
-                // Found a solution with same first objective, check if it's exactly the same
-                self.vec_set[pos] == *solution
-            }
-            Err(pos) => {
-                // Check solutions around the position that might have same first objective
-                let first_obj = solution.objectives()[0];
-                
-                // Check backwards from position
-                let mut idx = pos;
-                while idx > 0 && self.vec_set[idx - 1].objectives()[0] == first_obj {
-                    idx -= 1;
-                    if self.vec_set[idx] == *solution {
-                        return true;
-                    }
-                }
-                
-                // Check forward from position
-                idx = pos;
-                while idx < self.vec_set.len() && self.vec_set[idx].objectives()[0] == first_obj {
-                    if self.vec_set[idx] == *solution {
-                        return true;
-                    }
-                    idx += 1;
-                }
-                
-                false
-            }
-        }
+        self.contains_exact_duplicate(solution)
     }
 
     fn try_insert(&mut self, solution: &T) -> bool {
@@ -95,11 +103,15 @@ where
 
         let was_inserted;
 
-        match self.binary_search(solution) {
-            Ok(_) => {
-                was_inserted = false;
-            }
-            Err(position) => {
+        match self.binary_search_objectives(solution) {
+            Ok(position) | Err(position) => {
+                // Check for exact duplicate among solutions with same objectives
+                if position < self.vec_set.len()
+                    && self.vec_set[position].objectives() == solution.objectives()
+                    && self.contains_exact_duplicate(solution)
+                {
+                    return false;
+                }
                 // Check if new solution is dominated by ANY existing solution
                 if self.vec_set
                     .iter()
@@ -152,10 +164,17 @@ where
     }
 
     fn insert_unchecked(&mut self, solution: &T) {
-        match self.binary_search(solution) {
-            Ok(position) | Err(position) => {
-                // Solution already exists, insert anyway (unchecked)
-                self.vec_set.insert(position, solution.clone());
+        // Even in unchecked mode, prevent exact duplicates to maintain archive invariants
+        match self.binary_search_objectives(solution) {
+            Ok(pos) | Err(pos) => {
+                // Only check for duplicates if there are solutions with same objectives
+                if pos < self.vec_set.len()
+                    && self.vec_set[pos].objectives() == solution.objectives()
+                    && self.contains_exact_duplicate(solution)
+                {
+                    return;
+                }
+                self.vec_set.insert(pos, solution.clone());
             }
         }
     }

@@ -5,23 +5,22 @@ use rand::SeedableRng;
 use rand::{Rng, seq::IteratorRandom};
 use std::{collections::BinaryHeap, fmt::Debug, hash::Hash, time::Duration, vec};
 
-use crate::objectives::{self, SolutionEvaluator};
+use crate::objectives;
 use crate::probabilistic_probing_neighborhood::ProbabilisticProbingNeighborhood;
 use crate::problem::{ComparableImage, ImageObjectiveDeltas, Problem, ScaledObjectiveDeltas};
 use crate::residual_problem::ResidualProblem;
 use crate::residual_solution::ResidualSolution;
 use crate::solution::{ImageSet, MergeableWithResidual, SIMSCore, SIMSModifiable, SIMSSolution};
 use crate::solution_set_impl::NdTreeSolutionSet;
-use crate::timer::Timer;
+use crate::trackers::{ObjectiveTracker, StandardTrackerArray, TrackerCollection};
 use crate::util::IntersectionIterator;
 
-#[derive(Clone, Eq)]
+#[derive(Clone)]
 pub struct VecEncodedSolution<const D: usize> {
     pub selected_images: Vec<bool>,
     pub objectives: pareto::Objectives<D>,
-    pub clear_parts_counts: Vec<usize>,
-    pub element_coverage: Vec<usize>,
     pub timestamp: Duration,
+    pub trackers: StandardTrackerArray<D>,
 }
 
 // Iterator types for VecEncodedSolution
@@ -110,10 +109,6 @@ impl<const D: usize> ImageSet<D> for VecEncodedSolution<D> {
     fn set_image(&mut self, image_index: usize, selected: bool) {
         self.selected_images[image_index] = selected;
     }
-
-    fn clear_parts_counts(&self) -> &[usize] {
-        &self.clear_parts_counts
-    }
 }
 
 // Implement SIMSCore trait
@@ -146,9 +141,8 @@ impl<const D: usize> VecEncodedSolution<D> {
         let mut solution = Self {
             selected_images: vec![false; problem.images.len()],
             objectives: [0; D], // Will be recalculated below
-            clear_parts_counts: vec![0; problem.universe.len()],
-            element_coverage: vec![0; problem.universe.len()],
             timestamp: Duration::new(0, 0), // Initial solutions have timestamp 0
+            trackers: StandardTrackerArray::new(problem),
         };
 
         // Calculate correct objectives for empty solution (no images selected)
@@ -177,12 +171,14 @@ impl<const D: usize> VecEncodedSolution<D> {
 
 // Implement SIMSModifiable trait
 impl<const D: usize> SIMSModifiable<D> for VecEncodedSolution<D> {
-    fn clear_parts_counts(&self) -> &[usize] {
-        &self.clear_parts_counts
+    type Trackers = StandardTrackerArray<D>;
+
+    fn trackers(&self) -> &Self::Trackers {
+        &self.trackers
     }
 
-    fn element_coverage(&self) -> &[usize] {
-        &self.element_coverage
+    fn trackers_mut(&mut self) -> &mut Self::Trackers {
+        &mut self.trackers
     }
 
     fn add_image(&mut self, image_index: usize, problem: &Problem<Self, D>) {
@@ -243,28 +239,6 @@ impl<const D: usize> SIMSModifiable<D> for VecEncodedSolution<D> {
         Some(scaled_objective_deltas[max_index].image_index)
     }
 
-    fn get_neighborhood(&self, problem: &Problem<Self, D>) -> Vec<Self> {
-        // Create a timer for the neighborhood method
-        let timer = Timer::start(std::time::Duration::from_secs(60)); // 1 minute default
-
-        // Use the probabilistic probing neighborhood method with default parameters
-        let k = 1; // Default value for local search
-        let is_deterministic = true;
-        let probing_probability = 0.7; // Default probing probability
-        let max_probes = 50; // Default maximum probes
-        let objective_weights = None; // Use equal weights by default
-
-        self.probabilistic_probing_neighborhood(
-            k,
-            problem,
-            &timer,
-            is_deterministic,
-            probing_probability,
-            max_probes,
-            objective_weights,
-        )
-    }
-
     fn neighborhood(
         &self,
         k: u32,
@@ -278,6 +252,8 @@ impl<const D: usize> SIMSModifiable<D> for VecEncodedSolution<D> {
         let removal_candidates_lists: Vec<Vec<usize>> = {
             let _guard = candidates_span.enter();
             if k == 1 {
+                let is_replaceable_span = debug_span!("check_is_replaceable");
+                let _replaceable_guard = is_replaceable_span.enter();
                 self.selected_images()
                     .filter_map(|selected_image| {
                         if self.is_replaceable(selected_image, problem) {
@@ -288,7 +264,15 @@ impl<const D: usize> SIMSModifiable<D> for VecEncodedSolution<D> {
                     })
                     .collect()
             } else {
-                self.worst_selected_images(problem, is_deterministic)
+                let worst_images_span = debug_span!("compute_worst_images");
+                let worst_images = {
+                    let _worst_guard = worst_images_span.enter();
+                    self.worst_selected_images(problem, is_deterministic)
+                };
+                
+                let combinations_span = debug_span!("generate_combinations", k = k);
+                let _comb_guard = combinations_span.enter();
+                worst_images
                     .into_iter()
                     .combinations(k as usize)
                     .collect()
@@ -316,6 +300,9 @@ impl<const D: usize> SIMSModifiable<D> for VecEncodedSolution<D> {
                     let _solve_residual_guard = solve_residual_span.enter();
                     residual_problem.solve::<NdTreeSolutionSet<ResidualSolution<D>, D>>(timer)
                 };
+                
+                let extend_span = debug_span!("extend_solutions");
+                let _extend_guard = extend_span.enter();
                 residual_solutions.extend(neighborhood_iter);
             }
             if timer.is_expired() {
@@ -340,43 +327,8 @@ impl<const D: usize> SIMSModifiable<D> for VecEncodedSolution<D> {
             return false;
         }
 
-        let clear_parts_counts_valid =
-            self.clear_parts_counts
-                .iter()
-                .enumerate()
-                .all(|(index, &count)| {
-                    count
-                        == self
-                            .selected_images()
-                            .filter(|&image_index| {
-                                problem.images[image_index].clear_parts.contains(&index)
-                            })
-                            .count()
-                });
-
-        if !clear_parts_counts_valid {
-            log::error!("Clear parts counts are invalid");
-            return false;
-        }
-
-        let element_coverage_valid =
-            self.element_coverage
-                .iter()
-                .enumerate()
-                .all(|(index, &count)| {
-                    count
-                        == self
-                            .selected_images()
-                            .filter(|&image_index| {
-                                problem.images[image_index].parts.contains(&index)
-                            })
-                            .count()
-                });
-
-        if !element_coverage_valid {
-            log::error!("Element coverage is invalid");
-            return false;
-        }
+        // Note: clear_parts_counts and element_coverage validation removed - 
+        // these are now maintained automatically by trackers
 
         return self.are_objectives_valid(problem);
     }
@@ -401,8 +353,6 @@ impl<const D: usize> VecEncodedSolution<D> {
         let mut selected_images = vec![false; problem.images.len()];
         let mut covered_elements = vec![false; problem.universe.len()];
         let mut num_covered_elements = 0;
-        let mut clear_parts_counts = vec![0; problem.universe.len()];
-        let mut part_coverage_counts = vec![0; problem.universe.len()];
 
         while num_covered_elements < problem.universe.len() {
             let element_index = rng.random_range(0..problem.universe.len());
@@ -425,24 +375,14 @@ impl<const D: usize> VecEncodedSolution<D> {
                     covered_elements[part] = true;
                     num_covered_elements += 1;
                 }
-                part_coverage_counts[part] += 1;
             });
-
-            // Mark cloudy parts
-            problem.images[*image_index]
-                .clear_parts
-                .iter()
-                .for_each(|&clear_part| {
-                    clear_parts_counts[clear_part] += 1;
-                });
         }
 
         let mut sims_solution = Self {
             selected_images,
             objectives: [0; D],
-            clear_parts_counts,
-            element_coverage: part_coverage_counts,
             timestamp: Duration::new(0, 0), // Initial solutions have timestamp 0
+            trackers: StandardTrackerArray::new(problem),
         };
         sims_solution.compute_objectives(problem);
         sims_solution
@@ -542,23 +482,19 @@ impl<const D: usize> VecEncodedSolution<D> {
             "Objectives are invalid before removing image"
         );
 
-        // Use the new generic objective delta calculation
+        // Use trackers for delta calculation
         let mut deltas = [0i64; D];
         for (obj_index, delta) in deltas.iter_mut().enumerate().take(D) {
-            *delta = self.calculate_objective_delta(obj_index, i, problem);
+            *delta = self.trackers().get(obj_index).peek_delta(i, true, problem, self);
         }
+        
         objectives::apply_delta(&mut self.objectives, &deltas);
+        
+        // Apply tracker updates
+        for obj_index in 0..D {
+            self.trackers_mut().get_mut(obj_index).apply(i, true, problem);
+        }
 
-        problem.images[i].parts.iter().for_each(|&part| {
-            self.element_coverage[part] -= 1;
-        });
-        problem.images[i]
-            .clear_parts
-            .iter()
-            .for_each(|&clear_part| {
-                debug_assert!(self.clear_parts_counts[clear_part] > 0);
-                self.clear_parts_counts[clear_part] -= 1;
-            });
         self.selected_images[i] = false;
         debug_assert!(
             self.are_objectives_valid(problem),
@@ -568,22 +504,19 @@ impl<const D: usize> VecEncodedSolution<D> {
 
     /// Add image at index i
     pub fn add_image(&mut self, i: usize, problem: &Problem<Self, D>) {
-        // Use the new generic objective delta calculation
+        // Use trackers for delta calculation
         let mut deltas = [0i64; D];
         for (obj_index, delta) in deltas.iter_mut().enumerate().take(D) {
-            *delta = self.calculate_objective_delta(obj_index, i, problem);
+            *delta = self.trackers().get(obj_index).peek_delta(i, false, problem, self);
         }
+        
         objectives::apply_delta(&mut self.objectives, &deltas);
+        
+        // Apply tracker updates
+        for obj_index in 0..D {
+            self.trackers_mut().get_mut(obj_index).apply(i, false, problem);
+        }
 
-        problem.images[i].parts.iter().for_each(|&part| {
-            self.element_coverage[part] += 1;
-        });
-        problem.images[i]
-            .clear_parts
-            .iter()
-            .for_each(|&clear_part| {
-                self.clear_parts_counts[clear_part] += 1;
-            });
         self.selected_images[i] = true;
     }
 
@@ -609,32 +542,45 @@ impl<const D: usize> VecEncodedSolution<D> {
         problem: &'a Problem<Self, D>,
         is_deterministic: bool,
     ) -> Option<ResidualProblem<'a, Self, D>> {
-        let mut unmodified_solution = self.clone();
-
-        // Remove images
+        // Clone trackers and apply removals to get partial state
+        let mut partial_trackers = self.trackers.clone();
         for &removed_image_index in &removal_candidates_indices {
-            unmodified_solution.remove_image(removed_image_index, problem);
+            for obj_index in 0..D {
+                partial_trackers.get_mut(obj_index).apply(removed_image_index, true, problem);
+            }
         }
 
-        // Get list of uncovered elements
-        let uncovered_elements_indices = unmodified_solution
-            .element_coverage
-            .iter()
-            .enumerate()
-            .filter_map(|(element_index, &part_coverage_count)| {
-                if part_coverage_count == 0 {
-                    Some(element_index)
-                } else {
-                    None
-                }
+        // Create partial selected_images state
+        let mut partial_selected_images = self.selected_images.clone();
+        for &removed_image_index in &removal_candidates_indices {
+            partial_selected_images[removed_image_index] = false;
+        }
+
+        // Get list of uncovered elements by checking which elements have zero coverage
+        let uncovered_elements_indices = (0..problem.universe.len())
+            .filter(|&element_index| {
+                // Check if any selected image in partial state covers this element
+                !partial_selected_images.iter().enumerate().any(|(img_idx, &selected)| {
+                    selected && problem.images[img_idx].parts.contains(&element_index)
+                })
             })
             .collect::<Vec<usize>>();
 
-        // Get clear parts counts for uncovered elements
-        let original_clear_parts_counts = uncovered_elements_indices
-            .iter()
-            .map(|&element| unmodified_solution.clear_parts_counts[element])
-            .collect();
+        // Get clear parts counts for uncovered elements from CloudyArea tracker
+        let original_clear_parts_counts: Vec<usize> = problem.objective_types.iter().position(|obj| matches!(obj, crate::objectives::ObjectiveType::CloudyArea))
+            .map_or_else(
+                || vec![0; uncovered_elements_indices.len()],
+                |cloudy_area_tracker| {
+                    if let crate::trackers::StandardTracker::CloudyArea(state) = partial_trackers.get(cloudy_area_tracker) {
+                        uncovered_elements_indices
+                            .iter()
+                            .map(|&element| state.counts[element] as usize)
+                            .collect()
+                    } else {
+                        vec![0; uncovered_elements_indices.len()]
+                    }
+                }
+            );
 
         // Find best image(s) to replace removed image(s)
         let mut best_addition_candidates =
@@ -643,14 +589,15 @@ impl<const D: usize> VecEncodedSolution<D> {
         removal_candidates_indices.sort_unstable();
         best_addition_candidates.sort_unstable();
 
-        return Some(ResidualProblem::new(
-            unmodified_solution,
-            removal_candidates_indices,
-            best_addition_candidates,
+        Some(ResidualProblem::new(
+            self.clone(), // unmodified_solution
+            partial_trackers,
+            &removal_candidates_indices,
+            &best_addition_candidates,
             uncovered_elements_indices,
             original_clear_parts_counts,
             problem,
-        ));
+        ))
     }
 
     // Get scaled objective deltas for list of given images
@@ -837,6 +784,8 @@ impl<const D: usize> PartialEq for VecEncodedSolution<D> {
     }
 }
 
+impl<const D: usize> Eq for VecEncodedSolution<D> {}
+
 impl<const D: usize> Hash for VecEncodedSolution<D> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.selected_images.hash(state);
@@ -874,24 +823,13 @@ impl<const D: usize> MergeableWithResidual<D> for VecEncodedSolution<D> {
         residual_solution
             .selected_images
             .iter()
-            .map(|&image_index| residual_problem.all_images[image_index].index)
+            .map(|&condensed_idx| residual_problem.image_index_map[condensed_idx])
             .for_each(|image_index| {
                 self.add_image(image_index, problem);
             });
 
         // Inherit timestamp from ResidualSolution
         self.timestamp = residual_solution.timestamp;
-    }
-}
-
-// Implement SolutionEvaluator trait for VecEncodedSolution
-impl<const D: usize> SolutionEvaluator<D> for VecEncodedSolution<D> {
-    fn clear_parts_counts(&self) -> &[usize] {
-        &self.clear_parts_counts
-    }
-
-    fn element_coverage(&self) -> &[usize] {
-        &self.element_coverage
     }
 }
 

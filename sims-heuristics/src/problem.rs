@@ -4,10 +4,16 @@ use log::error;
 use regex::Regex;
 
 use crate::{
-    objectives::ObjectiveType,
+    objectives::{ObjectiveState, ObjectiveType},
     solution::ImageSet,
     util::{DifferenceIterator, IntersectionIterator},
 };
+
+/// Trait for Set Cover Problem operations
+pub trait SetCoverProblem {
+    /// Check if a solution forms a valid set cover (covers all elements)
+    fn is_set_cover<const D: usize>(&self, solution: &impl ImageSet<D>) -> bool;
+}
 
 #[derive(Debug, Default, Clone)]
 pub struct SIMSProblemInstanceRaw {
@@ -242,16 +248,31 @@ pub struct Problem<T: ImageSet<D>, const D: usize> {
     pub images: Vec<Image>,
     /// Matrix of size of overlaps between images
     pub overlap_matrix: Vec<Vec<usize>>,
-    /// Legacy objective definitions (for backward compatibility)
-    pub objectives: [ObjectiveType<T, D>; D],
-    /// Max values of objectives
-    pub max_objectives: pareto::Objectives<D>,
-    /// Objective bounds (min, max) for normalization - used for scaling in scalarization
-    pub objective_bounds: Option<Vec<[u64; 2]>>,
+    /// Objective states containing data and logic
+    pub objectives: [ObjectiveState<D>; D],
+    /// Objective types for metadata
+    pub objective_types: [ObjectiveType; D],
     /// Raw instance data for accessing resolution and incidence angle
     pub raw_instance: SIMSProblemInstanceRaw,
     /// Phantom data to maintain type parameter T
     _phantom: std::marker::PhantomData<T>,
+}
+
+// Implement SetCoverProblem trait for Problem
+impl<T: ImageSet<D>, const D: usize> SetCoverProblem for Problem<T, D> {
+    fn is_set_cover<const D2: usize>(&self, solution: &impl ImageSet<D2>) -> bool {
+        let mut covered_elements = vec![false; self.universe.len()];
+        
+        // Mark all elements covered by selected images
+        for image_index in solution.selected_images() {
+            for &element_index in &self.images[image_index].parts {
+                covered_elements[element_index] = true;
+            }
+        }
+        
+        // Check if all elements are covered
+        covered_elements.iter().all(|&covered| covered)
+    }
 }
 
 impl<T: ImageSet<D>, const D: usize> Problem<T, D> {
@@ -268,7 +289,7 @@ impl<T: ImageSet<D>, const D: usize> Problem<T, D> {
     /// Panics if an unknown objective type is encountered during max objective calculation.
     pub fn from_raw_with_objectives(
         mut raw: SIMSProblemInstanceRaw,
-        objectives: [ObjectiveType<T, D>; D],
+        objective_types: [ObjectiveType; D],
     ) -> Result<Self, String> {
         // Normalize all indices to be zero-based (same as from_raw)
         raw.images.iter_mut().for_each(|image| {
@@ -331,19 +352,8 @@ impl<T: ImageSet<D>, const D: usize> Problem<T, D> {
             }
         }
 
-        // Calculate max objectives using the provided objective definitions
-        let mut max_objectives = [0u64; D];
-        for (i, obj_def) in objectives.iter().enumerate() {
-            max_objectives[i] = match obj_def {
-                ObjectiveType::TotalCost => images.iter().map(Image::cost).sum(),
-                ObjectiveType::CloudyArea => universe.iter().map(|elem| elem.area).sum(),
-                ObjectiveType::MinResolution => raw.resolution.iter().min().copied().unwrap_or(0),
-                ObjectiveType::MaxIncidenceAngle => {
-                    raw.incidence_angle.iter().max().copied().unwrap_or(0)
-                }
-                ObjectiveType::_PhantomData(_) => panic!("Unknown objective type"),
-            };
-        }
+        // Create ObjectiveState from types and raw data
+        let objectives = ObjectiveState::from_types_and_raw(&objective_types, &raw);
 
         Ok(Self {
             instance_name: raw.name.clone(),
@@ -351,8 +361,7 @@ impl<T: ImageSet<D>, const D: usize> Problem<T, D> {
             images,
             overlap_matrix,
             objectives,
-            max_objectives,
-            objective_bounds: None, // Will be set later if provided
+            objective_types,
             raw_instance: raw,
             _phantom: std::marker::PhantomData,
         })
@@ -365,10 +374,10 @@ impl<T: ImageSet<D>, const D: usize> Problem<T, D> {
     /// Returns an error if the file cannot be read or parsed, or if problem creation fails.
     pub fn from_minizinc_datafile<P: AsRef<Path>>(
         model_path: &P,
-        objectives: [ObjectiveType<T, D>; D],
+        objective_types: [ObjectiveType; D],
     ) -> Result<Self, String> {
         let raw = SIMSProblemInstanceRaw::from_minizinc_datafile(model_path);
-        Self::from_raw_with_objectives(raw, objectives)
+        Self::from_raw_with_objectives(raw, objective_types)
     }
 
     /// Get total cost of all images
@@ -385,14 +394,19 @@ impl<T: ImageSet<D>, const D: usize> Problem<T, D> {
 
     /// Get objective by index
     #[must_use]
-    pub const fn objective(&self, index: usize) -> &ObjectiveType<T, D> {
+    pub const fn objective(&self, index: usize) -> &ObjectiveState<D> {
         &self.objectives[index]
+    }
+
+    #[must_use]
+    pub const fn objective_type(&self, index: usize) -> ObjectiveType {
+        self.objective_types[index]
     }
 
     /// Get objective by ID
     #[must_use]
-    pub fn objective_by_id(&self, id: &str) -> Option<&ObjectiveType<T, D>> {
-        self.objectives.iter().find(|obj| obj.id() == id)
+    pub fn objective_type_by_id(&self, id: &str) -> Option<ObjectiveType> {
+        self.objective_types.iter().copied().find(|obj| obj.id() == id)
     }
 
     /// Get number of objectives
@@ -401,19 +415,42 @@ impl<T: ImageSet<D>, const D: usize> Problem<T, D> {
         D
     }
 
-    /// Get all objective names (from new system if available, otherwise legacy)
+    /// Get all objective names
     #[must_use]
     pub fn objective_names(&self) -> Vec<&str> {
-        self.objectives
+        self.objective_types
             .iter()
-            .map(super::objectives::ObjectiveType::name)
+            .map(ObjectiveType::name)
             .collect()
+    }
+
+    /// Get max objectives array from objective states
+    #[must_use]
+    pub fn max_objectives(&self) -> [u64; D] {
+        std::array::from_fn(|i| self.objectives[i].max_value())
+    }
+
+    /// Get objective bounds if set
+    ///
+    /// # Panics
+    ///
+    /// Panics if unwrapping bounds fails (should not happen in normal operation)
+    #[must_use]
+    pub fn objective_bounds(&self) -> Option<[[u64; 2]; D]> {
+        if self.objectives.iter().all(|obj| obj.bounds().is_some()) {
+            Some(std::array::from_fn(|i| self.objectives[i].bounds().unwrap()))
+        } else {
+            None
+        }
     }
 
     /// Set objective bounds for normalization in scalarization
     /// Bounds should be [[min, max], [min, max], ...] for each objective
-    pub fn set_objective_bounds(&mut self, bounds: Vec<[u64; 2]>) {
-        self.objective_bounds = Some(bounds);
+    pub fn set_objective_bounds(&mut self, bounds: [[u64; 2]; D]) {
+        self.objectives
+            .iter_mut()
+            .zip(bounds)
+            .for_each(|(obj, bound)| obj.set_bounds(bound));
     }
 
     /// Create a builder for this problem
@@ -425,12 +462,20 @@ impl<T: ImageSet<D>, const D: usize> Problem<T, D> {
 
 impl<T: ImageSet<D>, const D: usize> Default for Problem<T, D> {
     fn default() -> Self {
-        // Create default objectives array based on the dimension D
-        let objectives: [ObjectiveType<T, D>; D] = array::from_fn(|i| match i {
+        // Create default objective types array based on the dimension D
+        let objective_types: [ObjectiveType; D] = array::from_fn(|i| match i {
             0 => ObjectiveType::TotalCost,
             1 => ObjectiveType::CloudyArea,
             2 => ObjectiveType::MinResolution,
             3 => ObjectiveType::MaxIncidenceAngle,
+            _ => panic!("Unknown objective"),
+        });
+
+        let objectives: [ObjectiveState<D>; D] = array::from_fn(|i| match i {
+            0 => ObjectiveState::TotalCost { costs: vec![], max_value: 0, bounds: None },
+            1 => ObjectiveState::CloudyArea { clear_images: vec![], areas: vec![], max_value: 0, bounds: None },
+            2 => ObjectiveState::MinResolution { resolutions: vec![], max_value: 0, bounds: None },
+            3 => ObjectiveState::MaxIncidenceAngle { incidence_angles: vec![], max_value: 0, bounds: None },
             _ => panic!("Unknown objective"),
         });
 
@@ -440,8 +485,7 @@ impl<T: ImageSet<D>, const D: usize> Default for Problem<T, D> {
             images: Vec::new(),
             overlap_matrix: Vec::new(),
             objectives,
-            max_objectives: [0; D],
-            objective_bounds: None,
+            objective_types,
             raw_instance: SIMSProblemInstanceRaw::default(),
             _phantom: std::marker::PhantomData,
         }
@@ -451,12 +495,12 @@ impl<T: ImageSet<D>, const D: usize> Default for Problem<T, D> {
 /// Builder for constructing Problem instances with custom objectives
 pub struct ProblemBuilder<T: ImageSet<D>, const D: usize> {
     raw_data: SIMSProblemInstanceRaw,
-    objectives: Option<Vec<ObjectiveType<T, D>>>,
+    objectives: Option<Vec<ObjectiveType>>,
     _phantom: std::marker::PhantomData<T>,
 }
 
 impl<T: ImageSet<D>, const D: usize> ProblemBuilder<T, D> {
-    /// Create a new builder from raw problem data
+    /// Create a new builder with raw problem data
     #[must_use]
     pub const fn new(raw_data: SIMSProblemInstanceRaw) -> Self {
         Self {
@@ -466,9 +510,9 @@ impl<T: ImageSet<D>, const D: usize> ProblemBuilder<T, D> {
         }
     }
 
-    /// Set the objective definitions for this problem
+    /// Set custom objectives for the problem
     #[must_use]
-    pub fn with_objectives(mut self, objectives: Vec<ObjectiveType<T, D>>) -> Self {
+    pub fn with_objectives(mut self, objectives: Vec<ObjectiveType>) -> Self {
         self.objectives = Some(objectives);
         self
     }
@@ -489,7 +533,7 @@ impl<T: ImageSet<D>, const D: usize> ProblemBuilder<T, D> {
             }
 
             // Convert Vec to array
-            let objectives_array: [ObjectiveType<T, D>; D] = objectives
+            let objectives_array: [ObjectiveType; D] = objectives
                 .try_into()
                 .map_err(|_| "Failed to convert vector to array")?;
 
@@ -498,5 +542,126 @@ impl<T: ImageSet<D>, const D: usize> ProblemBuilder<T, D> {
         } else {
             Err("No objectives set. Use with_objectives() to set custom objectives.".to_string())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::solution_impl::vec_encoded_solution::VecEncodedSolution;
+
+    #[test]
+    fn test_set_cover_problem_trait() {
+        // Create a simple problem instance
+        let raw = SIMSProblemInstanceRaw {
+            name: "test".to_string(),
+            num_images: 2,
+            universe_size: 3,
+            images: vec![vec![1, 2], vec![2, 3]],
+            costs: vec![10, 20],
+            clouds: vec![vec![], vec![]],
+            areas: vec![1, 1, 1],
+            max_cloud_area: 0,
+            resolution: vec![100, 100],
+            incidence_angle: vec![0, 0],
+        };
+
+        let objectives = [
+            crate::objectives::ObjectiveType::TotalCost,
+            crate::objectives::ObjectiveType::CloudyArea,
+        ];
+        
+        let problem: Problem<VecEncodedSolution<2>, 2> = 
+            Problem::from_raw_with_objectives(raw, objectives).unwrap();
+        
+        // Test Problem struct fields directly
+        assert_eq!(problem.images.len(), 2);
+        assert_eq!(problem.universe.len(), 3);
+        assert_eq!(problem.instance_name, "test");
+        
+        // Test specific accessors
+        assert_eq!(problem.images[0].cost, 10);
+        assert_eq!(problem.images[1].cost, 20);
+    }
+
+    #[test]
+    fn test_set_cover_problem_trait_generic() {
+        // Demonstrate that the trait works with generic functions
+        fn check_if_valid_cover<const D: usize, P: SetCoverProblem>(
+            problem: &P,
+            solution: &impl ImageSet<D>,
+        ) -> bool {
+            problem.is_set_cover(solution)
+        }
+
+        let raw = SIMSProblemInstanceRaw {
+            name: "generic_test".to_string(),
+            num_images: 3,
+            universe_size: 3,
+            images: vec![vec![1, 2], vec![2, 3], vec![1, 3]],
+            costs: vec![10, 20, 30],
+            clouds: vec![vec![], vec![], vec![]],
+            areas: vec![1, 1, 1],
+            max_cloud_area: 0,
+            resolution: vec![100, 100, 100],
+            incidence_angle: vec![0, 0, 0],
+        };
+
+        let objectives = [
+            crate::objectives::ObjectiveType::TotalCost,
+            crate::objectives::ObjectiveType::CloudyArea,
+        ];
+        
+        let problem: Problem<VecEncodedSolution<2>, 2> = 
+            Problem::from_raw_with_objectives(raw, objectives).unwrap();
+        
+        // Test with a valid cover
+        let solution = VecEncodedSolution::<2>::from_selected_images(&[0, 1], &problem);
+        assert!(check_if_valid_cover(&problem, &solution));
+    }
+
+    #[test]
+    fn test_is_set_cover() {
+        // Create a problem where elements 1,2,3 need to be covered
+        let raw = SIMSProblemInstanceRaw {
+            name: "cover_test".to_string(),
+            num_images: 3,
+            universe_size: 3,
+            images: vec![
+                vec![1, 2],    // Image 0 covers elements 0, 1
+                vec![2, 3],    // Image 1 covers elements 1, 2
+                vec![1, 3],    // Image 2 covers elements 0, 2
+            ],
+            costs: vec![10, 20, 15],
+            clouds: vec![vec![], vec![], vec![]],
+            areas: vec![1, 1, 1],
+            max_cloud_area: 0,
+            resolution: vec![100, 100, 100],
+            incidence_angle: vec![0, 0, 0],
+        };
+
+        let objectives = [
+            crate::objectives::ObjectiveType::TotalCost,
+            crate::objectives::ObjectiveType::CloudyArea,
+        ];
+        
+        let problem: Problem<VecEncodedSolution<2>, 2> = 
+            Problem::from_raw_with_objectives(raw, objectives).unwrap();
+        
+        // Test valid set cover: images 0 and 1 should cover all elements
+        let solution1 = VecEncodedSolution::<2>::from_selected_images(&[0, 1], &problem);
+        assert!(problem.is_set_cover(&solution1), "Images 0 and 1 should form a valid set cover");
+        
+        // Test another valid set cover: images 0 and 2
+        let solution2 = VecEncodedSolution::<2>::from_selected_images(&[0, 2], &problem);
+        assert!(problem.is_set_cover(&solution2), "Images 0 and 2 should form a valid set cover");
+        
+        // Test invalid set cover: only image 0 doesn't cover all elements
+        let solution3 = VecEncodedSolution::<2>::from_selected_images(&[0], &problem);
+        assert!(!problem.is_set_cover(&solution3), "Only image 0 should not form a valid set cover");
+        
+        // Test all images selected (definitely a valid cover)
+        let solution4 = VecEncodedSolution::<2>::from_selected_images(&[0, 1, 2], &problem);
+        assert!(problem.is_set_cover(&solution4), "All images should form a valid set cover");
     }
 }

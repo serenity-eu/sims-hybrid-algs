@@ -654,6 +654,7 @@ fn generate_trace_impl<const D: usize>(
             objectives: obj_values,
             iteration: index as u16, // Sequential iteration numbers
             timestamp: solution.timestamp,
+            selected_images: solution.selected_images.iter().copied().collect(),
         };
         explored_solutions.push(fingerprint);
 

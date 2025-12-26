@@ -68,4 +68,10 @@ pub mod solution;
 pub mod solution_impl;
 pub mod solution_set_impl;
 pub mod timer;
+pub mod trackers;
 pub mod util;
+pub mod problem_bitset;
+pub use problem_bitset::ProblemBitset;
+
+// Re-export key traits
+pub use problem::SetCoverProblem;

@@ -541,8 +541,7 @@ pub struct NDTreeSolutionIntoIterator<T, const N: usize, const D: usize, const C
 where
     T: HasObjectives<D> + MoSolution<D> + Clone + PartialEq,
 {
-    tree: NDTree<T, N, D, C>,
-    node_stack: Vec<DefaultKey>,
+    leaf_iterator: NDTreeNodeIntoIterator<T, N, D, C>,
     current_leaf_solutions: Option<ArrayVec<T, N>>,
     current_solution_index: usize,
 }
@@ -553,11 +552,8 @@ where
 {
     #[must_use]
     pub fn new(tree: NDTree<T, N, D, C>) -> Self {
-        let node_stack = tree.root.map_or_else(Vec::new, |root_key| vec![root_key]);
-
         Self {
-            tree,
-            node_stack,
+            leaf_iterator: NDTreeNodeIntoIterator::new(tree),
             current_leaf_solutions: None,
             current_solution_index: 0,
         }
@@ -574,7 +570,7 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             // If we have current leaf solutions, try to get the next solution from them
-            if let Some(ref solutions) = self.current_leaf_solutions {
+            if let Some(ref mut solutions) = self.current_leaf_solutions {
                 if self.current_solution_index < solutions.len() {
                     let solution = solutions[self.current_solution_index].clone();
                     self.current_solution_index += 1;
@@ -585,22 +581,18 @@ where
                 self.current_solution_index = 0;
             }
 
-            // Get the next node from the stack (same logic as NDTreeNodeIterator)
-            let idx = self.node_stack.pop()?;
-            match &self.tree.arena[idx] {
+            // Get the next node from the leaf iterator
+            let node = self.leaf_iterator.next()?;
+
+            // Check if this node is a leaf with solutions
+            match node {
                 Node::Leaf { solutions, .. } if !solutions.is_empty() => {
-                    self.current_leaf_solutions = Some(solutions.clone());
+                    self.current_leaf_solutions = Some(solutions);
                     self.current_solution_index = 0;
                     // Continue to the next iteration to get the first solution
                 }
-                Node::Internal { children, .. } => {
-                    // Add children to stack in reverse order for DFS pre-order traversal
-                    for &child_idx in children.iter().rev() {
-                        self.node_stack.push(child_idx);
-                    }
-                }
-                Node::Leaf { .. } => {
-                    // Empty leaf, continue to next node
+                _ => {
+                    // Not a leaf with solutions, continue to next node
                 }
             }
         }
@@ -619,7 +611,7 @@ where
     }
 }
 
-/// Depth-First Search-like iterator for `NDTree`
+/// Iterator for `NDTree`
 pub struct NDTreeSolutionIterator<'a, T, const N: usize, const D: usize, const C: usize>
 where
     T: HasObjectives<D> + MoSolution<D> + Clone + PartialEq,
@@ -1053,14 +1045,14 @@ mod tests {
             tree.insert(sol.clone());
         }
 
-        let collected: Vec<&TestSolution2D> = tree.iter().collect();
+        let collected: Vec<TestSolution2D> = tree.iter().cloned().collect();
         assert_eq!(collected.len(), 3);
 
         // Check that all solutions are present (order may vary)
         for test_sol in &test_solutions {
             assert!(collected
                 .iter()
-                .any(|&s| s.objectives() == test_sol.objectives()));
+                .any(|s| s.objectives() == test_sol.objectives()));
         }
     }
 
@@ -1120,8 +1112,8 @@ mod tests {
         let solutions: Vec<_> = tree.iter().collect();
         assert_eq!(solutions.len(), 2);
 
-        assert!(solutions.iter().any(|&s| s.objectives == [1, 2, 3]));
-        assert!(solutions.iter().any(|&s| s.objectives == [4, 5, 6]));
+        assert!(solutions.iter().any(|s| s.objectives == [1, 2, 3]));
+        assert!(solutions.iter().any(|s| s.objectives == [4, 5, 6]));
     }
 
     #[test]

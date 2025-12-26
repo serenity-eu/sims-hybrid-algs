@@ -7,7 +7,7 @@ use pls::explored_solutions_data::SolutionFingerprint;
 use pls::pareto_local_search::ParetoLocalSearch;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use std::{iter::IntoIterator, ops::RangeInclusive, time::Duration};
+use std::{iter::IntoIterator, ops::RangeInclusive, time::{Duration, SystemTime, UNIX_EPOCH}, thread};
 #[cfg(feature = "milp")]
 use std::collections::HashSet;
 
@@ -185,7 +185,6 @@ impl std::io::Write for SharedVecWriter {
     clippy::too_many_arguments,
     reason = "It's okay for Python API to have many parameters"
 )]
-#[expect(unused_variables, reason = "Doesn't use plot_output_path at the moment")]
 #[pyfunction]
 #[pyo3(signature = (
     sims_instance,
@@ -205,6 +204,7 @@ impl std::io::Write for SharedVecWriter {
     pareto_archive="nd-tree".to_string(),
     profiling_trace=false
 ))]
+#[allow(unused_variables, reason = "plot_output_path is used only when plotting feature is enabled")]
 pub fn solve_with_pls(
     sims_instance: &SimsDiscreteProblem,
     objectives: Vec<String>,
@@ -289,8 +289,14 @@ pub fn solve_with_pls(
 
     let timeout_seconds = timeout.as_secs_f64();
     let initial_pop_info = match &initial_population {
-        Some(pop) => format!("provided {} solutions", pop.len()),
-        None => format!("random generation size {}", initial_population_size),
+        Some(pop) => {
+            info!("PLS starting with {} solutions from initial population", pop.len());
+            format!("provided {} solutions", pop.len())
+        }
+        None => {
+            info!("PLS starting with random initial population of size {}", initial_population_size);
+            format!("random generation size {}", initial_population_size)
+        }
     };
     let bounds_info = match &objective_bounds {
         Some(bounds) => format!("provided bounds: {:?}", bounds),
@@ -372,7 +378,7 @@ pub fn solve_with_pls(
 
             // Set objective bounds if provided
             if let Some(ref bounds) = objective_bounds {
-                let bounds_array: Vec<[u64; 2]> = bounds
+                let bounds_vec: Vec<[u64; 2]> = bounds
                     .iter()
                     .map(|b| {
                         if b.len() != 2 {
@@ -384,13 +390,15 @@ pub fn solve_with_pls(
                         Ok([b[0], b[1]])
                     })
                     .collect::<PyResult<Vec<[u64; 2]>>>()?;
+                let bounds_array: [[u64; 2]; 2] = bounds_vec.try_into()
+                    .map_err(|_| PyValueError::new_err("Expected exactly 2 objective bounds for 2D problem"))?;
                 pls_problem.set_objective_bounds(bounds_array);
             }
 
             // Macro to handle different solution set types for 2D
             // Returns (final_solutions_vec, explored_solutions_vec)
             macro_rules! run_pls_2d_with_archive {
-                ($SolutionSetType:ty) => {{
+                ($SolutionSetType:ty, $archive_name:expr) => {{
                     // Create initial population manually for 2D
                     let mut initial_solution_set = <$SolutionSetType>::new("initial_2d_solutions");
                     
@@ -404,9 +412,9 @@ pub fn solve_with_pls(
                             initial_solution_set.try_insert(&pls_solution);
                         }
                         // Generate additional random solutions
-                        for _ in 0..initial_population_size {
+                        for i in 0..initial_population_size {
                             let random_solution = if is_deterministic {
-                                BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
+                                BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890u64.wrapping_add(i as u64))
                             } else {
                                 BitsetEncodedSolution::random(&pls_problem)
                             };
@@ -415,9 +423,9 @@ pub fn solve_with_pls(
                     } else {
                         // Generate random initial population
                         info!("Generating random initial population of {} solutions for 2D PLS", initial_population_size);
-                        for _ in 0..initial_population_size {
+                        for i in 0..initial_population_size {
                             let random_solution = if is_deterministic {
-                                BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
+                                BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890u64.wrapping_add(i as u64))
                             } else {
                                 BitsetEncodedSolution::random(&pls_problem)
                             };
@@ -437,6 +445,17 @@ pub fn solve_with_pls(
                     let final_solution_set = pareto_local_search.run(max_iterations, timeout);
                     
                     info!("2D PLS completed, processing {} solutions", final_solution_set.len());
+                    
+                    // Export explored solutions to JSON
+                    let explored_json = pareto_local_search.explored_solutions.to_json();
+                    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros();
+                    let thread_id = format!("{:?}", thread::current().id());
+                    let json_path = std::env::temp_dir().join(format!("explored_solutions_2d_{}_{}_{}_{}.json", $archive_name, std::process::id(), timestamp, thread_id));
+                    if let Err(e) = std::fs::write(&json_path, explored_json) {
+                        error!("Failed to write explored solutions JSON: {}", e);
+                    } else {
+                        error!("Explored solutions exported to: {}", json_path.display());
+                    }
                     
                     // Generate plot if requested
                     if plots {
@@ -474,16 +493,16 @@ pub fn solve_with_pls(
             let (final_solutions, explored_solutions) = match solution_set_type {
                 SolutionSetType::LinkedList => {
                     info!("Using LinkedListSolutionSet for 2D PLS");
-                    run_pls_2d_with_archive!(LinkedListSolutionSet<BitsetEncodedSolution<2>, 2>)
+                    run_pls_2d_with_archive!(LinkedListSolutionSet<BitsetEncodedSolution<2>, 2>, "linked-list")
                 },
                 SolutionSetType::Vector => {
                     info!("Using VecSolutionSet for 2D PLS");
-                    run_pls_2d_with_archive!(VecSolutionSet<BitsetEncodedSolution<2>, 2>)
+                    run_pls_2d_with_archive!(VecSolutionSet<BitsetEncodedSolution<2>, 2>, "vector")
                 },
                 SolutionSetType::NdTree => {
                     // For 2D, nd-tree uses BTreeSolutionSet
                     info!("Using BTreeSolutionSet for 2D PLS (nd-tree)");
-                    run_pls_2d_with_archive!(BTreeSolutionSet<BitsetEncodedSolution<2>, 2>)
+                    run_pls_2d_with_archive!(BTreeSolutionSet<BitsetEncodedSolution<2>, 2>, "nd-tree")
                 }
             };
 
@@ -626,7 +645,7 @@ pub fn solve_with_pls(
 
             // Set objective bounds if provided
             if let Some(ref bounds) = objective_bounds {
-                let bounds_array: Vec<[u64; 2]> = bounds
+                let bounds_vec: Vec<[u64; 2]> = bounds
                     .iter()
                     .map(|b| {
                         if b.len() != 2 {
@@ -638,12 +657,14 @@ pub fn solve_with_pls(
                         Ok([b[0], b[1]])
                     })
                     .collect::<PyResult<Vec<[u64; 2]>>>()?;
+                let bounds_array: [[u64; 2]; 3] = bounds_vec.try_into()
+                    .map_err(|_| PyValueError::new_err("Expected exactly 3 objective bounds for 3D problem"))?;
                 pls_problem.set_objective_bounds(bounds_array);
             }
 
             // Macro to handle different solution set types for 3D
             macro_rules! run_pls_3d_with_archive {
-                ($SolutionSetType:ty) => {{
+                ($SolutionSetType:ty, $archive_name:expr) => {{
                     // Create initial population manually for 3D
                     let mut initial_solution_set = <$SolutionSetType>::new("initial_3d_solutions");
                     
@@ -657,9 +678,9 @@ pub fn solve_with_pls(
                             initial_solution_set.try_insert(&pls_solution);
                         }
                         // Generate additional random solutions
-                        for _ in 0..initial_population_size {
+                        for i in 0..initial_population_size {
                             let random_solution = if is_deterministic {
-                                BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
+                                BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890u64.wrapping_add(i as u64))
                             } else {
                                 BitsetEncodedSolution::random(&pls_problem)
                             };
@@ -668,9 +689,9 @@ pub fn solve_with_pls(
                     } else {
                         // Generate random initial population
                         info!("Generating random initial population of {} solutions for 3D PLS", initial_population_size);
-                        for _ in 0..initial_population_size {
+                        for i in 0..initial_population_size {
                             let random_solution = if is_deterministic {
-                                BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
+                                BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890u64.wrapping_add(i as u64))
                             } else {
                                 BitsetEncodedSolution::random(&pls_problem)
                             };
@@ -690,6 +711,17 @@ pub fn solve_with_pls(
                     let final_solution_set = pareto_local_search.run(max_iterations, timeout);
 
                     info!("3D PLS completed, processing {} solutions", final_solution_set.len());
+                    
+                    // Export explored solutions to JSON
+                    let explored_json = pareto_local_search.explored_solutions.to_json();
+                    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros();
+                    let thread_id = format!("{:?}", thread::current().id());
+                    let json_path = std::env::temp_dir().join(format!("explored_solutions_3d_{}_{}_{}_{}.json", $archive_name, std::process::id(), timestamp, thread_id));
+                    if let Err(e) = std::fs::write(&json_path, explored_json) {
+                        error!("Failed to write explored solutions JSON: {}", e);
+                    } else {
+                        error!("Explored solutions exported to: {}", json_path.display());
+                    }
 
                     // Generate 3D plot if requested
                     if plots {
@@ -727,15 +759,15 @@ pub fn solve_with_pls(
             let (final_solutions, explored_solutions) = match solution_set_type {
                 SolutionSetType::LinkedList => {
                     info!("Using LinkedListSolutionSet for 3D PLS");
-                    run_pls_3d_with_archive!(LinkedListSolutionSet<BitsetEncodedSolution<3>, 3>)
+                    run_pls_3d_with_archive!(LinkedListSolutionSet<BitsetEncodedSolution<3>, 3>, "linked-list")
                 },
                 SolutionSetType::Vector => {
                     info!("Using VecSolutionSet for 3D PLS");
-                    run_pls_3d_with_archive!(VecSolutionSet<BitsetEncodedSolution<3>, 3>)
+                    run_pls_3d_with_archive!(VecSolutionSet<BitsetEncodedSolution<3>, 3>, "vector")
                 },
                 SolutionSetType::NdTree => {
                     info!("Using NdTreeSolutionSet for 3D PLS (nd-tree)");
-                    run_pls_3d_with_archive!(NdTreeSolutionSet<BitsetEncodedSolution<3>, 3>)
+                    run_pls_3d_with_archive!(NdTreeSolutionSet<BitsetEncodedSolution<3>, 3>, "nd-tree")
                 }
             };
             
@@ -879,7 +911,7 @@ pub fn solve_with_pls(
 
             // Set objective bounds if provided
             if let Some(ref bounds) = objective_bounds {
-                let bounds_array: Vec<[u64; 2]> = bounds
+                let bounds_vec: Vec<[u64; 2]> = bounds
                     .iter()
                     .map(|b| {
                         if b.len() != 2 {
@@ -891,12 +923,14 @@ pub fn solve_with_pls(
                         Ok([b[0], b[1]])
                     })
                     .collect::<PyResult<Vec<[u64; 2]>>>()?;
+                let bounds_array: [[u64; 2]; 4] = bounds_vec.try_into()
+                    .map_err(|_| PyValueError::new_err("Expected exactly 4 objective bounds for 4D problem"))?;
                 pls_problem.set_objective_bounds(bounds_array);
             }
 
             // Macro to handle different solution set types for 4D
             macro_rules! run_pls_4d_with_archive {
-                ($SolutionSetType:ty) => {{
+                ($SolutionSetType:ty, $archive_name:expr) => {{
                     // Create initial population manually for 4D
                     let mut initial_solution_set = <$SolutionSetType>::new("initial_4d_solutions");
                     
@@ -910,9 +944,9 @@ pub fn solve_with_pls(
                             initial_solution_set.try_insert(&pls_solution);
                         }
                         // Generate additional random solutions
-                        for _ in 0..initial_population_size {
+                        for i in 0..initial_population_size {
                             let random_solution = if is_deterministic {
-                                BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
+                                BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890u64.wrapping_add(i as u64))
                             } else {
                                 BitsetEncodedSolution::random(&pls_problem)
                             };
@@ -921,9 +955,9 @@ pub fn solve_with_pls(
                     } else {
                         // Generate random initial population
                         info!("Generating random initial population of {} solutions for 4D PLS", initial_population_size);
-                        for _ in 0..initial_population_size {
+                        for i in 0..initial_population_size {
                             let random_solution = if is_deterministic {
-                                BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890)
+                                BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890u64.wrapping_add(i as u64))
                             } else {
                                 BitsetEncodedSolution::random(&pls_problem)
                             };
@@ -943,6 +977,17 @@ pub fn solve_with_pls(
                     let final_solution_set = pareto_local_search.run(max_iterations, timeout);
 
                     info!("4D PLS completed, processing {} solutions", final_solution_set.len());
+                    
+                    // Export explored solutions to JSON
+                    let explored_json = pareto_local_search.explored_solutions.to_json();
+                    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros();
+                    let thread_id = format!("{:?}", thread::current().id());
+                    let json_path = std::env::temp_dir().join(format!("explored_solutions_4d_{}_{}_{}_{}.json", $archive_name, std::process::id(), timestamp, thread_id));
+                    if let Err(e) = std::fs::write(&json_path, explored_json) {
+                        error!("Failed to write explored solutions JSON: {}", e);
+                    } else {
+                        error!("Explored solutions exported to: {}", json_path.display());
+                    }
 
                     // Generate 4D plot if requested
                     if plots {
@@ -980,15 +1025,15 @@ pub fn solve_with_pls(
             let (final_solutions, explored_solutions) = match solution_set_type {
                 SolutionSetType::LinkedList => {
                     info!("Using LinkedListSolutionSet for 4D PLS");
-                    run_pls_4d_with_archive!(LinkedListSolutionSet<BitsetEncodedSolution<4>, 4>)
+                    run_pls_4d_with_archive!(LinkedListSolutionSet<BitsetEncodedSolution<4>, 4>, "linked-list")
                 },
                 SolutionSetType::Vector => {
                     info!("Using VecSolutionSet for 4D PLS");
-                    run_pls_4d_with_archive!(VecSolutionSet<BitsetEncodedSolution<4>, 4>)
+                    run_pls_4d_with_archive!(VecSolutionSet<BitsetEncodedSolution<4>, 4>, "vector")
                 },
                 SolutionSetType::NdTree => {
                     info!("Using NdTreeSolutionSet for 4D PLS (nd-tree)");
-                    run_pls_4d_with_archive!(NdTreeSolutionSet<BitsetEncodedSolution<4>, 4>)
+                    run_pls_4d_with_archive!(NdTreeSolutionSet<BitsetEncodedSolution<4>, 4>, "nd-tree")
                 }
             };
             

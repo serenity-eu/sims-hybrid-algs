@@ -113,7 +113,10 @@ where
     }
 
     fn insert_unchecked(&mut self, solution: &T) {
-        self.solutions.push_back(solution.clone());
+        // Even in unchecked mode, prevent exact duplicates to maintain archive invariants
+        if !self.contains(solution) {
+            self.solutions.push_back(solution.clone());
+        }
     }
 }
 

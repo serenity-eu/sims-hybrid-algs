@@ -2,61 +2,42 @@ use core::panic;
 use rand::Rng;
 use rand::distr::Open01;
 use std::fmt::Debug;
+use fixedbitset::FixedBitSet;
+use std::hash::Hash;
 
-// Forward declaration for Problem to avoid circular imports
-use crate::problem::Problem;
+use crate::problem::{SIMSProblemInstanceRaw, Problem};
 use crate::solution::ImageSet;
 
-/// Concrete objective types for the SIMS problem
-#[derive(Clone, Debug)]
-pub enum ObjectiveType<T: ImageSet<D>, const D: usize> {
+/// Lightweight identifier for objective types.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ObjectiveType {
     TotalCost,
     CloudyArea,
     MinResolution,
     MaxIncidenceAngle,
-    _PhantomData(std::marker::PhantomData<T>),
-}
-
-/// Trait for solution evaluation - provides access to solution state for objective calculation
-pub trait SolutionEvaluator<const D: usize>: crate::solution::ImageSet<D> {
-    /// Get clear parts counts for each element
-    fn clear_parts_counts(&self) -> &[usize];
-
-    /// Get element coverage counts
-    fn element_coverage(&self) -> &[usize];
 }
 
 /// Implementation of `ObjectiveType`
-impl<T: ImageSet<D>, const D: usize> ObjectiveType<T, D> {
+impl ObjectiveType {
     /// Returns the string identifier for this objective type.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the objective type is `_PhantomData`, which should not be used in normal operations.
     #[must_use]
-    pub fn id(&self) -> &'static str {
+    pub const fn id(&self) -> &'static str {
         match self {
             Self::TotalCost => "total_cost",
             Self::CloudyArea => "cloudy_area",
             Self::MinResolution => "min_resolution",
             Self::MaxIncidenceAngle => "max_incidence_angle",
-            Self::_PhantomData(_) => panic!("Unknown objective type"),
         }
     }
 
     /// Returns the human-readable name for this objective type.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the objective type is `_PhantomData`, which should not be used in normal operations.
     #[must_use]
-    pub fn name(&self) -> &'static str {
+    pub const fn name(&self) -> &'static str {
         match self {
             Self::TotalCost => "Total Cost",
             Self::CloudyArea => "Cloudy Area",
             Self::MinResolution => "Minimum Resolution Sum",
             Self::MaxIncidenceAngle => "Maximum Incidence Angle",
-            Self::_PhantomData(_) => panic!("Unknown objective type"),
         }
     }
 
@@ -64,54 +45,144 @@ impl<T: ImageSet<D>, const D: usize> ObjectiveType<T, D> {
     pub const fn is_minimization(&self) -> bool {
         true
     }
+}
+
+/// State and logic for objectives.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ObjectiveState<const D: usize> {
+    TotalCost {
+        costs: Vec<u64>,
+        max_value: u64,
+        bounds: Option<[u64; 2]>,
+    },
+    CloudyArea {
+        clear_images: Vec<FixedBitSet>,
+        areas: Vec<u64>,
+        max_value: u64,
+        bounds: Option<[u64; 2]>,
+    },
+    MinResolution {
+        resolutions: Vec<u64>,
+        max_value: u64,
+        bounds: Option<[u64; 2]>,
+    },
+    MaxIncidenceAngle {
+        incidence_angles: Vec<u64>,
+        max_value: u64,
+        bounds: Option<[u64; 2]>,
+    },
+}
+
+impl<const D: usize> ObjectiveState<D> {
+    /// Construct array of states from array of types and raw problem data.
+    #[must_use]
+    pub fn from_types_and_raw(
+        objective_types: &[ObjectiveType; D],
+        raw: &SIMSProblemInstanceRaw,
+    ) -> [Self; D] {
+        std::array::from_fn(|i| Self::from_type(objective_types[i], raw))
+    }
+
+    /// Construct state from type and raw problem data.
+    /// Assumes `raw` has been normalized (0-based indices) if it comes from `Problem`.
+    #[must_use]
+    pub fn from_type(obj_type: ObjectiveType, raw: &SIMSProblemInstanceRaw) -> Self {
+        match obj_type {
+            ObjectiveType::TotalCost => {
+                let costs = raw.costs.clone();
+                let max_value = costs.iter().sum();
+                Self::TotalCost {
+                    costs,
+                    max_value,
+                    bounds: None,
+                }
+            }
+            ObjectiveType::CloudyArea => {
+                let universe_size = raw.universe_size;
+                let clear_images = raw
+                    .images
+                    .iter()
+                    .zip(raw.clouds.iter())
+                    .map(|(image, cloud)| {
+                        let mut bs = FixedBitSet::with_capacity(universe_size);
+                        let cloud_set: std::collections::HashSet<_> = cloud.iter().copied().collect();
+                        
+                        for &elem in image {
+                            if !cloud_set.contains(&elem) && elem < universe_size {
+                                bs.insert(elem);
+                            }
+                        }
+                        bs
+                    })
+                    .collect();
+
+                let areas = raw.areas.clone();
+                let max_value = areas.iter().sum();
+                Self::CloudyArea {
+                    clear_images,
+                    areas,
+                    max_value,
+                    bounds: None,
+                }
+            }
+            ObjectiveType::MinResolution => {
+                let resolutions = raw.resolution.clone();
+                let max_value = resolutions.iter().max().copied().unwrap_or(0);
+                Self::MinResolution {
+                    resolutions,
+                    max_value,
+                    bounds: None,
+                }
+            }
+            ObjectiveType::MaxIncidenceAngle => {
+                let incidence_angles = raw.incidence_angle.clone();
+                let max_value = incidence_angles.iter().max().copied().unwrap_or(0);
+                Self::MaxIncidenceAngle {
+                    incidence_angles,
+                    max_value,
+                    bounds: None,
+                }
+            }
+        }
+    }
 
     /// Calculates the objective value for a given solution.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the objective type is `_PhantomData`, which should not be used in normal operations.
-    pub fn calculate_value<RT: ImageSet<D>>(&self, solution: &RT, problem: &Problem<T, D>) -> u64 {
+    pub fn calculate_value<RT: ImageSet<D>>(&self, solution: &RT, problem: &Problem<RT, D>) -> u64 {
         match self {
-            Self::TotalCost { .. } => solution
+            Self::TotalCost { costs, .. } => solution
                 .selected_images()
                 .iter()
-                .map(|&i| problem.images[i].cost())
+                .map(|&i| costs[i])
                 .sum(),
-            Self::CloudyArea { .. } => {
-                let mut clear_elements = vec![false; problem.universe.len()];
-
-                // Mark elements that are clear in selected images
-                for &image_index in &solution.selected_images() {
-                    for &clear_part in &problem.images[image_index].clear_parts {
-                        clear_elements[clear_part] = true;
+            Self::CloudyArea {
+                clear_images,
+                areas,
+                ..
+            } => {
+                let mut covered_clear = FixedBitSet::with_capacity(areas.len());
+                for image_index in solution.selected_images().iter().copied() {
+                    if let Some(img_clear) = clear_images.get(image_index) {
+                        covered_clear.union_with(img_clear);
                     }
                 }
-
-                // Calculate cloudy area (elements not covered by clear parts)
-                clear_elements
+                areas
                     .iter()
                     .enumerate()
-                    .filter_map(|(element_index, &is_clear)| {
-                        if is_clear {
-                            None
-                        } else {
-                            Some(problem.universe[element_index].area)
-                        }
-                    })
+                    .filter(|(idx, _)| !covered_clear.contains(*idx))
+                    .map(|(_, &area)| area)
                     .sum()
             }
-            Self::MinResolution { .. } => {
+            Self::MinResolution { resolutions, .. } => {
                 let mut min_resolution_sum = 0u64;
 
                 for element_index in 0..problem.universe.len() {
-                    // Find minimum resolution among selected images that cover this element
                     let min_resolution = solution
                         .selected_images()
                         .iter()
                         .filter(|&&image_index| {
                             problem.images[image_index].parts.contains(&element_index)
                         })
-                        .map(|&image_index| problem.raw_instance.resolution[image_index])
+                        .map(|&image_index| resolutions[image_index])
                         .min()
                         .unwrap_or(0);
 
@@ -120,13 +191,12 @@ impl<T: ImageSet<D>, const D: usize> ObjectiveType<T, D> {
 
                 min_resolution_sum
             }
-            Self::MaxIncidenceAngle { .. } => solution
+            Self::MaxIncidenceAngle { incidence_angles, .. } => solution
                 .selected_images()
                 .iter()
-                .map(|&image_index| problem.raw_instance.incidence_angle[image_index])
+                .map(|&image_index| incidence_angles[image_index])
                 .max()
                 .unwrap_or(0),
-            Self::_PhantomData(_) => panic!("Unknown objective type"),
         }
     }
 
@@ -134,178 +204,154 @@ impl<T: ImageSet<D>, const D: usize> ObjectiveType<T, D> {
     ///
     /// # Panics
     ///
-    /// Panics if the objective type is `_PhantomData`, which should not be used in normal operations.
-    pub fn calculate_delta(
+    /// Panics if called on `CloudyArea` variant - use trackers instead for efficient delta calculation.
+    pub fn calculate_delta<S: ImageSet<D>>(
         &self,
         image_index: usize,
         is_selected: bool,
-        solution: &T,
-        problem: &Problem<T, D>,
+        solution: &S,
+        problem: &Problem<S, D>,
     ) -> i64 {
         match self {
-            Self::TotalCost { .. } => {
-                let cost = problem.images[image_index].cost() as i64;
+            Self::TotalCost { costs, .. } => {
+                let cost = costs[image_index] as i64;
                 if is_selected {
-                    -cost // Removing image decreases cost
+                    -cost
                 } else {
-                    cost // Adding image increases cost
+                    cost
                 }
             }
             Self::CloudyArea { .. } => {
-                let mut cloudy_area_delta: i64 = 0;
-
-                if is_selected {
-                    // Removing image - check if any clear parts become uncovered
-                    for &clear_part in &problem.images[image_index].clear_parts {
-                        // If this is the last image with clear part covering the element, add element area to delta
-                        if solution.clear_parts_counts()[clear_part] == 1 {
-                            let area = problem.universe[clear_part].area as i64;
-                            cloudy_area_delta += area;
-                        }
-                    }
-                } else {
-                    // Adding image - check if any clear parts become covered for the first time
-                    for &clear_part in &problem.images[image_index].clear_parts {
-                        // If this is the first image with clear part covering the element, subtract element area from delta
-                        if solution.clear_parts_counts()[clear_part] == 0 {
-                            let area = problem.universe[clear_part].area as i64;
-                            cloudy_area_delta -= area;
-                        }
-                    }
-                }
-
-                cloudy_area_delta
+                panic!("CloudyArea::calculate_delta should not be called - use trackers instead");
             }
-            Self::MinResolution { .. } => {
+            Self::MinResolution { resolutions, .. } => {
                 let mut delta = 0i64;
-                let image_resolution = problem.raw_instance.resolution[image_index];
+                let image_resolution = resolutions[image_index];
 
                 for &element_index in &problem.images[image_index].parts {
-                    // Current minimum resolution for this element
                     let current_min = solution
                         .selected_images()
                         .iter()
                         .filter(|&&idx| {
                             idx != image_index && problem.images[idx].parts.contains(&element_index)
                         })
-                        .map(|&idx| problem.raw_instance.resolution[idx])
+                        .map(|&idx| resolutions[idx])
                         .min();
 
                     if is_selected {
-                        // Removing image - check if this was providing the minimum resolution
-                        if let Some(new_min) = current_min {
-                            if image_resolution < new_min {
-                                // This image was providing the minimum, delta increases
-                                delta += (new_min - image_resolution) as i64;
-                            }
+                        // Removing the image
+                        let next_min = solution
+                            .selected_images()
+                            .iter()
+                            .filter(|&&idx| {
+                                idx != image_index
+                                    && problem.images[idx].parts.contains(&element_index)
+                            })
+                            .map(|&idx| resolutions[idx])
+                            .min();
+
+                        if let Some(new_min) = next_min {
+                            delta += (image_resolution - new_min) as i64;
                         } else {
-                            // This was the only image covering this element
                             delta -= image_resolution as i64;
                         }
-                    } else {
-                        // Adding image - check if this provides a better minimum
-                        if let Some(current_min_val) = current_min {
-                            if image_resolution < current_min_val {
-                                // This image provides better resolution, delta decreases
-                                delta -= (current_min_val - image_resolution) as i64;
-                            }
-                        } else {
-                            // This is the first image to cover this element
-                            delta += image_resolution as i64;
+                    } else if let Some(current_min_val) = current_min {
+                        if image_resolution < current_min_val {
+                            delta -= (current_min_val - image_resolution) as i64;
                         }
+                    } else {
+                        delta += image_resolution as i64;
                     }
                 }
-
                 delta
             }
-            Self::MaxIncidenceAngle { .. } => {
-                let image_angle = problem.raw_instance.incidence_angle[image_index];
+            Self::MaxIncidenceAngle { incidence_angles, .. } => {
+                let image_angle = incidence_angles[image_index];
 
                 if is_selected {
-                    // Removing image
                     let current_max = solution
                         .selected_images()
                         .iter()
-                        .map(|&idx| problem.raw_instance.incidence_angle[idx])
+                        .map(|&idx| incidence_angles[idx])
                         .max()
                         .unwrap_or(0);
 
                     if image_angle == current_max {
-                        // This image had the maximum angle, find new maximum
                         let new_max = solution
                             .selected_images()
                             .iter()
                             .filter(|&&idx| idx != image_index)
-                            .map(|&idx| problem.raw_instance.incidence_angle[idx])
+                            .map(|&idx| incidence_angles[idx])
                             .max()
                             .unwrap_or(0);
-                        return (new_max as i64) - (current_max as i64);
+                        (new_max as i64) - (current_max as i64)
+                    } else {
+                        0
                     }
-                    // Image wasn't the maximum, no change
-                    0
                 } else {
-                    // Adding image
                     let current_max = solution
                         .selected_images()
                         .iter()
-                        .map(|&idx| problem.raw_instance.incidence_angle[idx])
+                        .map(|&idx| incidence_angles[idx])
                         .max()
                         .unwrap_or(0);
-
+                    
                     if image_angle > current_max {
-                        // New image has higher angle, becomes new maximum
                         (image_angle as i64) - (current_max as i64)
                     } else {
-                        // New image doesn't affect maximum
                         0
                     }
                 }
             }
-            Self::_PhantomData(_) => panic!("Unknown objective type"),
         }
     }
 
     /// Returns the maximum possible value for this objective.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the objective type is `_PhantomData`, which should not be used in normal operations.
     #[must_use]
-    pub fn max_value(&self, problem: &Problem<T, D>) -> u64 {
+    pub const fn max_value(&self) -> u64 {
         match self {
-            Self::TotalCost => problem.images.iter().map(super::problem::Image::cost).sum(),
-            Self::CloudyArea => problem.universe.iter().map(|elem| elem.area).sum(),
-            Self::MinResolution => problem
-                .raw_instance
-                .resolution
-                .iter()
-                .max()
-                .copied()
-                .unwrap_or(0),
-            Self::MaxIncidenceAngle => problem
-                .raw_instance
-                .incidence_angle
-                .iter()
-                .max()
-                .copied()
-                .unwrap_or(0),
-            Self::_PhantomData(_) => panic!("Unknown objective type"),
+            Self::TotalCost { max_value, .. }
+            | Self::CloudyArea { max_value, .. }
+            | Self::MinResolution { max_value, .. }
+            | Self::MaxIncidenceAngle { max_value, .. } => *max_value,
+        }
+    }
+
+    /// Returns the bounds for this objective, if set.
+    #[must_use]
+    pub const fn bounds(&self) -> Option<[u64; 2]> {
+        match self {
+            Self::TotalCost { bounds, .. }
+            | Self::CloudyArea { bounds, .. }
+            | Self::MinResolution { bounds, .. }
+            | Self::MaxIncidenceAngle { bounds, .. } => *bounds,
+        }
+    }
+
+    /// Sets the bounds for this objective.
+    pub const fn set_bounds(&mut self, new_bounds: [u64; 2]) {
+        match self {
+            Self::TotalCost { bounds, .. }
+            | Self::CloudyArea { bounds, .. }
+            | Self::MinResolution { bounds, .. }
+            | Self::MaxIncidenceAngle { bounds, .. } => *bounds = Some(new_bounds),
         }
     }
 }
 
 #[must_use]
 pub fn generate_weights<const D: usize>() -> [f32; D] {
-    let mut weights = [0.0f32; D];
     let mut remaining = 1.0_f32;
-
-    for weight in weights.iter_mut().take(D - 1) {
-        let random_weight: f32 = rand::rng().sample(Open01);
-        *weight = random_weight * remaining;
-        remaining -= random_weight * remaining;
-    }
-    weights[D - 1] = remaining; // Last weight gets the remainder
-    weights
+    std::array::from_fn(|i| {
+        if i < D - 1 {
+            let random_weight: f32 = rand::rng().sample(Open01);
+            let weight = random_weight * remaining;
+            remaining -= weight;
+            weight
+        } else {
+            remaining // Last weight gets the remainder
+        }
+    })
 }
 
 #[must_use]

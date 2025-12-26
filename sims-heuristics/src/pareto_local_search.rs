@@ -93,10 +93,15 @@ where
     ) -> Self {
         let mut population = S::new("population");
         // Initialize ExploredSolutionsData with the problem's max objectives array
-        let mut explored_solutions = ExploredSolutionsData::<D>::new(problem.max_objectives);
+        let mut explored_solutions = ExploredSolutionsData::<D>::new(problem.max_objectives());
         initial_population.iter().for_each(|solution| {
             if population.try_insert(solution) {
-                explored_solutions.register(0, solution, Duration::from_secs(0));
+                explored_solutions.register(
+                    0,
+                    solution,
+                    Duration::from_secs(0),
+                    solution.selected_images(),
+                );
             }
         });
         for (i, solution) in population.iter().enumerate() {
@@ -133,12 +138,6 @@ where
 
         let population = mem::replace(&mut self.population, S::new("population"));
 
-        let neighborhood_exploration_span = info_span!(
-            "explore_neighborhoods",
-            initial_population_size = population.len()
-        );
-        let exploration_guard = neighborhood_exploration_span.enter();
-
         self.explore_population_neighborhoods(
             population,
             iteration,
@@ -146,7 +145,6 @@ where
             &mut step_stats,
             &mut auxiliary_population,
         );
-        drop(exploration_guard);
 
         step_stats.auxiliary_len = auxiliary_population.len();
 
@@ -223,12 +221,9 @@ where
                     break 'population;
                 }
             }
-            
+
             drop(evaluation_guard);
 
-            // Instrument the explored neighborhood size update
-            let update_span = debug_span!("update_explored_neighborhood_size");
-            let _update_guard = update_span.enter();
             self.explored_solutions
                 .update_explored_neighborhood_size(&solution, self.neigborhood_structure);
         }
@@ -271,19 +266,19 @@ where
         debug_assert!(neighbor.is_valid(self.problem));
 
         if self.explored_solutions.is_registered(neighbor) {
-            debug!("Neighbor nr {neighbor_index} was already explored.");
             step_stats.duplicated_neighbor_count += 1;
-            tracing::trace!("Neighbor already explored, skipping");
+            tracing::trace!("Neighbor nr {neighbor_index} already explored, skipping");
             return false;
         }
 
-        self.explored_solutions
-            .register(iteration, neighbor, timer.elapsed());
+        self.explored_solutions.register(
+            iteration,
+            neighbor,
+            timer.elapsed(),
+            neighbor.selected_images(),
+        );
 
         tracing::trace!("Evaluating new neighbor");
-
-        let evaluation_span = debug_span!("evaluate_neighbor");
-        let _eval_guard = evaluation_span.enter();
 
         self.evaluate_neighbor(
             neighbor,
@@ -316,20 +311,13 @@ where
         auxiliary_population: &mut S,
     ) {
         if neighbor.is_covered_by(current_solution.objectives()) {
-            debug!("Neighbor nr {neighbor_index} is weakly dominated by current solution.");
-            tracing::trace!("Neighbor dominated by current solution, discarding");
+            tracing::trace!(
+                "Neighbor nr {neighbor_index} is dominated by current solution, discarding"
+            );
             return;
         }
 
-        let pareto_evaluation_span = debug_span!("pareto_evaluation");
-        let pareto_guard = pareto_evaluation_span.enter();
-
         if self.try_add_to_pareto_set(neighbor, neighbor_index, step_stats) {
-            drop(pareto_guard);
-
-            let auxiliary_evaluation_span = debug_span!("auxiliary_evaluation");
-            let _aux_guard = auxiliary_evaluation_span.enter();
-
             Self::try_add_to_auxiliary_population(
                 neighbor,
                 neighbor_index,
@@ -364,8 +352,7 @@ where
             );
             true
         } else {
-            debug!("Neighbor nr {neighbor_index} wasn't added to approximated pareto set.");
-            tracing::trace!("Neighbor rejected from Pareto set");
+            tracing::trace!("Neighbor nr {neighbor_index} rejected from Pareto set");
             false
         }
     }
@@ -377,6 +364,11 @@ where
         );
     }
 
+    #[instrument(
+        level = "debug",
+        skip(neighbor, step_stats, auxiliary_population),
+        fields(neighbor_index)
+    )]
     fn try_add_to_auxiliary_population(
         neighbor: &T,
         neighbor_index: usize,
@@ -579,6 +571,11 @@ where
     pub fn run(&mut self, max_iterations: usize, max_duration: Duration) -> S {
         let pls_timer = Timer::start(max_duration);
 
+        error!(
+            "Initial population after dominance filtering: {} solutions",
+            self.population.len()
+        );
+
         for i in 1..=max_iterations {
             let iteration_span = info_span!(
                 "pls_iteration",
@@ -659,6 +656,8 @@ where
     pub fn explored_solutions_fingerprints(&self) -> Vec<SolutionFingerprint<D>> {
         self.explored_solutions
             .solutions
-            .values().cloned().collect()
+            .values()
+            .cloned()
+            .collect()
     }
 }
