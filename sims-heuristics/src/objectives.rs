@@ -1,11 +1,11 @@
 use core::panic;
+use fixedbitset::FixedBitSet;
 use rand::Rng;
 use rand::distr::Open01;
 use std::fmt::Debug;
-use fixedbitset::FixedBitSet;
 use std::hash::Hash;
 
-use crate::problem::{SIMSProblemInstanceRaw, Problem};
+use crate::problem::{SIMSProblemInstanceRaw, SetCoverProblem};
 use crate::solution::ImageSet;
 
 /// Lightweight identifier for objective types.
@@ -85,6 +85,9 @@ impl<const D: usize> ObjectiveState<D> {
 
     /// Construct state from type and raw problem data.
     /// Assumes `raw` has been normalized (0-based indices) if it comes from `Problem`.
+    ///
+    /// # Panics
+    /// Panics if the resolutions array is empty when creating a `MinResolution` objective.
     #[must_use]
     pub fn from_type(obj_type: ObjectiveType, raw: &SIMSProblemInstanceRaw) -> Self {
         match obj_type {
@@ -99,20 +102,18 @@ impl<const D: usize> ObjectiveState<D> {
             }
             ObjectiveType::CloudyArea => {
                 let universe_size = raw.universe_size;
-                let clear_images = raw
+                let clear_images: Vec<FixedBitSet> = raw
                     .images
                     .iter()
                     .zip(raw.clouds.iter())
                     .map(|(image, cloud)| {
-                        let mut bs = FixedBitSet::with_capacity(universe_size);
-                        let cloud_set: std::collections::HashSet<_> = cloud.iter().copied().collect();
-                        
-                        for &elem in image {
-                            if !cloud_set.contains(&elem) && elem < universe_size {
-                                bs.insert(elem);
-                            }
-                        }
-                        bs
+                        let cloud_set: std::collections::HashSet<_> =
+                            cloud.iter().copied().collect();
+                        image
+                            .iter()
+                            .copied()
+                            .filter(|&elem| !cloud_set.contains(&elem) && elem < universe_size)
+                            .collect()
                     })
                     .collect();
 
@@ -127,7 +128,11 @@ impl<const D: usize> ObjectiveState<D> {
             }
             ObjectiveType::MinResolution => {
                 let resolutions = raw.resolution.clone();
-                let max_value = resolutions.iter().max().copied().unwrap_or(0);
+                let max_value = resolutions
+                    .iter()
+                    .max()
+                    .copied()
+                    .expect("Resolutions array cannot be empty");
                 Self::MinResolution {
                     resolutions,
                     max_value,
@@ -136,7 +141,11 @@ impl<const D: usize> ObjectiveState<D> {
             }
             ObjectiveType::MaxIncidenceAngle => {
                 let incidence_angles = raw.incidence_angle.clone();
-                let max_value = incidence_angles.iter().max().copied().unwrap_or(0);
+                let max_value = incidence_angles
+                    .iter()
+                    .max()
+                    .copied()
+                    .expect("Incidence angles array cannot be empty");
                 Self::MaxIncidenceAngle {
                     incidence_angles,
                     max_value,
@@ -147,20 +156,20 @@ impl<const D: usize> ObjectiveState<D> {
     }
 
     /// Calculates the objective value for a given solution.
-    pub fn calculate_value<RT: ImageSet<D>>(&self, solution: &RT, problem: &Problem<RT, D>) -> u64 {
+    pub fn calculate_value<P: SetCoverProblem<D>, RT: ImageSet<D>>(
+        &self,
+        solution: &RT,
+        problem: &P,
+    ) -> u64 {
         match self {
-            Self::TotalCost { costs, .. } => solution
-                .selected_images()
-                .iter()
-                .map(|&i| costs[i])
-                .sum(),
+            Self::TotalCost { costs, .. } => solution.selected_images().map(|i| costs[i]).sum(),
             Self::CloudyArea {
                 clear_images,
                 areas,
                 ..
             } => {
                 let mut covered_clear = FixedBitSet::with_capacity(areas.len());
-                for image_index in solution.selected_images().iter().copied() {
+                for image_index in solution.selected_images() {
                     if let Some(img_clear) = clear_images.get(image_index) {
                         covered_clear.union_with(img_clear);
                     }
@@ -168,33 +177,32 @@ impl<const D: usize> ObjectiveState<D> {
                 areas
                     .iter()
                     .enumerate()
-                    .filter(|(idx, _)| !covered_clear.contains(*idx))
-                    .map(|(_, &area)| area)
+                    .filter_map(|(idx, &area)| (!covered_clear.contains(idx)).then_some(area))
                     .sum()
             }
             Self::MinResolution { resolutions, .. } => {
-                let mut min_resolution_sum = 0u64;
+                let universe_size = problem.universe_size();
+                let mut element_mins = vec![u64::MAX; universe_size];
 
-                for element_index in 0..problem.universe.len() {
-                    let min_resolution = solution
-                        .selected_images()
-                        .iter()
-                        .filter(|&&image_index| {
-                            problem.images[image_index].parts.contains(&element_index)
-                        })
-                        .map(|&image_index| resolutions[image_index])
-                        .min()
-                        .unwrap_or(0);
-
-                    min_resolution_sum += min_resolution;
+                for image_index in solution.selected_images() {
+                    let res = resolutions[image_index];
+                    for element_index in problem.image_elements(image_index) {
+                        if res < element_mins[element_index] {
+                            element_mins[element_index] = res;
+                        }
+                    }
                 }
 
-                min_resolution_sum
+                element_mins
+                    .into_iter()
+                    .map(|min_res| if min_res == u64::MAX { 0 } else { min_res })
+                    .sum()
             }
-            Self::MaxIncidenceAngle { incidence_angles, .. } => solution
+            Self::MaxIncidenceAngle {
+                incidence_angles, ..
+            } => solution
                 .selected_images()
-                .iter()
-                .map(|&image_index| incidence_angles[image_index])
+                .map(|image_index| incidence_angles[image_index])
                 .max()
                 .unwrap_or(0),
         }
@@ -205,21 +213,17 @@ impl<const D: usize> ObjectiveState<D> {
     /// # Panics
     ///
     /// Panics if called on `CloudyArea` variant - use trackers instead for efficient delta calculation.
-    pub fn calculate_delta<S: ImageSet<D>>(
+    pub fn calculate_delta<P: SetCoverProblem<D>, S: ImageSet<D>>(
         &self,
         image_index: usize,
         is_selected: bool,
         solution: &S,
-        problem: &Problem<S, D>,
+        problem: &P,
     ) -> i64 {
         match self {
             Self::TotalCost { costs, .. } => {
                 let cost = costs[image_index] as i64;
-                if is_selected {
-                    -cost
-                } else {
-                    cost
-                }
+                if is_selected { -cost } else { cost }
             }
             Self::CloudyArea { .. } => {
                 panic!("CloudyArea::calculate_delta should not be called - use trackers instead");
@@ -228,26 +232,24 @@ impl<const D: usize> ObjectiveState<D> {
                 let mut delta = 0i64;
                 let image_resolution = resolutions[image_index];
 
-                for &element_index in &problem.images[image_index].parts {
+                for element_index in problem.image_elements(image_index) {
                     let current_min = solution
                         .selected_images()
-                        .iter()
-                        .filter(|&&idx| {
-                            idx != image_index && problem.images[idx].parts.contains(&element_index)
+                        .filter(|&idx| {
+                            idx != image_index && problem.image_contains_element(idx, element_index)
                         })
-                        .map(|&idx| resolutions[idx])
+                        .map(|idx| resolutions[idx])
                         .min();
 
                     if is_selected {
                         // Removing the image
                         let next_min = solution
                             .selected_images()
-                            .iter()
-                            .filter(|&&idx| {
+                            .filter(|&idx| {
                                 idx != image_index
-                                    && problem.images[idx].parts.contains(&element_index)
+                                    && problem.image_contains_element(idx, element_index)
                             })
-                            .map(|&idx| resolutions[idx])
+                            .map(|idx| resolutions[idx])
                             .min();
 
                         if let Some(new_min) = next_min {
@@ -265,23 +267,23 @@ impl<const D: usize> ObjectiveState<D> {
                 }
                 delta
             }
-            Self::MaxIncidenceAngle { incidence_angles, .. } => {
+            Self::MaxIncidenceAngle {
+                incidence_angles, ..
+            } => {
                 let image_angle = incidence_angles[image_index];
 
                 if is_selected {
                     let current_max = solution
                         .selected_images()
-                        .iter()
-                        .map(|&idx| incidence_angles[idx])
+                        .map(|idx| incidence_angles[idx])
                         .max()
                         .unwrap_or(0);
 
                     if image_angle == current_max {
                         let new_max = solution
                             .selected_images()
-                            .iter()
-                            .filter(|&&idx| idx != image_index)
-                            .map(|&idx| incidence_angles[idx])
+                            .filter(|&idx| idx != image_index)
+                            .map(|idx| incidence_angles[idx])
                             .max()
                             .unwrap_or(0);
                         (new_max as i64) - (current_max as i64)
@@ -291,11 +293,10 @@ impl<const D: usize> ObjectiveState<D> {
                 } else {
                     let current_max = solution
                         .selected_images()
-                        .iter()
-                        .map(|&idx| incidence_angles[idx])
+                        .map(|idx| incidence_angles[idx])
                         .max()
                         .unwrap_or(0);
-                    
+
                     if image_angle > current_max {
                         (image_angle as i64) - (current_max as i64)
                     } else {

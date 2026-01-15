@@ -34,11 +34,7 @@ impl Timer {
     #[must_use]
     pub fn remaining(&self) -> Duration {
         let elapsed = self.start.elapsed();
-        if elapsed >= self.duration {
-            Duration::ZERO
-        } else {
-            self.duration - elapsed
-        }
+        self.duration.saturating_sub(elapsed)
     }
 
     /// Check if the timer has expired

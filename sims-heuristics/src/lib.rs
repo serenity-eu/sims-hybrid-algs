@@ -38,6 +38,7 @@
 //! providing flexibility for any number of objectives. Use `generate_weights::<D>()` to
 //! create random weights that sum to 1.0 for D-dimensional objective spaces.
 
+#![feature(portable_simd)]
 #![expect(
     clippy::cast_precision_loss,
     reason = "Legacy code style, extensive refactor needed"
@@ -54,23 +55,22 @@
     clippy::cast_possible_wrap,
     reason = "Legacy code style, extensive refactor needed"
 )]
-pub mod examples;
 pub mod explored_solutions_data;
+pub mod objective_tracker;
+pub mod objective_tracker_impl;
 pub mod objectives;
 pub mod pareto_local_search;
 #[cfg(feature = "plotting")]
 pub mod plotting;
-pub mod probabilistic_probing_neighborhood;
 pub mod problem;
+pub mod problem_bitset;
 pub mod residual_problem;
 pub mod residual_solution;
 pub mod solution;
 pub mod solution_impl;
 pub mod solution_set_impl;
 pub mod timer;
-pub mod trackers;
 pub mod util;
-pub mod problem_bitset;
 pub use problem_bitset::ProblemBitset;
 
 // Re-export key traits

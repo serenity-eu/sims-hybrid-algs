@@ -1,16 +1,15 @@
-use criterion::{criterion_group, criterion_main, Criterion};
-use pls::problem::{SIMSProblemInstanceRaw, Problem};
-use pls::problem_bitset::ProblemBitset;
-use pls::solution_impl::vec_encoded_solution::VecEncodedSolution;
+use criterion::{Criterion, criterion_group, criterion_main};
 use fixedbitset::FixedBitSet;
+use pls::problem::SIMSProblemInstanceRaw;
+use pls::problem_bitset::ProblemBitset;
 use rand::prelude::*;
 
 fn load_raw_instance(path: &str) -> SIMSProblemInstanceRaw {
     SIMSProblemInstanceRaw::from_minizinc_datafile(path)
 }
 
-fn generate_covering_solutions(
-    pb: &ProblemBitset,
+fn generate_covering_solutions<const D: usize>(
+    pb: &ProblemBitset<D>,
     batch: usize,
     rng: &mut impl Rng,
 ) -> Vec<Vec<usize>> {
@@ -54,7 +53,13 @@ fn bench_cover_check(c: &mut Criterion) {
         let mut rng = StdRng::seed_from_u64(42);
 
         // Bitset implementation
-        let pb = ProblemBitset::from_raw(&raw);
+        let pb = ProblemBitset::from_raw_with_objectives(
+            &raw,
+            [
+                pls::objectives::ObjectiveType::TotalCost,
+                pls::objectives::ObjectiveType::CloudyArea,
+            ],
+        );
         let random_solutions = generate_covering_solutions(&pb, batch, &mut rng);
         c.bench_function(&format!("bitset_cover_check_{path}"), |b| {
             b.iter(|| {
@@ -69,21 +74,22 @@ fn bench_cover_check(c: &mut Criterion) {
         });
 
         // Default implementation
-        let problem = Problem::<VecEncodedSolution<2>, 2>::from_raw_with_objectives(
-            raw,
-            [pls::objectives::ObjectiveType::TotalCost, pls::objectives::ObjectiveType::CloudyArea],
-        ).unwrap();
+        let problem = pls::problem_bitset::ProblemBitset::<2>::from_raw_with_objectives(
+            &raw,
+            [
+                pls::objectives::ObjectiveType::TotalCost,
+                pls::objectives::ObjectiveType::CloudyArea,
+            ],
+        );
 
         c.bench_function(&format!("default_cover_check_{path}"), |b| {
             b.iter(|| {
                 for sol in &random_solutions {
-                    let mut covered = vec![false; universe_size];
+                    let mut covered = fixedbitset::FixedBitSet::with_capacity(universe_size);
                     for &img_idx in sol {
-                        for &el in &problem.images[img_idx].parts {
-                            covered[el] = true;
-                        }
+                        covered.union_with(&problem.images[img_idx]);
                     }
-                    assert!(covered.iter().all(|&x| x));
+                    assert!(covered.is_full());
                 }
             });
         });

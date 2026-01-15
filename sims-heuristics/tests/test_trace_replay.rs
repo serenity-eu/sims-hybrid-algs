@@ -10,60 +10,60 @@
 #![allow(clippy::uninlined_format_args)]
 #![allow(clippy::doc_markdown)]
 
-use fixedbitset::FixedBitSet;
 use pareto::{HasObjectives, ParetoFront};
+use pls::objectives::ObjectiveType;
+use pls::problem::SIMSProblemInstanceRaw;
+use pls::problem_bitset::ProblemBitset;
 use pls::solution_impl::bitset_encoded_solution::BitsetEncodedSolution;
 use pls::solution_set_impl::{LinkedListSolutionSet, NdTreeSolutionSet, VecSolutionSet};
-use pls::objectives::ObjectiveType;
-use pls::problem::{Problem, SIMSProblemInstanceRaw};
-use pls::trackers::{StandardTrackerArray, TrackerCollection};
 use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
-use std::time::Duration;
 
 /// Create a minimal dummy problem for initializing trackers in tests
-fn create_dummy_problem<const D: usize>(num_images: usize, universe_size: usize) -> Problem<BitsetEncodedSolution<D>, D> {
+fn create_dummy_problem<const D: usize>(
+    num_images: usize,
+    universe_size: usize,
+) -> ProblemBitset<D> {
     let objectives = std::array::from_fn(|_| ObjectiveType::TotalCost);
-    
-    Problem::from_raw_with_objectives(
-        SIMSProblemInstanceRaw {
-            name: "dummy".to_string(),
-            num_images,
-            universe_size,
-            images: vec![vec![]; num_images],
-            costs: vec![0; num_images],
-            clouds: vec![vec![]; num_images],
-            areas: vec![0; universe_size],
-            max_cloud_area: 0,
-            resolution: vec![0; num_images],
-            incidence_angle: vec![0; num_images],
-        },
-        objectives,
-    ).expect("Failed to create dummy problem")
+
+    let raw_data = SIMSProblemInstanceRaw {
+        name: "dummy".to_string(),
+        num_images,
+        universe_size,
+        images: vec![vec![]; num_images],
+        costs: vec![0; num_images],
+        clouds: vec![vec![]; num_images],
+        areas: vec![0; universe_size],
+        max_cloud_area: 0,
+        resolution: vec![0; num_images],
+        incidence_angle: vec![0; num_images],
+    };
+
+    ProblemBitset::from_raw_with_objectives(&raw_data, objectives)
 }
 
 /// Load trace data from JSON file and create BitsetEncodedSolutions
 fn load_trace_as_solutions<const D: usize>(
     filename: &str,
     num_images: usize,
-) -> Vec<BitsetEncodedSolution<D>> {
+) -> Vec<BitsetEncodedSolution<ProblemBitset<D>, D>> {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.push(filename);
-    
+
     let json_data = fs::read_to_string(&path)
         .unwrap_or_else(|_| panic!("Failed to read trace file: {}", path.display()));
-    
-    let parsed: serde_json::Value = serde_json::from_str(&json_data)
-        .expect("Failed to parse trace JSON");
-    
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&json_data).expect("Failed to parse trace JSON");
+
     let solutions = parsed["solutions"]
         .as_array()
         .expect("Expected 'solutions' array in trace JSON");
-    
+
     // Create a dummy problem for initializing trackers
     let dummy_problem = create_dummy_problem::<D>(num_images, 1);
-    
+
     solutions
         .iter()
         .filter_map(|sol| {
@@ -72,31 +72,24 @@ fn load_trace_as_solutions<const D: usize>(
                 .iter()
                 .map(|v| v.as_u64().expect("Expected u64 objectives"))
                 .collect();
-            
+
             if objectives_vec.len() != D {
                 return None;
             }
-            
+
             let mut objectives = [0u64; D];
             objectives.copy_from_slice(&objectives_vec);
-            
+
             let selected_images_array = sol["selected_images"].as_array()?;
             let selected_images_vec: Vec<usize> = selected_images_array
                 .iter()
                 .map(|v| v.as_u64().expect("Expected u64 image indices") as usize)
                 .collect();
-            
-            let mut selected_images = FixedBitSet::with_capacity(num_images);
-            for &img in &selected_images_vec {
-                selected_images.insert(img);
-            }
-            
-            Some(BitsetEncodedSolution {
-                selected_images,
-                objectives,
-                timestamp: Duration::from_secs(0),
-                trackers: StandardTrackerArray::new(&dummy_problem),
-            })
+
+            Some(BitsetEncodedSolution::from_selected_images(
+                &selected_images_vec,
+                &dummy_problem,
+            ))
         })
         .collect()
 }
@@ -104,7 +97,7 @@ fn load_trace_as_solutions<const D: usize>(
 /// Extract final Pareto front as a set of objective vectors
 fn extract_pareto_front<S, const D: usize>(archive: &S) -> HashSet<[u64; D]>
 where
-    S: for<'a> ParetoFront<'a, BitsetEncodedSolution<D>>,
+    S: for<'a> ParetoFront<'a, BitsetEncodedSolution<ProblemBitset<D>, D>>,
 {
     archive.iter().map(|sol| *sol.objectives()).collect()
 }
@@ -117,10 +110,12 @@ fn test_ndtree_trace_replay_4d() {
     println!("Loaded nd-tree trace with {} solutions", solutions.len());
 
     // Create all three archives
-    let mut ndtree_archive = NdTreeSolutionSet::<BitsetEncodedSolution<4>, 4>::new("ndtree");
-    let mut vector_archive = VecSolutionSet::<BitsetEncodedSolution<4>, 4>::new("vector");
+    let mut ndtree_archive =
+        NdTreeSolutionSet::<BitsetEncodedSolution<ProblemBitset<4>, 4>, 4>::new("ndtree");
+    let mut vector_archive =
+        VecSolutionSet::<BitsetEncodedSolution<ProblemBitset<4>, 4>, 4>::new("vector");
     let mut linkedlist_archive =
-        LinkedListSolutionSet::<BitsetEncodedSolution<4>, 4>::new("linkedlist");
+        LinkedListSolutionSet::<BitsetEncodedSolution<ProblemBitset<4>, 4>, 4>::new("linkedlist");
 
     // Replay the trace into all archives
     for solution in solutions {
@@ -158,10 +153,12 @@ fn test_vector_trace_replay_4d() {
     println!("Loaded vector trace with {} solutions", solutions.len());
 
     // Create all three archives
-    let mut ndtree_archive = NdTreeSolutionSet::<BitsetEncodedSolution<4>, 4>::new("ndtree");
-    let mut vector_archive = VecSolutionSet::<BitsetEncodedSolution<4>, 4>::new("vector");
+    let mut ndtree_archive =
+        NdTreeSolutionSet::<BitsetEncodedSolution<ProblemBitset<4>, 4>, 4>::new("ndtree");
+    let mut vector_archive =
+        VecSolutionSet::<BitsetEncodedSolution<ProblemBitset<4>, 4>, 4>::new("vector");
     let mut linkedlist_archive =
-        LinkedListSolutionSet::<BitsetEncodedSolution<4>, 4>::new("linkedlist");
+        LinkedListSolutionSet::<BitsetEncodedSolution<ProblemBitset<4>, 4>, 4>::new("linkedlist");
 
     // Replay the trace into all archives
     for solution in solutions {
@@ -196,19 +193,19 @@ fn test_combined_trace_replay_4d() {
     println!("Testing combined trace replay:");
 
     // Load both traces
-    let ndtree_solutions =
-        load_trace_as_solutions::<4>("tests/data/pls_trace_4d_ndtree.json", 50);
-    let vector_solutions =
-        load_trace_as_solutions::<4>("tests/data/pls_trace_4d_vector.json", 50);
+    let ndtree_solutions = load_trace_as_solutions::<4>("tests/data/pls_trace_4d_ndtree.json", 50);
+    let vector_solutions = load_trace_as_solutions::<4>("tests/data/pls_trace_4d_vector.json", 50);
 
     println!("  nd-tree trace: {} solutions", ndtree_solutions.len());
     println!("  vector trace: {} solutions", vector_solutions.len());
 
     // Create all three archives
-    let mut ndtree_archive = NdTreeSolutionSet::<BitsetEncodedSolution<4>, 4>::new("ndtree");
-    let mut vector_archive = VecSolutionSet::<BitsetEncodedSolution<4>, 4>::new("vector");
+    let mut ndtree_archive =
+        NdTreeSolutionSet::<BitsetEncodedSolution<ProblemBitset<4>, 4>, 4>::new("ndtree");
+    let mut vector_archive =
+        VecSolutionSet::<BitsetEncodedSolution<ProblemBitset<4>, 4>, 4>::new("vector");
     let mut linkedlist_archive =
-        LinkedListSolutionSet::<BitsetEncodedSolution<4>, 4>::new("linkedlist");
+        LinkedListSolutionSet::<BitsetEncodedSolution<ProblemBitset<4>, 4>, 4>::new("linkedlist");
 
     // Replay both traces into all archives
     for solution in ndtree_solutions.iter().chain(vector_solutions.iter()) {
@@ -225,7 +222,10 @@ fn test_combined_trace_replay_4d() {
     println!("Combined replay results:");
     println!("  nd-tree archive: {} solutions", ndtree_front.len());
     println!("  vector archive: {} solutions", vector_front.len());
-    println!("  linked list archive: {} solutions", linkedlist_front.len());
+    println!(
+        "  linked list archive: {} solutions",
+        linkedlist_front.len()
+    );
 
     // All should converge to the same Pareto front
     assert_eq!(
@@ -243,21 +243,21 @@ fn test_cross_trace_comparison_4d() {
     println!("Loaded traces:");
 
     // Load both traces
-    let ndtree_solutions =
-        load_trace_as_solutions::<4>("tests/data/pls_trace_4d_ndtree.json", 50);
-    let vector_solutions =
-        load_trace_as_solutions::<4>("tests/data/pls_trace_4d_vector.json", 50);
+    let ndtree_solutions = load_trace_as_solutions::<4>("tests/data/pls_trace_4d_ndtree.json", 50);
+    let vector_solutions = load_trace_as_solutions::<4>("tests/data/pls_trace_4d_vector.json", 50);
 
     println!("  nd-tree: {} solutions", ndtree_solutions.len());
     println!("  vector: {} solutions", vector_solutions.len());
 
     // Process nd-tree trace in all three archives
     let mut ndtree_archive_with_ndtree_trace =
-        NdTreeSolutionSet::<BitsetEncodedSolution<4>, 4>::new("ndtree_ndtree");
+        NdTreeSolutionSet::<BitsetEncodedSolution<ProblemBitset<4>, 4>, 4>::new("ndtree_ndtree");
     let mut vector_archive_with_ndtree_trace =
-        VecSolutionSet::<BitsetEncodedSolution<4>, 4>::new("vector_ndtree");
-    let mut linkedlist_archive_with_ndtree_trace =
-        LinkedListSolutionSet::<BitsetEncodedSolution<4>, 4>::new("linkedlist_ndtree");
+        VecSolutionSet::<BitsetEncodedSolution<ProblemBitset<4>, 4>, 4>::new("vector_ndtree");
+    let mut linkedlist_archive_with_ndtree_trace = LinkedListSolutionSet::<
+        BitsetEncodedSolution<ProblemBitset<4>, 4>,
+        4,
+    >::new("linkedlist_ndtree");
     for solution in &ndtree_solutions {
         ndtree_archive_with_ndtree_trace.try_insert(solution);
         vector_archive_with_ndtree_trace.try_insert(solution);
@@ -266,11 +266,13 @@ fn test_cross_trace_comparison_4d() {
 
     // Process vector trace in all three archives
     let mut ndtree_archive_with_vector_trace =
-        NdTreeSolutionSet::<BitsetEncodedSolution<4>, 4>::new("ndtree_vector");
+        NdTreeSolutionSet::<BitsetEncodedSolution<ProblemBitset<4>, 4>, 4>::new("ndtree_vector");
     let mut vector_archive_with_vector_trace =
-        VecSolutionSet::<BitsetEncodedSolution<4>, 4>::new("vector_vector");
-    let mut linkedlist_archive_with_vector_trace =
-        LinkedListSolutionSet::<BitsetEncodedSolution<4>, 4>::new("linkedlist_vector");
+        VecSolutionSet::<BitsetEncodedSolution<ProblemBitset<4>, 4>, 4>::new("vector_vector");
+    let mut linkedlist_archive_with_vector_trace = LinkedListSolutionSet::<
+        BitsetEncodedSolution<ProblemBitset<4>, 4>,
+        4,
+    >::new("linkedlist_vector");
     for solution in &vector_solutions {
         ndtree_archive_with_vector_trace.try_insert(solution);
         vector_archive_with_vector_trace.try_insert(solution);

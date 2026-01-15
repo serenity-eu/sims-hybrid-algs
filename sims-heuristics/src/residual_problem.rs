@@ -6,98 +6,138 @@ use log::{debug, trace};
 use pareto::{HasObjectives, ParetoFront};
 
 use crate::{
-    problem::Problem,
+    problem::SetCoverProblem,
     residual_solution::ResidualSolution,
     solution::{ImageSet, MergeableWithResidual},
+    util::UnionIterator,
 };
 
-pub struct ResidualProblem<'a, R: MergeableWithResidual<D> + Clone, const D: usize> {
-    /// Original solutions with unmodified image only
+pub struct ResidualProblem<R, P, const D: usize>
+where
+    R: MergeableWithResidual<P, D> + Clone,
+    P: SetCoverProblem<D>,
+{
+    /// Owned copy of original solution with unmodified images only
     pub unmodified_solution: R,
-    /// Trackers reflecting the state after removing images (before adding candidates)
-    pub partial_trackers: R::Trackers,
-    /// Condensed selected images (bitset) - maps to `removal_candidates_original_indices`
-    pub condensed_selected_images: FixedBitSet,
+    /// Condensed indices corresponding to `removed_images` in `image_index_map`.
+    /// Used to skip the "no-op" residual combination that would reconstruct the original solution.
+    pub condensed_original_removed_images: FixedBitSet,
     /// Map from condensed image index to original image index
-    pub image_index_map: Vec<usize>,
-    /// Map from condensed element index to original element index  
-    pub element_index_map: Vec<usize>,
+    pub image_map_condensed_to_original: Vec<usize>,
+    /// Map from condensed element index to original element index
+    pub element_map_condensed_to_original: Vec<usize>,
     /// Condensed images as bitsets (each bitset represents which condensed elements the image covers)
     pub condensed_images: Vec<FixedBitSet>,
-    /// Uncovered elements clear parts counts
-    pub original_clear_parts_counts: Vec<usize>,
-    /// Original problem instance
-    pub problem: &'a Problem<R, D>,
+    /// Iterator state for generating combinations
+    combination_iter: Box<dyn Iterator<Item = Vec<usize>>>,
+    /// Phantom data to use P type parameter
+    _phantom: std::marker::PhantomData<P>,
 }
 
-impl<'a, R: MergeableWithResidual<D> + Clone, const D: usize> ResidualProblem<'a, R, D> {
+impl<R, P, const D: usize> ResidualProblem<R, P, D>
+where
+    R: MergeableWithResidual<P, D> + Clone,
+    P: SetCoverProblem<D>,
+{
+    /// Creates a new residual problem from a solution with removed images.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a removed image index is not found in the constructed image index map.
+    /// This should never happen if the inputs are valid.
     #[must_use]
     pub fn new(
         unmodified_solution: R,
-        partial_trackers: R::Trackers,
-        removal_candidates_original_indices: &[usize],
+        removed_images: &[usize],
         addition_candidates: &[usize],
         uncovered_elements_indices: Vec<usize>,
-        original_clear_parts_counts: Vec<usize>,
-        problem: &'a Problem<R, D>,
+        problem: &P,
     ) -> Self {
         debug!("######################################################");
-        debug!(
-            "######## RESIDUAL PROBLEM removed: {removal_candidates_original_indices:?} added: {addition_candidates:?} ######"
-        );
+        debug!("######## RESIDUAL PROBLEM removed images: {removed_images:?} ######");
+        debug!("######## RESIDUAL PROBLEM addition candidates: {addition_candidates:?} ######");
         debug!("######## base: {unmodified_solution:?} ########");
         debug!("######################################################");
 
         // Build element index map (condensed -> original)
-        let element_index_map = uncovered_elements_indices;
-        let num_elements = element_index_map.len();
-        
-        // Create reverse map (original -> condensed) for fast lookup
-        let element_map_reverse: HashMap<usize, usize> = element_index_map
-            .iter()
-            .enumerate()
-            .map(|(condensed_idx, &original_idx)| (original_idx, condensed_idx))
-            .collect();
+        let element_map_condensed_to_original = uncovered_elements_indices;
 
-        // Build image index map: [removed_images..., addition_candidates...]
-        let image_index_map: Vec<usize> = removal_candidates_original_indices
+        // Create reverse map (original -> condensed) for fast lookup
+        let element_map_original_to_condensed: HashMap<usize, usize> =
+            element_map_condensed_to_original
+                .iter()
+                .enumerate()
+                .map(|(condensed_idx, &original_idx)| (original_idx, condensed_idx))
+                .collect();
+
+        // Build image index map as a UNION of both ordered lists.
+        // NOTE: `util::UnionIterator::union()` is a merge-based union, so it assumes:
+        // - both inputs are sorted ascending
+        // - both inputs are unique (set semantics)
+        // Keep ordering stable for deterministic behavior.
+        #[cfg(debug_assertions)]
+        {
+            debug_assert!(
+                removed_images.windows(2).all(|w| w[0] < w[1]),
+                "removed_images must be a sorted unique set"
+            );
+            debug_assert!(
+                addition_candidates.windows(2).all(|w| w[0] < w[1]),
+                "addition_candidates must be a sorted unique set"
+            );
+        }
+        let image_map_condensed_to_original: Vec<usize> = removed_images
             .iter()
             .copied()
-            .chain(addition_candidates.iter().copied())
+            .union(addition_candidates.iter().copied())
             .collect();
-        
-        let num_images = image_index_map.len();
-        
-        // Build condensed selected images bitset (only removed images are initially selected)
-        let mut condensed_selected_images = FixedBitSet::with_capacity(num_images);
-        for i in 0..removal_candidates_original_indices.len() {
-            condensed_selected_images.insert(i);
-        }
+
+        // Build reverse map (original image index -> condensed index) for removed-images bitset.
+        let image_map_original_to_condensed: HashMap<usize, usize> =
+            image_map_condensed_to_original
+                .iter()
+                .enumerate()
+                .map(|(condensed_idx, &original_idx)| (original_idx, condensed_idx))
+                .collect();
+
+        // Bitset of condensed indices corresponding to the original `removed_images`.
+        let condensed_original_removed_images = removed_images
+            .iter()
+            .map(|&img| {
+                image_map_original_to_condensed
+                    .get(&img)
+                    .copied()
+                    .expect("removed image must be in image_map_original_to_condensed")
+            })
+            .collect::<FixedBitSet>();
 
         // Build condensed images (bitsets representing element coverage)
-        let mut condensed_images = Vec::with_capacity(num_images);
-        for &original_img_idx in &image_index_map {
-            let mut element_coverage = FixedBitSet::with_capacity(num_elements);
-            
-            // Map original element indices to condensed indices
-            for &original_elem_idx in &problem.images[original_img_idx].parts {
-                if let Some(&condensed_elem_idx) = element_map_reverse.get(&original_elem_idx) {
-                    element_coverage.insert(condensed_elem_idx);
-                }
-            }
-            
-            condensed_images.push(element_coverage);
-        }
+        let condensed_images: Vec<FixedBitSet> = image_map_condensed_to_original
+            .iter()
+            .map(|&original_img_idx| {
+                // Map original element indices to condensed indices
+                problem
+                    .image_elements(original_img_idx)
+                    .filter_map(|original_elem_idx| {
+                        element_map_original_to_condensed
+                            .get(&original_elem_idx)
+                            .copied()
+                    })
+                    .collect()
+            })
+            .collect();
 
-        ResidualProblem {
+        let m = image_map_condensed_to_original.len();
+        let combination_iter = Box::new((0..=5).flat_map(move |i| (0..m).combinations(i)));
+
+        Self {
             unmodified_solution,
-            partial_trackers,
-            condensed_selected_images,
-            image_index_map,
-            element_index_map,
+            condensed_original_removed_images,
+            image_map_condensed_to_original,
+            element_map_condensed_to_original,
             condensed_images,
-            original_clear_parts_counts,
-            problem,
+            combination_iter,
+            _phantom: std::marker::PhantomData,
         }
     }
 
@@ -105,16 +145,16 @@ impl<'a, R: MergeableWithResidual<D> + Clone, const D: usize> ResidualProblem<'a
     /// Uses efficient bitset operations
     #[must_use]
     pub fn is_set_cover(&self, selected_images: &FixedBitSet) -> bool {
-        let num_elements = self.element_index_map.len();
+        let num_elements = self.element_map_condensed_to_original.len();
         let mut covered = FixedBitSet::with_capacity(num_elements);
-        
+
         // Union all coverage bitsets for selected images
         for img_idx in selected_images.ones() {
             covered.union_with(&self.condensed_images[img_idx]);
         }
-        
+
         // Check if all elements are covered
-        covered.count_ones(..) == num_elements
+        covered.is_full()
     }
 
     /// Get images that cover a specific element
@@ -123,19 +163,19 @@ impl<'a, R: MergeableWithResidual<D> + Clone, const D: usize> ResidualProblem<'a
         self.condensed_images
             .iter()
             .enumerate()
-            .filter(|(_, coverage)| coverage[element_idx])
-            .map(|(img_idx, _)| img_idx)
+            .filter_map(|(img_idx, coverage)| coverage.contains(element_idx).then_some(img_idx))
             .collect()
     }
 
-    pub fn solve_with_backtracing<S: ParetoFront<'a, ResidualSolution<D>> + Default>(
+    pub fn solve_with_backtracing<'a, S: ParetoFront<'a, ResidualSolution<D>> + Default>(
         &mut self,
+        problem: &P,
         timer: &crate::timer::Timer,
-    ) -> MergedSolutionIter<'_, R, D> {
+    ) -> Vec<ResidualSolution<D>> {
         let mut non_dominated_residual_set: S = S::default();
 
         // Build list of images covering each element for cartesian product
-        let element_images: Vec<Vec<usize>> = (0..self.element_index_map.len())
+        let element_images: Vec<Vec<usize>> = (0..self.element_map_condensed_to_original.len())
             .map(|elem_idx| self.images_covering_element(elem_idx))
             .collect();
 
@@ -146,14 +186,13 @@ impl<'a, R: MergeableWithResidual<D> + Clone, const D: usize> ResidualProblem<'a
             unique_cover.sort_unstable();
             unique_cover.dedup();
 
-            // Map condensed indices back to original indices
-            let original_indices: Vec<usize> = unique_cover
-                .iter()
-                .map(|&condensed_idx| self.image_index_map[condensed_idx])
-                .collect();
-
-            let residual_solution =
-                ResidualSolution::from_selected_images(&original_indices, self.problem, timer);
+            // Keep condensed indices for ResidualSolution
+            let residual_solution = ResidualSolution::from_selected_images_condensed(
+                &unique_cover,
+                &self.image_map_condensed_to_original,
+                problem,
+                timer,
+            );
 
             let was_added = non_dominated_residual_set.try_insert(&residual_solution);
 
@@ -161,7 +200,7 @@ impl<'a, R: MergeableWithResidual<D> + Clone, const D: usize> ResidualProblem<'a
             trace!(
                 "######### RESIDUAL: OBJECTIVES {:?} | IMAGES {:?} {} #########################",
                 residual_solution.objectives(),
-                residual_solution.selected_images(),
+                residual_solution.selected_images().collect::<Vec<_>>(),
                 if was_added { "ADDED" } else { "NOT ADDED" }
             );
         }
@@ -174,17 +213,12 @@ impl<'a, R: MergeableWithResidual<D> + Clone, const D: usize> ResidualProblem<'a
             trace!(
                 "****** NONDOMINANT RESIDUAL: OBJECTIVES {:?} | IMAGES {:?} ******",
                 solution.objectives(),
-                solution.selected_images()
+                solution.selected_images().collect::<Vec<_>>()
             );
         }
         trace!("*****************************************************");
 
-        MergedSolutionIter {
-            unmodified_solution: &self.unmodified_solution,
-            solutions_iter,
-            residual_problem: self,
-            problem: self.problem,
-        }
+        solutions_iter
     }
 
     // // Check whether selected images cover all elements
@@ -294,54 +328,80 @@ impl<'a, R: MergeableWithResidual<D> + Clone, const D: usize> ResidualProblem<'a
     }
     */
 
-    pub fn solve<S: ParetoFront<'a, ResidualSolution<D>> + Default>(
+    /// Get the next valid residual solution from the combination iterator
+    /// Returns None when all combinations have been exhausted
+    pub fn solve_next(
         &mut self,
+        problem: &P,
         timer: &crate::timer::Timer,
-    ) -> MergedSolutionIter<'_, R, D> {
+    ) -> Option<ResidualSolution<D>> {
+        // Iterate through combinations to find the next valid one
+        while let Some(combination) = self.combination_iter.next() {
+            // Check if this combination matches the initially selected images (removed candidates)
+            let selected: FixedBitSet = combination.iter().copied().collect();
+
+            // Skip the original combination (would reconstruct the original solution)
+            if selected == self.condensed_original_removed_images {
+                continue;
+            }
+
+            if !self.is_set_cover(&selected) {
+                continue;
+            }
+
+            // Create and return the residual solution
+            let residual_solution = ResidualSolution::from_selected_images_condensed(
+                &combination,
+                &self.image_map_condensed_to_original,
+                problem,
+                timer,
+            );
+
+            trace!(
+                "RESIDUAL: OBJ {:?} | IMG {:?}",
+                residual_solution.objectives(),
+                residual_solution.selected_images().collect::<Vec<_>>(),
+            );
+
+            return Some(residual_solution);
+        }
+
+        // All combinations exhausted
+        None
+    }
+
+    #[tracing::instrument(skip(self, problem, timer), level = "debug")]
+    pub fn solve<'a, S: ParetoFront<'a, ResidualSolution<D>> + Default>(
+        &'a mut self,
+        problem: &'a P,
+        timer: &crate::timer::Timer,
+        partial_trackers: R::Trackers,
+    ) -> MergedSolutionIter<'a, R, P, D> {
         use tracing::debug_span;
-        
+
         let init_span = debug_span!("initialize_residual_solve");
-        let init_guard = init_span.enter();
+        let _init_guard = init_span.enter();
+
+        let m = self.image_map_condensed_to_original.len();
+        // Use 0..m range for combinations to avoid vector allocation
+        let combs_0_to_5 = (0..=5).flat_map(|i| (0..m).combinations(i));
+
         let mut non_dominated_residual_set: S = S::default();
 
-        let images_indices = (0..self.image_index_map.len()).collect::<Vec<_>>();
-        drop(init_guard);
-
-        let combinations_span = debug_span!("generate_all_combinations", num_images = self.image_index_map.len());
-        let combs_0_to_5 = {
-            let _comb_guard = combinations_span.enter();
-            (0..=5).flat_map(|i| images_indices.iter().combinations(i))
-        };
-
         let enumerate_span = debug_span!("enumerate_combinations");
-        let enum_guard = enumerate_span.enter();
-        
-        // Horrible brute force but it should work
-        // for image_combination in images_indices.iter().powerset() {
+        let _enum_guard = enumerate_span.enter();
+
         for image_combination in combs_0_to_5 {
-            let check_skip_span = debug_span!("check_skip_combination");
-            let should_skip = {
-                let _skip_guard = check_skip_span.enter();
-                // Check if this combination matches the initially selected images (removed candidates)
-                let mut test_bitset = FixedBitSet::with_capacity(self.image_index_map.len());
-                for &&idx in &image_combination {
-                    test_bitset.insert(idx);
-                }
-                test_bitset == self.condensed_selected_images
-            };
-            
-            if should_skip {
+            // Check if this combination matches the initially selected images (removed candidates)
+            let test_bitset: FixedBitSet = image_combination.iter().copied().collect();
+            if test_bitset == self.condensed_original_removed_images {
                 trace!("Skipping image combination as it is equal to original one");
                 continue;
             }
 
-            let coverage_check_span = debug_span!("check_coverage");
+            // Check coverage
             let is_valid_combination = {
-                let _coverage_guard = coverage_check_span.enter();
-                let mut selected = FixedBitSet::with_capacity(self.image_index_map.len());
-                for &&img_idx in &image_combination {
-                    selected.insert(img_idx);
-                }
+                let selected: FixedBitSet = image_combination.iter().copied().collect();
                 self.is_set_cover(&selected)
             };
 
@@ -349,67 +409,174 @@ impl<'a, R: MergeableWithResidual<D> + Clone, const D: usize> ResidualProblem<'a
                 continue;
             }
 
-            let create_solution_span = debug_span!("create_residual_solution");
-            let residual_solution = {
-                let _create_guard = create_solution_span.enter();
-                // Map condensed indices back to original indices
-                let selected_images: Vec<usize> = image_combination
-                    .iter()
-                    .map(|&&condensed_idx| self.image_index_map[condensed_idx])
-                    .collect();
-                ResidualSolution::from_selected_images(&selected_images, self.problem, timer)
-            };
+            // Create solution - image_combination is Vec<usize> (condensed indices)
+            let residual_solution = ResidualSolution::from_selected_images_condensed(
+                &image_combination,
+                &self.image_map_condensed_to_original,
+                problem,
+                timer,
+            );
 
-            let insert_span = debug_span!("try_insert_to_pareto");
-            let was_added = {
-                let _insert_guard = insert_span.enter();
-                non_dominated_residual_set.try_insert(&residual_solution)
-            };
+            // Add to Pareto front
+            let was_added = non_dominated_residual_set.try_insert(&residual_solution);
 
-            trace!("#####################################################");
             trace!(
-                "######### RESIDUAL: OBJECTIVES {:?} | IMAGES {:?} {} #########################",
+                "RESIDUAL: OBJ {:?} | IMG {:?} {}",
                 residual_solution.objectives(),
-                residual_solution.selected_images(),
-                if was_added { "ADDED" } else { "NOT ADDED" }
+                residual_solution.selected_images().collect::<Vec<_>>(),
+                if was_added { "ADDED" } else { "SKIP" }
             );
         }
-        drop(enum_guard);
 
-        let collect_span = debug_span!("collect_solutions");
-        let solutions_iter: Vec<ResidualSolution<D>> = {
-            let _collect_guard = collect_span.enter();
-            non_dominated_residual_set.into_iter().collect()
-        };
-
-        trace!("*****************************************************");
-        for solution in &solutions_iter {
-            trace!(
-                "****** NONDOMINANT RESIDUAL: OBJECTIVES {:?} | IMAGES {:?} ******",
-                solution.objectives(),
-                solution.selected_images()
-            );
-        }
-        trace!("*****************************************************");
+        let solutions_iter: Vec<ResidualSolution<D>> =
+            non_dominated_residual_set.into_iter().collect();
 
         MergedSolutionIter {
             unmodified_solution: &self.unmodified_solution,
             solutions_iter,
             residual_problem: self,
-            problem: self.problem,
+            problem,
+            partial_trackers,
         }
     }
 }
 
-pub struct MergedSolutionIter<'a, R: MergeableWithResidual<D> + Clone, const D: usize> {
+pub struct MergedSolutionIter<'a, R, P, const D: usize>
+where
+    R: MergeableWithResidual<P, D> + Clone,
+    P: SetCoverProblem<D>,
+{
+    pub unmodified_solution: &'a R,
+    pub solutions_iter: Vec<ResidualSolution<D>>,
+    pub residual_problem: &'a ResidualProblem<R, P, D>,
+    pub problem: &'a P,
+    pub partial_trackers: R::Trackers,
+}
+/*
+pub struct ResidualSolutionIter<'b, 'a, R, P, const D: usize, S>
+where
+    R: MergeableWithResidual<P, D> + Clone,
+    P: SetCoverProblem<D>,
+    S: ParetoFront<'a, ResidualSolution<D>> + Default,
+{
+    residual_problem: &'b ResidualProblem<'a, R, P, D>,
+    timer: &'b crate::timer::Timer,
+    partial_trackers: R::Trackers,
+    images_indices: Vec<usize>,
+    combination_iter: Option<Box<dyn Iterator<Item = Vec<&'b usize>> + 'b>>,
+    non_dominated_set: S,
+    non_dominated_iter: Option<Box<dyn Iterator<Item = ResidualSolution<D>> + 'a>>,
     unmodified_solution: &'a R,
-    solutions_iter: Vec<ResidualSolution<D>>,
-    residual_problem: &'a ResidualProblem<'a, R, D>,
-    problem: &'a Problem<R, D>,
+    problem: &'a P,
 }
 
-impl<R: MergeableWithResidual<D> + Clone, const D: usize> Iterator
-    for MergedSolutionIter<'_, R, D>
+impl<'b, 'a, R, P, const D: usize, S> Iterator for ResidualSolutionIter<'b, 'a, R, P, D, S>
+where
+    R: MergeableWithResidual<P, D> + Clone,
+    P: SetCoverProblem<D>,
+    S: ParetoFront<'a, ResidualSolution<D>> + Default,
+{
+    type Item = R;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // If we already have non-dominated solutions collected, yield from them
+        if let Some(iter) = &mut self.non_dominated_iter {
+            if let Some(residual_solution) = iter.next() {
+                let mut new_solution = self.unmodified_solution.clone();
+                new_solution.merge_residual_solution(
+                    &residual_solution,
+                    self.residual_problem,
+                    self.problem,
+                    self.partial_trackers.clone(),
+                );
+                return Some(new_solution);
+            }
+        }
+
+        // Initialize combination iterator on first call
+        if self.combination_iter.is_none() {
+            let combs_0_to_5 = (0..=5).flat_map(|i| self.images_indices.iter().combinations(i));
+            self.combination_iter = Some(Box::new(combs_0_to_5));
+        }
+
+        // Enumerate combinations and build non-dominated set
+        if let Some(iter) = &mut self.combination_iter {
+            for image_combination in iter.by_ref() {
+                // Check if this combination matches the initially selected images (removed candidates)
+                let test_bitset: FixedBitSet = image_combination.iter().copied().copied().collect();
+                if test_bitset == self.residual_problem.condensed_original_removed_images {
+                    trace!("Skipping image combination as it is equal to original one");
+                    continue;
+                }
+
+                let selected: FixedBitSet = image_combination.iter().copied().copied().collect();
+                if !self.residual_problem.is_set_cover(&selected) {
+                    continue;
+                }
+
+                // Keep condensed indices for ResidualSolution
+                let condensed_images: Vec<usize> = image_combination
+                    .iter()
+                    .map(|&&condensed_idx| condensed_idx)
+                    .collect();
+                let residual_solution = ResidualSolution::from_selected_images_condensed(
+                    &condensed_images,
+                    &self.residual_problem.image_index_map,
+                    self.problem,
+                    self.timer,
+                );
+
+                let was_added = self.non_dominated_set.try_insert(&residual_solution);
+
+                trace!("#####################################################");
+                trace!(
+                    "######### RESIDUAL: OBJECTIVES {:?} | IMAGES {:?} {} #########################",
+                    residual_solution.objectives(),
+                    residual_solution.selected_images().collect::<Vec<_>>(),
+                    if was_added { "ADDED" } else { "NOT ADDED" }
+                );
+            }
+        }
+
+        // All combinations processed, now yield from non-dominated set
+        trace!("*****************************************************");
+        trace!("****** Processing non-dominated solutions ******");
+
+        let solutions: Vec<ResidualSolution<D>> = std::mem::take(&mut self.non_dominated_set).into_iter().collect();
+        for solution in &solutions {
+            trace!(
+                "****** NONDOMINANT RESIDUAL: OBJECTIVES {:?} | IMAGES {:?} ******",
+                solution.objectives(),
+                solution.selected_images().collect::<Vec<_>>()
+            );
+        }
+        trace!("*****************************************************");
+
+        self.non_dominated_iter = Some(Box::new(solutions.into_iter()));
+
+        // Yield first solution from the iterator
+        if let Some(iter) = &mut self.non_dominated_iter {
+            if let Some(residual_solution) = iter.next() {
+                let mut new_solution = self.unmodified_solution.clone();
+                new_solution.merge_residual_solution(
+                    &residual_solution,
+                    self.residual_problem,
+                    self.problem,
+                    self.partial_trackers.clone(),
+                );
+                return Some(new_solution);
+            }
+        }
+
+        None
+    }
+}
+*/
+
+impl<R, P, const D: usize> Iterator for MergedSolutionIter<'_, R, P, D>
+where
+    R: MergeableWithResidual<P, D> + Clone,
+    P: SetCoverProblem<D>,
 {
     type Item = R;
 
@@ -420,6 +587,7 @@ impl<R: MergeableWithResidual<D> + Clone, const D: usize> Iterator
             &residual_solution,
             self.residual_problem,
             self.problem,
+            &mut self.partial_trackers,
         );
         return Some(new_solution);
     }

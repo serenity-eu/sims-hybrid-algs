@@ -1,7 +1,7 @@
 use log::debug;
 use pls::objectives::ObjectiveType;
-use pls::problem::{Problem, SIMSProblemInstanceRaw};
-use pls::solution::bitset_encoded_solution::BitsetEncodedSolution;
+use pls::problem::{SIMSProblemInstanceRaw};
+use pls::problem_bitset::ProblemBitset;
 use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::{
     prelude::*,
@@ -168,7 +168,7 @@ impl SimsDiscreteProblem {
     }
 
     /// Convert to dictionary representation
-    fn to_dict(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let dict = PyDict::new(py);
         dict.set_item("num_images", self.num_images)?;
         dict.set_item("universe", self.universe)?;
@@ -379,7 +379,7 @@ impl SimsDiscreteProblem {
     }
 
     /// Convert to sims-heuristics Problem format directly in memory
-    pub fn to_pls_problem(&self) -> Problem<BitsetEncodedSolution<2>, 2> {
+    pub fn to_pls_problem(&self) -> ProblemBitset<2> {
         debug!(
             "Converting SIMS problem to PLS format: {} images, universe size {}",
             self.num_images, self.universe
@@ -390,25 +390,15 @@ impl SimsDiscreteProblem {
             self.images.iter().take(3).collect::<Vec<_>>()
         );
 
-        // Convert from Python 0-based indexing to MiniZinc 1-based indexing for the raw data
-        let converted_images: Vec<Vec<usize>> = self
-            .images
-            .iter()
-            .map(|img| img.iter().map(|&x| x + 1).collect())
-            .collect();
-        debug!("Converted to 1-based indexing for PLS");
-
+        // Images and clouds are already 0-based from Python (parse_set_array converts MiniZinc 1-based to 0-based)
+        // from_raw_with_objectives expects 0-based indices, so we pass them directly
         let raw_instance = SIMSProblemInstanceRaw {
             name: "python_instance".to_string(),
             num_images: self.num_images,
             universe_size: self.universe,
-            images: converted_images,
+            images: self.images.clone(),
             costs: self.costs.iter().map(|&c| c as u64).collect(),
-            clouds: self
-                .clouds
-                .iter()
-                .map(|cloud| cloud.iter().map(|&x| x + 1).collect())
-                .collect(),
+            clouds: self.clouds.clone(),
             areas: self.areas.iter().map(|&a| a as u64).collect(),
             max_cloud_area: self.max_cloud_area as u64,
             resolution: self.resolution.iter().map(|&r| r as u64).collect(),
@@ -417,8 +407,7 @@ impl SimsDiscreteProblem {
 
         debug!("Creating PLS problem from raw instance");
         let objectives = [ObjectiveType::TotalCost, ObjectiveType::CloudyArea];
-        let pls_problem = Problem::from_raw_with_objectives(raw_instance, objectives)
-            .expect("Failed to create PLS problem from raw instance");
+        let pls_problem = ProblemBitset::from_raw_with_objectives(&raw_instance, objectives);
         log::info!("Successfully created PLS problem");
         pls_problem
     }

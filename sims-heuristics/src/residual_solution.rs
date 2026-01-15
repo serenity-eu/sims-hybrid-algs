@@ -1,5 +1,5 @@
 use crate::{
-    problem::Problem,
+    problem::{Problem, SetCoverProblem},
     solution::{ImageSet, SIMSCore, SIMSSolution},
     timer::Timer,
 };
@@ -16,11 +16,10 @@ pub struct ResidualSolution<const D: usize> {
 
 impl<const D: usize> ResidualSolution<D> {
     #[must_use]
-    pub fn from_selected_images<T: ImageSet<D>>(
-        selected_images: &[usize],
-        problem: &Problem<T, D>,
-        timer: &Timer,
-    ) -> Self {
+    pub fn from_selected_images<P>(selected_images: &[usize], problem: &P, timer: &Timer) -> Self
+    where
+        P: SetCoverProblem<D>,
+    {
         let mut solution = Self {
             selected_images: selected_images.to_vec(),
             objectives: [0; D],
@@ -28,19 +27,49 @@ impl<const D: usize> ResidualSolution<D> {
         };
         // Calculate objectives directly for residual solution
         for i in 0..D {
-            // Cast solution to ResidualSolution for calculate_value
-            let residual_sol = Self {
-                selected_images: solution.selected_images.clone(),
-                objectives: [0; D],
-                timestamp: solution.timestamp,
-            };
-            solution.objectives[i] = problem.objective(i).calculate_value(&residual_sol, unsafe {
-                // SAFETY: Problem<T, D> and Problem<Self, D> have identical memory layout
-                // and Self implements ImageSet<D> just like T
-                &*std::ptr::from_ref::<Problem<T, D>>(problem).cast::<Problem<Self, D>>()
-            });
+            solution.objectives[i] = problem.objective(i).calculate_value(&solution, problem);
         }
         solution
+    }
+
+    /// Create `ResidualSolution` from condensed indices (used by `ResidualProblem`)
+    /// This stores condensed indices (0..N) internally but calculates objectives using original indices
+    #[must_use]
+    pub fn from_selected_images_condensed<P>(
+        condensed_indices: &[usize],
+        image_index_map: &[usize],
+        problem: &P,
+        timer: &Timer,
+    ) -> Self
+    where
+        P: SetCoverProblem<D>,
+    {
+        // Map condensed indices to original indices for objective calculation
+        let original_indices: Vec<usize> = condensed_indices
+            .iter()
+            .map(|&condensed_idx| image_index_map[condensed_idx])
+            .collect();
+
+        // Create a temporary solution with original indices for objective calculation
+        let temp_solution = Self {
+            selected_images: original_indices,
+            objectives: [0; D],
+            timestamp: timer.elapsed(),
+        };
+
+        let mut objectives = [0; D];
+        for (i, obj) in objectives.iter_mut().enumerate().take(D) {
+            *obj = problem
+                .objective(i)
+                .calculate_value(&temp_solution, problem);
+        }
+
+        // Return solution with condensed indices stored
+        Self {
+            selected_images: condensed_indices.to_vec(),
+            objectives,
+            timestamp: timer.elapsed(),
+        }
     }
 }
 
@@ -70,14 +99,13 @@ impl<const D: usize> MoSolution<D> for ResidualSolution<D> {}
 
 // Implement ImageSet<D> trait for ResidualSolution
 impl<const D: usize> ImageSet<D> for ResidualSolution<D> {
-    fn selected_images(&self) -> Vec<usize> {
-        self.selected_images.clone()
+    fn selected_images(&self) -> impl Iterator<Item = usize> {
+        self.selected_images.iter().copied()
     }
 
-    fn unselected_images(&self) -> Vec<usize> {
-        (0..self.selected_images.len())
-            .filter(|&i| !self.selected_images.contains(&i))
-            .collect()
+    fn unselected_images(&self) -> impl Iterator<Item = usize> {
+        let selected = self.selected_images.clone();
+        (0..selected.len()).filter(move |&i| !selected.contains(&i))
     }
 
     fn is_image_selected(&self, image_index: usize) -> bool {
@@ -98,7 +126,7 @@ impl<const D: usize> ImageSet<D> for ResidualSolution<D> {
 }
 
 // Implement SIMSCore trait for ResidualSolution
-impl<const D: usize> SIMSCore<D> for ResidualSolution<D> {
+impl<const D: usize> SIMSCore<Problem<Self, D>, D> for ResidualSolution<D> {
     fn to_debug_solution(&self) -> SIMSSolution {
         SIMSSolution {
             selected_images: self.selected_images.clone(),

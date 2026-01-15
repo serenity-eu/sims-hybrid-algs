@@ -1,25 +1,26 @@
 use pls::objectives::ObjectiveType;
 // Integration tests for verifying the generic objectives refactoring
-use pls::problem::{Problem, SIMSProblemInstanceRaw};
+use pls::problem::SIMSProblemInstanceRaw;
+use pls::problem_bitset::ProblemBitset;
 use pls::solution_impl::bitset_encoded_solution::BitsetEncodedSolution;
 
 #[test]
 fn test_generic_objectives_2d() {
-    // Create a simple test problem
+    // Create a simple test problem with 0-based indices (normalized)
     let raw_data = SIMSProblemInstanceRaw {
         name: "test_problem".to_string(),
         num_images: 3,
         universe_size: 4,
         images: vec![
-            vec![1, 2], // Image 0 covers elements 0, 1 (1-based, will be converted to 0-based)
-            vec![2, 3], // Image 1 covers elements 1, 2
-            vec![3, 4], // Image 2 covers elements 2, 3
+            vec![0, 1], // Image 0 covers elements 0, 1
+            vec![1, 2], // Image 1 covers elements 1, 2
+            vec![2, 3], // Image 2 covers elements 2, 3
         ],
         costs: vec![10, 20, 30],
         clouds: vec![
             vec![],     // Image 0 has no clouds (all clear)
-            vec![2],    // Image 1 has clouds on element 1 (0-based)
-            vec![3, 4], // Image 2 has clouds on elements 2, 3 (0-based)
+            vec![1],    // Image 1 has clouds on element 1
+            vec![2, 3], // Image 2 has clouds on elements 2, 3
         ],
         areas: vec![100, 200, 150, 250], // Areas for elements 0, 1, 2, 3
         max_cloud_area: 700,
@@ -28,11 +29,10 @@ fn test_generic_objectives_2d() {
     };
 
     // Test with default 2D objectives (backward compatibility)
-    let problem_legacy: Problem<BitsetEncodedSolution<2>, 2> = Problem::from_raw_with_objectives(
-        raw_data.clone(),
+    let problem_legacy = ProblemBitset::<2>::from_raw_with_objectives(
+        &raw_data,
         [ObjectiveType::TotalCost, ObjectiveType::CloudyArea],
-    )
-    .expect("Failed to create legacy problem instance");
+    );
     assert_eq!(problem_legacy.num_objectives(), 2);
     assert_eq!(
         problem_legacy.objective_names(),
@@ -40,13 +40,13 @@ fn test_generic_objectives_2d() {
     );
 
     // Test with explicit objective definitions using builder pattern
-    let problem_builder_result: Result<Problem<BitsetEncodedSolution<2>, 2>, String> =
-        Problem::builder(raw_data)
-            .with_objectives(vec![ObjectiveType::TotalCost, ObjectiveType::CloudyArea])
-            .build();
+    // Note: ProblemBitset doesn't have a builder pattern, only from_raw_with_objectives
+    let problem_generic = ProblemBitset::<2>::from_raw_with_objectives(
+        &raw_data,
+        [ObjectiveType::TotalCost, ObjectiveType::CloudyArea],
+    );
 
-    assert!(problem_builder_result.is_ok());
-    let problem_generic = problem_builder_result.unwrap();
+    assert_eq!(problem_generic.num_objectives(), 2);
 
     assert_eq!(problem_generic.num_objectives(), 2);
     assert_eq!(problem_generic.objective_type(0).id(), "total_cost");
@@ -62,31 +62,10 @@ fn test_generic_objectives_2d() {
 }
 
 #[test]
+#[ignore = "ProblemBitset doesn't have builder pattern, validation happens at compile-time via const generics"]
 fn test_generic_objectives_validation() {
-    let raw_data = SIMSProblemInstanceRaw {
-        name: "test_validation".to_string(),
-        num_images: 2,
-        universe_size: 2,
-        images: vec![vec![1], vec![2]],
-        costs: vec![10, 20],
-        clouds: vec![vec![], vec![]],
-        areas: vec![100, 200],
-        max_cloud_area: 300,
-        resolution: vec![10, 20],
-        incidence_angle: vec![45, 60],
-    };
-
-    // Test validation - wrong number of objectives
-    let result: Result<Problem<BitsetEncodedSolution<3>, 3>, String> = Problem::builder(raw_data)
-        .with_objectives(vec![
-            ObjectiveType::TotalCost,
-            ObjectiveType::CloudyArea, // Only 2 objectives provided
-        ])
-        .build();
-
-    assert!(result.is_err());
-    let error_msg = result.err().unwrap();
-    assert!(error_msg.contains("Expected 3 objectives, got 2"));
+    // This test is disabled because ProblemBitset validates objective count at compile-time
+    // through const generics, not at runtime through a builder pattern
 }
 
 #[test]

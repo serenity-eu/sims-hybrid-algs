@@ -10,9 +10,77 @@ use crate::{
 };
 
 /// Trait for Set Cover Problem operations
-pub trait SetCoverProblem {
+pub trait SetCoverProblem<const D: usize> {
     /// Check if a solution forms a valid set cover (covers all elements)
-    fn is_set_cover<const D: usize>(&self, solution: &impl ImageSet<D>) -> bool;
+    fn is_set_cover(&self, solution: &impl ImageSet<D>) -> bool;
+
+    /// Get reference to objective state by index
+    fn objective(&self, index: usize) -> &ObjectiveState<D>;
+
+    /// Get array of all objectives
+    fn objectives(&self) -> &[ObjectiveState<D>; D];
+
+    /// Get array of max objective values
+    fn max_objectives(&self) -> [u64; D];
+
+    /// Get objective bounds if set
+    fn objective_bounds(&self) -> Option<[[u64; 2]; D]>;
+
+    /// Get number of images
+    fn num_images(&self) -> usize;
+
+    /// Get number of elements in universe
+    fn num_elements(&self) -> usize;
+
+    /// Get universe size (alias for `num_elements`)
+    fn universe_size(&self) -> usize {
+        self.num_elements()
+    }
+
+    /// Check if an image contains an element
+    fn image_contains_element(&self, image_index: usize, element_index: usize) -> bool;
+
+    /// Get elements covered by an image (iterator over element indices)
+    fn image_elements(&self, image_index: usize) -> impl Iterator<Item = usize> + '_;
+
+    /// Get overlap between two images
+    fn overlap(&self, image_i: usize, image_j: usize) -> usize;
+
+    /// Get objective types array
+    fn objective_types(&self) -> &[ObjectiveType; D];
+
+    /// Get instance name
+    fn instance_name(&self) -> &str;
+
+    /// Get images that cover a specific element
+    fn element_images(&self, element_index: usize) -> impl Iterator<Item = usize> + '_;
+
+    /// Get objective names
+    fn objective_names(&self) -> Vec<&str> {
+        self.objective_types()
+            .iter()
+            .map(ObjectiveType::name)
+            .collect()
+    }
+
+    /// Get iterator over indices of uncovered elements given selected images
+    fn uncovered_elements<'a, I>(&'a self, selected_images: I) -> impl Iterator<Item = usize> + 'a
+    where
+        I: Iterator<Item = usize> + 'a,
+        Self: 'a,
+    {
+        let mut covered = vec![false; self.num_elements()];
+        for image_index in selected_images {
+            for element_index in self.image_elements(image_index) {
+                covered[element_index] = true;
+            }
+        }
+        covered.into_iter().enumerate().filter_map(
+            |(idx, is_covered)| {
+                if is_covered { None } else { Some(idx) }
+            },
+        )
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -106,6 +174,12 @@ pub fn parse_set_of_vecs(input_str: &str) -> Vec<Vec<usize>> {
 impl SIMSProblemInstanceRaw {
     /// Constructs a `SIMSProblemInstanceRaw` from a `MiniZinc` data file.
     ///
+    /// # Note
+    ///
+    /// `MiniZinc` uses 1-based indexing, but this method normalizes all indices to 0-based
+    /// during reading. The returned `SIMSProblemInstanceRaw` is guaranteed to have normalized
+    /// (0-based) indices.
+    ///
     /// # Panics
     ///
     /// This function will panic if the file cannot be read, or if the file name, file stem,
@@ -166,6 +240,20 @@ impl SIMSProblemInstanceRaw {
                 }
             }
         }
+
+        // Normalize all indices to be zero-based (MiniZinc uses 1-based indexing)
+        sims_problem.images.iter_mut().for_each(|image| {
+            for index in image.iter_mut() {
+                *index -= 1;
+            }
+            image.sort_unstable();
+        });
+        sims_problem.clouds.iter_mut().for_each(|cloud| {
+            for index in cloud.iter_mut() {
+                *index -= 1;
+            }
+            cloud.sort_unstable();
+        });
 
         sims_problem
     }
@@ -259,26 +347,105 @@ pub struct Problem<T: ImageSet<D>, const D: usize> {
 }
 
 // Implement SetCoverProblem trait for Problem
-impl<T: ImageSet<D>, const D: usize> SetCoverProblem for Problem<T, D> {
-    fn is_set_cover<const D2: usize>(&self, solution: &impl ImageSet<D2>) -> bool {
+impl<T: ImageSet<D>, const D: usize> SetCoverProblem<D> for Problem<T, D> {
+    fn is_set_cover(&self, solution: &impl ImageSet<D>) -> bool {
         let mut covered_elements = vec![false; self.universe.len()];
-        
+
         // Mark all elements covered by selected images
         for image_index in solution.selected_images() {
             for &element_index in &self.images[image_index].parts {
                 covered_elements[element_index] = true;
             }
         }
-        
+
         // Check if all elements are covered
         covered_elements.iter().all(|&covered| covered)
     }
+
+    fn objective(&self, index: usize) -> &ObjectiveState<D> {
+        &self.objectives[index]
+    }
+
+    fn objectives(&self) -> &[ObjectiveState<D>; D] {
+        &self.objectives
+    }
+
+    fn max_objectives(&self) -> [u64; D] {
+        std::array::from_fn(|i| self.objectives[i].max_value())
+    }
+
+    fn objective_bounds(&self) -> Option<[[u64; 2]; D]> {
+        if self.objectives.iter().all(|obj| obj.bounds().is_some()) {
+            Some(std::array::from_fn(|i| {
+                self.objectives[i].bounds().unwrap()
+            }))
+        } else {
+            None
+        }
+    }
+
+    fn num_images(&self) -> usize {
+        self.images.len()
+    }
+
+    fn num_elements(&self) -> usize {
+        self.universe.len()
+    }
+
+    fn image_contains_element(&self, image_index: usize, element_index: usize) -> bool {
+        self.images[image_index].parts.contains(&element_index)
+    }
+
+    fn image_elements(&self, image_index: usize) -> impl Iterator<Item = usize> + '_ {
+        self.images[image_index].parts.iter().copied()
+    }
+
+    // fn image_cost(&self, image_index: usize) -> u64 {
+    //     self.images[image_index].cost
+    // }
+
+    // fn element_area(&self, element_index: usize) -> u64 {
+    //     self.universe[element_index].area
+    // }
+
+    fn overlap(&self, image_i: usize, image_j: usize) -> usize {
+        self.overlap_matrix[image_i][image_j]
+    }
+
+    fn objective_types(&self) -> &[ObjectiveType; D] {
+        &self.objective_types
+    }
+
+    fn instance_name(&self) -> &str {
+        &self.instance_name
+    }
+
+    fn element_images(&self, element_index: usize) -> impl Iterator<Item = usize> + '_ {
+        self.universe[element_index].images.iter().copied()
+    }
+
+    // fn image_clear_parts(&self, image_index: usize) -> impl Iterator<Item = usize> + '_ {
+    //     self.images[image_index].clear_parts.iter().copied()
+    // }
+
+    // fn image_resolution(&self, image_index: usize) -> u64 {
+    //     self.raw_instance.resolution[image_index]
+    // }
+
+    // fn image_incidence_angle(&self, image_index: usize) -> u64 {
+    //     self.raw_instance.incidence_angle[image_index]
+    // }
 }
 
 impl<T: ImageSet<D>, const D: usize> Problem<T, D> {
     /// Constructs a `Problem` from a raw SIMS problem instance with custom objective definitions.
     ///
     /// Create a problem instance from raw data with specified objectives.
+    ///
+    /// # Note
+    ///
+    /// This method expects `raw` to already have normalized (0-based) indices.
+    /// If loading from a `MiniZinc` file, use `from_minizinc_datafile` which handles normalization.
     ///
     /// # Errors
     ///
@@ -288,24 +455,10 @@ impl<T: ImageSet<D>, const D: usize> Problem<T, D> {
     ///
     /// Panics if an unknown objective type is encountered during max objective calculation.
     pub fn from_raw_with_objectives(
-        mut raw: SIMSProblemInstanceRaw,
+        raw: SIMSProblemInstanceRaw,
         objective_types: [ObjectiveType; D],
     ) -> Result<Self, String> {
-        // Normalize all indices to be zero-based (same as from_raw)
-        raw.images.iter_mut().for_each(|image| {
-            for index in image.iter_mut() {
-                *index -= 1;
-            }
-            image.sort_unstable();
-        });
-        raw.clouds.iter_mut().for_each(|image| {
-            for index in image.iter_mut() {
-                *index -= 1;
-            }
-            image.sort_unstable();
-        });
-
-        // Create universe (same as from_raw)
+        // Create universe
         let mut universe = vec![Element::default(); raw.universe_size];
         raw.images
             .iter()
@@ -338,7 +491,10 @@ impl<T: ImageSet<D>, const D: usize> Problem<T, D> {
 
         // Create overlap matrix (same as from_raw)
         let mut overlap_matrix: Vec<Vec<usize>> = vec![vec![0; raw.num_images]; raw.num_images];
-        #[allow(clippy::needless_range_loop, reason = "Iterator pattern would require multiple mutable borrows of overlap_matrix, which violates borrow checker rules")]
+        #[allow(
+            clippy::needless_range_loop,
+            reason = "Iterator pattern would require multiple mutable borrows of overlap_matrix, which violates borrow checker rules"
+        )]
         for i in 0..raw.num_images {
             for j in 0..=i {
                 let common_elements = raw.images[i]
@@ -406,7 +562,10 @@ impl<T: ImageSet<D>, const D: usize> Problem<T, D> {
     /// Get objective by ID
     #[must_use]
     pub fn objective_type_by_id(&self, id: &str) -> Option<ObjectiveType> {
-        self.objective_types.iter().copied().find(|obj| obj.id() == id)
+        self.objective_types
+            .iter()
+            .copied()
+            .find(|obj| obj.id() == id)
     }
 
     /// Get number of objectives
@@ -438,7 +597,9 @@ impl<T: ImageSet<D>, const D: usize> Problem<T, D> {
     #[must_use]
     pub fn objective_bounds(&self) -> Option<[[u64; 2]; D]> {
         if self.objectives.iter().all(|obj| obj.bounds().is_some()) {
-            Some(std::array::from_fn(|i| self.objectives[i].bounds().unwrap()))
+            Some(std::array::from_fn(|i| {
+                self.objectives[i].bounds().unwrap()
+            }))
         } else {
             None
         }
@@ -472,10 +633,27 @@ impl<T: ImageSet<D>, const D: usize> Default for Problem<T, D> {
         });
 
         let objectives: [ObjectiveState<D>; D] = array::from_fn(|i| match i {
-            0 => ObjectiveState::TotalCost { costs: vec![], max_value: 0, bounds: None },
-            1 => ObjectiveState::CloudyArea { clear_images: vec![], areas: vec![], max_value: 0, bounds: None },
-            2 => ObjectiveState::MinResolution { resolutions: vec![], max_value: 0, bounds: None },
-            3 => ObjectiveState::MaxIncidenceAngle { incidence_angles: vec![], max_value: 0, bounds: None },
+            0 => ObjectiveState::TotalCost {
+                costs: vec![],
+                max_value: 0,
+                bounds: None,
+            },
+            1 => ObjectiveState::CloudyArea {
+                clear_images: vec![],
+                areas: vec![],
+                max_value: 0,
+                bounds: None,
+            },
+            2 => ObjectiveState::MinResolution {
+                resolutions: vec![],
+                max_value: 0,
+                bounds: None,
+            },
+            3 => ObjectiveState::MaxIncidenceAngle {
+                incidence_angles: vec![],
+                max_value: 0,
+                bounds: None,
+            },
             _ => panic!("Unknown objective"),
         });
 
@@ -548,16 +726,15 @@ impl<T: ImageSet<D>, const D: usize> ProblemBuilder<T, D> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::solution_impl::vec_encoded_solution::VecEncodedSolution;
 
     #[test]
     fn test_set_cover_problem_trait() {
-        // Create a simple problem instance
+        // Create a simple problem instance with 0-based indices (normalized)
         let raw = SIMSProblemInstanceRaw {
             name: "test".to_string(),
             num_images: 2,
             universe_size: 3,
-            images: vec![vec![1, 2], vec![2, 3]],
+            images: vec![vec![0, 1], vec![1, 2]],
             costs: vec![10, 20],
             clouds: vec![vec![], vec![]],
             areas: vec![1, 1, 1],
@@ -570,24 +747,24 @@ mod tests {
             crate::objectives::ObjectiveType::TotalCost,
             crate::objectives::ObjectiveType::CloudyArea,
         ];
-        
-        let problem: Problem<VecEncodedSolution<2>, 2> = 
-            Problem::from_raw_with_objectives(raw, objectives).unwrap();
-        
-        // Test Problem struct fields directly
-        assert_eq!(problem.images.len(), 2);
-        assert_eq!(problem.universe.len(), 3);
-        assert_eq!(problem.instance_name, "test");
-        
+
+        let problem =
+            crate::problem_bitset::ProblemBitset::<2>::from_raw_with_objectives(&raw, objectives);
+
+        // Test Problem struct fields directly through trait methods
+        assert_eq!(problem.num_images(), 2);
+        assert_eq!(problem.num_elements(), 3);
+        assert_eq!(problem.instance_name(), "test");
+
         // Test specific accessors
-        assert_eq!(problem.images[0].cost, 10);
-        assert_eq!(problem.images[1].cost, 20);
+        assert_eq!(problem.image_cost(0), 10);
+        assert_eq!(problem.image_cost(1), 20);
     }
 
     #[test]
     fn test_set_cover_problem_trait_generic() {
         // Demonstrate that the trait works with generic functions
-        fn check_if_valid_cover<const D: usize, P: SetCoverProblem>(
+        fn check_if_valid_cover<const D: usize, P: SetCoverProblem<D>>(
             problem: &P,
             solution: &impl ImageSet<D>,
         ) -> bool {
@@ -598,7 +775,7 @@ mod tests {
             name: "generic_test".to_string(),
             num_images: 3,
             universe_size: 3,
-            images: vec![vec![1, 2], vec![2, 3], vec![1, 3]],
+            images: vec![vec![0, 1], vec![1, 2], vec![0, 2]],
             costs: vec![10, 20, 30],
             clouds: vec![vec![], vec![], vec![]],
             areas: vec![1, 1, 1],
@@ -611,26 +788,30 @@ mod tests {
             crate::objectives::ObjectiveType::TotalCost,
             crate::objectives::ObjectiveType::CloudyArea,
         ];
-        
-        let problem: Problem<VecEncodedSolution<2>, 2> = 
-            Problem::from_raw_with_objectives(raw, objectives).unwrap();
-        
+
+        let problem =
+            crate::problem_bitset::ProblemBitset::<2>::from_raw_with_objectives(&raw, objectives);
+
         // Test with a valid cover
-        let solution = VecEncodedSolution::<2>::from_selected_images(&[0, 1], &problem);
+        let solution =
+            crate::solution::bitset_encoded_solution::BitsetEncodedSolution::from_selected_images(
+                &[0, 1],
+                &problem,
+            );
         assert!(check_if_valid_cover(&problem, &solution));
     }
 
     #[test]
     fn test_is_set_cover() {
-        // Create a problem where elements 1,2,3 need to be covered
+        // Create a problem where elements 0,1,2 need to be covered (0-based indices)
         let raw = SIMSProblemInstanceRaw {
             name: "cover_test".to_string(),
             num_images: 3,
             universe_size: 3,
             images: vec![
-                vec![1, 2],    // Image 0 covers elements 0, 1
-                vec![2, 3],    // Image 1 covers elements 1, 2
-                vec![1, 3],    // Image 2 covers elements 0, 2
+                vec![0, 1], // Image 0 covers elements 0, 1
+                vec![1, 2], // Image 1 covers elements 1, 2
+                vec![0, 2], // Image 2 covers elements 0, 2
             ],
             costs: vec![10, 20, 15],
             clouds: vec![vec![], vec![], vec![]],
@@ -644,24 +825,52 @@ mod tests {
             crate::objectives::ObjectiveType::TotalCost,
             crate::objectives::ObjectiveType::CloudyArea,
         ];
-        
-        let problem: Problem<VecEncodedSolution<2>, 2> = 
-            Problem::from_raw_with_objectives(raw, objectives).unwrap();
-        
+
+        let problem =
+            crate::problem_bitset::ProblemBitset::<2>::from_raw_with_objectives(&raw, objectives);
+
         // Test valid set cover: images 0 and 1 should cover all elements
-        let solution1 = VecEncodedSolution::<2>::from_selected_images(&[0, 1], &problem);
-        assert!(problem.is_set_cover(&solution1), "Images 0 and 1 should form a valid set cover");
-        
+        let solution1 =
+            crate::solution::bitset_encoded_solution::BitsetEncodedSolution::from_selected_images(
+                &[0, 1],
+                &problem,
+            );
+        assert!(
+            problem.is_set_cover(&solution1),
+            "Images 0 and 1 should form a valid set cover"
+        );
+
         // Test another valid set cover: images 0 and 2
-        let solution2 = VecEncodedSolution::<2>::from_selected_images(&[0, 2], &problem);
-        assert!(problem.is_set_cover(&solution2), "Images 0 and 2 should form a valid set cover");
-        
+        let solution2 =
+            crate::solution::bitset_encoded_solution::BitsetEncodedSolution::from_selected_images(
+                &[0, 2],
+                &problem,
+            );
+        assert!(
+            problem.is_set_cover(&solution2),
+            "Images 0 and 2 should form a valid set cover"
+        );
+
         // Test invalid set cover: only image 0 doesn't cover all elements
-        let solution3 = VecEncodedSolution::<2>::from_selected_images(&[0], &problem);
-        assert!(!problem.is_set_cover(&solution3), "Only image 0 should not form a valid set cover");
-        
+        let solution3 =
+            crate::solution::bitset_encoded_solution::BitsetEncodedSolution::from_selected_images(
+                &[0],
+                &problem,
+            );
+        assert!(
+            !problem.is_set_cover(&solution3),
+            "Only image 0 should not form a valid set cover"
+        );
+
         // Test all images selected (definitely a valid cover)
-        let solution4 = VecEncodedSolution::<2>::from_selected_images(&[0, 1, 2], &problem);
-        assert!(problem.is_set_cover(&solution4), "All images should form a valid set cover");
+        let solution4 =
+            crate::solution::bitset_encoded_solution::BitsetEncodedSolution::from_selected_images(
+                &[0, 1, 2],
+                &problem,
+            );
+        assert!(
+            problem.is_set_cover(&solution4),
+            "All images should form a valid set cover"
+        );
     }
 }

@@ -14,7 +14,9 @@ use std::{
 use pareto::{ParetoFront, RandomCollection};
 use pls::solution_set_impl::BTreeSolutionSet;
 use pls::{objectives::ObjectiveType, pareto_local_search::ParetoLocalSearch};
-use pls::{problem::Problem, solution_impl::bitset_encoded_solution::BitsetEncodedSolution};
+use pls::{
+    problem_bitset::ProblemBitset, solution_impl::bitset_encoded_solution::BitsetEncodedSolution,
+};
 
 const INITIAL_POPULATION_SIZE: usize = 100;
 const MAX_ITERATIONS: usize = 50000;
@@ -96,26 +98,15 @@ fn main() {
         .with_file(true)
         .compact();
 
-    // Optionally add Chrome tracing layer
-    if let Some(chrome_trace_path) = &args.chrome_trace {
-        let (chrome_layer, guard) = tracing_chrome::ChromeLayerBuilder::new()
-            .file(chrome_trace_path)
-            .build();
-
-        tracing_subscriber::registry()
-            .with(fmt_layer)
-            .with(chrome_layer)
-            .with(env_filter)
-            .init();
-
-        // Keep the guard alive for the duration of the program
-        std::mem::forget(guard);
-    } else {
-        tracing_subscriber::registry()
-            .with(fmt_layer)
-            .with(env_filter)
-            .init();
+    // Chrome tracing is not available in this version
+    if args.chrome_trace.is_some() {
+        eprintln!("Warning: Chrome tracing is not available. Ignoring --chrome-trace option.");
     }
+
+    tracing_subscriber::registry()
+        .with(fmt_layer)
+        .with(env_filter)
+        .init();
 
     // Bridge log crate to tracing (ignore errors if already set)
     let _ = tracing_log::LogTracer::init();
@@ -142,16 +133,15 @@ fn main() {
         "Loading problem instance from file: {}",
         args.problem.display()
     );
-    let sims_problem_instance =
-        Problem::<BitsetEncodedSolution<NUM_OBJECTIVES>, NUM_OBJECTIVES>::from_minizinc_datafile(
-            &args.problem,
-            [ObjectiveType::TotalCost, ObjectiveType::CloudyArea],
-        )
-        .expect("Failed to load problem instance");
+    let sims_problem_instance = ProblemBitset::<NUM_OBJECTIVES>::from_minizinc_datafile(
+        &args.problem,
+        [ObjectiveType::TotalCost, ObjectiveType::CloudyArea],
+    )
+    .expect("Failed to load problem instance");
 
     debug!("Initializing initial solution set");
     let initial_solution_set: BTreeSolutionSet<
-        BitsetEncodedSolution<NUM_OBJECTIVES>,
+        BitsetEncodedSolution<ProblemBitset<NUM_OBJECTIVES>, NUM_OBJECTIVES>,
         NUM_OBJECTIVES,
     > = if let Some(initial_population_csv) = &args.initial_population {
         debug!(
@@ -217,7 +207,7 @@ fn main() {
         &sims_problem_instance,
     );
 
-    let final_solutions: Vec<BitsetEncodedSolution<NUM_OBJECTIVES>> =
+    let final_solutions: Vec<BitsetEncodedSolution<ProblemBitset<NUM_OBJECTIVES>, NUM_OBJECTIVES>> =
         final_solution_set.into_iter().collect();
 
     let non_dominated_points = pareto_local_search.explored_solutions.non_dominated();
