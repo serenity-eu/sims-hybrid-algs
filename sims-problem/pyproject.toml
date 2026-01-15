@@ -32,6 +32,7 @@ dev = [
 
 [tool.uv]
 cache-keys = [{file = "pyproject.toml"}, {file = "Cargo.toml"}, {file = "**/*.rs"}, {file = "../sims-heuristics/Cargo.toml"}, {file = "../sims-heuristics/**/*.rs"}]
+config-settings = { build-args = '--profile=dev'}
 
 [tool.uv.sources]
 sims-solvers = { workspace = true }

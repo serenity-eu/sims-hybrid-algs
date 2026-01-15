@@ -8,7 +8,7 @@ use csv::{ReaderBuilder, WriterBuilder};
 use itertools::Itertools;
 use pareto::HasObjectives;
 use pls::{
-    problem::{Problem, parse_set_of_vecs},
+    problem::{SetCoverProblem, parse_set_of_vecs},
     solution::ImageSet,
 };
 
@@ -31,15 +31,19 @@ pub fn solution_list_from_csv<const D: usize>(path: &Path) -> Vec<Vec<usize>> {
     return selected_images_vecs;
 }
 
-pub fn append_solutions_to_csv<T: ImageSet<D> + HasObjectives<D>, const D: usize>(
+pub fn append_solutions_to_csv<
+    T: ImageSet<D> + HasObjectives<D>,
+    P: SetCoverProblem<D>,
+    const D: usize,
+>(
     path: &PathBuf,
     solutions: &[T],
-    probem_instance: &Problem<T, D>,
+    probem_instance: &P,
     timeout_s: u64,
     solution_time_s: &[f32],
     elapsed_time_s: u64,
 ) {
-    let instance = probem_instance.instance_name.clone();
+    let instance = probem_instance.instance_name().to_string();
     let problem = "sims".to_string();
     let solver_name = "pls".to_string();
     let solver_timeout_sec = timeout_s.to_string();
@@ -65,7 +69,7 @@ pub fn append_solutions_to_csv<T: ImageSet<D> + HasObjectives<D>, const D: usize
 
     let solutions_pareto_front_str = solutions
         .iter()
-        .map(|solution| format!("[{}]", solution.selected_images().iter().join(", ")))
+        .map(|solution| format!("[{}]", solution.selected_images().join(", ")))
         .join(", ");
     let solutions_pareto_front = format!("{{{solutions_pareto_front_str}}}");
 

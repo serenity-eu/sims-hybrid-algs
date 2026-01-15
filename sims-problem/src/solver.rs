@@ -312,21 +312,15 @@ pub fn solve_with_pls(
         neighborhood_size_min..=neighborhood_size_max;
 
     // Convert to PLS problem format - common for all dimensions
+    // Note: sims_instance already has 0-based indices from Python, and
+    // from_raw_with_objectives expects 0-based indices, so we pass them directly
     let raw_instance = pls::problem::SIMSProblemInstanceRaw {
         name: "python_instance".to_string(),
         num_images: sims_instance.num_images,
         universe_size: sims_instance.universe,
-        images: sims_instance
-            .images
-            .iter()
-            .map(|img| img.iter().map(|&x| x + 1).collect())
-            .collect(),
+        images: sims_instance.images.clone(),
         costs: sims_instance.costs.iter().map(|&c| c as u64).collect(),
-        clouds: sims_instance
-            .clouds
-            .iter()
-            .map(|cloud| cloud.iter().map(|&x| x + 1).collect())
-            .collect(),
+        clouds: sims_instance.clouds.clone(),
         areas: sims_instance.areas.iter().map(|&a| a as u64).collect(),
         max_cloud_area: sims_instance.max_cloud_area as u64,
         resolution: sims_instance.resolution.iter().map(|&r| r as u64).collect(),
@@ -347,6 +341,7 @@ pub fn solve_with_pls(
         2 => {
             use pls::solution_impl::bitset_encoded_solution::BitsetEncodedSolution;
             use pls::solution_set_impl::{LinkedListSolutionSet, VecSolutionSet, BTreeSolutionSet};
+            use pls::problem_bitset::ProblemBitset;
 
             debug!("Using 2D optimization with objectives: {objectives:?}, solution_set_type: {:?}", solution_set_type);
 
@@ -370,11 +365,10 @@ pub fn solve_with_pls(
                 };
             }
 
-            let mut pls_problem = pls::problem::Problem::from_raw_with_objectives(
-                raw_instance,
+            let mut pls_problem = ProblemBitset::from_raw_with_objectives(
+                &raw_instance,
                 objective_definitions,
-            )
-            .map_err(|e| PyValueError::new_err(format!("Failed to create 2D problem: {e}")))?;
+            );
 
             // Set objective bounds if provided
             if let Some(ref bounds) = objective_bounds {
@@ -482,7 +476,7 @@ pub fn solve_with_pls(
                     }
                     
                     // Convert to Vec to have a uniform return type
-                    let final_solutions_vec: Vec<BitsetEncodedSolution<2>> = final_solution_set.into_iter().collect();
+                    let final_solutions_vec: Vec<BitsetEncodedSolution<ProblemBitset<2>, 2>> = final_solution_set.into_iter().collect();
                     let explored_solutions_vec: Vec<SolutionFingerprint<2>> = pareto_local_search.explored_solutions_fingerprints();
                     
                     (final_solutions_vec, explored_solutions_vec)
@@ -493,16 +487,16 @@ pub fn solve_with_pls(
             let (final_solutions, explored_solutions) = match solution_set_type {
                 SolutionSetType::LinkedList => {
                     info!("Using LinkedListSolutionSet for 2D PLS");
-                    run_pls_2d_with_archive!(LinkedListSolutionSet<BitsetEncodedSolution<2>, 2>, "linked-list")
+                    run_pls_2d_with_archive!(LinkedListSolutionSet<BitsetEncodedSolution<ProblemBitset<2>, 2>, 2>, "linked-list")
                 },
                 SolutionSetType::Vector => {
                     info!("Using VecSolutionSet for 2D PLS");
-                    run_pls_2d_with_archive!(VecSolutionSet<BitsetEncodedSolution<2>, 2>, "vector")
+                    run_pls_2d_with_archive!(VecSolutionSet<BitsetEncodedSolution<ProblemBitset<2>, 2>, 2>, "vector")
                 },
                 SolutionSetType::NdTree => {
                     // For 2D, nd-tree uses BTreeSolutionSet
                     info!("Using BTreeSolutionSet for 2D PLS (nd-tree)");
-                    run_pls_2d_with_archive!(BTreeSolutionSet<BitsetEncodedSolution<2>, 2>, "nd-tree")
+                    run_pls_2d_with_archive!(BTreeSolutionSet<BitsetEncodedSolution<ProblemBitset<2>, 2>, 2>, "nd-tree")
                 }
             };
 
@@ -613,6 +607,7 @@ pub fn solve_with_pls(
         3 => {
             use pls::solution_impl::bitset_encoded_solution::BitsetEncodedSolution;
             use pls::solution_set_impl::{LinkedListSolutionSet, VecSolutionSet, NdTreeSolutionSet};
+            use pls::problem_bitset::ProblemBitset;
 
             debug!("Using 3D optimization with objectives: {objectives:?}, solution_set_type: {:?}", solution_set_type);
 
@@ -637,11 +632,10 @@ pub fn solve_with_pls(
                 };
             }
 
-            let mut pls_problem = pls::problem::Problem::from_raw_with_objectives(
-                raw_instance,
+            let mut pls_problem = ProblemBitset::from_raw_with_objectives(
+                &raw_instance,
                 objective_definitions,
-            )
-            .map_err(|e| PyValueError::new_err(format!("Failed to create 3D problem: {e}")))?;
+            );
 
             // Set objective bounds if provided
             if let Some(ref bounds) = objective_bounds {
@@ -748,7 +742,7 @@ pub fn solve_with_pls(
                     }
 
                     // Convert to Vec to have a uniform return type
-                    let final_solutions_vec: Vec<BitsetEncodedSolution<3>> = final_solution_set.into_iter().collect();
+                    let final_solutions_vec: Vec<BitsetEncodedSolution<ProblemBitset<3>, 3>> = final_solution_set.into_iter().collect();
                     let explored_solutions_vec: Vec<SolutionFingerprint<3>> = pareto_local_search.explored_solutions_fingerprints();
                     
                     (final_solutions_vec, explored_solutions_vec)
@@ -759,15 +753,15 @@ pub fn solve_with_pls(
             let (final_solutions, explored_solutions) = match solution_set_type {
                 SolutionSetType::LinkedList => {
                     info!("Using LinkedListSolutionSet for 3D PLS");
-                    run_pls_3d_with_archive!(LinkedListSolutionSet<BitsetEncodedSolution<3>, 3>, "linked-list")
+                    run_pls_3d_with_archive!(LinkedListSolutionSet<BitsetEncodedSolution<ProblemBitset<3>, 3>, 3>, "linked-list")
                 },
                 SolutionSetType::Vector => {
                     info!("Using VecSolutionSet for 3D PLS");
-                    run_pls_3d_with_archive!(VecSolutionSet<BitsetEncodedSolution<3>, 3>, "vector")
+                    run_pls_3d_with_archive!(VecSolutionSet<BitsetEncodedSolution<ProblemBitset<3>, 3>, 3>, "vector")
                 },
                 SolutionSetType::NdTree => {
                     info!("Using NdTreeSolutionSet for 3D PLS (nd-tree)");
-                    run_pls_3d_with_archive!(NdTreeSolutionSet<BitsetEncodedSolution<3>, 3>, "nd-tree")
+                    run_pls_3d_with_archive!(NdTreeSolutionSet<BitsetEncodedSolution<ProblemBitset<3>, 3>, 3>, "nd-tree")
                 }
             };
             
@@ -878,6 +872,7 @@ pub fn solve_with_pls(
         4 => {
             use pls::solution_impl::bitset_encoded_solution::BitsetEncodedSolution;
             use pls::solution_set_impl::{LinkedListSolutionSet, VecSolutionSet, NdTreeSolutionSet};
+            use pls::problem_bitset::ProblemBitset;
 
             debug!("Using 4D optimization with objectives: {objectives:?}, solution_set_type: {:?}", solution_set_type);
 
@@ -903,11 +898,10 @@ pub fn solve_with_pls(
                 };
             }
 
-            let mut pls_problem = pls::problem::Problem::from_raw_with_objectives(
-                raw_instance,
+            let mut pls_problem = ProblemBitset::from_raw_with_objectives(
+                &raw_instance,
                 objective_definitions,
-            )
-            .map_err(|e| PyValueError::new_err(format!("Failed to create 4D problem: {e}")))?;
+            );
 
             // Set objective bounds if provided
             if let Some(ref bounds) = objective_bounds {
@@ -1014,7 +1008,7 @@ pub fn solve_with_pls(
                     }
 
                     // Convert to Vec to have a uniform return type
-                    let final_solutions_vec: Vec<BitsetEncodedSolution<4>> = final_solution_set.into_iter().collect();
+                    let final_solutions_vec: Vec<BitsetEncodedSolution<ProblemBitset<4>, 4>> = final_solution_set.into_iter().collect();
                     let explored_solutions_vec: Vec<SolutionFingerprint<4>> = pareto_local_search.explored_solutions_fingerprints();
                     
                     (final_solutions_vec, explored_solutions_vec)
@@ -1025,15 +1019,15 @@ pub fn solve_with_pls(
             let (final_solutions, explored_solutions) = match solution_set_type {
                 SolutionSetType::LinkedList => {
                     info!("Using LinkedListSolutionSet for 4D PLS");
-                    run_pls_4d_with_archive!(LinkedListSolutionSet<BitsetEncodedSolution<4>, 4>, "linked-list")
+                    run_pls_4d_with_archive!(LinkedListSolutionSet<BitsetEncodedSolution<ProblemBitset<4>, 4>, 4>, "linked-list")
                 },
                 SolutionSetType::Vector => {
                     info!("Using VecSolutionSet for 4D PLS");
-                    run_pls_4d_with_archive!(VecSolutionSet<BitsetEncodedSolution<4>, 4>, "vector")
+                    run_pls_4d_with_archive!(VecSolutionSet<BitsetEncodedSolution<ProblemBitset<4>, 4>, 4>, "vector")
                 },
                 SolutionSetType::NdTree => {
                     info!("Using NdTreeSolutionSet for 4D PLS (nd-tree)");
-                    run_pls_4d_with_archive!(NdTreeSolutionSet<BitsetEncodedSolution<4>, 4>, "nd-tree")
+                    run_pls_4d_with_archive!(NdTreeSolutionSet<BitsetEncodedSolution<ProblemBitset<4>, 4>, 4>, "nd-tree")
                 }
             };
             
@@ -1778,25 +1772,20 @@ fn solve_hybrid_2d(
 ) -> PyResult<SolvingResult> {
     use pls::solution_impl::bitset_encoded_solution::BitsetEncodedSolution;
     use pls::solution_set_impl::BTreeSolutionSet;
+    use pls::problem_bitset::ProblemBitset;
 
     debug!("Using 2D hybrid optimization");
 
     // Convert to PLS problem format and create 2D problem with specified objectives
+    // Note: sims_instance already has 0-based indices from Python, and
+    // from_raw_with_objectives expects 0-based indices, so we pass them directly
     let raw_instance = pls::problem::SIMSProblemInstanceRaw {
         name: "python_hybrid_instance".to_string(),
         num_images: sims_instance.num_images,
         universe_size: sims_instance.universe,
-        images: sims_instance
-            .images
-            .iter()
-            .map(|img| img.iter().map(|&x| x + 1).collect())
-            .collect(),
+        images: sims_instance.images.clone(),
         costs: sims_instance.costs.iter().map(|&c| c as u64).collect(),
-        clouds: sims_instance
-            .clouds
-            .iter()
-            .map(|cloud| cloud.iter().map(|&x| x + 1).collect())
-            .collect(),
+        clouds: sims_instance.clouds.clone(),
         areas: sims_instance.areas.iter().map(|&a| a as u64).collect(),
         max_cloud_area: sims_instance.max_cloud_area as u64,
         resolution: sims_instance.resolution.iter().map(|&r| r as u64).collect(),
@@ -1828,8 +1817,7 @@ fn solve_hybrid_2d(
     }
 
     let pls_problem =
-        pls::problem::Problem::from_raw_with_objectives(raw_instance, objective_definitions)
-            .map_err(|e| PyValueError::new_err(format!("Failed to create 2D problem: {e}")))?;
+        ProblemBitset::from_raw_with_objectives(&raw_instance, objective_definitions);
 
     // Convert MILP solutions to PLS initial solutions
     let mut initial_solutions = Vec::new();
@@ -1848,7 +1836,7 @@ fn solve_hybrid_2d(
         info!("Adding {remaining_size} random solutions to reach desired population size");
 
         // Create random solutions manually
-        let mut random_solutions: BTreeSolutionSet<BitsetEncodedSolution<2>, 2> =
+        let mut random_solutions: BTreeSolutionSet<BitsetEncodedSolution<ProblemBitset<2>, 2>, 2> =
             BTreeSolutionSet::new("random_2d_solutions");
         for _ in 0..remaining_size {
             let random_solution = if pls_config.is_deterministic {
@@ -1930,7 +1918,7 @@ fn solve_hybrid_2d(
     }
 
     // Convert final solutions to Python format
-    let final_solutions: Vec<BitsetEncodedSolution<2>> = final_solution_set.into_iter().collect();
+    let final_solutions: Vec<BitsetEncodedSolution<ProblemBitset<2>, 2>> = final_solution_set.into_iter().collect();
     let mut python_solutions = Vec::new();
 
     for solution in final_solutions.iter() {
@@ -1959,25 +1947,20 @@ fn solve_hybrid_3d(
 ) -> PyResult<SolvingResult> {
     use pls::solution_impl::bitset_encoded_solution::BitsetEncodedSolution;
     use pls::solution_set_impl::NdTreeSolutionSet;
+    use pls::problem_bitset::ProblemBitset;
 
     debug!("Using 3D hybrid optimization");
 
     // Convert to PLS problem format
+    // Note: sims_instance already has 0-based indices from Python, and
+    // from_raw_with_objectives expects 0-based indices, so we pass them directly
     let raw_instance = pls::problem::SIMSProblemInstanceRaw {
         name: "python_hybrid_instance".to_string(),
         num_images: sims_instance.num_images,
         universe_size: sims_instance.universe,
-        images: sims_instance
-            .images
-            .iter()
-            .map(|img| img.iter().map(|&x| x + 1).collect())
-            .collect(),
+        images: sims_instance.images.clone(),
         costs: sims_instance.costs.iter().map(|&c| c as u64).collect(),
-        clouds: sims_instance
-            .clouds
-            .iter()
-            .map(|cloud| cloud.iter().map(|&x| x + 1).collect())
-            .collect(),
+        clouds: sims_instance.clouds.clone(),
         areas: sims_instance.areas.iter().map(|&a| a as u64).collect(),
         max_cloud_area: sims_instance.max_cloud_area as u64,
         resolution: sims_instance.resolution.iter().map(|&r| r as u64).collect(),
@@ -2010,8 +1993,7 @@ fn solve_hybrid_3d(
     }
 
     let pls_problem =
-        pls::problem::Problem::from_raw_with_objectives(raw_instance, objective_definitions)
-            .map_err(|e| PyValueError::new_err(format!("Failed to create 3D problem: {e}")))?;
+        ProblemBitset::from_raw_with_objectives(&raw_instance, objective_definitions);
 
     // Convert MILP solutions to PLS initial solutions
     let mut initial_solutions = Vec::new();
@@ -2030,7 +2012,7 @@ fn solve_hybrid_3d(
         info!("Adding {remaining_size} random solutions to reach desired population size");
 
         // Create random solutions manually
-        let mut random_solutions: NdTreeSolutionSet<BitsetEncodedSolution<3>, 3> =
+        let mut random_solutions: NdTreeSolutionSet<BitsetEncodedSolution<ProblemBitset<3>, 3>, 3> =
             NdTreeSolutionSet::new("random_3d_solutions");
         for _ in 0..remaining_size {
             let random_solution = if pls_config.is_deterministic {
@@ -2112,7 +2094,7 @@ fn solve_hybrid_3d(
     }
 
     // Convert final solutions to Python format
-    let final_solutions: Vec<BitsetEncodedSolution<3>> = final_solution_set.into_iter().collect();
+    let final_solutions: Vec<BitsetEncodedSolution<ProblemBitset<3>, 3>> = final_solution_set.into_iter().collect();
     let mut python_solutions = Vec::new();
 
     for solution in final_solutions.iter() {
@@ -2140,25 +2122,20 @@ fn solve_hybrid_4d(
 ) -> PyResult<SolvingResult> {
     use pls::solution_impl::bitset_encoded_solution::BitsetEncodedSolution;
     use pls::solution_set_impl::NdTreeSolutionSet;
+    use pls::problem_bitset::ProblemBitset;
 
     debug!("Using 4D hybrid optimization");
 
     // Convert to PLS problem format
+    // Note: sims_instance already has 0-based indices from Python, and
+    // from_raw_with_objectives expects 0-based indices, so we pass them directly
     let raw_instance = pls::problem::SIMSProblemInstanceRaw {
         name: "python_hybrid_instance".to_string(),
         num_images: sims_instance.num_images,
         universe_size: sims_instance.universe,
-        images: sims_instance
-            .images
-            .iter()
-            .map(|img| img.iter().map(|&x| x + 1).collect())
-            .collect(),
+        images: sims_instance.images.clone(),
         costs: sims_instance.costs.iter().map(|&c| c as u64).collect(),
-        clouds: sims_instance
-            .clouds
-            .iter()
-            .map(|cloud| cloud.iter().map(|&x| x + 1).collect())
-            .collect(),
+        clouds: sims_instance.clouds.clone(),
         areas: sims_instance.areas.iter().map(|&a| a as u64).collect(),
         max_cloud_area: sims_instance.max_cloud_area as u64,
         resolution: sims_instance.resolution.iter().map(|&r| r as u64).collect(),
@@ -2192,8 +2169,7 @@ fn solve_hybrid_4d(
     }
 
     let pls_problem =
-        pls::problem::Problem::from_raw_with_objectives(raw_instance, objective_definitions)
-            .map_err(|e| PyValueError::new_err(format!("Failed to create 4D problem: {e}")))?;
+        ProblemBitset::from_raw_with_objectives(&raw_instance, objective_definitions);
 
     // Convert MILP solutions to PLS initial solutions
     let mut initial_solutions = Vec::new();
@@ -2212,7 +2188,7 @@ fn solve_hybrid_4d(
         info!("Adding {remaining_size} random solutions to reach desired population size");
 
         // Create random solutions manually
-        let mut random_solutions: NdTreeSolutionSet<BitsetEncodedSolution<4>, 4> =
+        let mut random_solutions: NdTreeSolutionSet<BitsetEncodedSolution<ProblemBitset<4>, 4>, 4> =
             NdTreeSolutionSet::new("random_4d_solutions");
         for _ in 0..remaining_size {
             let random_solution = if pls_config.is_deterministic {
@@ -2294,7 +2270,7 @@ fn solve_hybrid_4d(
     }
 
     // Convert final solutions to Python format
-    let final_solutions: Vec<BitsetEncodedSolution<4>> = final_solution_set.into_iter().collect();
+    let final_solutions: Vec<BitsetEncodedSolution<ProblemBitset<4>, 4>> = final_solution_set.into_iter().collect();
     let mut python_solutions = Vec::new();
 
     for solution in final_solutions.iter() {

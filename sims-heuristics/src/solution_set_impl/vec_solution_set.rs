@@ -1,10 +1,11 @@
 use log::trace;
-use pareto::{ParetoFront, Random, RandomCollection};
-
-use crate::solution::EncodedSolution;
+use pareto::{MoSolution, ParetoFront, Random, RandomCollection};
 
 #[derive(Clone)]
-pub struct VecSolutionSet<T: EncodedSolution<D> + Sized, const D: usize> {
+pub struct VecSolutionSet<T, const D: usize>
+where
+    T: MoSolution<D> + PartialEq + Sized,
+{
     name: &'static str,
     last_added_position: usize,
     vec_set: Vec<T>,
@@ -12,7 +13,7 @@ pub struct VecSolutionSet<T: EncodedSolution<D> + Sized, const D: usize> {
 
 impl<T, const D: usize> VecSolutionSet<T, D>
 where
-    T: EncodedSolution<D> + Sized + Clone,
+    T: MoSolution<D> + PartialEq + Sized + Clone,
 {
     #[must_use]
     pub const fn new(name: &'static str) -> Self {
@@ -71,7 +72,7 @@ where
 
 impl<T, const D: usize> ParetoFront<'_, T> for VecSolutionSet<T, D>
 where
-    T: EncodedSolution<D> + Sized + Clone,
+    T: MoSolution<D> + PartialEq + Sized + Clone,
 {
     type Iter<'b>
         = std::slice::Iter<'b, T>
@@ -113,7 +114,8 @@ where
                     return false;
                 }
                 // Check if new solution is dominated by ANY existing solution
-                if self.vec_set
+                if self
+                    .vec_set
                     .iter()
                     .any(|s| solution.is_covered_by(s.objectives()))
                 {
@@ -131,7 +133,9 @@ where
 
             // Check ALL solutions for dominance by the newly inserted solution
             for (index, existing) in self.vec_set.iter().enumerate() {
-                if index != self.last_added_position && existing.is_dominated_by(solution.objectives()) {
+                if index != self.last_added_position
+                    && existing.is_dominated_by(solution.objectives())
+                {
                     to_remove.push(index);
                 }
             }
@@ -182,7 +186,7 @@ where
 
 impl<T, const D: usize> FromIterator<T> for VecSolutionSet<T, D>
 where
-    T: EncodedSolution<D> + Sized + Clone,
+    T: MoSolution<D> + PartialEq + Sized + Clone,
 {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         let vec_set: Vec<T> = iter.into_iter().collect();
@@ -196,7 +200,7 @@ where
 
 impl<T, const D: usize> IntoIterator for VecSolutionSet<T, D>
 where
-    T: EncodedSolution<D> + Sized + Clone,
+    T: MoSolution<D> + PartialEq + Sized + Clone,
 {
     type Item = T;
     type IntoIter = std::vec::IntoIter<T>;
@@ -207,6 +211,6 @@ where
 }
 
 impl<T, const D: usize> RandomCollection<T> for VecSolutionSet<T, D> where
-    T: EncodedSolution<D> + Sized + Clone + Random
+    T: MoSolution<D> + PartialEq + Sized + Clone + Random
 {
 }

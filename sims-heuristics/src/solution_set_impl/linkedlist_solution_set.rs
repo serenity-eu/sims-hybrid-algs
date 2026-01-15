@@ -5,20 +5,21 @@
 
 use std::collections::LinkedList;
 
-use pareto::{ParetoFront, Random, RandomCollection};
+use pareto::{MoSolution, ParetoFront, Random, RandomCollection};
 use tracing::{trace, warn};
 
-use crate::solution::EncodedSolution;
-
 #[derive(Clone)]
-pub struct LinkedListSolutionSet<T: EncodedSolution<D> + Sized, const D: usize> {
+pub struct LinkedListSolutionSet<T, const D: usize>
+where
+    T: MoSolution<D> + PartialEq + Sized,
+{
     name: &'static str,
     solutions: LinkedList<T>,
 }
 
 impl<T, const D: usize> LinkedListSolutionSet<T, D>
 where
-    T: EncodedSolution<D> + Sized + Clone,
+    T: MoSolution<D> + PartialEq + Sized + Clone,
 {
     #[must_use]
     pub const fn new(name: &'static str) -> Self {
@@ -31,7 +32,7 @@ where
 
 impl<T, const D: usize> ParetoFront<'_, T> for LinkedListSolutionSet<T, D>
 where
-    T: EncodedSolution<D> + Sized + Clone,
+    T: MoSolution<D> + PartialEq + Sized + Clone,
 {
     type Iter<'b>
         = std::collections::linked_list::Iter<'b, T>
@@ -74,7 +75,7 @@ where
 
         // Remove all solutions dominated by the new solution
         let size_before = self.solutions.len();
-        
+
         // Manually filter out dominated solutions since retain is unstable for LinkedList
         let mut new_solutions = LinkedList::new();
         for existing in &self.solutions {
@@ -83,7 +84,7 @@ where
             }
         }
         self.solutions = new_solutions;
-        
+
         let size_after = self.solutions.len();
         if size_before != size_after {
             trace!(
@@ -122,7 +123,7 @@ where
 
 impl<T, const D: usize> FromIterator<T> for LinkedListSolutionSet<T, D>
 where
-    T: EncodedSolution<D> + Sized + Clone,
+    T: MoSolution<D> + PartialEq + Sized + Clone,
 {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         let solutions = iter.into_iter().collect();
@@ -135,7 +136,7 @@ where
 
 impl<T, const D: usize> IntoIterator for LinkedListSolutionSet<T, D>
 where
-    T: EncodedSolution<D> + Sized + Clone,
+    T: MoSolution<D> + PartialEq + Sized + Clone,
 {
     type Item = T;
     type IntoIter = std::collections::linked_list::IntoIter<T>;
@@ -146,6 +147,6 @@ where
 }
 
 impl<T, const D: usize> RandomCollection<T> for LinkedListSolutionSet<T, D> where
-    T: EncodedSolution<D> + Sized + Clone + Random
+    T: MoSolution<D> + PartialEq + Sized + Clone + Random
 {
 }

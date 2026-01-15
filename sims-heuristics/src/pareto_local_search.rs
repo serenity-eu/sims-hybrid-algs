@@ -10,8 +10,8 @@ use tracing::{debug_span, info_span, instrument};
 
 use crate::{
     explored_solutions_data::{ExploredSolutionsData, SolutionFingerprint},
-    probabilistic_probing_neighborhood::ProbabilisticProbingNeighborhood,
-    problem::Problem,
+    objective_tracker::TrackerCollection,
+    problem::SetCoverProblem,
     solution::{EncodedSolution, ImageSet},
     timer::Timer,
 };
@@ -49,13 +49,14 @@ struct IterationMetrics {
     per_solution_search_time: f32,
 }
 
-pub struct ParetoLocalSearch<'a, T, S, const D: usize>
+pub struct ParetoLocalSearch<'a, T, S, P, const D: usize>
 where
-    T: ImageSet<D> + EncodedSolution<D> + ProbabilisticProbingNeighborhood<D>,
+    T: ImageSet<D> + EncodedSolution<P, D>,
     S: ParetoFront<'a, T> + Clone,
+    P: SetCoverProblem<D>,
 {
     /// Reference to problem instance
-    problem: &'a Problem<T, D>,
+    problem: &'a P,
     /// Current population
     population: S,
     /// Approximation of Pareto set
@@ -68,6 +69,9 @@ where
     pub neighborhood_size_range: RangeInclusive<u32>,
     /// Explored solutions objectives
     pub explored_solutions: ExploredSolutionsData<D>,
+    /// Spare tracker for neighborhood exploration (reused to avoid allocations)
+    spare_tracker: T::Trackers,
+    _phantom: std::marker::PhantomData<T>,
 }
 
 #[derive(Eq, PartialEq)]
@@ -80,13 +84,104 @@ pub enum StepStatus {
     AllNeighborhoodStructuresExplored,
 }
 
-impl<'a, T, S, const D: usize> ParetoLocalSearch<'a, T, S, D>
+impl<'a, T, S, P, const D: usize> ParetoLocalSearch<'a, T, S, P, D>
 where
-    T: ImageSet<D> + EncodedSolution<D> + ProbabilisticProbingNeighborhood<D>,
+    T: ImageSet<D> + EncodedSolution<P, D>,
     S: ParetoFront<'a, T> + Clone + FromIterator<T> + IntoIterator<Item = T>,
+    P: SetCoverProblem<D>,
 {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Plumbs explicit mutable state to allow streaming neighbor evaluation"
+    )]
+    fn process_neighbor_streaming(
+        problem: &P,
+        explored_solutions: &mut ExploredSolutionsData<D>,
+        approximated_pareto_set: &mut S,
+        neighbor: &T,
+        neighbor_index: usize,
+        current_solution: &T,
+        iteration: usize,
+        timer: &Timer,
+        step_stats: &mut StepStats,
+        auxiliary_population: &mut S,
+    ) -> bool {
+        step_stats.explored_neighbor_count += 1;
+        debug!("######## NEIGHBOR {neighbor_index} {neighbor:?} ########");
+
+        #[cfg(debug_assertions)]
+        {
+            let is_valid = neighbor.is_valid(problem);
+            if !is_valid {
+                eprintln!("Generated neighbor {neighbor_index} is invalid: {neighbor:?}");
+                // Check coverage manually to debug
+                let selected_images: Vec<usize> = neighbor.selected_images().collect();
+                eprintln!("  Selected images: {selected_images:?}");
+                let mut covered_elements = std::collections::HashSet::new();
+                for &img_idx in &selected_images {
+                    for elem in problem.image_elements(img_idx) {
+                        covered_elements.insert(elem);
+                    }
+                }
+                eprintln!(
+                    "  Total elements covered: {}/{}",
+                    covered_elements.len(),
+                    problem.num_elements()
+                );
+                if covered_elements.len() < problem.num_elements() {
+                    let uncovered: Vec<usize> = (0..problem.num_elements())
+                        .filter(|e| !covered_elements.contains(e))
+                        .take(20)
+                        .collect();
+                    eprintln!("  Uncovered elements (first 20): {uncovered:?}");
+                }
+            }
+            debug_assert!(
+                is_valid,
+                "Generated neighbor {neighbor_index} is invalid: {neighbor:?}"
+            );
+        }
+
+        if explored_solutions.is_registered(neighbor) {
+            step_stats.duplicated_neighbor_count += 1;
+            tracing::trace!("Neighbor nr {neighbor_index} already explored, skipping");
+            return false;
+        }
+
+        explored_solutions.register_without_selected_images(iteration, neighbor, timer.elapsed());
+
+        if neighbor.is_covered_by(current_solution.objectives()) {
+            tracing::trace!(
+                "Neighbor nr {neighbor_index} is dominated by current solution, discarding"
+            );
+            return false;
+        }
+
+        if approximated_pareto_set.try_insert(neighbor) {
+            step_stats.pareto_added_count += 1;
+
+            if auxiliary_population.try_insert(neighbor) {
+                step_stats.auxiliary_added_count += 1;
+            } else {
+                debug!(
+                    "Neighbor nr {neighbor_index} is dominated so it wasn't added to auxiliary population"
+                );
+            }
+        } else {
+            tracing::trace!("Neighbor nr {neighbor_index} rejected from Pareto set");
+        }
+
+        if timer.is_expired() {
+            info!("Timer expired. Stop exploring neighbors.");
+            tracing::warn!("Timer expired during neighbor processing");
+            return true;
+        }
+
+        false
+    }
+
     pub fn new(
-        problem: &'a Problem<T, D>,
+        problem: &'a P,
         initial_population: &S,
         neighborhood_size_range: RangeInclusive<u32>,
         is_deterministic: bool,
@@ -100,7 +195,7 @@ where
                     0,
                     solution,
                     Duration::from_secs(0),
-                    solution.selected_images(),
+                    solution.selected_images().collect(),
                 );
             }
         });
@@ -109,6 +204,7 @@ where
         }
 
         let approximated_pareto_set = population.clone().with_name("approximated Pareto set");
+        let spare_tracker = T::Trackers::new(problem);
         ParetoLocalSearch {
             problem,
             population,
@@ -117,6 +213,8 @@ where
             neighborhood_size_range,
             explored_solutions,
             is_deterministic,
+            spare_tracker,
+            _phantom: std::marker::PhantomData,
         }
     }
 
@@ -174,41 +272,47 @@ where
         step_stats: &mut StepStats,
         auxiliary_population: &mut S,
     ) {
+        // Stream neighbors without collecting them into a Vec.
+        // We explicitly borrow disjoint mutable fields, so we can hold `&mut spare_tracker`
+        // while updating the explored-solution registry and Pareto archive.
+        let spare_tracker = &mut self.spare_tracker;
+        let explored_solutions = &mut self.explored_solutions;
+        let approximated_pareto_set = &mut self.approximated_pareto_set;
+
+        let problem = self.problem;
+        let neighborhood_structure = self.neigborhood_structure;
+        let is_deterministic = self.is_deterministic;
+
         'population: for (index, solution) in population.into_iter().enumerate() {
             let solution_span = debug_span!(
                 "explore_solution",
                 solution_index = index,
-                neighborhood_structure = self.neigborhood_structure
+                neighborhood_structure = neighborhood_structure
             );
             let _solution_guard = solution_span.enter();
 
-            // Instrument neighborhood generation separately
             let neighborhood_generation_span = debug_span!(
                 "generate_neighborhood",
-                neighborhood_structure = self.neigborhood_structure
+                neighborhood_structure = neighborhood_structure
             );
-            let neighbors = {
-                let _gen_guard = neighborhood_generation_span.enter();
-                solution.neighborhood(
-                    self.neigborhood_structure,
-                    self.problem,
-                    timer,
-                    self.is_deterministic,
-                )
-            };
-            let neighbor_count = neighbors.len();
+            let _gen_guard = neighborhood_generation_span.enter();
 
-            tracing::debug!(
-                neighbors_generated = neighbor_count,
-                "Generated neighborhood for solution"
+            let neighbor_evaluation_span = debug_span!("evaluate_neighbors");
+            let _evaluation_guard = neighbor_evaluation_span.enter();
+
+            let mut neighborhood_iter = solution.neighborhood_iter(
+                spare_tracker,
+                neighborhood_structure,
+                problem,
+                timer,
+                is_deterministic,
             );
 
-            let neighbor_evaluation_span =
-                debug_span!("evaluate_neighbors", neighbor_count = neighbor_count);
-            let evaluation_guard = neighbor_evaluation_span.enter();
-
-            for (neighbor_index, neighbor) in neighbors.into_iter().enumerate() {
-                if self.process_neighbor(
+            for (neighbor_index, neighbor) in neighborhood_iter.by_ref().enumerate() {
+                if Self::process_neighbor_streaming(
+                    problem,
+                    explored_solutions,
+                    approximated_pareto_set,
                     &neighbor,
                     neighbor_index,
                     &solution,
@@ -222,10 +326,7 @@ where
                 }
             }
 
-            drop(evaluation_guard);
-
-            self.explored_solutions
-                .update_explored_neighborhood_size(&solution, self.neigborhood_structure);
+            explored_solutions.update_explored_neighborhood_size(&solution, neighborhood_structure);
         }
 
         tracing::debug!(
@@ -233,155 +334,6 @@ where
             duplicates_found = step_stats.duplicated_neighbor_count,
             "Population neighborhood exploration completed"
         );
-    }
-
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "Necessary for logical separation of concerns"
-    )]
-    #[instrument(
-        level = "trace",
-        skip(
-            self,
-            neighbor,
-            current_solution,
-            timer,
-            step_stats,
-            auxiliary_population
-        ),
-        fields(neighbor_index, iteration)
-    )]
-    fn process_neighbor(
-        &mut self,
-        neighbor: &T,
-        neighbor_index: usize,
-        current_solution: &T,
-        iteration: usize,
-        timer: &Timer,
-        step_stats: &mut StepStats,
-        auxiliary_population: &mut S,
-    ) -> bool {
-        step_stats.explored_neighbor_count += 1;
-        debug!("######## NEIGHBOR {neighbor_index} {neighbor:?} ########");
-        debug_assert!(neighbor.is_valid(self.problem));
-
-        if self.explored_solutions.is_registered(neighbor) {
-            step_stats.duplicated_neighbor_count += 1;
-            tracing::trace!("Neighbor nr {neighbor_index} already explored, skipping");
-            return false;
-        }
-
-        self.explored_solutions.register(
-            iteration,
-            neighbor,
-            timer.elapsed(),
-            neighbor.selected_images(),
-        );
-
-        tracing::trace!("Evaluating new neighbor");
-
-        self.evaluate_neighbor(
-            neighbor,
-            neighbor_index,
-            current_solution,
-            step_stats,
-            auxiliary_population,
-        );
-
-        if timer.is_expired() {
-            info!("Timer expired. Stop exploring neighbors.");
-            tracing::warn!("Timer expired during neighbor processing");
-            return true;
-        }
-
-        false
-    }
-
-    #[instrument(
-        level = "trace",
-        skip(self, neighbor, current_solution, step_stats, auxiliary_population),
-        fields(neighbor_index, iteration)
-    )]
-    fn evaluate_neighbor(
-        &mut self,
-        neighbor: &T,
-        neighbor_index: usize,
-        current_solution: &T,
-        step_stats: &mut StepStats,
-        auxiliary_population: &mut S,
-    ) {
-        if neighbor.is_covered_by(current_solution.objectives()) {
-            tracing::trace!(
-                "Neighbor nr {neighbor_index} is dominated by current solution, discarding"
-            );
-            return;
-        }
-
-        if self.try_add_to_pareto_set(neighbor, neighbor_index, step_stats) {
-            Self::try_add_to_auxiliary_population(
-                neighbor,
-                neighbor_index,
-                step_stats,
-                auxiliary_population,
-            );
-
-            tracing::trace!("Neighbor added to Pareto set and auxiliary population evaluated");
-        } else {
-            tracing::trace!("Neighbor not added to Pareto set");
-        }
-    }
-
-    #[instrument(level = "trace", skip(self, neighbor, step_stats), fields(
-        neighbor_index,
-        iteration,
-        pareto_set_size = self.approximated_pareto_set.len()
-    ))]
-    fn try_add_to_pareto_set(
-        &mut self,
-        neighbor: &T,
-        neighbor_index: usize,
-        step_stats: &mut StepStats,
-    ) -> bool {
-        if self.approximated_pareto_set.try_insert(neighbor) {
-            self.log_pareto_set_addition(neighbor_index);
-            step_stats.pareto_added_count += 1;
-
-            tracing::trace!(
-                new_pareto_set_size = self.approximated_pareto_set.len(),
-                "Neighbor successfully added to Pareto set"
-            );
-            true
-        } else {
-            tracing::trace!("Neighbor nr {neighbor_index} rejected from Pareto set");
-            false
-        }
-    }
-
-    fn log_pareto_set_addition(&self, neighbor_index: usize) {
-        debug!(
-            "Neighbor nr {neighbor_index} was added to approximated pareto set. Approximated pareto set size: {}",
-            self.approximated_pareto_set.len()
-        );
-    }
-
-    #[instrument(
-        level = "debug",
-        skip(neighbor, step_stats, auxiliary_population),
-        fields(neighbor_index)
-    )]
-    fn try_add_to_auxiliary_population(
-        neighbor: &T,
-        neighbor_index: usize,
-        step_stats: &mut StepStats,
-        auxiliary_population: &mut S,
-    ) {
-        if auxiliary_population.try_insert(neighbor) {
-            step_stats.auxiliary_added_count += 1;
-        } else {
-            debug!(
-                "Neighbor nr {neighbor_index} is dominated so it wasn't added to auxiliary population"
-            );
-        }
     }
 
     #[instrument(level = "debug", skip(self, step_time, step_stats), fields(
@@ -439,8 +391,8 @@ where
 
     fn log_metrics(iteration: usize, metrics: &IterationMetrics, step_stats: &StepStats) {
         error!(
-            "Iteration {iteration} [{} us, {} us/sol], neighbors: size: {}, explored: {}, duplicated: {} ({} %), auxiliary: +{}-{}, pareto: +{}-{}",
-            metrics.duration_us,
+            "Iteration {iteration} [{:.3} s, {} us/sol], neighbors: size: {}, explored: {}, duplicated: {} ({} %), auxiliary: +{}-{}, pareto: +{}-{}",
+            metrics.duration_us as f64 / 1_000_000.0,
             metrics.per_solution_search_time,
             metrics.neighborhood_size,
             step_stats.explored_neighbor_count,
@@ -481,7 +433,7 @@ where
 
         if self.can_increase_neighborhood_structure() {
             info!("Increasing neighborhood structure.");
-            tracing::debug!(
+            tracing::info!(
                 old_structure = self.neigborhood_structure,
                 new_structure = self.neigborhood_structure + 1,
                 "Increasing neighborhood structure"
@@ -502,20 +454,10 @@ where
         old_neighborhood_structure = self.neigborhood_structure
     ))]
     fn replace_population_with_auxiliary(&mut self, auxiliary_population: S) {
-        let start_time = Instant::now();
-
         info!("Replacing current population with auxiliary population.");
         self.population = auxiliary_population.with_name("population");
         info!("Start again with smallest neighborhood structure.");
         self.neigborhood_structure = *self.neighborhood_size_range.start();
-
-        let elapsed = start_time.elapsed();
-        tracing::debug!(
-            new_population_size = self.population.len(),
-            new_neighborhood_structure = self.neigborhood_structure,
-            duration_us = elapsed.as_micros(),
-            "Population replaced with auxiliary population"
-        );
     }
 
     fn can_increase_neighborhood_structure(&self) -> bool {
@@ -529,37 +471,17 @@ where
         neighborhood_structure = self.neigborhood_structure
     ))]
     fn add_eligible_pareto_solutions(&mut self) {
-        let start_time = Instant::now();
-
         info!(
             "Use solutions from approximated pareto set which are not already Pareto local optimum"
         );
-        let eligible_solutions: Vec<_> = self
-            .approximated_pareto_set
-            .iter()
-            .filter(|&solution| {
-                self.explored_solutions.explored_neighborhood_size(solution)
-                    < self.neigborhood_structure
-            })
-            .collect();
-
-        let eligible_count = eligible_solutions.len();
-        tracing::debug!(
-            eligible_solutions_count = eligible_count,
-            "Found eligible Pareto solutions"
-        );
+        let eligible_solutions = self.approximated_pareto_set.iter().filter(|&solution| {
+            self.explored_solutions.explored_neighborhood_size(solution)
+                < self.neigborhood_structure
+        });
 
         for solution in eligible_solutions {
             self.population.insert_unchecked(solution);
         }
-
-        let elapsed = start_time.elapsed();
-        tracing::debug!(
-            new_population_size = self.population.len(),
-            eligible_added = eligible_count,
-            duration_us = elapsed.as_micros(),
-            "Eligible Pareto solutions added to population"
-        );
     }
 
     #[instrument(level = "info", skip(self), fields(
@@ -645,7 +567,7 @@ where
 
         error!(
             "===== Final Pareto Set Objectives - {} (lexicographically sorted) =====",
-            self.problem.instance_name
+            self.problem.instance_name()
         );
         for (i, obj) in objectives.iter().enumerate() {
             error!("Solution {}: {:?}", i + 1, obj);

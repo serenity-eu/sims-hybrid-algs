@@ -1,19 +1,20 @@
 use std::collections::{BTreeSet, btree_set};
 
-use pareto::{ParetoFront, Random, RandomCollection};
+use pareto::{MoSolution, ParetoFront, Random, RandomCollection};
 use tracing::{trace, warn};
 
-use crate::solution::EncodedSolution;
-
 #[derive(Clone)]
-pub struct BTreeSolutionSet<T: EncodedSolution<D> + Sized, const D: usize> {
+pub struct BTreeSolutionSet<T, const D: usize>
+where
+    T: MoSolution<2> + MoSolution<D> + PartialEq + Sized,
+{
     name: &'static str,
     btree_set: BTreeSet<T>,
 }
 
 impl<T> BTreeSolutionSet<T, 2>
 where
-    T: EncodedSolution<2> + Sized + Ord + Clone,
+    T: MoSolution<2> + PartialEq + Sized + Ord + Clone,
 {
     #[must_use]
     pub const fn new(name: &'static str) -> Self {
@@ -26,7 +27,7 @@ where
 
 impl<T> ParetoFront<'_, T> for BTreeSolutionSet<T, 2>
 where
-    T: EncodedSolution<2> + Sized + Ord + Clone,
+    T: MoSolution<2> + PartialEq + Sized + Ord + Clone,
 {
     type Iter<'b>
         = btree_set::Iter<'b, T>
@@ -116,7 +117,7 @@ where
 
 impl<T> FromIterator<T> for BTreeSolutionSet<T, 2>
 where
-    T: EncodedSolution<2> + Sized + Ord + Clone,
+    T: MoSolution<2> + PartialEq + Sized + Ord + Clone,
 {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         let btree_set = iter.into_iter().collect();
@@ -129,7 +130,7 @@ where
 
 impl<T> IntoIterator for BTreeSolutionSet<T, 2>
 where
-    T: EncodedSolution<2> + Sized + Clone,
+    T: MoSolution<2> + PartialEq + Sized + Clone,
 {
     type Item = T;
     type IntoIter = btree_set::IntoIter<T>;
@@ -141,7 +142,7 @@ where
 
 impl<T> Default for BTreeSolutionSet<T, 2>
 where
-    T: EncodedSolution<2> + Sized + Ord + Clone,
+    T: MoSolution<2> + PartialEq + Sized + Ord + Clone,
 {
     fn default() -> Self {
         Self::new("default")
@@ -149,6 +150,6 @@ where
 }
 
 impl<T> RandomCollection<T> for BTreeSolutionSet<T, 2> where
-    T: EncodedSolution<2> + Sized + Ord + Clone + Random
+    T: MoSolution<2> + PartialEq + Sized + Ord + Clone + Random
 {
 }

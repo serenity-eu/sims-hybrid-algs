@@ -1,6 +1,6 @@
 use log::debug;
 use pls::objectives::ObjectiveState;
-use pls::problem::Problem;
+use pls::problem_bitset::ProblemBitset;
 use pls::solution::{bitset_encoded_solution::BitsetEncodedSolution, EncodedSolution};
 
 use crate::solution::Solution;
@@ -8,7 +8,7 @@ use crate::solution::Solution;
 /// Helper function to extract objective values by type from solution
 fn extract_objective_values<const D: usize>(
     objectives: &[u64],
-    problem: &Problem<BitsetEncodedSolution<D>, D>,
+    problem: &ProblemBitset<D>,
 ) -> (Option<u64>, Option<u64>, Option<u64>, Option<u64>) {
     let mut cost: Option<u64> = None;
     let mut cloudy_area: Option<u64> = None;
@@ -38,14 +38,14 @@ fn extract_objective_values<const D: usize>(
 /// Convert 2D PLS BitsetEncodedSolution to Python Solution
 impl
     From<(
-        &BitsetEncodedSolution<2>,
-        &Problem<BitsetEncodedSolution<2>, 2>,
+        &BitsetEncodedSolution<ProblemBitset<2>, 2>,
+        &ProblemBitset<2>,
     )> for Solution
 {
     fn from(
         val: (
-            &BitsetEncodedSolution<2>,
-            &Problem<BitsetEncodedSolution<2>, 2>,
+            &BitsetEncodedSolution<ProblemBitset<2>, 2>,
+            &ProblemBitset<2>,
         ),
     ) -> Self {
         let (pls_solution, problem) = val;
@@ -82,14 +82,14 @@ impl
 /// Convert 3D PLS BitsetEncodedSolution to Python Solution
 impl
     From<(
-        &BitsetEncodedSolution<3>,
-        &Problem<BitsetEncodedSolution<3>, 3>,
+        &BitsetEncodedSolution<ProblemBitset<3>, 3>,
+        &ProblemBitset<3>,
     )> for Solution
 {
     fn from(
         val: (
-            &BitsetEncodedSolution<3>,
-            &Problem<BitsetEncodedSolution<3>, 3>,
+            &BitsetEncodedSolution<ProblemBitset<3>, 3>,
+            &ProblemBitset<3>,
         ),
     ) -> Self {
         let (pls_solution, problem) = val;
@@ -124,14 +124,14 @@ impl
 /// Convert 4D PLS BitsetEncodedSolution to Python Solution  
 impl
     From<(
-        &BitsetEncodedSolution<4>,
-        &Problem<BitsetEncodedSolution<4>, 4>,
+        &BitsetEncodedSolution<ProblemBitset<4>, 4>,
+        &ProblemBitset<4>,
     )> for Solution
 {
     fn from(
         val: (
-            &BitsetEncodedSolution<4>,
-            &Problem<BitsetEncodedSolution<4>, 4>,
+            &BitsetEncodedSolution<ProblemBitset<4>, 4>,
+            &ProblemBitset<4>,
         ),
     ) -> Self {
         let (pls_solution, problem) = val;

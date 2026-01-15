@@ -107,21 +107,19 @@ impl Solution {
     }
 
     /// Convert solution to JSON-compatible dictionary
-    fn to_json(&self) -> PyResult<PyObject> {
-        Python::with_gil(|py| {
-            let dict = PyDict::new(py);
+    fn to_json(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let dict = PyDict::new(py);
 
-            // Convert HashSet to Vec for JSON serialization
-            let selected_images_list: Vec<usize> = self.selected_images.iter().cloned().collect();
-            dict.set_item("selected_images", selected_images_list)?;
-            dict.set_item("cost", self.cost)?;
-            dict.set_item("cloudy_area", self.cloudy_area)?;
-            dict.set_item("timestamp", self.timestamp)?; // PyO3 automatically converts Duration to timedelta
-            dict.set_item("max_incidence_angle", self.max_incidence_angle)?;
-            dict.set_item("min_resolutions_sum", self.min_resolutions_sum)?;
+        // Convert HashSet to Vec for JSON serialization
+        let selected_images_list: Vec<usize> = self.selected_images.iter().cloned().collect();
+        dict.set_item("selected_images", selected_images_list)?;
+        dict.set_item("cost", self.cost)?;
+        dict.set_item("cloudy_area", self.cloudy_area)?;
+        dict.set_item("timestamp", self.timestamp)?; // PyO3 automatically converts Duration to timedelta
+        dict.set_item("max_incidence_angle", self.max_incidence_angle)?;
+        dict.set_item("min_resolutions_sum", self.min_resolutions_sum)?;
 
-            Ok(dict.into())
-        })
+        Ok(dict.into())
     }
 
     /// Get selected images as a list

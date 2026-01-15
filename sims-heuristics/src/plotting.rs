@@ -21,7 +21,7 @@
 //! - 5D: 10 pairs → 3×4 grid with 10 subplots used
 
 #[cfg(feature = "plotting")]
-use crate::{explored_solutions_data::ExploredSolutionsData, problem::Problem, solution::ImageSet};
+use crate::{explored_solutions_data::ExploredSolutionsData, problem::SetCoverProblem};
 use plotters::prelude::*;
 use std::cmp::Ordering;
 
@@ -92,9 +92,9 @@ pub fn draw_solutions_plot<const D: usize>(
 ///
 /// This function extracts objective names from the Problem and calls `draw_solutions_plot`.
 #[cfg(feature = "plotting")]
-pub fn draw_solutions_plot_with_problem<T: ImageSet<D>, const D: usize>(
+pub fn draw_solutions_plot_with_problem<P: SetCoverProblem<D>, const D: usize>(
     solutions_data: &ExploredSolutionsData<D>,
-    problem: &Problem<T, D>,
+    problem: &P,
 ) {
     let objective_names = problem.objective_names();
     draw_solutions_plot(solutions_data, &objective_names);
