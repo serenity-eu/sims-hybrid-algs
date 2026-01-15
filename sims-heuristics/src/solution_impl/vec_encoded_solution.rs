@@ -2,6 +2,7 @@ use itertools::Itertools;
 use log::trace;
 use pareto::{HasObjectives, MoSolution, Random};
 use rand::SeedableRng;
+use rand::rngs::SmallRng;
 use rand::{Rng, seq::IteratorRandom};
 use std::{collections::BinaryHeap, fmt::Debug, hash::Hash, time::Duration, vec};
 
@@ -390,7 +391,7 @@ where
     /// Panics if there is no image that covers an uncovered element (i.e., `.choose(&mut rng).unwrap()` fails).
     #[must_use]
     pub fn random_with_seed(problem: &P, seed: u64) -> Self {
-        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        let mut rng = SmallRng::seed_from_u64(seed);
         let mut selected_images = vec![false; problem.num_images()];
         let mut covered_elements = vec![false; problem.num_elements()];
         let mut num_covered_elements = 0;

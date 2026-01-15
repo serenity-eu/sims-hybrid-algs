@@ -5,6 +5,8 @@ use std::{
 };
 
 use log::{debug, error, info};
+use rand::prelude::*;
+use rand::SeedableRng;
 use pareto::ParetoFront;
 use tracing::{debug_span, info_span, instrument};
 
@@ -283,7 +285,17 @@ where
         let neighborhood_structure = self.neigborhood_structure;
         let is_deterministic = self.is_deterministic;
 
-        'population: for (index, solution) in population.into_iter().enumerate() {
+        // Shuffle population to vary exploration order each iteration
+        let mut population_vec: Vec<_> = population.into_iter().collect();
+        if is_deterministic {
+            // Seeded RNG for reproducible but varied order per iteration
+            let mut rng = SmallRng::seed_from_u64(iteration as u64);
+            population_vec.shuffle(&mut rng);
+        } else {
+            population_vec.shuffle(&mut rand::rng());
+        }
+
+        'population: for (index, solution) in population_vec.into_iter().enumerate() {
             let solution_span = debug_span!(
                 "explore_solution",
                 solution_index = index,

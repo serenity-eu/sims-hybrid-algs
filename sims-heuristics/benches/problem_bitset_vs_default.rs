@@ -50,7 +50,7 @@ fn bench_cover_check(c: &mut Criterion) {
         let raw = load_raw_instance(path);
         let universe_size = raw.universe_size;
         let batch = 10_000;
-        let mut rng = StdRng::seed_from_u64(42);
+        let mut rng = SmallRng::seed_from_u64(42);
 
         // Bitset implementation
         let pb = ProblemBitset::from_raw_with_objectives(
