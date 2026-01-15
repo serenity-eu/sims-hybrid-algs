@@ -1,10 +1,10 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use nd_tree::nd_tree::{NDTree, Solution};
-use rand::rngs::StdRng;
+use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
 fn generate_solutions<const D: usize>(n: usize, v_max: u64) -> Vec<Solution<D>> {
-    let mut rng = StdRng::seed_from_u64(42);
+    let mut rng = SmallRng::seed_from_u64(42);
     let mut solutions = Vec::with_capacity(n);
     for _ in 0..n {
         let mut objectives = [0u64; D];

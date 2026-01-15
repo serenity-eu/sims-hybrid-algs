@@ -62,7 +62,7 @@ fn generate_pareto_solutions<const D: usize>(
     v_max: u64,
     eps: f64,
 ) -> Vec<BenchSolution<D>> {
-    let mut rng = StdRng::seed_from_u64(42); // Fixed seed for reproducible results
+    let mut rng = SmallRng::seed_from_u64(42); // Fixed seed for reproducible results
     let v_max_f = v_max as f64;
     let v2 = v_max_f * v_max_f;
     let min_sum = (1.0 - eps) * v2;

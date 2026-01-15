@@ -19,6 +19,12 @@ path = "src/bin/debug_lagos_30.rs"
 test = false
 bench = false
 
+[[bin]]
+name = "debug-lagos-100"
+path = "src/bin/debug_lagos_100.rs"
+test = false
+bench = false
+
 [[bench]]
 name = "unique_values_count_bench"
 harness = false

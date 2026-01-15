@@ -1,4 +1,4 @@
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{Rng, SeedableRng, rngs::SmallRng};
 use std::marker::ConstParamTy;
 
 pub type Objectives<const D: usize> = [u64; D];
@@ -76,7 +76,7 @@ pub trait RandomCollection<T: Random>: FromIterator<T> {
 
     #[must_use]
     fn random_with_seed(size: usize, seed: u64) -> Self {
-        let mut rng = StdRng::seed_from_u64(seed);
+        let mut rng = SmallRng::seed_from_u64(seed);
         (0..size)
             .map(|_| T::random_with_seed(rng.random()))
             .collect()
