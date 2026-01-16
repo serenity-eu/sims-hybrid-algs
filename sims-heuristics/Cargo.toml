@@ -139,7 +139,7 @@ scalarized_selection = ["nd-tree/scalarized_query"]
 debug = true
 codegen-units = 1
 lto = "fat"
-panic = "abort"
+panic = "unwind"
 
 [lints.clippy]
 # Enable all pedantic and nursery lints with priority
