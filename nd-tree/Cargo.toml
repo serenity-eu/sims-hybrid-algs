@@ -27,7 +27,7 @@ path = "benches/trace_replay_bench.rs"
 opt-level = 3              # Maximum optimization
 lto = "fat"                # Link-time optimization across all crates
 codegen-units = 1          # Single codegen unit for better optimization
-panic = "abort"            # Smaller binary, faster execution
+panic = "unwind"           # Allow stack unwinding for debugging
 strip = true               # Strip debug symbols
 overflow-checks = false    # Disable integer overflow checks for speed
 
