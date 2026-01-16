@@ -315,19 +315,19 @@ impl<const D: usize> ObjectiveTracker<D> for SimdCloudyAreaState {
                 let idx3 = *clear_ptr.add(base + 3) as usize;
                 
                 let count0 = counts_ptr.add(idx0);
-                *count0 -= 1;
+                *count0 = count0.read().checked_sub(1).expect("track_image_removal: count underflow");
                 total_add += ((*count0 == 0) as u64) * *areas_ptr.add(idx0);
                 
                 let count1 = counts_ptr.add(idx1);
-                *count1 -= 1;
+                *count1 = count1.read().checked_sub(1).expect("track_image_removal: count underflow");
                 total_add += ((*count1 == 0) as u64) * *areas_ptr.add(idx1);
                 
                 let count2 = counts_ptr.add(idx2);
-                *count2 -= 1;
+                *count2 = count2.read().checked_sub(1).expect("track_image_removal: count underflow");
                 total_add += ((*count2 == 0) as u64) * *areas_ptr.add(idx2);
                 
                 let count3 = counts_ptr.add(idx3);
-                *count3 -= 1;
+                *count3 = count3.read().checked_sub(1).expect("track_image_removal: count underflow");
                 total_add += ((*count3 == 0) as u64) * *areas_ptr.add(idx3);
             }
         }
@@ -338,7 +338,7 @@ impl<const D: usize> ObjectiveTracker<D> for SimdCloudyAreaState {
             unsafe {
                 let area = *areas_ptr.add(idx);
                 let count = counts_ptr.add(idx);
-                *count -= 1;
+                *count = count.read().checked_sub(1).expect("track_image_removal: count underflow");
                 total_add += ((*count == 0) as u64) * area;
             }
         }
@@ -398,7 +398,10 @@ impl<const D: usize> ObjectiveTracker<D> for SimdCloudyAreaState {
             }
         }
         
-        self.current_area -= total_sub;
+        // Use checked subtraction to catch underflow bugs
+        self.current_area = self.current_area
+            .checked_sub(total_sub)
+            .expect("CloudyArea underflow: total_sub > current_area");
         -(total_sub as i64)
     }
 

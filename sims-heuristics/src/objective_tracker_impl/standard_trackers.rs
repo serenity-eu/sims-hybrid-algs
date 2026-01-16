@@ -6,6 +6,7 @@ use fixedbitset::FixedBitSet;
 use crate::{
     SetCoverProblem,
     objective_tracker::{ObjectiveTracker, TrackerCollection},
+    objective_tracker_impl::tracker_trace::{self, TraceOp},
     solution::ImageSet,
 };
 
@@ -525,6 +526,7 @@ impl<const D: usize> TrackerCollection<D> for StandardTrackerArray<D> {
     }
 
     fn new(problem: &impl SetCoverProblem<D>) -> Self {
+        tracker_trace::record(TraceOp::Reset, 0);
         let trackers = std::array::from_fn(|i| {
             match problem.objective(i) {
                 crate::objectives::ObjectiveState::TotalCost { costs, .. } => {
@@ -564,7 +566,7 @@ impl<const D: usize> TrackerCollection<D> for StandardTrackerArray<D> {
                     incidence_angles, ..
                 } => {
                     StandardTracker::MaxIncidenceAngle(MaxIncidenceAngleState {
-                        sorted_angles: Vec::with_capacity(200), // Pre-allocate for typical image count
+                        sorted_angles: Vec::with_capacity(200),
                         image_incidence_angles: Arc::new(incidence_angles.clone()),
                         current_max: 0,
                     })
@@ -597,6 +599,7 @@ impl<const D: usize> TrackerCollection<D> for StandardTrackerArray<D> {
         problem: &impl SetCoverProblem<D>,
         solution: &impl ImageSet<D>,
     ) -> [i64; D] {
+        tracker_trace::record(TraceOp::PeekRem, image_index);
         std::array::from_fn(|i| self.trackers[i].peek_removal_delta(image_index, problem, solution))
     }
 
@@ -608,6 +611,7 @@ impl<const D: usize> TrackerCollection<D> for StandardTrackerArray<D> {
         problem: &impl SetCoverProblem<D>,
         solution: &impl ImageSet<D>,
     ) -> [i64; D] {
+        tracker_trace::record(TraceOp::PeekAdd, image_index);
         std::array::from_fn(|i| {
             self.trackers[i].peek_addition_delta(image_index, problem, solution)
         })
@@ -620,6 +624,7 @@ impl<const D: usize> TrackerCollection<D> for StandardTrackerArray<D> {
         image_index: usize,
         problem: &impl SetCoverProblem<D>,
     ) -> [i64; D] {
+        tracker_trace::record(TraceOp::TrackRem, image_index);
         std::array::from_fn(|i| self.trackers[i].track_image_removal(image_index, problem))
     }
 
@@ -630,6 +635,7 @@ impl<const D: usize> TrackerCollection<D> for StandardTrackerArray<D> {
         image_index: usize,
         problem: &impl SetCoverProblem<D>,
     ) -> [i64; D] {
+        tracker_trace::record(TraceOp::TrackAdd, image_index);
         std::array::from_fn(|i| self.trackers[i].track_image_addition(image_index, problem))
     }
 
@@ -642,10 +648,10 @@ impl<const D: usize> TrackerCollection<D> for StandardTrackerArray<D> {
     /// Reinitialize tracker state from a solution's selected images.
     /// Reuses existing allocations for efficiency.
     fn initialize_from(&mut self, solution: &impl ImageSet<D>, problem: &impl SetCoverProblem<D>) {
-        // Reset to empty state (reuses allocations in Vec/ArrayVec)
+        // Reset to empty state - new() records the Reset event
         *self = Self::new(problem);
 
-        // Apply all selected images
+        // Apply all selected images (these will be recorded as TrackAdd events)
         for img in solution.selected_images() {
             self.track_image_addition(img, problem);
         }
