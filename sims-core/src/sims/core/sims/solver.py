@@ -1,12 +1,71 @@
 import logging
 from pathlib import Path
 
+try:
+    import sims_problem
+except ImportError:
+    raise ImportError(
+        "sims_problem module not found. Please ensure the sims-problem package is installed."
+    )
+
 from .problem import ProblemInstance
 from .solver_config import FrontStrategy, SolverType, TwoPhaseSolverConfig
 from .solver_result import Solution, SolverResult, TwoPhaseSolverResult
 from .solvers import gurobi, ortools, pareto_local_search, python_milp
 
 log = logging.getLogger(Path(__file__).stem)
+
+
+def _compute_hypervolume_for_result(
+    result: SolverResult,
+    objectives: list[str],
+    objective_bounds: list[list[int]],
+) -> float:
+    """
+    Compute hypervolume for a SolverResult using sims_problem.compute_hypervolume.
+    
+    Args:
+        result: The solver result containing the Pareto front
+        objectives: List of objective names (e.g., ["min_cost", "cloud_coverage"])
+        objective_bounds: Objective bounds as [[min, max], ...] for each objective.
+    
+    Returns:
+        The computed hypervolume value
+    """
+    if not result.pareto_front:
+        return 0.0
+    
+    # Extract raw objective values as points
+    points = [
+        _extract_objectives(sol, objectives)
+        for sol in result.pareto_front
+    ]
+    
+    try:
+        return sims_problem.compute_hypervolume(
+            solutions=points,
+            objective_bounds=objective_bounds,
+            normalized=True,
+        )
+    except Exception as e:
+        log.warning(f"Failed to compute hypervolume: {e}")
+        return 0.0
+
+
+def _extract_objectives(sol: Solution, objectives: list[str]) -> list[int]:
+    """Extract objective values from a Solution in the order specified by objectives."""
+    values = []
+    for obj_name in objectives:
+        match obj_name:
+            case "min_cost":
+                values.append(sol.cost)
+            case "cloud_coverage":
+                values.append(sol.cloudy_area)
+            case "min_max_incidence_angle":
+                values.append(sol.max_incidence_angle or 0)
+            case "min_resolution":
+                values.append(sol.min_resolutions_sum or 0)
+    return values
 
 
 def solve(
@@ -27,19 +86,19 @@ def solve(
 ) -> SolverResult:
     match solver_type:
         case SolverType.OR_TOOLS:
-            return ortools.solve(
+            result = ortools.solve(
                 problem_instance, problem_path, timeout_s, output_path, front_strategy, objectives, enable_trace, include_dominated, max_solutions_count
             )
         case SolverType.GUROBI:
-            return gurobi.solve(
+            result = gurobi.solve(
                 problem_instance, problem_path, timeout_s, output_path, front_strategy, objectives, enable_trace, include_dominated, max_solutions_count
             )
         case SolverType.PYTHON_MILP:
-            return python_milp.solve(
+            result = python_milp.solve(
                 problem_instance, problem_path, timeout_s, output_path, front_strategy, objectives, enable_trace, include_dominated, max_solutions_count
             )
         case SolverType.PLS:
-            return pareto_local_search.solve(
+            result = pareto_local_search.solve(
                 problem_instance,
                 timeout_s,
                 objectives,
@@ -52,6 +111,11 @@ def solve(
             )
         case _:
             raise ValueError(f"Solver type {solver_type} is not supported")
+    
+    # Compute hypervolume for the result if bounds are provided
+    if objective_bounds is not None:
+        result.hypervolume = _compute_hypervolume_for_result(result, objectives, objective_bounds)
+    return result
 
 
 def _split_time_by_ratio(total_time: int, ratio: tuple[int, int]) -> tuple[int, int]:
@@ -140,4 +204,17 @@ def solve_with_two_phases(
             f"[{problem_instance.name}] - running Pareto Local Search for {pls_time} seconds...Done"
         )
 
-    return TwoPhaseSolverResult.from_results_pair(exact_solver_result, pls_result, solver_config, filter_invalid=False)
+    two_phase_result = TwoPhaseSolverResult.from_results_pair(exact_solver_result, pls_result, solver_config, filter_invalid=False)
+    
+    # Compute hypervolume for both phase results if bounds are provided
+    if objective_bounds is not None:
+        if two_phase_result.exact_solver_result is not None:
+            two_phase_result.exact_solver_result.hypervolume = _compute_hypervolume_for_result(
+                two_phase_result.exact_solver_result, objectives, objective_bounds
+            )
+        if two_phase_result.pls_result is not None:
+            two_phase_result.pls_result.hypervolume = _compute_hypervolume_for_result(
+                two_phase_result.pls_result, objectives, objective_bounds
+            )
+    
+    return two_phase_result

@@ -71,14 +71,14 @@ class FrontStrategy(StrEnum):
 @dataclass(frozen=True)
 class SolverConfig:
     solver_type: SolverType
-    front_strategy: FrontStrategy
+    front_strategy: FrontStrategy | None
     timeout_s: int
     ratio_step: int = 20
 
     def to_dict(self) -> dict:
         return {
             "solver_type": str(self.solver_type),
-            "front_strategy": str(self.front_strategy),
+            "front_strategy": str(self.front_strategy) if self.front_strategy else None,
             "timeout_s": self.timeout_s,
             "ratio_step": self.ratio_step,
         }
