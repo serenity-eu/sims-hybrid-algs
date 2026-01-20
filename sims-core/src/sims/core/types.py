@@ -16,9 +16,9 @@ class ObjectiveType(StrEnum):
     """Types of the objectives."""
 
     MIN_COST = "min_cost"
-    MIN_CLOUD_COVER = "min_cloud_cover"
-    MIN_MAX_RESOLUTION = "min_max_resolution"
-    MIN_INCIDENCE_ANGLE = "min_incidence_angle"
+    MIN_CLOUD_COVER = "cloud_coverage"
+    MIN_MAX_RESOLUTION = "min_resolution"
+    MIN_INCIDENCE_ANGLE = "min_max_incidence_angle"
 
 
 class AlgorithmType(StrEnum):
@@ -46,8 +46,6 @@ class TaskStage(StrEnum):
     """
 
     VALIDATION = "validation"
-    IMAGES_FETCH = "images_fetch"
-    COST_ESTIMATION = "cost_estimation"
     IMAGES_PREPROCESSING = "images_preprocessing"
     PROBLEM_FORMULATION = "problem_formulation"
     SOLVING = "solving"

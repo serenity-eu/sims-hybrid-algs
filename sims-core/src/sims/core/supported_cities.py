@@ -3,6 +3,7 @@ from pathlib import Path
 import geopandas
 from geopandas import GeoDataFrame
 
+from .data_providers import up42_provider
 from .types import SupportedCity
 
 _ASSETS_DIR = Path(__file__).parent / "assets"
@@ -17,7 +18,11 @@ def _read_image_set_for_city(city: SupportedCity) -> GeoDataFrame:
     city_image_set_path = (
         _ASSETS_DIR / f"{str(city)}_300" / "geodata" / "original_images.geojson"
     )
-    return geopandas.read_file(city_image_set_path)
+    raw_gdf = geopandas.read_file(city_image_set_path)
+    # Tokyo Bay data is already normalized (has snake_case columns)
+    if city == SupportedCity.TOKYO_BAY:
+        return raw_gdf
+    return up42_provider.normalize(raw_gdf)
 
 
 SUPPORTED_CITIES_BOUNDS: dict[SupportedCity, GeoDataFrame] = {
