@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 import os
 from dataclasses import dataclass, field
@@ -407,9 +406,8 @@ def normalize(images_gdf: GeoDataFrame) -> GeoDataFrame:
     """
     preprocessed_images_gdf = GeoDataFrame(images_gdf[["id", "geometry", "cost", "resolution"]], crs=images_gdf.crs)
     preprocessed_images_gdf["cloud_coverage"] = images_gdf["cloudCoverage"]
-    provider_properties = images_gdf["providerProperties"].to_list()  # type: ignore # geopandas is poorly typed
     preprocessed_images_gdf["incidence_angle"] = [
-        json.loads(properties)["incidenceAngle"] for properties in provider_properties
+        props["incidenceAngle"] for props in images_gdf["providerProperties"]
     ]
     return preprocessed_images_gdf
 

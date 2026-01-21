@@ -420,14 +420,14 @@ where
     fn log_auxiliary_population(auxiliary_population: &S) {
         debug!("===== Auxiliary population solutions: =====");
         for solution in auxiliary_population.iter() {
-            info!("{solution:?}");
+            debug!("{solution:?}");
         }
     }
 
     fn log_pareto_front(&self) {
-        info!("===== Pareto Front solutions: =====");
+        debug!("===== Pareto Front solutions: =====");
         for solution in self.approximated_pareto_set.iter() {
-            info!("{solution:?}");
+            debug!("{solution:?}");
         }
     }
 
