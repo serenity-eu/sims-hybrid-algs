@@ -59,6 +59,10 @@ htmlcov/
 # Jupyter Notebook
 .ipynb_checkpoints
 
+# Rust build artifacts
+target/
+**/target/
+
 # PyO3/maturin build artifacts
 .pdm-build/
 
@@ -73,8 +77,6 @@ results/
 
 # Documentation
 docs/
-*.md
-README*
 
 # Configuration files that shouldn't be in containers
 .env.*

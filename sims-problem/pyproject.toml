@@ -35,7 +35,8 @@ cache-keys = [{file = "pyproject.toml"}, {file = "Cargo.toml"}, {file = "**/*.rs
 config-settings = { build-args = '--profile=dev'}
 
 [tool.uv.sources]
-sims-solvers = { workspace = true }
+# Use relative path for standalone builds (e.g., in Docker)
+sims-solvers = { path = "../sims-solvers", editable = true }
 
 [tool.maturin]
 features = ["pyo3/extension-module", "milp"]
