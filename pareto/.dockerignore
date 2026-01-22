@@ -1,0 +1,23 @@
+# Rust build artifacts
+target/
+**/target/
+Cargo.lock
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# Documentation and tests
+*.md
+docs/
+tests/
+examples/
+
+# Flamegraph outputs
+*.svg
+flamegraph.svg
+perf.data*

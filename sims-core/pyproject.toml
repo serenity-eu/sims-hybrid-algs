@@ -30,8 +30,10 @@ dev = [
 module-name = "sims.core"
 
 [tool.uv.sources]
-sims-problem = { workspace = true }
-sims-solvers = { workspace = true }
+# Use relative paths for standalone builds (e.g., in Docker)
+# These paths are resolved relative to where sims-core is placed
+sims-problem = { path = "../sims-problem", editable = true }
+sims-solvers = { path = "../sims-solvers", editable = true }
 
 [tool.pytest.ini_options]
 log_cli = true
