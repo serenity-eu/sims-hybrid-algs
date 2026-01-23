@@ -11,7 +11,7 @@ use rand::{Rng, seq::IteratorRandom};
 use std::{collections::BinaryHeap, fmt::Debug, hash::Hash, time::Duration};
 
 use crate::objective_tracker::{ObjectiveTracker, TrackerCollection};
-use crate::objective_tracker_impl::composite_debug_trackers::CompositeDebugTrackerArray;
+use crate::objective_tracker_impl::standard_trackers::StandardTrackerArray;
 use crate::problem::{ComparableImage, ImageObjectiveDeltas, ScaledObjectiveDeltas};
 use crate::residual_problem::ResidualProblem;
 use crate::residual_solution::ResidualSolution;
@@ -29,7 +29,7 @@ pub struct UndercoveredSolution<const D: usize> {
     pub partial_selected_images: FixedBitSet,
     pub removed_images: FixedBitSet,
     pub uncovered_elements: FixedBitSet,
-    pub partial_trackers: CompositeDebugTrackerArray<D>,
+    pub partial_trackers: StandardTrackerArray<D>,
 }
 
 /// Lightweight view for `ImageSet` operations - only used for tracker `peek_delta` calls
@@ -150,8 +150,7 @@ impl<P, const D: usize> SIMSModifiable<P, D> for BitsetEncodedSolution<P, D>
 where
     P: SetCoverProblem<D> + Clone + Send + Sync,
 {
-    // TEMPORARY: Use CompositeDebugTrackerArray to validate Standard vs Simd
-    type Trackers = CompositeDebugTrackerArray<D>;
+    type Trackers = StandardTrackerArray<D>;
 
     fn add_image(&mut self, image_index: usize, problem: &P, trackers: &mut Self::Trackers) {
         log::debug!("ADD_IMAGE: Starting addition of image {image_index}");
@@ -545,7 +544,7 @@ where
             partial_selected_images,
             removed_images,
             uncovered_elements,
-            partial_trackers: CompositeDebugTrackerArray::new(problem),
+            partial_trackers: StandardTrackerArray::new(problem),
         }
     }
 
@@ -557,7 +556,7 @@ where
         mut removal_candidates_indices: Vec<usize>,
         problem: &P,
         is_deterministic: bool,
-        trackers: &mut CompositeDebugTrackerArray<D>,
+        trackers: &mut StandardTrackerArray<D>,
     ) -> Option<ResidualProblem<Self, P, D>> {
         let mut active_solution = self.clone();
 
@@ -603,7 +602,7 @@ where
     #[must_use]
     pub fn best_unselected_images_with_trackers(
         partial_selected_images: &FixedBitSet,
-        partial_trackers: &CompositeDebugTrackerArray<D>,
+        partial_trackers: &StandardTrackerArray<D>,
         uncovered_elements: &[usize],
         problem: &P,
         is_deterministic: bool,
@@ -734,7 +733,7 @@ where
         uncovered_elements: &[usize],
         problem: &P,
         is_deterministic: bool,
-        trackers: &CompositeDebugTrackerArray<D>,
+        trackers: &StandardTrackerArray<D>,
     ) -> Option<Vec<usize>> {
         Self::best_unselected_images_with_trackers(
             &self.selected_images,
@@ -750,7 +749,7 @@ where
         &self,
         problem: &P,
         is_deterministic: bool,
-        trackers: &CompositeDebugTrackerArray<D>,
+        trackers: &StandardTrackerArray<D>,
     ) -> Vec<usize> {
         let weights: [f32; D] = if is_deterministic {
             // For deterministic mode, use equal weights
@@ -797,7 +796,7 @@ where
         &self,
         images: I,
         problem: &P,
-        trackers: &CompositeDebugTrackerArray<D>,
+        trackers: &StandardTrackerArray<D>,
     ) -> Vec<ScaledObjectiveDeltas<D>> {
         let raw_comparable_images: Vec<ImageObjectiveDeltas<D>> = images
             .map(|image_index| {
@@ -999,7 +998,7 @@ where
 {
     pub fn neighborhood_iter_impl<'a>(
         &'a self,
-        trackers: &'a mut CompositeDebugTrackerArray<D>,
+        trackers: &'a mut StandardTrackerArray<D>,
         k: u32,
         problem: &'a P,
         timer: &'a Timer,
@@ -1049,7 +1048,7 @@ where
     original_solution: BitsetEncodedSolution<P, D>,
     problem: &'a P,
     timer: &'a Timer,
-    trackers: &'a mut CompositeDebugTrackerArray<D>,
+    trackers: &'a mut StandardTrackerArray<D>,
     removal_candidates_iter: Box<dyn Iterator<Item = Vec<usize>> + 'a>,
 
     // State for current residual problem - now we can cache it directly without lifetime issues
