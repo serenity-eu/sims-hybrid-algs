@@ -36,9 +36,9 @@ pub struct MinResolutionState {
     pub image_resolutions: Arc<Vec<u64>>,
     /// Unsorted resolutions of selected images covering each element.
     ///
-    /// We keep this unsorted to make add/remove `O(1)` (`push`/`swap_remove`) and
-    /// rely on cached minima for objective deltas.
-    pub element_resolutions: Vec<ArrayVec<u64, 64>>,
+    /// We keep this unsorted to make add/remove `O(1)` amortized (`push`/`swap_remove`) and
+    /// rely on cached minima for objective deltas. Uses Vec for growable capacity.
+    pub element_resolutions: Vec<Vec<u64>>,
     /// Cached minimum resolution per element (0 if uncovered)
     pub element_min: Vec<u64>,
     /// Cached count of the minimum resolution per element
@@ -556,7 +556,7 @@ impl<const D: usize> TrackerCollection<D> for StandardTrackerArray<D> {
                 crate::objectives::ObjectiveState::MinResolution { resolutions, .. } => {
                     StandardTracker::MinResolution(MinResolutionState {
                         image_resolutions: Arc::new(resolutions.clone()),
-                        element_resolutions: vec![ArrayVec::new(); problem.num_elements()],
+                        element_resolutions: vec![Vec::new(); problem.num_elements()],
                         element_min: vec![0; problem.num_elements()],
                         element_min_count: vec![0; problem.num_elements()],
                         current_sum: 0,
