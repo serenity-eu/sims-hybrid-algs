@@ -2064,6 +2064,11 @@ dev = [
     { name = "ruff" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "ruff" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = "==3.12.15" },
@@ -2079,6 +2084,9 @@ requires-dist = [
     { name = "sims-solvers", editable = "sims-solvers" },
 ]
 provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ruff", specifier = "==0.14.0" }]
 
 [[package]]
 name = "sims-hybrid-algs"
@@ -2170,7 +2178,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "sims-solvers", editable = "sims-solvers" },
 ]
-provides-extras = ["test", "dev"]
+provides-extras = ["dev", "test"]
 
 [package.metadata.requires-dev]
 dev = [

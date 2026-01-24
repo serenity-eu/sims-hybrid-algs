@@ -83,7 +83,7 @@ pub struct SimdTrackerSharedData {
     pub clear_intervals_offsets: Arc<Vec<usize>>,
 }
 
-pub fn simd_shared_data<const D: usize>(problem: &impl SetCoverProblem<D>) -> Arc<SimdTrackerSharedData> {
+pub(super) fn simd_shared_data<const D: usize>(problem: &impl SetCoverProblem<D>) -> Arc<SimdTrackerSharedData> {
     #[allow(clippy::ref_as_ptr)]
     let key = problem as *const _ as usize;
 

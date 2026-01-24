@@ -6,7 +6,7 @@ use rand::rngs::SmallRng;
 use rand::{Rng, seq::IteratorRandom};
 use std::{collections::BinaryHeap, fmt::Debug, hash::Hash, time::Duration, vec};
 
-use crate::objective_tracker::{SimdTrackerArray, TrackerCollection};
+use crate::objective_tracker::{StandardTrackerArray, TrackerCollection};
 use crate::objectives;
 use crate::problem::{ComparableImage, ImageObjectiveDeltas, ScaledObjectiveDeltas};
 use crate::residual_problem::ResidualProblem;
@@ -170,7 +170,7 @@ where
         solution.recalculate_objectives(problem);
 
         // Now add the specified images
-        let mut trackers = SimdTrackerArray::new(problem);
+        let mut trackers = StandardTrackerArray::new(problem);
         for &image_index in selected_images_vec {
             solution.add_image(image_index, problem, &mut trackers);
         }
@@ -195,7 +195,7 @@ impl<P, const D: usize> SIMSModifiable<P, D> for VecEncodedSolution<P, D>
 where
     P: crate::problem::SetCoverProblem<D> + Clone + Send + Sync,
 {
-    type Trackers = SimdTrackerArray<D>;
+    type Trackers = StandardTrackerArray<D>;
 
     fn add_image(&mut self, image_index: usize, problem: &P, trackers: &mut Self::Trackers) {
         self.add_image(image_index, problem, trackers);
@@ -209,7 +209,7 @@ where
         &self,
         images: &[usize],
         problem: &P,
-        trackers: &SimdTrackerArray<D>,
+        trackers: &StandardTrackerArray<D>,
     ) -> Vec<ScaledObjectiveDeltas<D>> {
         self.scaled_image_objective_deltas(images.iter().copied(), problem, trackers)
     }
@@ -217,7 +217,7 @@ where
     fn find_best_image_to_add(
         &self,
         problem: &P,
-        trackers: &SimdTrackerArray<D>,
+        trackers: &StandardTrackerArray<D>,
     ) -> Option<usize> {
         let unselected_iter = UnselectedImagesIter::new(&self.selected_images);
         let unselected: Vec<usize> = unselected_iter.collect();
@@ -242,7 +242,7 @@ where
     fn find_best_image_to_remove(
         &self,
         problem: &P,
-        trackers: &SimdTrackerArray<D>,
+        trackers: &StandardTrackerArray<D>,
     ) -> Option<usize> {
         let selected_iter = SelectedImagesIter::new(&self.selected_images);
         let selected: Vec<usize> = selected_iter.collect();
@@ -476,7 +476,7 @@ where
     }
 
     /// Remove image at index i
-    pub fn remove_image(&mut self, i: usize, problem: &P, trackers: &mut SimdTrackerArray<D>) {
+    pub fn remove_image(&mut self, i: usize, problem: &P, trackers: &mut StandardTrackerArray<D>) {
         debug_assert!(
             self.are_objectives_valid(problem),
             "Objectives are invalid before removing image"
@@ -497,7 +497,7 @@ where
     }
 
     /// Add image at index i
-    pub fn add_image(&mut self, i: usize, problem: &P, trackers: &mut SimdTrackerArray<D>) {
+    pub fn add_image(&mut self, i: usize, problem: &P, trackers: &mut StandardTrackerArray<D>) {
         // Use trackers for delta calculation and state update
         let deltas = trackers.track_image_addition(i, problem);
         objectives::apply_delta(&mut self.objectives, &deltas);
@@ -526,7 +526,7 @@ where
         mut removal_candidates_indices: Vec<usize>,
         problem: &P,
         is_deterministic: bool,
-        trackers: &mut SimdTrackerArray<D>,
+        trackers: &mut StandardTrackerArray<D>,
     ) -> Option<ResidualProblem<Self, P, D>> {
         // Apply removals to trackers
         for &removed_image_index in &removal_candidates_indices {
@@ -576,7 +576,7 @@ where
         &self,
         images: I,
         problem: &P,
-        _trackers: &SimdTrackerArray<D>,
+        _trackers: &StandardTrackerArray<D>,
     ) -> Vec<ScaledObjectiveDeltas<D>> {
         let raw_comparable_images: Vec<ImageObjectiveDeltas<D>> = images
             .map(|image_index| {
@@ -652,7 +652,7 @@ where
             self.generate_weights()
         };
 
-        let temp_trackers = SimdTrackerArray::new(problem);
+        let temp_trackers = StandardTrackerArray::new(problem);
         let unselected_images_scaled_deltas: Vec<ScaledObjectiveDeltas<D>> =
             self.scaled_image_objective_deltas(self.unselected_images(), problem, &temp_trackers);
 
@@ -712,7 +712,7 @@ where
         } else {
             self.generate_weights()
         };
-        let temp_trackers = SimdTrackerArray::new(problem);
+        let temp_trackers = StandardTrackerArray::new(problem);
         let selected_images_scaled_deltas: Vec<ScaledObjectiveDeltas<D>> =
             self.scaled_image_objective_deltas(self.selected_images(), problem, &temp_trackers);
 
