@@ -146,7 +146,7 @@ class ParetoFront:
                 idx = remaining_front[-1]
 
     def not_dominated_constraint_mzn(self, x):
-        """For each solution `y` to the problem, we return a Minizinc constraint guaranteeing that `y` is not dominated by `x`.
+        r"""For each solution `y` to the problem, we return a Minizinc constraint guaranteeing that `y` is not dominated by `x`.
         Returns:
          Str:
            For instance, on a bi-objective problem `objs[1] > 1 \/ objs[2] < 10`
@@ -161,7 +161,7 @@ class ParetoFront:
         return " \\/ ".join(cons)
 
     def front_constraint_mzn(self):
-        """For each solution `y` to the problem, we return a Minizinc constraint guaranteeing that `y` is not dominated by any solution in the Pareto front.
+        r"""For each solution `y` to the problem, we return a Minizinc constraint guaranteeing that `y` is not dominated by any solution in the Pareto front.
         Returns:
           Str:
             For instance, on a bi-objective problem with two elements in the front `(objs[1] > 1 \/ objs[2] < 10) /\ (objs[1] > 5 \/ objs[2] < 15)`

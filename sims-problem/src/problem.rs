@@ -21,17 +21,17 @@ pub struct SimsDiscreteProblem {
     #[pyo3(get, set)]
     pub images: Vec<Vec<usize>>,
     #[pyo3(get, set)]
-    pub costs: Vec<i32>,
+    pub costs: Vec<i64>,
     #[pyo3(get, set)]
     pub clouds: Vec<Vec<usize>>,
     #[pyo3(get, set)]
-    pub areas: Vec<i32>,
+    pub areas: Vec<i64>,
     #[pyo3(get, set)]
-    pub resolution: Vec<i32>,
+    pub resolution: Vec<i64>,
     #[pyo3(get, set)]
-    pub incidence_angle: Vec<i32>,
+    pub incidence_angle: Vec<i64>,
     #[pyo3(get, set)]
-    pub max_cloud_area: i32,
+    pub max_cloud_area: i64,
 }
 
 #[pymethods]
@@ -45,12 +45,12 @@ impl SimsDiscreteProblem {
         num_images: usize,
         universe: usize,
         images: Vec<Vec<usize>>,
-        costs: Vec<i32>,
+        costs: Vec<i64>,
         clouds: Vec<Vec<usize>>,
-        areas: Vec<i32>,
-        resolution: Vec<i32>,
-        incidence_angle: Vec<i32>,
-        max_cloud_area: i32,
+        areas: Vec<i64>,
+        resolution: Vec<i64>,
+        incidence_angle: Vec<i64>,
+        max_cloud_area: i64,
     ) -> Self {
         Self {
             num_images,
@@ -71,12 +71,12 @@ impl SimsDiscreteProblem {
         let num_images: usize = data.get_item("num_images")?.unwrap().extract()?;
         let universe: usize = data.get_item("universe")?.unwrap().extract()?;
         let images: Vec<Vec<usize>> = data.get_item("images")?.unwrap().extract()?;
-        let costs: Vec<i32> = data.get_item("costs")?.unwrap().extract()?;
+        let costs: Vec<i64> = data.get_item("costs")?.unwrap().extract()?;
         let clouds: Vec<Vec<usize>> = data.get_item("clouds")?.unwrap().extract()?;
-        let areas: Vec<i32> = data.get_item("areas")?.unwrap().extract()?;
-        let resolution: Vec<i32> = data.get_item("resolution")?.unwrap().extract()?;
-        let incidence_angle: Vec<i32> = data.get_item("incidence_angle")?.unwrap().extract()?;
-        let max_cloud_area: i32 = data.get_item("max_cloud_area")?.unwrap().extract()?;
+        let areas: Vec<i64> = data.get_item("areas")?.unwrap().extract()?;
+        let resolution: Vec<i64> = data.get_item("resolution")?.unwrap().extract()?;
+        let incidence_angle: Vec<i64> = data.get_item("incidence_angle")?.unwrap().extract()?;
+        let max_cloud_area: i64 = data.get_item("max_cloud_area")?.unwrap().extract()?;
 
         Ok(Self::new(
             num_images,
@@ -137,17 +137,17 @@ impl SimsDiscreteProblem {
             .parse()
             .map_err(|e| PyValueError::new_err(format!("Invalid universe: {e}")))?;
 
-        let max_cloud_area: i32 = data
+        let max_cloud_area: i64 = data
             .get("max_cloud_area")
             .ok_or_else(|| PyValueError::new_err("Missing max_cloud_area"))?
             .parse()
             .map_err(|e| PyValueError::new_err(format!("Invalid max_cloud_area: {e}")))?;
 
         // Parse integer arrays
-        let costs: Vec<i32> = Self::parse_int_array(data.get("costs").map_or("", |v| v))?;
-        let areas: Vec<i32> = Self::parse_int_array(data.get("areas").map_or("", |v| v))?;
-        let resolution: Vec<i32> = Self::parse_int_array(data.get("resolution").map_or("", |v| v))?;
-        let incidence_angle: Vec<i32> =
+        let costs: Vec<i64> = Self::parse_int_array(data.get("costs").map_or("", |v| v))?;
+        let areas: Vec<i64> = Self::parse_int_array(data.get("areas").map_or("", |v| v))?;
+        let resolution: Vec<i64> = Self::parse_int_array(data.get("resolution").map_or("", |v| v))?;
+        let incidence_angle: Vec<i64> =
             Self::parse_int_array(data.get("incidence_angle").map_or("", |v| v))?;
 
         // Parse set arrays (convert from 1-based to 0-based indexing)
@@ -183,14 +183,14 @@ impl SimsDiscreteProblem {
     }
 
     /// Get maximum values for cost and area objectives
-    fn get_max_values(&self) -> (i32, i32) {
-        let max_cost: i32 = self.costs.iter().sum();
-        let max_area: i32 = self.areas.iter().sum();
+    fn get_max_values(&self) -> (i64, i64) {
+        let max_cost: i64 = self.costs.iter().sum();
+        let max_area: i64 = self.areas.iter().sum();
         (max_cost, max_area)
     }
 
     /// Get reference point for Pareto optimization
-    fn get_ref_point(&self) -> (i32, i32) {
+    fn get_ref_point(&self) -> (i64, i64) {
         let (max_cost, max_area) = self.get_max_values();
         (max_cost + 1, max_area + 1)
     }
@@ -283,7 +283,7 @@ impl SimsDiscreteProblem {
     }
 
     /// Get total cost for a set of selected images
-    fn calculate_total_cost(&self, selected_images: Vec<usize>) -> PyResult<i32> {
+    fn calculate_total_cost(&self, selected_images: Vec<usize>) -> PyResult<i64> {
         let mut total_cost = 0;
         for &image_idx in &selected_images {
             if image_idx >= self.num_images {
@@ -295,7 +295,7 @@ impl SimsDiscreteProblem {
     }
 
     /// Get total cloud area for a set of selected images
-    fn calculate_total_cloud_area(&self, selected_images: Vec<usize>) -> PyResult<i32> {
+    fn calculate_total_cloud_area(&self, selected_images: Vec<usize>) -> PyResult<i64> {
         let mut total_cloud_area = 0;
         let mut covered_cloud_fragments = HashSet::new();
 
@@ -331,7 +331,7 @@ impl SimsDiscreteProblem {
 
 impl SimsDiscreteProblem {
     /// Helper method to parse integer arrays from dzn format
-    fn parse_int_array(values_str: &str) -> PyResult<Vec<i32>> {
+    fn parse_int_array(values_str: &str) -> PyResult<Vec<i64>> {
         let mut result = Vec::new();
         for value in values_str.split(',') {
             let trimmed = value.trim();

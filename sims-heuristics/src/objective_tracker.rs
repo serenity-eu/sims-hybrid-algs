@@ -113,10 +113,4 @@ pub trait TrackerCollection<const D: usize>: Clone + Debug + Send + Sync {
 }
 
 // Re-export common tracker implementations so call sites can depend on a stable path.
-pub use crate::objective_tracker_impl::alternative_trackers::{AltTracker, AltTrackerArray};
-pub use crate::objective_tracker_impl::explicit_simd_trackers::{ExplicitSimdTracker, ExplicitSimdTrackerArray};
-pub use crate::objective_tracker_impl::safe_simd_trackers::{SafeTracker, SafeTrackerArray};
-pub use crate::objective_tracker_impl::saturating_trackers::{SaturatingTracker, SaturatingTrackerArray};
-pub use crate::objective_tracker_impl::simd_trackers::{SimdTracker, SimdTrackerArray};
-pub use crate::objective_tracker_impl::simplified_trackers::{SimpleTracker, SimpleTrackerArray};
 pub use crate::objective_tracker_impl::standard_trackers::{StandardTracker, StandardTrackerArray};

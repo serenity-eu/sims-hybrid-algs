@@ -1144,7 +1144,7 @@ pub fn solve_with_pls(
 /// Helper function to compute cloudy area for a set of selected images
 /// This matches the Python implementation in solver_result.py::_compute_cloudy_area
 #[cfg(feature = "milp")]
-fn compute_cloudy_area(selected_images: &[usize], problem_data: &SimsDiscreteProblem) -> i32 {
+fn compute_cloudy_area(selected_images: &[usize], problem_data: &SimsDiscreteProblem) -> i64 {
     // Compute clear parts - universe elements that are covered by non-cloudy parts of images
     let mut clear_parts = HashSet::new();
     for &img_idx in selected_images {
@@ -1164,7 +1164,7 @@ fn compute_cloudy_area(selected_images: &[usize], problem_data: &SimsDiscretePro
 /// Helper function to compute minimum resolutions sum
 /// This matches the Python implementation in solver_result.py::_compute_min_resolutions_sum
 #[cfg(feature = "milp")]
-fn compute_min_resolutions_sum(selected_images: &[usize], problem_data: &SimsDiscreteProblem) -> i32 {
+fn compute_min_resolutions_sum(selected_images: &[usize], problem_data: &SimsDiscreteProblem) -> i64 {
     // For each universe element, find minimum resolution among images that cover it
     (0..problem_data.universe)
         .map(|u| {
@@ -1272,7 +1272,7 @@ pub fn solve_with_milp(
         sims_instance.num_images,
         sims_instance.universe,
         actual_num_clouds,  // Use actual cloud count (431 for lagos_nigeria_30)
-        sims_instance.max_cloud_area,
+        sims_instance.max_cloud_area as i32,
     );
 
     // Convert images (sets of universe points covered)
@@ -1477,7 +1477,7 @@ pub fn solve_with_milp(
         for obj_name in objectives.iter() {
             match obj_name.as_str() {
                 "min_cost" => {
-                    let computed_cost: i32 = selected_images.iter()
+                    let computed_cost: i64 = selected_images.iter()
                         .map(|&img_idx| sims_instance.costs[img_idx])
                         .sum();
                     cost = Some(computed_cost as u64);

@@ -1,10 +1,12 @@
-pub mod alternative_trackers;
-pub mod composite_debug_trackers;
-pub mod explicit_simd_trackers;
-pub mod safe_simd_trackers;
-pub mod saturating_trackers;
-pub mod segment_tree_trackers;
-pub mod simd_trackers;
-pub mod simplified_trackers;
 pub mod standard_trackers;
 pub mod tracker_trace;
+
+// Keep other tracker implementations private (not exported)
+mod alternative_trackers;
+mod composite_debug_trackers;
+mod explicit_simd_trackers;
+mod safe_simd_trackers;
+mod saturating_trackers;
+mod segment_tree_trackers;
+mod simd_trackers;
+mod simplified_trackers;
