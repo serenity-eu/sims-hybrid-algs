@@ -7,7 +7,7 @@ use pls::explored_solutions_data::SolutionFingerprint;
 use pls::pareto_local_search::ParetoLocalSearch;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use std::{iter::IntoIterator, ops::RangeInclusive, time::{Duration, SystemTime, UNIX_EPOCH}, thread};
+use std::{iter::IntoIterator, ops::RangeInclusive, thread, time::Duration};
 #[cfg(feature = "milp")]
 use std::collections::HashSet;
 
@@ -439,18 +439,7 @@ pub fn solve_with_pls(
                     let final_solution_set = pareto_local_search.run(max_iterations, timeout);
                     
                     info!("2D PLS completed, processing {} solutions", final_solution_set.len());
-                    
-                    // Export explored solutions to JSON
-                    let explored_json = pareto_local_search.explored_solutions.to_json();
-                    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros();
-                    let thread_id = format!("{:?}", thread::current().id());
-                    let json_path = std::env::temp_dir().join(format!("explored_solutions_2d_{}_{}_{}_{}.json", $archive_name, std::process::id(), timestamp, thread_id));
-                    if let Err(e) = std::fs::write(&json_path, explored_json) {
-                        error!("Failed to write explored solutions JSON: {}", e);
-                    } else {
-                        error!("Explored solutions exported to: {}", json_path.display());
-                    }
-                    
+
                     // Generate plot if requested
                     if plots {
                         #[cfg(feature = "plotting")]
@@ -705,17 +694,6 @@ pub fn solve_with_pls(
                     let final_solution_set = pareto_local_search.run(max_iterations, timeout);
 
                     info!("3D PLS completed, processing {} solutions", final_solution_set.len());
-                    
-                    // Export explored solutions to JSON
-                    let explored_json = pareto_local_search.explored_solutions.to_json();
-                    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros();
-                    let thread_id = format!("{:?}", thread::current().id());
-                    let json_path = std::env::temp_dir().join(format!("explored_solutions_3d_{}_{}_{}_{}.json", $archive_name, std::process::id(), timestamp, thread_id));
-                    if let Err(e) = std::fs::write(&json_path, explored_json) {
-                        error!("Failed to write explored solutions JSON: {}", e);
-                    } else {
-                        error!("Explored solutions exported to: {}", json_path.display());
-                    }
 
                     // Generate 3D plot if requested
                     if plots {
@@ -971,17 +949,6 @@ pub fn solve_with_pls(
                     let final_solution_set = pareto_local_search.run(max_iterations, timeout);
 
                     info!("4D PLS completed, processing {} solutions", final_solution_set.len());
-                    
-                    // Export explored solutions to JSON
-                    let explored_json = pareto_local_search.explored_solutions.to_json();
-                    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros();
-                    let thread_id = format!("{:?}", thread::current().id());
-                    let json_path = std::env::temp_dir().join(format!("explored_solutions_4d_{}_{}_{}_{}.json", $archive_name, std::process::id(), timestamp, thread_id));
-                    if let Err(e) = std::fs::write(&json_path, explored_json) {
-                        error!("Failed to write explored solutions JSON: {}", e);
-                    } else {
-                        error!("Explored solutions exported to: {}", json_path.display());
-                    }
 
                     // Generate 4D plot if requested
                     if plots {
