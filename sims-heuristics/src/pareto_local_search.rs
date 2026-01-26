@@ -402,7 +402,7 @@ where
     }
 
     fn log_metrics(iteration: usize, metrics: &IterationMetrics, step_stats: &StepStats) {
-        error!(
+        info!(
             "Iteration {iteration} [{:.3} s, {} us/sol], neighbors: size: {}, explored: {}, duplicated: {} ({} %), auxiliary: +{}-{}, pareto: +{}-{}",
             metrics.duration_us as f64 / 1_000_000.0,
             metrics.per_solution_search_time,
@@ -505,7 +505,7 @@ where
     pub fn run(&mut self, max_iterations: usize, max_duration: Duration) -> S {
         let pls_timer = Timer::start(max_duration);
 
-        error!(
+        info!(
             "Initial population after dominance filtering: {} solutions",
             self.population.len()
         );
@@ -577,14 +577,14 @@ where
         // Sort objectives lexicographically
         objectives.sort();
 
-        error!(
+        debug!(
             "===== Final Pareto Set Objectives - {} (lexicographically sorted) =====",
             self.problem.instance_name()
         );
         for (i, obj) in objectives.iter().enumerate() {
-            error!("Solution {}: {:?}", i + 1, obj);
+            debug!("Solution {}: {:?}", i + 1, obj);
         }
-        error!("===== Total solutions: {} =====", objectives.len());
+        debug!("===== Total solutions: {} =====", objectives.len());
     }
 
     pub fn explored_solutions_fingerprints(&self) -> Vec<SolutionFingerprint<D>> {
