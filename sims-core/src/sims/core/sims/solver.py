@@ -33,6 +33,7 @@ def _compute_hypervolume_for_result(
         The computed hypervolume value
     """
     if not result.pareto_front:
+        log.info("_compute_hypervolume_for_result: empty pareto_front, returning 0.0")
         return 0.0
     
     # Extract raw objective values as points
@@ -41,12 +42,16 @@ def _compute_hypervolume_for_result(
         for sol in result.pareto_front
     ]
     
+    log.info(f"_compute_hypervolume_for_result: {len(points)} points, first 3: {points[:3]}")
+    
     try:
-        return sims_problem.compute_hypervolume(
+        hv = sims_problem.compute_hypervolume(
             data=points,
             objective_bounds=objective_bounds,
             normalized=True,
         )
+        log.info(f"_compute_hypervolume_for_result: computed hypervolume = {hv}")
+        return hv
     except Exception as e:
         log.warning(f"Failed to compute hypervolume: {e}")
         return 0.0
@@ -114,7 +119,11 @@ def solve(
     
     # Compute hypervolume for the result if bounds are provided
     if objective_bounds is not None:
+        log.info(f"Computing hypervolume with bounds: {objective_bounds}, objectives: {objectives}, pareto_front size: {len(result.pareto_front)}")
         result.hypervolume = _compute_hypervolume_for_result(result, objectives, objective_bounds)
+        log.info(f"Computed hypervolume: {result.hypervolume}")
+    else:
+        log.info("No objective_bounds provided, skipping hypervolume computation")
     return result
 
 
