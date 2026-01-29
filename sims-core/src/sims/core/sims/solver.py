@@ -43,7 +43,7 @@ def _compute_hypervolume_for_result(
     
     try:
         return sims_problem.compute_hypervolume(
-            solutions=points,
+            data=points,
             objective_bounds=objective_bounds,
             normalized=True,
         )

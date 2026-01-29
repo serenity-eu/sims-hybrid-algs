@@ -877,7 +877,7 @@ def solve_with_hybrid(
 
 
 def compute_hypervolume(
-    solutions: list[Solution] | list[list[int]],
+    data: list[Solution] | list[list[int]],
     objective_bounds: list[list[int]],
     reference_point: list[int] | None = None,
     normalized: bool = False
@@ -893,22 +893,22 @@ def compute_hypervolume(
     and applies the appropriate computation algorithm.
     
     Args:
-        solutions: Either a list of Solution objects or a list of points (each point is a list of ints).
-                  For Solution objects, objectives are extracted using objectives_2d(), objectives_3d(), 
-                  or objectives_4d() based on the objective bounds dimension.
+        data: Either a list of Solution objects or a list of points (each point is a list of ints).
+              For Solution objects, objectives are extracted using objectives_2d(), objectives_3d(), 
+              or objectives_4d() based on the objective bounds dimension.
         objective_bounds: Bounds for each dimension. Format: [[min1, max1], [min2, max2], ...]
-                         for each dimension. Used for scaling when scaled=True and determines
+                         for each dimension. Used for scaling when normalized=True and determines
                          the problem dimension.
         reference_point: Optional reference point for hypervolume computation. If not provided,
                         computed as the maximum bounds [max1, max2, ...]. Must be within or
                         dominated by all solutions for meaningful results.
-        scaled: If True, scales all points to [0, 1000] range using objective_bounds
-               before computing hypervolume. This preserves dominance relationships while
-               normalizing the scale. Default is False.
+        normalized: If True, normalizes all points to [0, 1] range using objective_bounds
+                   before computing hypervolume. This preserves dominance relationships while
+                   normalizing the scale. Default is False.
     
     Returns:
-        The hypervolume value as an int. When scaled=True, the result is in the
-        normalized [0, 1000] coordinate space.
+        The hypervolume value as a float. When normalized=True, the result is in the
+        normalized [0, 1] coordinate space.
         
     Raises:
         ValueError: If dimension is not 2, 3, or 4, or if inputs are inconsistent,
