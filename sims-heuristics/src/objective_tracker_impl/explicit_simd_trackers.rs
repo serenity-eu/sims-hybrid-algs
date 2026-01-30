@@ -11,7 +11,11 @@
 
 #![allow(unused)]
 
+use std::simd::cmp::SimdPartialOrd;
+use std::simd::num::SimdUint;
 use std::simd::prelude::*;
+use std::simd::Mask;
+use std::simd::Select;
 use std::sync::Arc;
 
 use crate::objective_tracker::{ObjectiveTracker, TrackerCollection};

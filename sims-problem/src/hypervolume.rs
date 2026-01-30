@@ -373,20 +373,30 @@ fn normalize_points_to_unit_range(
         if range > 0 { range as f64 } else { 1.0 }
     }).collect();
     
-    // Normalize points to [0, 1] range
-    let normalized_points: Vec<Vec<f64>> = points.iter().map(|point| {
+    // Normalize points to [0, 1] range - panic if values are outside bounds
+    let normalized_points: Vec<Vec<f64>> = points.iter().enumerate().map(|(point_idx, point)| {
         point.iter().enumerate().map(|(i, &val)| {
+            if val < bounds[i][0] || val > bounds[i][1] {
+                panic!(
+                    "Point {} objective {} value {} is outside bounds [{}, {}]",
+                    point_idx, i, val, bounds[i][0], bounds[i][1]
+                );
+            }
             let min_bound = bounds[i][0] as f64;
-            let clamped_val = (val.max(bounds[i][0]).min(bounds[i][1])) as f64;
-            (clamped_val - min_bound) / ranges[i]
+            (val as f64 - min_bound) / ranges[i]
         }).collect()
     }).collect();
     
     // Normalize reference point
     let normalized_reference: Vec<f64> = reference_point.iter().enumerate().map(|(i, &val)| {
+        if val < bounds[i][0] || val > bounds[i][1] {
+            panic!(
+                "Reference point objective {} value {} is outside bounds [{}, {}]",
+                i, val, bounds[i][0], bounds[i][1]
+            );
+        }
         let min_bound = bounds[i][0] as f64;
-        let clamped_val = (val.max(bounds[i][0]).min(bounds[i][1])) as f64;
-        (clamped_val - min_bound) / ranges[i]
+        (val as f64 - min_bound) / ranges[i]
     }).collect();
     
     (normalized_points, normalized_reference)
