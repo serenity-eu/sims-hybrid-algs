@@ -46,12 +46,32 @@ except ImportError:
     plt = None
     print("Warning: matplotlib not available, plots will not be generated", file=sys.stderr)
 
-# Import sims_problem for hypervolume computation
+# Import pymoo for hypervolume computation (C-optimized, handles dominated points)
 try:
-    from sims_problem import compute_hypervolume
+    from pymoo.indicators.hv import HV as PymooHV
 except ImportError:
-    print("Error: sims_problem module not found. Make sure it's installed.", file=sys.stderr)
+    print("Error: pymoo not found. Install with: pip install pymoo", file=sys.stderr)
     sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Result file cache -- avoids re-reading large JSON files multiple times
+# ---------------------------------------------------------------------------
+_result_cache: Dict[str, dict] = {}
+
+
+def load_result_cached(result_path: Path) -> dict:
+    """Load and cache a result.json file.  Subsequent calls return the cached copy."""
+    key = str(result_path)
+    if key not in _result_cache:
+        with open(result_path, 'r') as f:
+            _result_cache[key] = json.load(f)
+    return _result_cache[key]
+
+
+def clear_result_cache() -> None:
+    """Free memory by clearing the result cache."""
+    _result_cache.clear()
 
 
 def extract_objectives_from_solution(solution: dict, objectives_list: List[str]) -> List[int]:
@@ -105,6 +125,10 @@ def extract_pareto_front(solutions: List[dict], objectives_list: List[str]) -> L
     """
     Extract the Pareto front from a list of solutions.
     
+    Uses numpy vectorization for efficient O(n * m * k) filtering where
+    n = number of solutions, m = non-dominated solutions, k = objectives.
+    Falls back to pure Python if numpy is not available.
+    
     Args:
         solutions: List of solution dictionaries
         objectives_list: List of objective names
@@ -118,11 +142,85 @@ def extract_pareto_front(solutions: List[dict], objectives_list: List[str]) -> L
         for sol in solutions
     ]
     
+    if not all_objectives:
+        return []
+    
+    if np is not None:
+        return _extract_pareto_front_numpy(all_objectives)
+    else:
+        return _extract_pareto_front_pure(all_objectives)
+
+
+def _extract_pareto_front_numpy(all_objectives: List[List[int]]) -> List[List[int]]:
+    """
+    Numpy-vectorized Pareto front extraction (minimization).
+    
+    Uses fully vectorized pairwise dominance checking.
+    For n points with k objectives, runs in O(n^2 * k) but with
+    numpy broadcast operations (no Python inner loop).
+    """
+    arr = np.array(all_objectives, dtype=np.int64)
+    n = arr.shape[0]
+    
+    if n == 0:
+        return []
+    if n == 1:
+        return [arr[0].tolist()]
+    
+    # De-duplicate first to reduce n
+    unique_arr = np.unique(arr, axis=0)
+    n_unique = unique_arr.shape[0]
+    
+    if n_unique == 1:
+        return [unique_arr[0].tolist()]
+    
+    # Vectorized non-dominated filtering:
+    # Point i is dominated if there exists any j where
+    # all(arr[j] <= arr[i]) and any(arr[j] < arr[i])
+    is_dominated = np.zeros(n_unique, dtype=bool)
+    
+    # Process in chunks to limit memory (n^2 can be large)
+    chunk_size = min(n_unique, 2048)
+    for i_start in range(0, n_unique, chunk_size):
+        i_end = min(i_start + chunk_size, n_unique)
+        # points_i shape: (chunk, 1, k), unique_arr shape: (1, n, k)
+        points_i = unique_arr[i_start:i_end, np.newaxis, :]  # (chunk, 1, k)
+        points_all = unique_arr[np.newaxis, :, :]             # (1, n, k)
+        
+        # le[c, j, k] = unique_arr[j, k] <= points_i[c, k]
+        le = points_all <= points_i   # (chunk, n, k)
+        lt = points_all < points_i    # (chunk, n, k)
+        
+        # j dominates i iff all objectives <= and at least one <
+        all_le = le.all(axis=2)   # (chunk, n)
+        any_lt = lt.any(axis=2)   # (chunk, n)
+        dominates_i = all_le & any_lt  # (chunk, n)
+        
+        # Exclude self-domination (diagonal)
+        for offset, idx in enumerate(range(i_start, i_end)):
+            dominates_i[offset, idx] = False
+        
+        is_dominated[i_start:i_end] = dominates_i.any(axis=1)
+    
+    return unique_arr[~is_dominated].tolist()
+
+
+def _extract_pareto_front_pure(all_objectives: List[List[int]]) -> List[List[int]]:
+    """Pure Python fallback for Pareto front extraction."""
+    # De-duplicate
+    seen = set()
+    unique = []
+    for obj in all_objectives:
+        key = tuple(obj)
+        if key not in seen:
+            seen.add(key)
+            unique.append(obj)
+    
     # Find Pareto front
     pareto_front = []
-    for i, obj_i in enumerate(all_objectives):
+    for i, obj_i in enumerate(unique):
         is_dominated = False
-        for j, obj_j in enumerate(all_objectives):
+        for j, obj_j in enumerate(unique):
             if i != j and dominates(obj_j, obj_i):
                 is_dominated = True
                 break
@@ -238,9 +336,8 @@ def compute_hypervolume_from_result(result_path: Path) -> Optional[float]:
             if bounds_and_ref:
                 objective_bounds, reference_point = bounds_and_ref
         
-        # Load result.json
-        with open(result_path, 'r') as f:
-            data = json.load(f)
+        # Load result.json (cached)
+        data = load_result_cached(result_path)
         
         # Extract metadata
         objectives_list = data.get('objectives', [])
@@ -254,28 +351,42 @@ def compute_hypervolume_from_result(result_path: Path) -> Optional[float]:
             print(f"Warning: No solutions found in {result_path}", file=sys.stderr)
             return None
         
-        # Extract Pareto front
-        pareto_front = extract_pareto_front(solutions, objectives_list)
+        # Extract objective values for all solutions
+        all_objectives = [
+            extract_objectives_from_solution(sol, objectives_list)
+            for sol in solutions
+        ]
         
-        if not pareto_front:
+        if not all_objectives:
+            print(f"Warning: Empty objectives for {result_path}", file=sys.stderr)
+            return None
+        
+        # If we couldn't load bounds from trace, compute them from all solutions
+        if objective_bounds is None or reference_point is None:
+            objective_bounds = compute_objective_bounds(all_objectives)
+            reference_point = compute_reference_point(objective_bounds)
+        
+        # Solutions are already a Pareto front (non-dominated)
+        if not all_objectives:
             print(f"Warning: Empty Pareto front for {result_path}", file=sys.stderr)
             return None
         
-        # If we couldn't load bounds from trace, compute them from Pareto front
-        if objective_bounds is None or reference_point is None:
-            objective_bounds = compute_objective_bounds(pareto_front)
-            reference_point = compute_reference_point(objective_bounds)
+        # Normalize objectives to [0, 1] range using bounds and compute HV with pymoo
+        print("Normalizing objectives and computing hypervolume with pymoo...", file=sys.stderr)
+        bounds_arr = np.array(objective_bounds, dtype=np.float64)  # shape (k, 2)
+        ref_arr = np.array(reference_point, dtype=np.float64)  # shape (k,)
+        points_arr = np.array(all_objectives, dtype=np.float64)  # shape (nd, k)
         
-        # Compute hypervolume using sims_problem
-        # Use normalized=True to get hypervolume in [0, 1] range
-        hv = compute_hypervolume(
-            pareto_front,
-            objective_bounds,
-            reference_point=reference_point,
-            normalized=True
-        )
+        ranges = ref_arr - bounds_arr[:, 0]
+        ranges[ranges == 0] = 1.0
         
-        return float(hv)
+        scaled_points = (points_arr - bounds_arr[:, 0]) / ranges
+        scaled_ref = np.ones(len(reference_point))  # ref maps to 1.0
+
+        print(f"Computing hypervolume with reference point: {reference_point} and bounds: {objective_bounds}", file=sys.stderr)
+        hv = float(PymooHV(ref_point=scaled_ref)(scaled_points))
+        
+        return hv
         
     except Exception as e:
         print(f"Error processing {result_path}: {e}", file=sys.stderr)
@@ -300,10 +411,12 @@ def compute_hypervolume_from_result_with_bounds(
     Returns:
         Hypervolume value as float, or None if computation fails
     """
+    import time
     try:
-        # Load result.json
-        with open(result_path, 'r') as f:
-            data = json.load(f)
+        t0 = time.monotonic()
+        # Load result.json (cached)
+        data = load_result_cached(result_path)
+        t_load = time.monotonic()
         
         # Extract metadata
         objectives_list = data.get('objectives', [])
@@ -317,21 +430,33 @@ def compute_hypervolume_from_result_with_bounds(
             print(f"Warning: No solutions found in {result_path}", file=sys.stderr)
             return None
         
-        # Extract Pareto front
-        pareto_front = extract_pareto_front(solutions, objectives_list)
+        # Extract objective values for all solutions
+        all_objectives = [
+            extract_objectives_from_solution(sol, objectives_list)
+            for sol in solutions
+        ]
+        t_extract = time.monotonic()
         
-        if not pareto_front:
-            print(f"Warning: Empty Pareto front for {result_path}", file=sys.stderr)
+        # Solutions are already a Pareto front (non-dominated)
+        if not all_objectives:
+            print(f"Warning: Empty Pareto front for {result_path}", file=sys.stderr, flush=True)
             return None
         
-        # Compute hypervolume using sims_problem with provided bounds
-        # Use normalized=True to get hypervolume in [0, 1] range
-        hv = compute_hypervolume(
-            pareto_front,
-            objective_bounds,
-            reference_point=reference_point,
-            normalized=True
-        )
+        # Normalize objectives to [0, 1] range using bounds and compute HV with pymoo
+        bounds_arr = np.array(objective_bounds, dtype=np.float64)
+        ref_arr = np.array(reference_point, dtype=np.float64)
+        points_arr = np.array(all_objectives, dtype=np.float64)
+        
+        ranges = ref_arr - bounds_arr[:, 0]
+        ranges[ranges == 0] = 1.0
+        
+        scaled_points = (points_arr - bounds_arr[:, 0]) / ranges
+        scaled_ref = np.ones(len(reference_point))
+        
+        hv = float(PymooHV(ref_point=scaled_ref)(scaled_points))
+        t_hv = time.monotonic()
+        
+        print(f"    [{len(all_objectives)} pts] load={t_load-t0:.2f}s extract={t_extract-t_load:.2f}s hv={t_hv-t_extract:.2f}s total={t_hv-t0:.2f}s", file=sys.stderr, flush=True)
         
         return float(hv)
         
@@ -353,8 +478,7 @@ def extract_phase_counts(result_path: Path) -> Tuple[int, int]:
         Tuple of (exact_count, heuristic_count)
     """
     try:
-        with open(result_path, 'r') as f:
-            data = json.load(f)
+        data = load_result_cached(result_path)
         
         solutions = data.get('solutions', [])
         exact_count = sum(1 for sol in solutions if sol.get('phase') == 'exact')
@@ -655,18 +779,27 @@ def compute_unified_bounds(directories: List[Path]) -> Tuple[Dict, Dict]:
                     instance_global_bounds[instance_name]["bounds_list"].append(bounds)
                     instance_global_bounds[instance_name]["reference_list"].append(ref)
             
-            # Fallback: collect Pareto fronts from result.json to compute bounds later
+            # Fallback: compute bounds directly from all solutions (no Pareto filtering needed)
             try:
-                with open(result_path, 'r') as f:
-                    data = json.load(f)
+                data = load_result_cached(result_path)
                 objectives_list = data.get('objectives', [])
                 solutions = data.get('solutions', [])
                 if objectives_list and solutions:
-                    pareto_front = extract_pareto_front(solutions, objectives_list)
-                    if pareto_front:
-                        instance_global_bounds[instance_name]["pareto_fronts"].append(pareto_front)
+                    # Extract objective values for all solutions to get min/max bounds
+                    all_objectives = [
+                        extract_objectives_from_solution(sol, objectives_list)
+                        for sol in solutions
+                    ]
+                    if all_objectives:
+                        # Compute bounds directly - no need for expensive Pareto filtering
+                        num_obj = len(all_objectives[0])
+                        bounds = []
+                        for obj_idx in range(num_obj):
+                            values = [sol[obj_idx] for sol in all_objectives]
+                            bounds.append([min(values), max(values)])
+                        instance_global_bounds[instance_name]["bounds_list"].append(bounds)
             except Exception as e:
-                print(f"Warning: Could not load Pareto front from {result_path}: {e}", file=sys.stderr)
+                print(f"Warning: Could not load bounds from {result_path}: {e}", file=sys.stderr)
     
     # Compute unified global bounds for each instance
     unified_bounds_map = {}
@@ -683,30 +816,6 @@ def compute_unified_bounds(directories: List[Path]) -> Tuple[Dict, Dict]:
                 all_maxs = [bounds[obj_idx][1] for bounds in data["bounds_list"]]
                 global_min = min(all_mins)
                 global_max = max(all_maxs)
-                global_bounds.append([global_min, global_max])
-            
-            global_ref = [b[1] + 1 for b in global_bounds]
-            unified_bounds_map[instance_name] = global_bounds
-            unified_ref_map[instance_name] = global_ref
-        
-        # Fallback: compute bounds from collected Pareto fronts
-        elif data["pareto_fronts"]:
-            # Merge all Pareto fronts for this instance
-            all_solutions = []
-            for pf in data["pareto_fronts"]:
-                all_solutions.extend(pf)
-            
-            if not all_solutions:
-                continue
-            
-            # Compute global bounds from all solutions
-            num_objectives = len(all_solutions[0])
-            global_bounds = []
-            
-            for obj_idx in range(num_objectives):
-                values = [sol[obj_idx] for sol in all_solutions]
-                global_min = min(values)
-                global_max = max(values)
                 global_bounds.append([global_min, global_max])
             
             global_ref = [b[1] + 1 for b in global_bounds]
@@ -740,28 +849,30 @@ def recompute_with_unified_bounds(artifacts_dir: Path, unified_bounds_map: Dict,
         print(f"Warning: No result.json files found in {artifacts_dir}", file=sys.stderr)
         return {}
     
-    print(f"Found {len(result_files)} result files to process", file=sys.stderr)
+    print(f"Found {len(result_files)} result files to process", file=sys.stderr, flush=True)
     
-    for result_path in sorted(result_files):
+    for file_idx, result_path in enumerate(sorted(result_files), 1):
         # Extract instance name
         instance_name = extract_instance_name(result_path)
         if instance_name is None:
-            print(f"Warning: Could not extract instance name from {result_path}", file=sys.stderr)
+            print(f"Warning: Could not extract instance name from {result_path}", file=sys.stderr, flush=True)
             continue
         
         # Extract ratio from path
         ratio = extract_ratio_from_path(result_path)
         if ratio is None:
-            print(f"Warning: Could not extract ratio from {result_path}", file=sys.stderr)
+            print(f"Warning: Could not extract ratio from {result_path}", file=sys.stderr, flush=True)
             continue
         
         # Get unified bounds for this instance
         if instance_name not in unified_bounds_map:
-            print(f"Warning: No unified bounds for {instance_name}", file=sys.stderr)
+            print(f"Warning: No unified bounds for {instance_name}", file=sys.stderr, flush=True)
             continue
         
         objective_bounds = unified_bounds_map[instance_name]
         reference_point = unified_ref_map[instance_name]
+        
+        print(f"  [{file_idx}/{len(result_files)}] Processing {instance_name} ratio={ratio}...", file=sys.stderr, flush=True)
         
         # Compute hypervolume from result.json with unified bounds
         hv = compute_hypervolume_from_result_with_bounds(
@@ -857,7 +968,7 @@ def parse_test_artifacts(artifacts_dir: Path) -> Tuple[Dict[str, Dict[str, List[
     
     # First pass: collect all bounds for each instance across all ratios
     print("\nCollecting global bounds for each instance...", file=sys.stderr)
-    instance_global_bounds = defaultdict(lambda: {"bounds_list": [], "reference_list": [], "pareto_fronts": []})
+    instance_global_bounds = defaultdict(lambda: {"bounds_list": [], "reference_list": []})
     
     for result_path in result_files:
         instance_name = extract_instance_name(result_path)
@@ -873,25 +984,31 @@ def parse_test_artifacts(artifacts_dir: Path) -> Tuple[Dict[str, Dict[str, List[
                 instance_global_bounds[instance_name]["bounds_list"].append(bounds)
                 instance_global_bounds[instance_name]["reference_list"].append(ref)
         
-        # Fallback: collect Pareto fronts from result.json to compute bounds later
+        # Fallback: compute bounds directly from all solutions (no Pareto filtering needed)
         try:
-            with open(result_path, 'r') as f:
-                data = json.load(f)
+            data = load_result_cached(result_path)
             objectives_list = data.get('objectives', [])
             solutions = data.get('solutions', [])
             if objectives_list and solutions:
-                pareto_front = extract_pareto_front(solutions, objectives_list)
-                if pareto_front:
-                    instance_global_bounds[instance_name]["pareto_fronts"].append(pareto_front)
+                all_objectives = [
+                    extract_objectives_from_solution(sol, objectives_list)
+                    for sol in solutions
+                ]
+                if all_objectives:
+                    num_obj = len(all_objectives[0])
+                    bounds = []
+                    for obj_idx in range(num_obj):
+                        values = [sol[obj_idx] for sol in all_objectives]
+                        bounds.append([min(values), max(values)])
+                    instance_global_bounds[instance_name]["bounds_list"].append(bounds)
         except Exception as e:
-            print(f"Warning: Could not load Pareto front from {result_path}: {e}", file=sys.stderr)
+            print(f"Warning: Could not load bounds from {result_path}: {e}", file=sys.stderr)
     
     # Compute global bounds for each instance
     global_bounds_map = {}
     global_ref_map = {}
     
     for instance_name, data in instance_global_bounds.items():
-        # If we have bounds from trace files, use those
         if data["bounds_list"]:
             num_objectives = len(data["bounds_list"][0])
             global_bounds = []
@@ -901,30 +1018,6 @@ def parse_test_artifacts(artifacts_dir: Path) -> Tuple[Dict[str, Dict[str, List[
                 all_maxs = [bounds[obj_idx][1] for bounds in data["bounds_list"]]
                 global_min = min(all_mins)
                 global_max = max(all_maxs)
-                global_bounds.append([global_min, global_max])
-            
-            global_ref = [b[1] + 1 for b in global_bounds]
-            global_bounds_map[instance_name] = global_bounds
-            global_ref_map[instance_name] = global_ref
-        
-        # Fallback: compute bounds from collected Pareto fronts
-        elif data["pareto_fronts"]:
-            # Merge all Pareto fronts for this instance
-            all_solutions = []
-            for pf in data["pareto_fronts"]:
-                all_solutions.extend(pf)
-            
-            if not all_solutions:
-                continue
-            
-            # Compute global bounds from all solutions
-            num_objectives = len(all_solutions[0])
-            global_bounds = []
-            
-            for obj_idx in range(num_objectives):
-                values = [sol[obj_idx] for sol in all_solutions]
-                global_min = min(values)
-                global_max = max(values)
                 global_bounds.append([global_min, global_max])
             
             global_ref = [b[1] + 1 for b in global_bounds]
@@ -1073,8 +1166,7 @@ def analyze_zero_hypervolumes(artifacts_dir: Path, results: Dict[str, Dict[str, 
                     result_path = result_files[0]
                     
                     try:
-                        with open(result_path, 'r') as f:
-                            result_data = json.load(f)
+                        result_data = load_result_cached(result_path)
                         
                         num_solutions = len(result_data.get('solutions', []))
                         objectives_list = result_data.get('objectives', [])
@@ -1170,8 +1262,7 @@ def compute_phase_hypervolumes(
         Tuple of (phase1_hv, total_hv, exact_count, heuristic_count)
     """
     try:
-        with open(result_path, 'r') as f:
-            data = json.load(f)
+        data = load_result_cached(result_path)
         
         objectives_list = data.get('objectives', [])
         solutions = data.get('solutions', [])
@@ -1186,28 +1277,36 @@ def compute_phase_hypervolumes(
         exact_count = len(exact_solutions)
         heuristic_count = len(heuristic_solutions)
         
+        # Pre-compute normalization parameters (shared)
+        bounds_arr = np.array(objective_bounds, dtype=np.float64)
+        ref_arr = np.array(reference_point, dtype=np.float64)
+        ranges = ref_arr - bounds_arr[:, 0]
+        ranges[ranges == 0] = 1.0
+        scaled_ref = np.ones(len(reference_point))
+        
         # Compute phase 1 hypervolume (exact only)
+        # pymoo HV internally filters dominated points, no need for extract_pareto_front
         phase1_hv = None
         if exact_solutions:
-            phase1_pareto = extract_pareto_front(exact_solutions, objectives_list)
-            if phase1_pareto:
-                phase1_hv = compute_hypervolume(
-                    phase1_pareto,
-                    objective_bounds,
-                    reference_point=reference_point,
-                    normalized=True
-                )
+            phase1_objs = [
+                extract_objectives_from_solution(sol, objectives_list)
+                for sol in exact_solutions
+            ]
+            if phase1_objs:
+                pts = np.array(phase1_objs, dtype=np.float64)
+                scaled = (pts - bounds_arr[:, 0]) / ranges
+                phase1_hv = float(PymooHV(ref_point=scaled_ref)(scaled))
         
-        # Compute total hypervolume (all solutions)
-        total_pareto = extract_pareto_front(solutions, objectives_list)
+        # Compute total hypervolume (all solutions -- already a Pareto front)
+        total_objs = [
+            extract_objectives_from_solution(sol, objectives_list)
+            for sol in solutions
+        ]
         total_hv = None
-        if total_pareto:
-            total_hv = compute_hypervolume(
-                total_pareto,
-                objective_bounds,
-                reference_point=reference_point,
-                normalized=True
-            )
+        if total_objs:
+            pts = np.array(total_objs, dtype=np.float64)
+            scaled = (pts - bounds_arr[:, 0]) / ranges
+            total_hv = float(PymooHV(ref_point=scaled_ref)(scaled))
         
         return (float(phase1_hv) if phase1_hv is not None else None,
                 float(total_hv) if total_hv is not None else None,
@@ -2123,8 +2222,7 @@ def compute_unique_objective_values(artifacts_dirs: List[Path], unified_bounds_m
             
             for result_file in result_files:
                 try:
-                    with open(result_file, 'r') as f:
-                        data = json.load(f)
+                    data = load_result_cached(result_file)
                     
                     objectives_list = data.get('objectives', [])
                     solutions = data.get('solutions', [])
@@ -2191,8 +2289,7 @@ def generate_correlation_plots(artifacts_dirs: List[Path], output_dir: Path, uni
             
             for result_file in result_files:
                 try:
-                    with open(result_file, 'r') as f:
-                        data = json.load(f)
+                    data = load_result_cached(result_file)
                     
                     objectives_list = data.get('objectives', [])
                     solutions = data.get('solutions', [])
@@ -2837,6 +2934,7 @@ Examples:
             else:
                 # Single directory of each type
                 run_comparison_mode(ndtree_dirs[0], vector_dirs[0], labels)
+            clear_result_cache()
             return
             
         elif len(args.compare) == 2:
@@ -2861,6 +2959,7 @@ Examples:
             
             # Run comparison mode
             run_comparison_mode(dir1, dir2, args.labels)
+            clear_result_cache()
             return
         else:
             print("Error: --compare requires either 0 arguments (auto-detect) or 2 arguments (manual)", file=sys.stderr)
@@ -2963,6 +3062,9 @@ Examples:
     html_path = export_to_html(report_path)
     if html_path:
         print(f"HTML report exported to: {html_path}", file=sys.stderr)
+    
+    # Free cached result data
+    clear_result_cache()
 
 
 if __name__ == "__main__":

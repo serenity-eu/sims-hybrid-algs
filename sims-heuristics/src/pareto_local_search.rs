@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use log::{debug, error, info};
+use log::{debug, info};
 use rand::prelude::*;
 use rand::SeedableRng;
 use pareto::ParetoFront;
@@ -372,7 +372,7 @@ where
             "Iteration completed"
         );
 
-        Self::log_metrics(iteration, &iteration_metrics, step_stats);
+        Self::log_metrics(iteration, &iteration_metrics, step_stats, self.approximated_pareto_set.len());
     }
 
     fn calculate_iteration_metrics(
@@ -401,9 +401,9 @@ where
         }
     }
 
-    fn log_metrics(iteration: usize, metrics: &IterationMetrics, step_stats: &StepStats) {
+    fn log_metrics(iteration: usize, metrics: &IterationMetrics, step_stats: &StepStats, pareto_final_size: usize) {
         info!(
-            "Iteration {iteration} [{:.3} s, {} us/sol], neighbors: size: {}, explored: {}, duplicated: {} ({} %), auxiliary: +{}-{}, pareto: +{}-{}",
+            "Iteration {iteration} [{:.3} s, {} us/sol], neighbors: size: {}, explored: {}, duplicated: {} ({} %), auxiliary: +{}-{}={}, pareto: +{}-{}={}",
             metrics.duration_us as f64 / 1_000_000.0,
             metrics.per_solution_search_time,
             metrics.neighborhood_size,
@@ -412,8 +412,10 @@ where
             metrics.duplicated_percent,
             step_stats.auxiliary_added_count,
             metrics.auxiliary_removed_count,
+            step_stats.auxiliary_len,
             step_stats.pareto_added_count,
             metrics.pareto_removed_count,
+            pareto_final_size,
         );
     }
 
@@ -505,6 +507,10 @@ where
     pub fn run(&mut self, max_iterations: usize, max_duration: Duration) -> S {
         let pls_timer = Timer::start(max_duration);
 
+        info!(
+            "PLS using tracker type: {}",
+            std::any::type_name::<T::Trackers>()
+        );
         info!(
             "Initial population after dominance filtering: {} solutions",
             self.population.len()

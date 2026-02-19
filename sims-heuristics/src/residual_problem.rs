@@ -6,11 +6,27 @@ use log::{debug, trace};
 use pareto::{HasObjectives, ParetoFront};
 
 use crate::{
+    objectives::ObjectiveState,
     problem::SetCoverProblem,
     residual_solution::ResidualSolution,
     solution::{ImageSet, MergeableWithResidual},
     util::UnionIterator,
 };
+
+/// Precomputed data for efficiently computing merged CloudyArea objectives
+/// on residual solutions, without materializing the full merged solution.
+pub struct CloudyAreaData {
+    /// Index of the CloudyArea objective in the objectives array
+    pub objective_index: usize,
+    /// Total cloudy area of the base solution (S \ R)
+    pub base_cloudy_area: u64,
+    /// Per candidate image (indexed by condensed image index):
+    /// bitset of which *cloudy* elements this image covers clearly.
+    /// Only elements that are cloudy in the base are tracked.
+    pub condensed_clear_parts: Vec<FixedBitSet>,
+    /// Areas of the cloudy elements, indexed by condensed cloudy-element index
+    pub condensed_areas: Vec<u64>,
+}
 
 pub struct ResidualProblem<R, P, const D: usize>
 where
@@ -28,6 +44,8 @@ where
     pub element_map_condensed_to_original: Vec<usize>,
     /// Condensed images as bitsets (each bitset represents which condensed elements the image covers)
     pub condensed_images: Vec<FixedBitSet>,
+    /// Precomputed data for merged CloudyArea computation (None if no CloudyArea objective)
+    pub cloudy_area_data: Option<CloudyAreaData>,
     /// Iterator state for generating combinations
     combination_iter: Box<dyn Iterator<Item = Vec<usize>>>,
     /// Phantom data to use P type parameter
@@ -127,6 +145,13 @@ where
             })
             .collect();
 
+        // Build CloudyAreaData if the problem has a CloudyArea objective
+        let cloudy_area_data = Self::build_cloudy_area_data(
+            &unmodified_solution,
+            &image_map_condensed_to_original,
+            problem,
+        );
+
         let m = image_map_condensed_to_original.len();
         let combination_iter = Box::new((0..=5).flat_map(move |i| (0..m).combinations(i)));
 
@@ -136,9 +161,124 @@ where
             image_map_condensed_to_original,
             element_map_condensed_to_original,
             condensed_images,
+            cloudy_area_data,
             combination_iter,
             _phantom: std::marker::PhantomData,
         }
+    }
+
+    /// Build CloudyAreaData by computing base clear coverage and condensing
+    /// the clear parts of candidate images down to only the cloudy elements.
+    fn build_cloudy_area_data(
+        unmodified_solution: &R,
+        image_map_condensed_to_original: &[usize],
+        problem: &P,
+    ) -> Option<CloudyAreaData> {
+        // Find the CloudyArea objective index and extract its data
+        let (objective_index, clear_images, areas) = problem
+            .objectives()
+            .iter()
+            .enumerate()
+            .find_map(|(i, obj)| match obj {
+                ObjectiveState::CloudyArea {
+                    clear_images,
+                    areas,
+                    ..
+                } => Some((i, clear_images, areas)),
+                _ => None,
+            })?;
+
+        let universe_size = problem.universe_size();
+
+        // Compute base clear coverage: union of clear_images for all selected images in base
+        let mut base_clear = FixedBitSet::with_capacity(universe_size);
+        for img_idx in unmodified_solution.selected_images() {
+            if let Some(img_clear) = clear_images.get(img_idx) {
+                base_clear.union_with(img_clear);
+            }
+        }
+
+        // Identify cloudy elements and their areas
+        // cloudy_element_map[condensed_cloudy_idx] = original_element_idx
+        let cloudy_elements: Vec<usize> = (0..universe_size)
+            .filter(|&e| !base_clear.contains(e))
+            .collect();
+
+        if cloudy_elements.is_empty() {
+            // Everything is clear in the base -- no improvement possible
+            return Some(CloudyAreaData {
+                objective_index,
+                base_cloudy_area: 0,
+                condensed_clear_parts: vec![
+                    FixedBitSet::with_capacity(0);
+                    image_map_condensed_to_original.len()
+                ],
+                condensed_areas: Vec::new(),
+            });
+        }
+
+        // Reverse map: original element -> condensed cloudy index
+        let mut original_to_cloudy = vec![usize::MAX; universe_size];
+        for (condensed_idx, &original_idx) in cloudy_elements.iter().enumerate() {
+            original_to_cloudy[original_idx] = condensed_idx;
+        }
+
+        let base_cloudy_area: u64 = cloudy_elements.iter().map(|&e| areas[e]).sum();
+        let condensed_areas: Vec<u64> = cloudy_elements.iter().map(|&e| areas[e]).collect();
+
+        // For each candidate image, build a condensed clear bitset over cloudy elements only
+        let num_cloudy = cloudy_elements.len();
+        let condensed_clear_parts: Vec<FixedBitSet> = image_map_condensed_to_original
+            .iter()
+            .map(|&original_img_idx| {
+                let mut bits = FixedBitSet::with_capacity(num_cloudy);
+                if let Some(img_clear) = clear_images.get(original_img_idx) {
+                    for elem in img_clear.ones() {
+                        let condensed = original_to_cloudy[elem];
+                        if condensed != usize::MAX {
+                            bits.insert(condensed);
+                        }
+                    }
+                }
+                bits
+            })
+            .collect();
+
+        Some(CloudyAreaData {
+            objective_index,
+            base_cloudy_area,
+            condensed_clear_parts,
+            condensed_areas,
+        })
+    }
+
+    /// Compute the merged CloudyArea objective for a residual solution.
+    /// Returns the cloudy area of (base union patch), using precomputed condensed data.
+    /// The residual solution stores condensed image indices.
+    pub fn compute_merged_cloudy_area(
+        &self,
+        residual_solution: &ResidualSolution<D>,
+    ) -> Option<u64> {
+        let data = self.cloudy_area_data.as_ref()?;
+
+        if data.condensed_areas.is_empty() {
+            return Some(0);
+        }
+
+        // OR together the condensed clear parts for all selected images in the patch
+        let num_cloudy = data.condensed_areas.len();
+        let mut patch_clear = FixedBitSet::with_capacity(num_cloudy);
+        for condensed_img_idx in &residual_solution.selected_images {
+            patch_clear.union_with(&data.condensed_clear_parts[*condensed_img_idx]);
+        }
+
+        // Sum areas of elements newly cleared by the patch
+        let newly_cleared_area: u64 = patch_clear
+            .ones()
+            .map(|condensed_elem| data.condensed_areas[condensed_elem])
+            .sum();
+
+        Some(data.base_cloudy_area - newly_cleared_area)
     }
 
     /// Check if the given selection of condensed images forms a set cover

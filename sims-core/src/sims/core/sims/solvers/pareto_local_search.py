@@ -109,6 +109,7 @@ def solve(
             trace=enable_trace,
             profiling_trace=enable_profiling_trace,
             objective_bounds=objective_bounds,
+            include_dominated=include_dominated,
             pareto_archive=pareto_archive
         )
 

@@ -1,0 +1,11 @@
+# SIMS Core test recipes
+
+# Run all 4D medium instance tests with pseudo-solver (all ratios, archives, instances)
+test:
+    uv run pytest \
+        "tests/test_two_phases_instances.py::TestTwoPhaseInstances::test_solve_two_phase_4d_on_medium_instances" \
+        --use-pseudo-solver \
+        --name "medium_instances" \
+        -v -s \
+        --log-cli-level=INFO \
+        --timeout=4200

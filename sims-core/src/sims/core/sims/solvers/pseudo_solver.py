@@ -156,9 +156,9 @@ class PseudoSolver:
                     objectives=objectives,
                     initial_population=exact_pareto_front if exact_pareto_front else None,
                     enable_trace=False,
-                    enable_profiling_trace=True,  # Enable profiling trace for PLS
+                    enable_profiling_trace=False,
                     objective_bounds=objective_bounds,
-                    include_dominated=False,
+                    include_dominated=True,
                     pareto_archive=pareto_archive,
                 )
                 

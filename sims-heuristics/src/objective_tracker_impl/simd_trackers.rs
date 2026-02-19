@@ -15,6 +15,69 @@ use crate::objective_tracker::{ObjectiveTracker, TrackerCollection};
 use crate::problem::SetCoverProblem;
 use crate::solution::ImageSet;
 
+/// Bounds-check assertion: validates that `image_index` and `image_index+1` are
+/// valid for the given offsets array, and that the resulting range is valid for
+/// the elements array. Also validates every element index fits in `target_len`.
+/// Only active when `bounds_check` feature is enabled.
+#[cfg(feature = "bounds_check")]
+fn assert_csr_bounds(
+    label: &str,
+    image_index: usize,
+    offsets: &[usize],
+    elements: &[u32],
+    target_len: usize,
+) {
+    assert!(
+        image_index + 1 < offsets.len(),
+        "[{label}] image_index={image_index} OOB for offsets len={}",
+        offsets.len()
+    );
+    let start = offsets[image_index];
+    let end = offsets[image_index + 1];
+    assert!(
+        end <= elements.len(),
+        "[{label}] offset range {start}..{end} OOB for elements len={}",
+        elements.len()
+    );
+    for (i, &e) in elements[start..end].iter().enumerate() {
+        assert!(
+            (e as usize) < target_len,
+            "[{label}] element[{i}]={e} OOB for target len={target_len} (image_index={image_index})"
+        );
+    }
+}
+
+/// Bounds-check for interval-based access patterns.
+#[cfg(feature = "bounds_check")]
+fn assert_interval_bounds(
+    label: &str,
+    image_index: usize,
+    int_offsets: &[usize],
+    intervals: &[Interval],
+    target_len: usize,
+) {
+    assert!(
+        image_index + 1 < int_offsets.len(),
+        "[{label}] image_index={image_index} OOB for interval offsets len={}",
+        int_offsets.len()
+    );
+    let int_start = int_offsets[image_index];
+    let int_end = int_offsets[image_index + 1];
+    assert!(
+        int_end <= intervals.len(),
+        "[{label}] interval range {int_start}..{int_end} OOB for intervals len={}",
+        intervals.len()
+    );
+    for &iv in &intervals[int_start..int_end] {
+        let end = iv.start as usize + iv.len as usize;
+        assert!(
+            end <= target_len,
+            "[{label}] interval start={} len={} -> end={end} OOB for target len={target_len} (image_index={image_index})",
+            iv.start, iv.len
+        );
+    }
+}
+
 /// Interval representation for run-length compressed element lists.
 /// Each interval represents a consecutive range [start, start+len).
 #[derive(Clone, Copy, Debug)]
@@ -261,6 +324,8 @@ pub struct SimdCloudyAreaState {
 
 impl<const D: usize> ObjectiveTracker<D> for SimdCloudyAreaState {
     fn peek_removal_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+        #[cfg(feature = "bounds_check")]
+        assert_csr_bounds("CloudyArea::peek_removal", image_index, &self.clear_elements_offsets, &self.clear_elements, self.counts.len());
         let start = unsafe { *self.clear_elements_offsets.get_unchecked(image_index) };
         let end = unsafe { *self.clear_elements_offsets.get_unchecked(image_index + 1) };
         let clear_elements = unsafe { self.clear_elements.get_unchecked(start..end) };
@@ -277,6 +342,8 @@ impl<const D: usize> ObjectiveTracker<D> for SimdCloudyAreaState {
     }
 
     fn peek_addition_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+        #[cfg(feature = "bounds_check")]
+        assert_csr_bounds("CloudyArea::peek_addition", image_index, &self.clear_elements_offsets, &self.clear_elements, self.counts.len());
         let start = unsafe { *self.clear_elements_offsets.get_unchecked(image_index) };
         let end = unsafe { *self.clear_elements_offsets.get_unchecked(image_index + 1) };
         let clear_elements = unsafe { self.clear_elements.get_unchecked(start..end) };
@@ -293,6 +360,8 @@ impl<const D: usize> ObjectiveTracker<D> for SimdCloudyAreaState {
     }
 
     fn track_image_removal(&mut self, image_index: usize, _p: &impl SetCoverProblem<D>) -> i64 {
+        #[cfg(feature = "bounds_check")]
+        assert_csr_bounds("CloudyArea::track_removal", image_index, &self.clear_elements_offsets, &self.clear_elements, self.counts.len());
         let start = unsafe { *self.clear_elements_offsets.get_unchecked(image_index) };
         let end = unsafe { *self.clear_elements_offsets.get_unchecked(image_index + 1) };
 
@@ -348,6 +417,8 @@ impl<const D: usize> ObjectiveTracker<D> for SimdCloudyAreaState {
     }
 
     fn track_image_addition(&mut self, image_index: usize, _p: &impl SetCoverProblem<D>) -> i64 {
+        #[cfg(feature = "bounds_check")]
+        assert_csr_bounds("CloudyArea::track_addition", image_index, &self.clear_elements_offsets, &self.clear_elements, self.counts.len());
         let start = unsafe { *self.clear_elements_offsets.get_unchecked(image_index) };
         let end = unsafe { *self.clear_elements_offsets.get_unchecked(image_index + 1) };
 
@@ -444,8 +515,30 @@ pub struct SimdMinResolutionState {
     pub c1_counts: Vec<u16>,
 }
 
+impl SimdMinResolutionState {
+    #[cfg(feature = "bounds_check")]
+    fn assert_element_bounds(&self, label: &str, image_index: usize) {
+        let target = if self.two_level {
+            self.packed_counts.len()
+        } else if !self.element_packed_small.is_empty() {
+            self.element_packed_small.len()
+        } else {
+            self.element_min_level.len()
+        };
+        assert_csr_bounds(label, image_index, &self.image_elements_offsets, &self.image_elements, target);
+    }
+
+    #[cfg(feature = "bounds_check")]
+    fn assert_interval_bounds_for(&self, label: &str, image_index: usize) {
+        let target = self.packed_counts.len();
+        assert_interval_bounds(label, image_index, &self.image_intervals_offsets, &self.image_intervals, target);
+    }
+}
+
 impl<const D: usize> ObjectiveTracker<D> for SimdMinResolutionState {
     fn peek_removal_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+        #[cfg(feature = "bounds_check")]
+        self.assert_element_bounds("MinRes::peek_removal", image_index);
         let img_level = self.image_resolution_level[image_index] as usize;
         let start = unsafe { *self.image_elements_offsets.get_unchecked(image_index) };
         let end = unsafe { *self.image_elements_offsets.get_unchecked(image_index + 1) };
@@ -463,6 +556,8 @@ impl<const D: usize> ObjectiveTracker<D> for SimdMinResolutionState {
     }
 
     fn peek_addition_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+        #[cfg(feature = "bounds_check")]
+        self.assert_element_bounds("MinRes::peek_addition", image_index);
         let img_level = self.image_resolution_level[image_index] as usize;
         let start = unsafe { *self.image_elements_offsets.get_unchecked(image_index) };
         let end = unsafe { *self.image_elements_offsets.get_unchecked(image_index + 1) };
@@ -480,6 +575,14 @@ impl<const D: usize> ObjectiveTracker<D> for SimdMinResolutionState {
     }
 
     fn track_image_removal(&mut self, image_index: usize, _p: &impl SetCoverProblem<D>) -> i64 {
+        #[cfg(feature = "bounds_check")]
+        {
+            if self.two_level {
+                self.assert_interval_bounds_for("MinRes::track_removal", image_index);
+            } else {
+                self.assert_element_bounds("MinRes::track_removal", image_index);
+            }
+        }
         let img_level = self.image_resolution_level[image_index] as usize;
 
         if self.two_level {
@@ -500,6 +603,14 @@ impl<const D: usize> ObjectiveTracker<D> for SimdMinResolutionState {
     }
 
     fn track_image_addition(&mut self, image_index: usize, _p: &impl SetCoverProblem<D>) -> i64 {
+        #[cfg(feature = "bounds_check")]
+        {
+            if self.two_level {
+                self.assert_interval_bounds_for("MinRes::track_addition", image_index);
+            } else {
+                self.assert_element_bounds("MinRes::track_addition", image_index);
+            }
+        }
         let img_level = self.image_resolution_level[image_index] as usize;
 
         if self.two_level {
@@ -1220,6 +1331,14 @@ pub struct SimdMaxIncidenceAngleState {
 
 impl<const D: usize> ObjectiveTracker<D> for SimdMaxIncidenceAngleState {
     fn peek_removal_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+        #[cfg(feature = "bounds_check")]
+        {
+            assert!(image_index < self.image_incidence_level.len(),
+                "[MaxAngle::peek_removal] image_index={image_index} OOB for image_incidence_level len={}", self.image_incidence_level.len());
+            let lvl = self.image_incidence_level[image_index] as usize;
+            assert!(lvl < self.level_counts.len(),
+                "[MaxAngle::peek_removal] level={lvl} OOB for level_counts len={}", self.level_counts.len());
+        }
         let img_level = self.image_incidence_level[image_index];
         if self.current_max_level == u8::MAX || img_level < self.current_max_level {
             return 0;
@@ -1243,6 +1362,14 @@ impl<const D: usize> ObjectiveTracker<D> for SimdMaxIncidenceAngleState {
     }
 
     fn peek_addition_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+        #[cfg(feature = "bounds_check")]
+        {
+            assert!(image_index < self.image_incidence_level.len(),
+                "[MaxAngle::peek_addition] image_index={image_index} OOB for image_incidence_level len={}", self.image_incidence_level.len());
+            let lvl = self.image_incidence_level[image_index] as usize;
+            assert!(lvl < self.incidence_levels.len(),
+                "[MaxAngle::peek_addition] level={lvl} OOB for incidence_levels len={}", self.incidence_levels.len());
+        }
         let img_level = self.image_incidence_level[image_index];
         if self.current_max_level == u8::MAX || img_level > self.current_max_level {
             let next_val = unsafe { *self.incidence_levels.get_unchecked(img_level as usize) };
@@ -1253,6 +1380,14 @@ impl<const D: usize> ObjectiveTracker<D> for SimdMaxIncidenceAngleState {
     }
 
     fn track_image_removal(&mut self, image_index: usize, _p: &impl SetCoverProblem<D>) -> i64 {
+        #[cfg(feature = "bounds_check")]
+        {
+            assert!(image_index < self.image_incidence_level.len(),
+                "[MaxAngle::track_removal] image_index={image_index} OOB for image_incidence_level len={}", self.image_incidence_level.len());
+            let lvl = self.image_incidence_level[image_index] as usize;
+            assert!(lvl < self.level_counts.len(),
+                "[MaxAngle::track_removal] level={lvl} OOB for level_counts len={}", self.level_counts.len());
+        }
         let img_level = self.image_incidence_level[image_index] as usize;
         let old_max = self.current_max;
 
@@ -1281,6 +1416,14 @@ impl<const D: usize> ObjectiveTracker<D> for SimdMaxIncidenceAngleState {
     }
 
     fn track_image_addition(&mut self, image_index: usize, _p: &impl SetCoverProblem<D>) -> i64 {
+        #[cfg(feature = "bounds_check")]
+        {
+            assert!(image_index < self.image_incidence_level.len(),
+                "[MaxAngle::track_addition] image_index={image_index} OOB for image_incidence_level len={}", self.image_incidence_level.len());
+            let lvl = self.image_incidence_level[image_index] as usize;
+            assert!(lvl < self.level_counts.len(),
+                "[MaxAngle::track_addition] level={lvl} OOB for level_counts len={}", self.level_counts.len());
+        }
         let img_level = self.image_incidence_level[image_index];
         let old_max = self.current_max;
 
