@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use arrayvec::ArrayVec;
 use fixedbitset::FixedBitSet;
 
 use crate::{

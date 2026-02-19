@@ -306,7 +306,7 @@ def get_timeout_for_instance_size(instances: List[str], base_timeout: int = 60) 
             elif size == 50:
                 return 45  # 45 seconds for size 50
             elif size == 100:
-                return 3600 # 1 hour for size 100
+                return 1200 # 20 minutes for size 100
             elif size in [145, 150]:
                 # return 12000  # 200 minutes for size 145-150
                 return 3600 # 1 hour for size 145-150

@@ -9,9 +9,10 @@ name = "sims_problem"
 crate-type = ["cdylib"]
 
 [features]
-default = []
+default = ["bounds_check"]
 plotting = ["pls/plotting"]
 milp = ["augmecon", "augmecon/coin_cbc"]
+bounds_check = ["pls/bounds_check"]
 
 [dependencies]
 pyo3 = { version = "0.27.2", features = ["extension-module"] }

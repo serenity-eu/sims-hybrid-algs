@@ -11,13 +11,14 @@ use rand::{Rng, seq::IteratorRandom};
 use std::{collections::BinaryHeap, fmt::Debug, hash::Hash, time::Duration};
 
 use crate::objective_tracker::{ObjectiveTracker, TrackerCollection};
-use crate::objective_tracker_impl::standard_trackers::StandardTrackerArray;
+use crate::objective_tracker_impl::proven_safe_trackers::ProvenSafeTrackerArray;
 use crate::problem::{ComparableImage, ImageObjectiveDeltas, ScaledObjectiveDeltas};
 use crate::residual_problem::ResidualProblem;
 use crate::residual_solution::ResidualSolution;
 use crate::solution::{ImageSet, MergeableWithResidual, SIMSCore, SIMSModifiable, SIMSSolution};
 use crate::solution_set_impl::NdTreeSolutionSet;
 use crate::timer::Timer;
+use nd_tree::nd_tree::NDTreeSolutionIntoIterator;
 use crate::{SetCoverProblem, objectives};
 
 use itertools::Itertools;
@@ -29,7 +30,7 @@ pub struct UndercoveredSolution<const D: usize> {
     pub partial_selected_images: FixedBitSet,
     pub removed_images: FixedBitSet,
     pub uncovered_elements: FixedBitSet,
-    pub partial_trackers: StandardTrackerArray<D>,
+    pub partial_trackers: ProvenSafeTrackerArray<D>,
 }
 
 /// Lightweight view for `ImageSet` operations - only used for tracker `peek_delta` calls
@@ -150,7 +151,7 @@ impl<P, const D: usize> SIMSModifiable<P, D> for BitsetEncodedSolution<P, D>
 where
     P: SetCoverProblem<D> + Clone + Send + Sync,
 {
-    type Trackers = StandardTrackerArray<D>;
+    type Trackers = ProvenSafeTrackerArray<D>;
 
     fn add_image(&mut self, image_index: usize, problem: &P, trackers: &mut Self::Trackers) {
         log::debug!("ADD_IMAGE: Starting addition of image {image_index}");
@@ -544,7 +545,7 @@ where
             partial_selected_images,
             removed_images,
             uncovered_elements,
-            partial_trackers: StandardTrackerArray::new(problem),
+            partial_trackers: ProvenSafeTrackerArray::new(problem),
         }
     }
 
@@ -556,7 +557,7 @@ where
         mut removal_candidates_indices: Vec<usize>,
         problem: &P,
         is_deterministic: bool,
-        trackers: &mut StandardTrackerArray<D>,
+        trackers: &mut ProvenSafeTrackerArray<D>,
     ) -> Option<ResidualProblem<Self, P, D>> {
         let mut active_solution = self.clone();
 
@@ -602,7 +603,7 @@ where
     #[must_use]
     pub fn best_unselected_images_with_trackers(
         partial_selected_images: &FixedBitSet,
-        partial_trackers: &StandardTrackerArray<D>,
+        partial_trackers: &ProvenSafeTrackerArray<D>,
         uncovered_elements: &[usize],
         problem: &P,
         is_deterministic: bool,
@@ -733,7 +734,7 @@ where
         uncovered_elements: &[usize],
         problem: &P,
         is_deterministic: bool,
-        trackers: &StandardTrackerArray<D>,
+        trackers: &ProvenSafeTrackerArray<D>,
     ) -> Option<Vec<usize>> {
         Self::best_unselected_images_with_trackers(
             &self.selected_images,
@@ -749,7 +750,7 @@ where
         &self,
         problem: &P,
         is_deterministic: bool,
-        trackers: &StandardTrackerArray<D>,
+        trackers: &ProvenSafeTrackerArray<D>,
     ) -> Vec<usize> {
         let weights: [f32; D] = if is_deterministic {
             // For deterministic mode, use equal weights
@@ -796,7 +797,7 @@ where
         &self,
         images: I,
         problem: &P,
-        trackers: &StandardTrackerArray<D>,
+        trackers: &ProvenSafeTrackerArray<D>,
     ) -> Vec<ScaledObjectiveDeltas<D>> {
         let raw_comparable_images: Vec<ImageObjectiveDeltas<D>> = images
             .map(|image_index| {
@@ -998,7 +999,7 @@ where
 {
     pub fn neighborhood_iter_impl<'a>(
         &'a self,
-        trackers: &'a mut StandardTrackerArray<D>,
+        trackers: &'a mut ProvenSafeTrackerArray<D>,
         k: u32,
         problem: &'a P,
         timer: &'a Timer,
@@ -1035,6 +1036,7 @@ where
             removal_candidates_iter,
             current_residual_problem: None,
             current_removal_candidates: Vec::new(),
+            filtered_residual_iter: None,
             is_deterministic,
         }
     }
@@ -1048,12 +1050,18 @@ where
     original_solution: BitsetEncodedSolution<P, D>,
     problem: &'a P,
     timer: &'a Timer,
-    trackers: &'a mut StandardTrackerArray<D>,
+    trackers: &'a mut ProvenSafeTrackerArray<D>,
     removal_candidates_iter: Box<dyn Iterator<Item = Vec<usize>> + 'a>,
 
     // State for current residual problem - now we can cache it directly without lifetime issues
     current_residual_problem: Option<ResidualProblem<BitsetEncodedSolution<P, D>, P, D>>,
     current_removal_candidates: Vec<usize>,
+
+    // Consuming iterator over Pareto-filtered residual solutions for the current residual problem.
+    // When a new residual problem is created, all its valid residual solutions are
+    // enumerated (with merged CloudyArea objectives), filtered through an NdTree Pareto front,
+    // and drained lazily via this iterator.
+    filtered_residual_iter: Option<NDTreeSolutionIntoIterator<ResidualSolution<D>, 32, D, 4>>,
 
     is_deterministic: bool,
 }
@@ -1065,6 +1073,8 @@ where
     type Item = BitsetEncodedSolution<P, D>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        use pareto::ParetoFront;
+
         // Outer loop to avoid recursion
         loop {
             // Check timer first
@@ -1072,40 +1082,12 @@ where
                 return None;
             }
 
-            // 1. If we don't have a current residual problem, get next removal candidate and create one
-            if self.current_residual_problem.is_none() {
-                // Loop through removal candidates until we find one that produces a valid residual problem
-                loop {
-                    // Get next removal candidate
-                    let removal_candidates = self.removal_candidates_iter.next()?;
-
-                    // Create residual problem (this will modify trackers)
-                    if let Some(residual_problem) = self.original_solution.create_residual_problem(
-                        removal_candidates.clone(),
-                        self.problem,
-                        self.is_deterministic,
-                        self.trackers,
-                    ) {
-                        // Successfully created residual problem - cache it directly
-                        self.current_removal_candidates = removal_candidates;
-                        self.current_residual_problem = Some(residual_problem);
-                        break;
-                    }
-
-                    // Restore trackers to original solution state
-                    for &removal_candidate in &removal_candidates {
-                        self.trackers
-                            .track_image_addition(removal_candidate, self.problem);
-                    }
-                }
-            }
-
-            // 2. Try to get next valid solution from current residual problem
-            if let Some(residual_problem) = self.current_residual_problem.as_mut()
-                && let Some(residual_solution) =
-                    residual_problem.solve_next(self.problem, self.timer)
-            {
-                // Merge into neighbor
+            // 1. If we have a non-exhausted iterator of non-dominated residual solutions, yield from it
+            if let Some(residual_solution) = self.filtered_residual_iter.as_mut().and_then(|it| it.next()) {
+                let residual_problem = self
+                    .current_residual_problem
+                    .as_ref()
+                    .expect("residual problem must exist while iterator is active");
                 let mut neighbor = residual_problem.unmodified_solution.clone();
                 neighbor.merge_residual_solution(
                     &residual_solution,
@@ -1113,17 +1095,82 @@ where
                     self.problem,
                     self.trackers,
                 );
-
                 return Some(neighbor);
             }
 
-            // Exhausted current residual problem's combinations, clear it and try next removal candidate
-            self.current_residual_problem = None;
-            // Restore trackers to original solution state
-            for &removal_candidate in &self.current_removal_candidates {
-                self.trackers
-                    .track_image_addition(removal_candidate, self.problem);
+            // 2. Iterator exhausted. If we had a residual problem, we've drained it -- clean up.
+            if self.current_residual_problem.is_some() {
+                self.current_residual_problem = None;
+                self.filtered_residual_iter = None;
+                // Restore trackers to original solution state
+                for &removal_candidate in &self.current_removal_candidates {
+                    self.trackers
+                        .track_image_addition(removal_candidate, self.problem);
+                }
             }
+
+            // 3. Get next removal candidate and create a new residual problem
+            loop {
+                let removal_candidates = self.removal_candidates_iter.next()?;
+
+                // Create residual problem (this will modify trackers)
+                if let Some(mut residual_problem) =
+                    self.original_solution.create_residual_problem(
+                        removal_candidates.clone(),
+                        self.problem,
+                        self.is_deterministic,
+                        self.trackers,
+                    )
+                {
+                    self.current_removal_candidates = removal_candidates;
+
+                    // 4. Enumerate ALL valid residual solutions, fix non-additive objectives,
+                    //    and filter through Pareto front.
+                    //
+                    //    - CloudyArea: overwrite with merged value (sound)
+                    //    - MinResolution: neutralize to 0 (unsound in residual space,
+                    //      so we disable it for filtering; the global archive still
+                    //      filters on full merged objectives)
+                    let min_res_obj_idx = self.problem.objective_types().iter().position(
+                        |t| matches!(t, crate::objectives::ObjectiveType::MinResolution),
+                    );
+
+                    let mut nd_set: NdTreeSolutionSet<ResidualSolution<D>, D> =
+                        NdTreeSolutionSet::default();
+                    while let Some(mut residual_solution) =
+                        residual_problem.solve_next(self.problem, self.timer)
+                    {
+                        // Overwrite CloudyArea objective with merged value
+                        if let Some(merged_cloudy) =
+                            residual_problem.compute_merged_cloudy_area(&residual_solution)
+                        {
+                            let obj_idx = residual_problem
+                                .cloudy_area_data
+                                .as_ref()
+                                .unwrap()
+                                .objective_index;
+                            residual_solution.objectives[obj_idx] = merged_cloudy;
+                        }
+                        // Neutralize MinResolution so it never causes dominance
+                        if let Some(idx) = min_res_obj_idx {
+                            residual_solution.objectives[idx] = 0;
+                        }
+                        nd_set.try_insert(&residual_solution);
+                    }
+
+                    // Store the consuming iterator -- no Vec allocation
+                    self.filtered_residual_iter = Some(nd_set.into_iter());
+                    self.current_residual_problem = Some(residual_problem);
+                    break;
+                }
+
+                // Restore trackers to original solution state
+                for &removal_candidate in &removal_candidates {
+                    self.trackers
+                        .track_image_addition(removal_candidate, self.problem);
+                }
+            }
+            // Loop back to yield from the freshly-filled iterator
         }
     }
 }

@@ -178,8 +178,8 @@ def run_two_phase_solver_with_validation(
                 solver_config=solver_config,
                 objectives=objectives,
                 dry_run=False,
-                enable_pls_trace=False,  # Disabled: trace generation is O(n²) and takes hours for large solution sets
-                enable_profiling_trace=True,  # Enable profiling trace for performance analysis
+                enable_pls_trace=False,
+                enable_profiling_trace=False,
                 objective_bounds=objective_bounds,
                 max_solutions_count=max_solutions_count,
                 pareto_archive=pareto_archive,
@@ -644,9 +644,9 @@ class TestTwoPhaseInstances:
 
     @pytest.mark.timeout(4200)  # Solver timeout: 3600s (1h) + 600s (10min) buffer for size 100
     @pytest.mark.parametrize("pareto_archive", ["nd-tree", "linked-list", "vector"])
+    @pytest.mark.parametrize("ratio", TWO_PHASE_RATIOS)
     @pytest.mark.parametrize("iteration", range(NUM_ITERATIONS))
     @pytest.mark.parametrize("filename", MEDIUM_INSTANCES)
-    @pytest.mark.parametrize("ratio", TWO_PHASE_RATIOS)
     def test_solve_two_phase_4d_on_medium_instances(self, filename, ratio, iteration, pareto_archive, test_data_dir, mzn_model_path, artifacts_manager, caplog, use_pseudo_solver):
         """Test two-phase solver on medium instances (100 images) with 4 objectives and different ratios."""
         caplog.set_level(logging.INFO)

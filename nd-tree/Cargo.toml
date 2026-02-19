@@ -17,6 +17,11 @@ name = "pareto_front_comparison"
 harness = false
 path = "benches/pareto_front_comparison.rs"
 
+[[bench]]
+name = "trace_replay_bench"
+harness = false
+path = "benches/trace_replay_bench.rs"
+
 # Performance-optimized profiles
 [profile.release]
 opt-level = 3              # Maximum optimization

@@ -1012,9 +1012,11 @@ pub fn solve_with_pls(
 
             // Generate trace if requested
             if trace {
-                info!("Generating 4D optimization trace archive");
+                info!("Generating 4D optimization trace archive ({} explored solutions)", explored_solutions.len());
                 
                 // Compute dominance info (filtering + domination indices in one pass)
+                info!("Computing dominance info (filter_dominated={})...", !include_dominated);
+                let dominance_start = std::time::Instant::now();
                 let dominance_info = if include_dominated {
                     // Don't filter, but still compute domination indices
                     trace::compute_dominance_info(explored_solutions, false)
@@ -1023,11 +1025,18 @@ pub fn solve_with_pls(
                     // Filter and compute domination indices
                     trace::compute_dominance_info(explored_solutions, true)
                 };
+                info!("Dominance computation done in {:.3}s ({} -> {} solutions)",
+                    dominance_start.elapsed().as_secs_f64(),
+                    dominance_info.domination_indices.len(),
+                    dominance_info.solutions.len(),
+                );
                 
                 let trace_solutions = dominance_info.solutions;
                 let domination_indices = Some(dominance_info.domination_indices);
                 
                 // Use provided objective bounds or calculate from solutions
+                info!("Computing objective bounds for {} trace solutions...", trace_solutions.len());
+                let bounds_start = std::time::Instant::now();
                 let (trace_objective_bounds, reference_point) = if let Some(provided_bounds) = &objective_bounds {
                     // Validate provided bounds
                     if provided_bounds.len() != objectives.len() {
@@ -1060,7 +1069,10 @@ pub fn solve_with_pls(
                     trace::calculate_objective_bounds_from_solutions(&trace_solutions)
                         .map_err(|e| PyValueError::new_err(format!("Failed to calculate objective bounds: {}", e)))?
                 };
+                info!("Objective bounds computed in {:.3}s", bounds_start.elapsed().as_secs_f64());
                 
+                info!("Creating trace archive (binaries + hypervolume + compression)...");
+                let archive_start = std::time::Instant::now();
                 let trace_archive = trace::create_optimization_trace_archive(
                     trace_solutions,
                     objectives,
@@ -1073,6 +1085,8 @@ pub fn solve_with_pls(
                 .map_err(|e| {
                     PyValueError::new_err(format!("Failed to create trace archive: {}", e))
                 })?;
+                info!("Trace archive created in {:.3}s ({} bytes)",
+                    archive_start.elapsed().as_secs_f64(), trace_archive.len());
                 
                 // Capture profiling data if enabled
                 let profiling_data = read_profiling_trace_data(_chrome_guard, _profiling_buffer);

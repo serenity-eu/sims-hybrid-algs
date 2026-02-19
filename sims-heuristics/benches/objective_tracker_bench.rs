@@ -8,8 +8,9 @@ use criterion::{
 };
 use fixedbitset::FixedBitSet;
 use pls::objective_tracker::{
-    AltTrackerArray, SimdTrackerArray, StandardTrackerArray, TrackerCollection, 
-    ExplicitSimdTrackerArray, SaturatingTrackerArray, SafeTrackerArray, SimpleTrackerArray
+    AltTrackerArray, SimdTrackerArray, StandardTrackerArray, TrackerCollection,
+    ExplicitSimdTrackerArray, SaturatingTrackerArray, SafeTrackerArray, SimpleTrackerArray,
+    ProvenSafeTrackerArray,
 };
 use pls::objectives::ObjectiveType;
 use pls::problem_bitset::ProblemBitset;
@@ -326,6 +327,21 @@ fn bench_tracker_replay_lagos_30(c: &mut Criterion) {
         |b, &()| {
             b.iter_batched(
                 || SimpleTrackerArray::<4>::new(&problem),
+                |trackers| {
+                    let (_trackers, sink) = replay_trace::<4, _>(trackers, &problem, events);
+                    black_box(sink);
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        },
+    );
+
+    group.bench_with_input(
+        BenchmarkId::new("ProvenSafeTrackerArray", TRACE_PATH),
+        &(),
+        |b, &()| {
+            b.iter_batched(
+                || ProvenSafeTrackerArray::<4>::new(&problem),
                 |trackers| {
                     let (_trackers, sink) = replay_trace::<4, _>(trackers, &problem, events);
                     black_box(sink);

@@ -5,6 +5,7 @@
 
 use crate::objective_tracker::TrackerCollection;
 use crate::objective_tracker_impl::simd_trackers::SimdTrackerArray;
+#[cfg(feature = "additional_trackers")]
 use crate::objective_tracker_impl::simplified_trackers::SimpleTrackerArray;
 use crate::objective_tracker_impl::standard_trackers::{StandardTracker, StandardTrackerArray};
 use crate::problem::SetCoverProblem;
@@ -130,12 +131,14 @@ impl<const D: usize> TrackerCollection<D> for CompositeDebugTrackerArray<D> {
 
 /// A composite tracker that runs StandardTrackerArray and SimpleTrackerArray in parallel,
 /// asserting that all results match.
+#[cfg(feature = "additional_trackers")]
 #[derive(Clone, Debug)]
 pub struct StandardSimpleDebugTrackerArray<const D: usize> {
     standard: StandardTrackerArray<D>,
     simple: SimpleTrackerArray<D>,
 }
 
+#[cfg(feature = "additional_trackers")]
 impl<const D: usize> TrackerCollection<D> for StandardSimpleDebugTrackerArray<D> {
     type Tracker = StandardTracker;
 
@@ -280,6 +283,7 @@ mod tests {
         // If we get here without panic, the implementations match
     }
 
+    #[cfg(feature = "additional_trackers")]
     #[test]
     fn test_composite_standard_simple_consistency() {
         let instance_path = Path::new("data").join("lagos_nigeria_30.dzn");

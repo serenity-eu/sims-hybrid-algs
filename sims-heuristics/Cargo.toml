@@ -48,6 +48,7 @@ harness = false
 [[bench]]
 name = "objective_tracker_bench"
 harness = false
+required-features = ["additional_trackers"]
 
 [dev-dependencies]
 criterion = "0.8.1"
@@ -77,9 +78,11 @@ smallvec = "1.15.1"
 arrayvec = "0.7.6"
 
 [features]
-default = ["bitmaps", "plotting"]
+default = ["bitmaps", "plotting", "bounds_check"]
 plotting = ["plotters", "nd-tree/plotting"]
 bitmaps = ["fixedbitset"]
+additional_trackers = []
+bounds_check = []
 
 [profile.release]
 debug = true
