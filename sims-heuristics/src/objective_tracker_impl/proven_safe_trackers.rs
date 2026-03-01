@@ -184,14 +184,14 @@ fn build_shared_data<const D: usize>(problem: &impl SetCoverProblem<D>) -> Share
         element_areas: element_areas.unwrap(),
         clear_elements: clear_elements.unwrap(),
         clear_elements_offsets: clear_elements_offsets.unwrap(),
-        resolution_levels: resolution_levels.unwrap(),
-        image_resolution_level: image_resolution_level.unwrap(),
+        resolution_levels: resolution_levels.unwrap_or_default(),
+        image_resolution_level: image_resolution_level.unwrap_or_default(),
         image_elements,
         image_elements_offsets,
         image_intervals: Arc::new(image_intervals),
         image_intervals_offsets: Arc::new(image_intervals_offsets),
-        incidence_levels: incidence_levels.unwrap(),
-        image_incidence_level: image_incidence_level.unwrap(),
+        incidence_levels: incidence_levels.unwrap_or_default(),
+        image_incidence_level: image_incidence_level.unwrap_or_default(),
     }
 }
 

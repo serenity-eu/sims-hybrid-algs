@@ -202,10 +202,13 @@ impl std::io::Write for SharedVecWriter {
     objective_bounds=None,
     include_dominated=false,
     pareto_archive="nd-tree".to_string(),
-    profiling_trace=false
+    profiling_trace=false,
+    parallel=false,
+    num_parallel_threads=0usize
 ))]
 #[allow(unused_variables, reason = "plot_output_path is used only when plotting feature is enabled")]
 pub fn solve_with_pls(
+    py: Python<'_>,
     sims_instance: &SimsDiscreteProblem,
     objectives: Vec<String>,
     plots: bool,
@@ -222,6 +225,8 @@ pub fn solve_with_pls(
     include_dominated: bool,
     pareto_archive: String,
     profiling_trace: bool,
+    parallel: bool,
+    num_parallel_threads: usize,
 ) -> PyResult<SolvingResult> {
     // Setup Chrome tracing if requested
     let (_chrome_guard, _profiling_buffer) = if profiling_trace {
@@ -471,7 +476,80 @@ pub fn solve_with_pls(
                     (final_solutions_vec, explored_solutions_vec)
                 }};
             }
-            
+
+            // --- Concurrent PLS (parallel) path ---
+            #[cfg(not(feature = "parallel"))]
+            if parallel {
+                return Err(PyValueError::new_err(
+                    "parallel=True requires 'parallel' feature. Rebuild with: \
+                     uv pip install -e . --reinstall-package sims-problem \
+                     --config-settings=build-args='--features parallel'"
+                ));
+            }
+            #[cfg(feature = "parallel")]
+            if parallel {
+                use pls::concurrent_pls::{ConcurrentPLS, ConcurrentPLSConfig};
+                use pls::solution_set_impl::NdTreeSolutionSet;
+
+                let num_threads = if num_parallel_threads == 0 {
+                    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
+                } else {
+                    num_parallel_threads
+                };
+                info!("Running 2D ConcurrentPLS with {num_threads} threads");
+
+                let mut initial_nd = NdTreeSolutionSet::new("cpls_initial_2d");
+                if let Some(provided_population) = &initial_population {
+                    info!("Using provided initial population of {} solutions and generating {} random solutions for 2D ConcurrentPLS",
+                          provided_population.len(), initial_population_size);
+                    for solution in provided_population {
+                        let selected_images: Vec<usize> = solution.selected_images.iter().cloned().collect();
+                        let pls_solution = BitsetEncodedSolution::from_selected_images(&selected_images, &pls_problem);
+                        initial_nd.try_insert(&pls_solution);
+                    }
+                    for i in 0..initial_population_size {
+                        let random_solution = if is_deterministic {
+                            BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890u64.wrapping_add(i as u64))
+                        } else {
+                            BitsetEncodedSolution::random(&pls_problem)
+                        };
+                        initial_nd.try_insert(&random_solution);
+                    }
+                } else {
+                    info!("Generating random initial population of {} solutions for 2D ConcurrentPLS", initial_population_size);
+                    for i in 0..initial_population_size {
+                        let random_solution = if is_deterministic {
+                            BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890u64.wrapping_add(i as u64))
+                        } else {
+                            BitsetEncodedSolution::random(&pls_problem)
+                        };
+                        initial_nd.try_insert(&random_solution);
+                    }
+                }
+
+                let config = ConcurrentPLSConfig {
+                    max_iterations,
+                    neighborhood_size_range: neighborhood_size_range.clone(),
+                    is_deterministic,
+                    ..ConcurrentPLSConfig::default_with_threads(num_threads, timeout)
+                };
+
+                info!("Starting 2D ConcurrentPLS execution ({num_threads} threads, {max_iterations} iterations timeout)");
+                let cpls_result = py.allow_threads(|| ConcurrentPLS::new(&pls_problem, config).solve(&initial_nd));
+                info!("2D ConcurrentPLS completed, processing {} solutions", cpls_result.archive.len());
+
+                let mut python_final_solutions = Vec::new();
+                for solution in cpls_result.archive {
+                    let py_solution: crate::solution::Solution = (&solution, &pls_problem).into();
+                    python_final_solutions.push(py_solution);
+                }
+                if trace {
+                    log::warn!("trace=true is not supported with parallel=true (ConcurrentPLS does not track explored solutions); returning result without trace");
+                }
+                return Ok(crate::solution::SolvingResult::new(python_final_solutions));
+            }
+            // --- End concurrent PLS path ---
+
             // Select solution set type based on enum and run PLS
             let (final_solutions, explored_solutions) = match solution_set_type {
                 SolutionSetType::LinkedList => {
@@ -726,7 +804,80 @@ pub fn solve_with_pls(
                     (final_solutions_vec, explored_solutions_vec)
                 }};
             }
-            
+
+            // --- Concurrent PLS (parallel) path ---
+            #[cfg(not(feature = "parallel"))]
+            if parallel {
+                return Err(PyValueError::new_err(
+                    "parallel=True requires 'parallel' feature. Rebuild with: \
+                     uv pip install -e . --reinstall-package sims-problem \
+                     --config-settings=build-args='--features parallel'"
+                ));
+            }
+            #[cfg(feature = "parallel")]
+            if parallel {
+                use pls::concurrent_pls::{ConcurrentPLS, ConcurrentPLSConfig};
+                use pls::solution_set_impl::NdTreeSolutionSet;
+
+                let num_threads = if num_parallel_threads == 0 {
+                    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
+                } else {
+                    num_parallel_threads
+                };
+                info!("Running 3D ConcurrentPLS with {num_threads} threads");
+
+                let mut initial_nd = NdTreeSolutionSet::new("cpls_initial_3d");
+                if let Some(provided_population) = &initial_population {
+                    info!("Using provided initial population of {} solutions and generating {} random solutions for 3D ConcurrentPLS",
+                          provided_population.len(), initial_population_size);
+                    for solution in provided_population {
+                        let selected_images: Vec<usize> = solution.selected_images.iter().cloned().collect();
+                        let pls_solution = BitsetEncodedSolution::from_selected_images(&selected_images, &pls_problem);
+                        initial_nd.try_insert(&pls_solution);
+                    }
+                    for i in 0..initial_population_size {
+                        let random_solution = if is_deterministic {
+                            BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890u64.wrapping_add(i as u64))
+                        } else {
+                            BitsetEncodedSolution::random(&pls_problem)
+                        };
+                        initial_nd.try_insert(&random_solution);
+                    }
+                } else {
+                    info!("Generating random initial population of {} solutions for 3D ConcurrentPLS", initial_population_size);
+                    for i in 0..initial_population_size {
+                        let random_solution = if is_deterministic {
+                            BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890u64.wrapping_add(i as u64))
+                        } else {
+                            BitsetEncodedSolution::random(&pls_problem)
+                        };
+                        initial_nd.try_insert(&random_solution);
+                    }
+                }
+
+                let config = ConcurrentPLSConfig {
+                    max_iterations,
+                    neighborhood_size_range: neighborhood_size_range.clone(),
+                    is_deterministic,
+                    ..ConcurrentPLSConfig::default_with_threads(num_threads, timeout)
+                };
+
+                info!("Starting 3D ConcurrentPLS execution ({num_threads} threads, {max_iterations} iterations timeout)");
+                let cpls_result = py.allow_threads(|| ConcurrentPLS::new(&pls_problem, config).solve(&initial_nd));
+                info!("3D ConcurrentPLS completed, processing {} solutions", cpls_result.archive.len());
+
+                let mut python_final_solutions = Vec::new();
+                for solution in cpls_result.archive {
+                    let py_solution: crate::solution::Solution = (&solution, &pls_problem).into();
+                    python_final_solutions.push(py_solution);
+                }
+                if trace {
+                    log::warn!("trace=true is not supported with parallel=true (ConcurrentPLS does not track explored solutions); returning result without trace");
+                }
+                return Ok(crate::solution::SolvingResult::new(python_final_solutions));
+            }
+            // --- End concurrent PLS path ---
+
             // Select solution set type based on enum and run PLS
             let (final_solutions, explored_solutions) = match solution_set_type {
                 SolutionSetType::LinkedList => {
@@ -981,7 +1132,80 @@ pub fn solve_with_pls(
                     (final_solutions_vec, explored_solutions_vec)
                 }};
             }
-            
+
+            // --- Concurrent PLS (parallel) path ---
+            #[cfg(not(feature = "parallel"))]
+            if parallel {
+                return Err(PyValueError::new_err(
+                    "parallel=True requires 'parallel' feature. Rebuild with: \
+                     uv pip install -e . --reinstall-package sims-problem \
+                     --config-settings=build-args='--features parallel'"
+                ));
+            }
+            #[cfg(feature = "parallel")]
+            if parallel {
+                use pls::concurrent_pls::{ConcurrentPLS, ConcurrentPLSConfig};
+                use pls::solution_set_impl::NdTreeSolutionSet;
+
+                let num_threads = if num_parallel_threads == 0 {
+                    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
+                } else {
+                    num_parallel_threads
+                };
+                info!("Running 4D ConcurrentPLS with {num_threads} threads");
+
+                let mut initial_nd = NdTreeSolutionSet::new("cpls_initial_4d");
+                if let Some(provided_population) = &initial_population {
+                    info!("Using provided initial population of {} solutions and generating {} random solutions for 4D ConcurrentPLS",
+                          provided_population.len(), initial_population_size);
+                    for solution in provided_population {
+                        let selected_images: Vec<usize> = solution.selected_images.iter().cloned().collect();
+                        let pls_solution = BitsetEncodedSolution::from_selected_images(&selected_images, &pls_problem);
+                        initial_nd.try_insert(&pls_solution);
+                    }
+                    for i in 0..initial_population_size {
+                        let random_solution = if is_deterministic {
+                            BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890u64.wrapping_add(i as u64))
+                        } else {
+                            BitsetEncodedSolution::random(&pls_problem)
+                        };
+                        initial_nd.try_insert(&random_solution);
+                    }
+                } else {
+                    info!("Generating random initial population of {} solutions for 4D ConcurrentPLS", initial_population_size);
+                    for i in 0..initial_population_size {
+                        let random_solution = if is_deterministic {
+                            BitsetEncodedSolution::random_with_seed(&pls_problem, 1_234_567_890u64.wrapping_add(i as u64))
+                        } else {
+                            BitsetEncodedSolution::random(&pls_problem)
+                        };
+                        initial_nd.try_insert(&random_solution);
+                    }
+                }
+
+                let config = ConcurrentPLSConfig {
+                    max_iterations,
+                    neighborhood_size_range: neighborhood_size_range.clone(),
+                    is_deterministic,
+                    ..ConcurrentPLSConfig::default_with_threads(num_threads, timeout)
+                };
+
+                info!("Starting 4D ConcurrentPLS execution ({num_threads} threads, {max_iterations} iterations timeout)");
+                let cpls_result = py.allow_threads(|| ConcurrentPLS::new(&pls_problem, config).solve(&initial_nd));
+                info!("4D ConcurrentPLS completed, processing {} solutions", cpls_result.archive.len());
+
+                let mut python_final_solutions = Vec::new();
+                for solution in cpls_result.archive {
+                    let py_solution: crate::solution::Solution = (&solution, &pls_problem).into();
+                    python_final_solutions.push(py_solution);
+                }
+                if trace {
+                    log::warn!("trace=true is not supported with parallel=true (ConcurrentPLS does not track explored solutions); returning result without trace");
+                }
+                return Ok(crate::solution::SolvingResult::new(python_final_solutions));
+            }
+            // --- End concurrent PLS path ---
+
             // Select solution set type based on enum and run PLS
             let (final_solutions, explored_solutions) = match solution_set_type {
                 SolutionSetType::LinkedList => {
@@ -1558,6 +1782,7 @@ pub fn solve_with_milp(
     trace=true
 ))]
 pub fn solve_with_hybrid(
+    py: Python<'_>,
     sims_instance: &SimsDiscreteProblem,
     milp_config: &MilpConfig,
     pls_config: &PlsConfig,
@@ -1603,6 +1828,7 @@ pub fn solve_with_hybrid(
         // Pure PLS case
         info!("Pure PLS algorithm (ratio 0:100)");
         let solving_result = solve_with_pls(
+            py,
             sims_instance,
             pls_config.objectives.clone(),
             pls_config.plots,
@@ -1619,6 +1845,8 @@ pub fn solve_with_hybrid(
             false, // Don't include dominated solutions
             "nd-tree".to_string(), // Default pareto archive
             false, // No profiling trace for hybrid
+            false, // parallel disabled for internal hybrid calls
+            0,     // num_parallel_threads (ignored)
         )?;
         return Ok(solving_result);
     }
@@ -1659,6 +1887,7 @@ pub fn solve_with_hybrid(
     if milp_solutions.final_solutions.is_empty() {
         info!("MILP found no solutions, falling back to PLS only");
         let solving_result = solve_with_pls(
+            py,
             sims_instance,
             pls_config.objectives.clone(),
             pls_config.plots,
@@ -1675,6 +1904,8 @@ pub fn solve_with_hybrid(
             false, // Don't include dominated solutions
             "nd-tree".to_string(), // Default pareto archive
             false, // No profiling trace for hybrid
+            false, // parallel disabled for internal hybrid calls
+            0,     // num_parallel_threads (ignored)
         )?;
         return Ok(solving_result);
     }

@@ -97,7 +97,8 @@ def run_two_phase_solver_with_validation(
     iteration: int | None = None,
     max_solutions_count: int | None = None,
     pareto_archive: str = "nd-tree",
-    use_pseudo_solver: bool = False
+    use_pseudo_solver: bool = False,
+    parallel: bool = False,
 ) -> SolverTestResult:
     """
     Run solver.solve_with_two_phases with the given configuration and validate results.
@@ -114,6 +115,7 @@ def run_two_phase_solver_with_validation(
         iteration: Iteration number for repeated runs
         max_solutions_count: Maximum number of solutions to generate (None = unlimited)
         pareto_archive: Pareto archive implementation ("nd-tree", "linked-list", "vector")
+        parallel: Whether to use ConcurrentPLS (multi-threaded PLS) in the PLS phase
     
     Returns:
         SolverTestResult with execution details and success status
@@ -156,34 +158,26 @@ def run_two_phase_solver_with_validation(
             ratio=ratio
         )
         
-        # Use pseudo-solver or real solver based on flag
-        if use_pseudo_solver:
-            pseudo_solver = get_pseudo_solver()
-            result = pseudo_solver.solve_with_two_phases(
-                problem_instance=problem_instance,
-                problem_path=Path(instance_path),
-                solver_config=solver_config,
-                objectives=objectives,
-                timeout_s=timeout,
-                run_real_pls=True,  # Run real PLS after replaying exact solutions
-                objective_bounds=objective_bounds,
-                pareto_archive=pareto_archive
-            )
-        else:
-            # Call solver.solve_with_two_phases with objective bounds
-            result = solve_with_two_phases(
-                problem_instance=problem_instance,
-                problem_path=Path(instance_path),
-                experiment_path=output_dir,
-                solver_config=solver_config,
-                objectives=objectives,
-                dry_run=False,
-                enable_pls_trace=False,
-                enable_profiling_trace=False,
-                objective_bounds=objective_bounds,
-                max_solutions_count=max_solutions_count,
-                pareto_archive=pareto_archive,
-            )
+        # Optionally override the exact phase with pre-recorded solutions.
+        # Two-phase orchestration (time splitting, PLS seeding, parallel, hypervolume)
+        # is always handled by solve_with_two_phases regardless.
+        exact_solver_fn = get_pseudo_solver().solve_exact if use_pseudo_solver else None
+
+        result = solve_with_two_phases(
+            problem_instance=problem_instance,
+            problem_path=Path(instance_path),
+            experiment_path=output_dir,
+            solver_config=solver_config,
+            objectives=objectives,
+            dry_run=False,
+            enable_pls_trace=False,
+            enable_profiling_trace=False,
+            objective_bounds=objective_bounds,
+            max_solutions_count=max_solutions_count,
+            pareto_archive=pareto_archive,
+            parallel=parallel,
+            exact_solver_fn=exact_solver_fn,
+        )
 
         execution_time = time.time() - start_time
         logger.info(f"Two-phase execution completed successfully in {execution_time:.2f} seconds")
@@ -277,10 +271,11 @@ class TestTwoPhaseInstances:
 
     # 2D objectives tests with different ratios
     @pytest.mark.timeout(60)  # Solver timeout: 10-45s, pytest buffer included
+    @pytest.mark.parametrize("parallel", [False, True])
     @pytest.mark.parametrize("pareto_archive", ["nd-tree", "linked-list", "vector"])
     @pytest.mark.parametrize("ratio", TWO_PHASE_RATIOS)
     @pytest.mark.parametrize("filename", SMALL_INSTANCES)
-    def test_solve_two_phase_2d_on_small_instances(self, filename, ratio, pareto_archive, test_data_dir, mzn_model_path, artifacts_manager, caplog, use_pseudo_solver):
+    def test_solve_two_phase_2d_on_small_instances(self, filename, ratio, pareto_archive, parallel, test_data_dir, mzn_model_path, artifacts_manager, caplog, use_pseudo_solver):
         """Test two-phase solver on small instances (30 images) with 2 objectives and different ratios."""
         caplog.set_level(logging.INFO)
         logger = logging.getLogger(__name__)
@@ -294,7 +289,7 @@ class TestTwoPhaseInstances:
         objectives = ["min_cost", "cloud_coverage"]
         timeout = get_timeout_for_instance_size([filename])
         ratio_str = format_ratio_string(ratio)
-        test_name = f"solve_two_phase_2d_small_{ratio_str}"
+        test_name = f"solve_two_phase_2d_small_{ratio_str}_{'concurrent' if parallel else 'sequential'}"
         
         # Run the test
         result = run_two_phase_solver_with_validation(
@@ -307,7 +302,8 @@ class TestTwoPhaseInstances:
             artifacts_manager=artifacts_manager,
             test_name=test_name,
             pareto_archive=pareto_archive,
-            use_pseudo_solver=use_pseudo_solver
+            use_pseudo_solver=use_pseudo_solver,
+            parallel=parallel
         )
         
         # Assert success
@@ -317,10 +313,11 @@ class TestTwoPhaseInstances:
         logger.info(f"Small 2D instance {filename} (ratio {ratio_str}) completed successfully in {result.execution_time:.2f}s")
 
     @pytest.mark.timeout(4200)  # Solver timeout: 3600s (1h) + 600s (10min) buffer for size 100
+    @pytest.mark.parametrize("parallel", [False, True])
     @pytest.mark.parametrize("pareto_archive", ["nd-tree", "linked-list", "vector"])
     @pytest.mark.parametrize("ratio", TWO_PHASE_RATIOS)
     @pytest.mark.parametrize("filename", MEDIUM_INSTANCES)
-    def test_solve_two_phase_2d_on_medium_instances(self, filename, ratio, pareto_archive, test_data_dir, mzn_model_path, artifacts_manager, caplog, use_pseudo_solver):
+    def test_solve_two_phase_2d_on_medium_instances(self, filename, ratio, pareto_archive, parallel, test_data_dir, mzn_model_path, artifacts_manager, caplog, use_pseudo_solver):
         """Test two-phase solver on medium instances (50 images) with 2 objectives and different ratios."""
         caplog.set_level(logging.INFO)
         logger = logging.getLogger(__name__)
@@ -334,7 +331,7 @@ class TestTwoPhaseInstances:
         objectives = ["min_cost", "cloud_coverage"]
         timeout = get_timeout_for_instance_size([filename])
         ratio_str = format_ratio_string(ratio)
-        test_name = f"solve_two_phase_2d_medium_{ratio_str}"
+        test_name = f"solve_two_phase_2d_medium_{ratio_str}_{'concurrent' if parallel else 'sequential'}"
         
         # Run the test
         result = run_two_phase_solver_with_validation(
@@ -347,7 +344,8 @@ class TestTwoPhaseInstances:
             artifacts_manager=artifacts_manager,
             test_name=test_name,
             pareto_archive=pareto_archive,
-            use_pseudo_solver=use_pseudo_solver
+            use_pseudo_solver=use_pseudo_solver,
+            parallel=parallel
         )
         
         # Assert success
@@ -357,10 +355,11 @@ class TestTwoPhaseInstances:
         logger.info(f"Medium 2D instance {filename} (ratio {ratio_str}) completed successfully in {result.execution_time:.2f}s")
 
     @pytest.mark.timeout(12600)  # Solver timeout: 12000s (200min) + 600s (10min) buffer for size 145-150
+    @pytest.mark.parametrize("parallel", [False, True])
     @pytest.mark.parametrize("pareto_archive", ["nd-tree", "linked-list", "vector"])
     @pytest.mark.parametrize("ratio", TWO_PHASE_RATIOS)
     @pytest.mark.parametrize("filename", LARGE_INSTANCES)
-    def test_solve_two_phase_2d_on_large_instances(self, filename, ratio, pareto_archive, test_data_dir, mzn_model_path, artifacts_manager, caplog, use_pseudo_solver):
+    def test_solve_two_phase_2d_on_large_instances(self, filename, ratio, pareto_archive, parallel, test_data_dir, mzn_model_path, artifacts_manager, caplog, use_pseudo_solver):
         """Test two-phase solver on large instances (145-150 images) with 2 objectives and different ratios."""
         caplog.set_level(logging.INFO)
         logger = logging.getLogger(__name__)
@@ -374,7 +373,7 @@ class TestTwoPhaseInstances:
         objectives = ["min_cost", "cloud_coverage"]
         timeout = get_timeout_for_instance_size([filename])
         ratio_str = format_ratio_string(ratio)
-        test_name = f"solve_two_phase_2d_large_{ratio_str}"
+        test_name = f"solve_two_phase_2d_large_{ratio_str}_{'concurrent' if parallel else 'sequential'}"
         
         # Run the test
         result = run_two_phase_solver_with_validation(
@@ -387,7 +386,8 @@ class TestTwoPhaseInstances:
             artifacts_manager=artifacts_manager,
             test_name=test_name,
             pareto_archive=pareto_archive,
-            use_pseudo_solver=use_pseudo_solver
+            use_pseudo_solver=use_pseudo_solver,
+            parallel=parallel
         )
         
         # Assert success
@@ -397,10 +397,11 @@ class TestTwoPhaseInstances:
         logger.info(f"Large 2D instance {filename} (ratio {ratio_str}) completed successfully in {result.execution_time:.2f}s")
 
     @pytest.mark.timeout(43800)  # Solver timeout: 43200s (12h) + 600s (10min) buffer for size 200
+    @pytest.mark.parametrize("parallel", [False, True])
     @pytest.mark.parametrize("pareto_archive", ["nd-tree", "linked-list", "vector"])
     @pytest.mark.parametrize("ratio", TWO_PHASE_RATIOS)
     @pytest.mark.parametrize("filename", HUGE_INSTANCES)
-    def test_solve_two_phase_2d_on_huge_instances(self, filename, ratio, pareto_archive, test_data_dir, mzn_model_path, artifacts_manager, caplog, use_pseudo_solver):
+    def test_solve_two_phase_2d_on_huge_instances(self, filename, ratio, pareto_archive, parallel, test_data_dir, mzn_model_path, artifacts_manager, caplog, use_pseudo_solver):
         """Test two-phase solver on huge instances (200 images) with 2 objectives and different ratios."""
         caplog.set_level(logging.INFO)
         logger = logging.getLogger(__name__)
@@ -414,7 +415,7 @@ class TestTwoPhaseInstances:
         objectives = ["min_cost", "cloud_coverage"]
         timeout = get_timeout_for_instance_size([filename])
         ratio_str = format_ratio_string(ratio)
-        test_name = f"solve_two_phase_2d_huge_{ratio_str}"
+        test_name = f"solve_two_phase_2d_huge_{ratio_str}_{'concurrent' if parallel else 'sequential'}"
         
         # Run the test
         result = run_two_phase_solver_with_validation(
@@ -427,7 +428,8 @@ class TestTwoPhaseInstances:
             artifacts_manager=artifacts_manager,
             test_name=test_name,
             pareto_archive=pareto_archive,
-            use_pseudo_solver=use_pseudo_solver
+            use_pseudo_solver=use_pseudo_solver,
+            parallel=parallel
         )
         
         # Assert success
@@ -438,10 +440,11 @@ class TestTwoPhaseInstances:
 
     # 3D objectives tests with different ratios
     @pytest.mark.timeout(60)  # Solver timeout: 10-45s, pytest buffer included
+    @pytest.mark.parametrize("parallel", [False, True])
     @pytest.mark.parametrize("pareto_archive", ["nd-tree", "linked-list", "vector"])
     @pytest.mark.parametrize("ratio", TWO_PHASE_RATIOS)
     @pytest.mark.parametrize("filename", SMALL_INSTANCES)
-    def test_solve_two_phase_3d_on_small_instances(self, filename, ratio, pareto_archive, test_data_dir, mzn_model_path, artifacts_manager, caplog, use_pseudo_solver):
+    def test_solve_two_phase_3d_on_small_instances(self, filename, ratio, pareto_archive, parallel, test_data_dir, mzn_model_path, artifacts_manager, caplog, use_pseudo_solver):
         """Test two-phase solver on small instances (30 images) with 3 objectives and different ratios."""
         caplog.set_level(logging.INFO)
         logger = logging.getLogger(__name__)
@@ -455,7 +458,7 @@ class TestTwoPhaseInstances:
         objectives = ["min_cost", "cloud_coverage", "min_max_incidence_angle"]
         timeout = get_timeout_for_instance_size([filename])
         ratio_str = format_ratio_string(ratio)
-        test_name = f"solve_two_phase_3d_small_{ratio_str}"
+        test_name = f"solve_two_phase_3d_small_{ratio_str}_{'concurrent' if parallel else 'sequential'}"
         
         # Run the test
         result = run_two_phase_solver_with_validation(
@@ -468,7 +471,8 @@ class TestTwoPhaseInstances:
             artifacts_manager=artifacts_manager,
             test_name=test_name,
             pareto_archive=pareto_archive,
-            use_pseudo_solver=use_pseudo_solver
+            use_pseudo_solver=use_pseudo_solver,
+            parallel=parallel
         )
         
         # Assert success
@@ -478,10 +482,11 @@ class TestTwoPhaseInstances:
         logger.info(f"Small 3D instance {filename} (ratio {ratio_str}) completed successfully in {result.execution_time:.2f}s")
 
     @pytest.mark.timeout(4200)  # Solver timeout: 3600s (1h) + 600s (10min) buffer for size 100
+    @pytest.mark.parametrize("parallel", [False, True])
     @pytest.mark.parametrize("pareto_archive", ["nd-tree", "linked-list", "vector"])
     @pytest.mark.parametrize("ratio", TWO_PHASE_RATIOS)
     @pytest.mark.parametrize("filename", MEDIUM_INSTANCES)
-    def test_solve_two_phase_3d_on_medium_instances(self, filename, ratio, pareto_archive, test_data_dir, mzn_model_path, artifacts_manager, caplog, use_pseudo_solver):
+    def test_solve_two_phase_3d_on_medium_instances(self, filename, ratio, pareto_archive, parallel, test_data_dir, mzn_model_path, artifacts_manager, caplog, use_pseudo_solver):
         """Test two-phase solver on medium instances (50 images) with 3 objectives and different ratios."""
         caplog.set_level(logging.INFO)
         logger = logging.getLogger(__name__)
@@ -495,7 +500,7 @@ class TestTwoPhaseInstances:
         objectives = ["min_cost", "cloud_coverage", "min_max_incidence_angle"]
         timeout = get_timeout_for_instance_size([filename])
         ratio_str = format_ratio_string(ratio)
-        test_name = f"solve_two_phase_3d_medium_{ratio_str}"
+        test_name = f"solve_two_phase_3d_medium_{ratio_str}_{'concurrent' if parallel else 'sequential'}"
         
         # Run the test
         result = run_two_phase_solver_with_validation(
@@ -508,7 +513,8 @@ class TestTwoPhaseInstances:
             artifacts_manager=artifacts_manager,
             test_name=test_name,
             pareto_archive=pareto_archive,
-            use_pseudo_solver=use_pseudo_solver
+            use_pseudo_solver=use_pseudo_solver,
+            parallel=parallel
         )
         
         # Assert success
@@ -518,10 +524,11 @@ class TestTwoPhaseInstances:
         logger.info(f"Medium 3D instance {filename} (ratio {ratio_str}) completed successfully in {result.execution_time:.2f}s")
 
     @pytest.mark.timeout(12600)  # Solver timeout: 12000s (200min) + 600s (10min) buffer for size 145-150
+    @pytest.mark.parametrize("parallel", [False, True])
     @pytest.mark.parametrize("pareto_archive", ["nd-tree", "linked-list", "vector"])
     @pytest.mark.parametrize("ratio", TWO_PHASE_RATIOS)
     @pytest.mark.parametrize("filename", LARGE_INSTANCES)
-    def test_solve_two_phase_3d_on_large_instances(self, filename, ratio, pareto_archive, test_data_dir, mzn_model_path, artifacts_manager, caplog, use_pseudo_solver):
+    def test_solve_two_phase_3d_on_large_instances(self, filename, ratio, pareto_archive, parallel, test_data_dir, mzn_model_path, artifacts_manager, caplog, use_pseudo_solver):
         """Test two-phase solver on large instances (145-150 images) with 3 objectives and different ratios."""
         caplog.set_level(logging.INFO)
         logger = logging.getLogger(__name__)
@@ -535,7 +542,7 @@ class TestTwoPhaseInstances:
         objectives = ["min_cost", "cloud_coverage", "min_max_incidence_angle"]
         timeout = get_timeout_for_instance_size([filename])
         ratio_str = format_ratio_string(ratio)
-        test_name = f"solve_two_phase_3d_large_{ratio_str}"
+        test_name = f"solve_two_phase_3d_large_{ratio_str}_{'concurrent' if parallel else 'sequential'}"
         
         # Run the test
         result = run_two_phase_solver_with_validation(
@@ -548,7 +555,8 @@ class TestTwoPhaseInstances:
             artifacts_manager=artifacts_manager,
             test_name=test_name,
             pareto_archive=pareto_archive,
-            use_pseudo_solver=use_pseudo_solver
+            use_pseudo_solver=use_pseudo_solver,
+            parallel=parallel
         )
         
         # Assert success
@@ -558,10 +566,11 @@ class TestTwoPhaseInstances:
         logger.info(f"Large 3D instance {filename} (ratio {ratio_str}) completed successfully in {result.execution_time:.2f}s")
 
     @pytest.mark.timeout(43800)  # Solver timeout: 43200s (12h) + 600s (10min) buffer for size 200
+    @pytest.mark.parametrize("parallel", [False, True])
     @pytest.mark.parametrize("pareto_archive", ["nd-tree", "linked-list", "vector"])
     @pytest.mark.parametrize("ratio", TWO_PHASE_RATIOS)
     @pytest.mark.parametrize("filename", HUGE_INSTANCES)
-    def test_solve_two_phase_3d_on_huge_instances(self, filename, ratio, pareto_archive, test_data_dir, mzn_model_path, artifacts_manager, caplog, use_pseudo_solver):
+    def test_solve_two_phase_3d_on_huge_instances(self, filename, ratio, pareto_archive, parallel, test_data_dir, mzn_model_path, artifacts_manager, caplog, use_pseudo_solver):
         """Test two-phase solver on huge instances (200 images) with 3 objectives and different ratios."""
         caplog.set_level(logging.INFO)
         logger = logging.getLogger(__name__)
@@ -575,7 +584,7 @@ class TestTwoPhaseInstances:
         objectives = ["min_cost", "cloud_coverage", "min_max_incidence_angle"]
         timeout = get_timeout_for_instance_size([filename])
         ratio_str = format_ratio_string(ratio)
-        test_name = f"solve_two_phase_3d_huge_{ratio_str}"
+        test_name = f"solve_two_phase_3d_huge_{ratio_str}_{'concurrent' if parallel else 'sequential'}"
         
         # Run the test
         result = run_two_phase_solver_with_validation(
@@ -588,7 +597,8 @@ class TestTwoPhaseInstances:
             artifacts_manager=artifacts_manager,
             test_name=test_name,
             pareto_archive=pareto_archive,
-            use_pseudo_solver=use_pseudo_solver
+            use_pseudo_solver=use_pseudo_solver,
+            parallel=parallel
         )
         
         # Assert success
@@ -599,11 +609,12 @@ class TestTwoPhaseInstances:
 
     # 4D objectives tests with different ratios
     @pytest.mark.timeout(360)  # Solver timeout: 10-45s, pytest buffer included
+    @pytest.mark.parametrize("parallel", [False, True])
     @pytest.mark.parametrize("pareto_archive", ["nd-tree", "linked-list", "vector"])
     @pytest.mark.parametrize("iteration", range(NUM_ITERATIONS))
     @pytest.mark.parametrize("filename", SMALL_INSTANCES)
     @pytest.mark.parametrize("ratio", TWO_PHASE_RATIOS)
-    def test_solve_two_phase_4d_on_small_instances(self, filename, ratio, iteration, pareto_archive, test_data_dir, mzn_model_path, artifacts_manager, caplog, use_pseudo_solver):
+    def test_solve_two_phase_4d_on_small_instances(self, filename, ratio, iteration, pareto_archive, parallel, test_data_dir, mzn_model_path, artifacts_manager, caplog, use_pseudo_solver):
         """Test two-phase solver on small instances (30 images) with 4 objectives and different ratios."""
         caplog.set_level(logging.DEBUG)
         logger = logging.getLogger(__name__)
@@ -617,7 +628,7 @@ class TestTwoPhaseInstances:
         objectives = ["min_cost", "cloud_coverage", "min_max_incidence_angle", "min_resolution"]
         timeout = get_timeout_for_instance_size([filename])
         ratio_str = format_ratio_string(ratio)
-        test_name = f"solve_two_phase_4d_small_{pareto_archive}"
+        test_name = f"solve_two_phase_4d_small_{pareto_archive}_{'concurrent' if parallel else 'sequential'}"
         
         logger.info(f"Running iteration {iteration + 1}/{NUM_ITERATIONS} for {filename} with ratio {ratio_str}")
         
@@ -633,7 +644,8 @@ class TestTwoPhaseInstances:
             test_name=test_name,
             iteration=iteration,
             pareto_archive=pareto_archive,
-            use_pseudo_solver=use_pseudo_solver
+            use_pseudo_solver=use_pseudo_solver,
+            parallel=parallel
         )
         
         # Assert success
@@ -643,11 +655,12 @@ class TestTwoPhaseInstances:
         logger.info(f"Small 4D instance {filename} (ratio {ratio_str}, iteration {iteration + 1}/{NUM_ITERATIONS}) completed successfully in {result.execution_time:.2f}s")
 
     @pytest.mark.timeout(4200)  # Solver timeout: 3600s (1h) + 600s (10min) buffer for size 100
+    @pytest.mark.parametrize("parallel", [False, True])
     @pytest.mark.parametrize("pareto_archive", ["nd-tree", "linked-list", "vector"])
     @pytest.mark.parametrize("ratio", TWO_PHASE_RATIOS)
     @pytest.mark.parametrize("iteration", range(NUM_ITERATIONS))
     @pytest.mark.parametrize("filename", MEDIUM_INSTANCES)
-    def test_solve_two_phase_4d_on_medium_instances(self, filename, ratio, iteration, pareto_archive, test_data_dir, mzn_model_path, artifacts_manager, caplog, use_pseudo_solver):
+    def test_solve_two_phase_4d_on_medium_instances(self, filename, ratio, iteration, pareto_archive, parallel, test_data_dir, mzn_model_path, artifacts_manager, caplog, use_pseudo_solver):
         """Test two-phase solver on medium instances (100 images) with 4 objectives and different ratios."""
         caplog.set_level(logging.INFO)
         logger = logging.getLogger(__name__)
@@ -661,7 +674,7 @@ class TestTwoPhaseInstances:
         objectives = ["min_cost", "cloud_coverage", "min_max_incidence_angle", "min_resolution"]
         timeout = get_timeout_for_instance_size([filename])
         ratio_str = format_ratio_string(ratio)
-        test_name = f"solve_two_phase_4d_medium_{pareto_archive}"
+        test_name = f"solve_two_phase_4d_medium_{pareto_archive}_{'concurrent' if parallel else 'sequential'}"
         
         logger.info(f"Running iteration {iteration + 1}/{NUM_ITERATIONS} for {filename} with ratio {ratio_str}")
         
@@ -677,7 +690,8 @@ class TestTwoPhaseInstances:
             test_name=test_name,
             iteration=iteration,
             pareto_archive=pareto_archive,
-            use_pseudo_solver=use_pseudo_solver
+            use_pseudo_solver=use_pseudo_solver,
+            parallel=parallel
         )
         
         # Assert success
@@ -687,11 +701,12 @@ class TestTwoPhaseInstances:
         logger.info(f"Medium 4D instance {filename} (ratio {ratio_str}, iteration {iteration + 1}/{NUM_ITERATIONS}) completed successfully in {result.execution_time:.2f}s")
 
     @pytest.mark.timeout(12600)  # Solver timeout: 12000s (200min) + 600s (10min) buffer for size 145-150
+    @pytest.mark.parametrize("parallel", [False, True])
     @pytest.mark.parametrize("pareto_archive", ["nd-tree", "linked-list", "vector"])
     @pytest.mark.parametrize("iteration", range(NUM_ITERATIONS))
     @pytest.mark.parametrize("filename", LARGE_INSTANCES)
     @pytest.mark.parametrize("ratio", TWO_PHASE_RATIOS)
-    def test_solve_two_phase_4d_on_large_instances(self, filename, ratio, iteration, pareto_archive, test_data_dir, mzn_model_path, artifacts_manager, caplog, use_pseudo_solver):
+    def test_solve_two_phase_4d_on_large_instances(self, filename, ratio, iteration, pareto_archive, parallel, test_data_dir, mzn_model_path, artifacts_manager, caplog, use_pseudo_solver):
         """Test two-phase solver on large instances (145-150 images) with 4 objectives and different ratios."""
         caplog.set_level(logging.INFO)
         logger = logging.getLogger(__name__)
@@ -705,7 +720,7 @@ class TestTwoPhaseInstances:
         objectives = ["min_cost", "cloud_coverage", "min_max_incidence_angle", "min_resolution"]
         timeout = get_timeout_for_instance_size([filename])
         ratio_str = format_ratio_string(ratio)
-        test_name = f"solve_two_phase_4d_large_{pareto_archive}"
+        test_name = f"solve_two_phase_4d_large_{pareto_archive}_{'concurrent' if parallel else 'sequential'}"
         
         logger.info(f"Running iteration {iteration + 1}/{NUM_ITERATIONS} for {filename} with ratio {ratio_str}")
         
@@ -722,7 +737,8 @@ class TestTwoPhaseInstances:
             iteration=iteration,
             max_solutions_count=10,  # Limit to 10 solutions for large instances
             pareto_archive=pareto_archive,
-            use_pseudo_solver=use_pseudo_solver
+            use_pseudo_solver=use_pseudo_solver,
+            parallel=parallel
         )
         
         # Assert success
@@ -732,11 +748,12 @@ class TestTwoPhaseInstances:
         logger.info(f"Large 4D instance {filename} (ratio {ratio_str}, iteration {iteration + 1}/{NUM_ITERATIONS}) completed successfully in {result.execution_time:.2f}s")
 
     @pytest.mark.timeout(43800)  # Solver timeout: 43200s (12h) + 600s (10min) buffer for size 200
+    @pytest.mark.parametrize("parallel", [False, True])
     @pytest.mark.parametrize("pareto_archive", ["nd-tree", "linked-list", "vector"])
     @pytest.mark.parametrize("iteration", range(NUM_ITERATIONS))
     @pytest.mark.parametrize("filename", HUGE_INSTANCES)
     @pytest.mark.parametrize("ratio", TWO_PHASE_RATIOS)
-    def test_solve_two_phase_4d_on_huge_instances(self, filename, ratio, iteration, pareto_archive, test_data_dir, mzn_model_path, artifacts_manager, caplog, use_pseudo_solver):
+    def test_solve_two_phase_4d_on_huge_instances(self, filename, ratio, iteration, pareto_archive, parallel, test_data_dir, mzn_model_path, artifacts_manager, caplog, use_pseudo_solver):
         """Test two-phase solver on huge instances (200 images) with 4 objectives and different ratios."""
         caplog.set_level(logging.INFO)
         logger = logging.getLogger(__name__)
@@ -750,7 +767,7 @@ class TestTwoPhaseInstances:
         objectives = ["min_cost", "cloud_coverage", "min_max_incidence_angle", "min_resolution"]
         timeout = get_timeout_for_instance_size([filename])
         ratio_str = format_ratio_string(ratio)
-        test_name = f"solve_two_phase_4d_huge_{pareto_archive}"
+        test_name = f"solve_two_phase_4d_huge_{pareto_archive}_{'concurrent' if parallel else 'sequential'}"
         
         logger.info(f"Running iteration {iteration + 1}/{NUM_ITERATIONS} for {filename} with ratio {ratio_str}")
         
@@ -767,7 +784,8 @@ class TestTwoPhaseInstances:
             iteration=iteration,
             max_solutions_count=10,  # Limit to 10 solutions for huge instances
             pareto_archive=pareto_archive,
-            use_pseudo_solver=use_pseudo_solver
+            use_pseudo_solver=use_pseudo_solver,
+            parallel=parallel
         )
         
         # Assert success

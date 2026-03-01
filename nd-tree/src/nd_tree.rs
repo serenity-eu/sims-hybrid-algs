@@ -135,6 +135,18 @@ where
         self.insert(new_solution);
     }
 
+    /// Remove all solutions in the tree that are dominated by `dominator`, without inserting it.
+    /// This is the pruning-only half of `update`: identical domination scan, no insertion step.
+    pub fn remove_dominated(&mut self, dominator: &T) {
+        let Some(root_key) = self.root else { return };
+        self.update_node(root_key, dominator);
+        if let Some(root_key) = self.root {
+            if self.arena[root_key].is_empty() {
+                self.deallocate_root();
+            }
+        }
+    }
+
     fn insert(&mut self, sol: T) {
         if let Some(root_key) = self.root {
             // If the root exists, insert into it

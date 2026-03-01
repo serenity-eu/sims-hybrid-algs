@@ -92,6 +92,16 @@ where
     }
 }
 
+impl<T, const D: usize> NdTreeSolutionSet<T, D>
+where
+    T: ImageSet<D> + MoSolution<D> + PartialEq + Sized + Clone,
+{
+    /// Remove all solutions dominated by `dominator` without inserting it.
+    pub fn remove_dominated(&mut self, dominator: &T) {
+        self.nd_tree.remove_dominated(dominator);
+    }
+}
+
 impl<T, const D: usize> FromIterator<T> for NdTreeSolutionSet<T, D>
 where
     T: ImageSet<D> + MoSolution<D> + PartialEq + Sized + Clone,

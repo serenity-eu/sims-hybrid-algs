@@ -590,7 +590,9 @@ def solve_with_pls(
     objective_bounds: Optional[list[list[int]]] = None,
     include_dominated: bool = False,
     pareto_archive: Literal["nd-tree", "linked-list", "vector"] = "nd-tree",
-    profiling_trace: bool = False
+    profiling_trace: bool = False,
+    parallel: bool = False,
+    num_parallel_threads: int = 0
 ) -> SolvingResult: ...
 
 @overload
@@ -610,7 +612,9 @@ def solve_with_pls(
     objective_bounds: Optional[list[list[int]]] = None,
     include_dominated: bool = False,
     pareto_archive: Literal["nd-tree", "linked-list", "vector"] = "nd-tree",
-    profiling_trace: bool = False
+    profiling_trace: bool = False,
+    parallel: bool = False,
+    num_parallel_threads: int = 0
 ) -> SolvingResult: ...
 
 def solve_with_pls(
@@ -629,7 +633,9 @@ def solve_with_pls(
     objective_bounds: Optional[list[list[int]]] = None,
     include_dominated: bool = False,
     pareto_archive: Literal["nd-tree", "linked-list", "vector"] = "nd-tree",
-    profiling_trace: bool = False
+    profiling_trace: bool = False,
+    parallel: bool = False,
+    num_parallel_threads: int = 0
 ) -> SolvingResult:
     """
     Solve the SIMS problem using Pareto Local Search (heuristic algorithm).

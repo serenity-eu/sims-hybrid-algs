@@ -31,6 +31,8 @@ def solve(
     include_dominated: bool = False,
     pareto_archive: str = "nd-tree",
     is_deterministic: bool = True,
+    parallel: bool = False,
+    num_parallel_threads: int = 0,
 ) -> SolverResult:
     """
     Solve the SIMS problem using Pareto Local Search via sims_problem.solve_with_pls.
@@ -52,6 +54,8 @@ def solve(
         include_dominated: If False, filters out dominated solutions from traces (default: False)
         pareto_archive: Pareto archive implementation ("nd-tree", "linked-list", "vector")
         is_deterministic: Whether to use deterministic mode (default: True)
+        parallel: Whether to use ConcurrentPLS (multi-threaded) instead of sequential PLS (default: False)
+        num_parallel_threads: Number of threads for ConcurrentPLS; 0 = auto-detect CPU count (default: 0)
     
     Returns:
         SolverResult: The solving result with Pareto front solutions
@@ -110,7 +114,9 @@ def solve(
             profiling_trace=enable_profiling_trace,
             objective_bounds=objective_bounds,
             include_dominated=include_dominated,
-            pareto_archive=pareto_archive
+            pareto_archive=pareto_archive,
+            parallel=parallel,
+            num_parallel_threads=num_parallel_threads
         )
 
     except Exception as e:

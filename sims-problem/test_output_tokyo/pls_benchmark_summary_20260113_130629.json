@@ -1,0 +1,29 @@
+{
+  "benchmark_info": {
+    "timestamp": "2026-01-13T13:06:29.059155",
+    "instances_tested": 1,
+    "total_runs": 1,
+    "successful_runs": 0,
+    "failed_runs": 1,
+    "algorithm": "PLS",
+    "iterations_per_instance": 1,
+    "max_pls_iterations": 50000
+  },
+  "overall_statistics": {
+    "avg_runtime": 0.0,
+    "avg_solutions": 0.0,
+    "total_runtime": 0.0
+  },
+  "performance_by_instance": {},
+  "validation_statistics": {
+    "runs_with_validation": 0,
+    "valid_runs": 0,
+    "invalid_runs": 0,
+    "total_solutions": 0,
+    "invalid_solutions": 0,
+    "solutions_with_warnings": 0,
+    "pareto_front_violations": 0,
+    "run_validation_rate": 0,
+    "solution_validity_rate": 0
+  }
+}

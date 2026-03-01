@@ -4,7 +4,7 @@ use pareto::ParetoFront;
 use pls::{
     objectives::ObjectiveType, pareto_local_search::ParetoLocalSearch,
     problem_bitset::ProblemBitset, solution::bitset_encoded_solution::BitsetEncodedSolution,
-    solution_set_impl::NdTreeSolutionSet,
+    solution_set_impl::{NdTreeSolutionSet, VecSolutionSet},
 };
 use serde::Deserialize;
 
@@ -63,7 +63,7 @@ const LARGE_INSTANCES: [&str; 5] = [
 ];
 
 const MAX_ITERATIONS: usize = 1000;
-const MAX_DURATION: Duration = Duration::from_hours(1);
+const MAX_DURATION: Duration = Duration::from_secs(180);
 
 /// Load initial population from JSON file containing pre-recorded solutions
 /// This simulates the two-phase approach where exact solver provides initial solutions
@@ -150,14 +150,17 @@ const TWO_PHASE_RATIOS: [(u32, u32); 11] = [
 
 #[test]
 fn test_4d_small_instances() {
+    let _ = env_logger::try_init();
+
     for instance_file in SMALL_INSTANCES {
         let instance_path = Path::new(INSTANCES_PATH).join(instance_file);
 
         let problem = ProblemBitset::<4>::from_minizinc_datafile(&instance_path, OBJECTIVE_TYPES)
             .expect("the instance file to be present");
 
-        let initial_population: NdTreeSolutionSet<BitsetEncodedSolution<ProblemBitset<4>, 4>, 4> =
+        let mut initial_population: NdTreeSolutionSet<BitsetEncodedSolution<ProblemBitset<4>, 4>, 4> =
             NdTreeSolutionSet::new("test_population");
+        initial_population.try_insert(&BitsetEncodedSolution::random(&problem));
         let is_deterministic = true;
 
         let mut pareto_local_search =
@@ -172,6 +175,38 @@ fn test_4d_small_instances() {
 }
 
 #[test]
+#[ignore = "profiling target — run with cargo flamegraph"]
+fn profile_lagos_100() {
+    let _ = env_logger::try_init();
+    let instance_path = Path::new(INSTANCES_PATH).join("lagos_nigeria_100.dzn");
+    let problem = ProblemBitset::<4>::from_minizinc_datafile(&instance_path, OBJECTIVE_TYPES)
+        .expect("the instance file to be present");
+    let mut initial_population: NdTreeSolutionSet<BitsetEncodedSolution<ProblemBitset<4>, 4>, 4> =
+        NdTreeSolutionSet::new("test_population");
+    initial_population.try_insert(&BitsetEncodedSolution::random(&problem));
+    let mut pareto_local_search =
+        ParetoLocalSearch::new(&problem, &initial_population, 1..=5, false);
+    let solutions = pareto_local_search.run(MAX_ITERATIONS, MAX_DURATION);
+    assert!(!solutions.is_empty(), "expected at least one solution");
+}
+
+#[test]
+#[ignore = "profiling target — run with cargo flamegraph"]
+fn profile_lagos_100_vec() {
+    let _ = env_logger::try_init();
+    let instance_path = Path::new(INSTANCES_PATH).join("lagos_nigeria_100.dzn");
+    let problem = ProblemBitset::<4>::from_minizinc_datafile(&instance_path, OBJECTIVE_TYPES)
+        .expect("the instance file to be present");
+    let mut initial_population: VecSolutionSet<BitsetEncodedSolution<ProblemBitset<4>, 4>, 4> =
+        VecSolutionSet::new("test_population");
+    initial_population.try_insert(&BitsetEncodedSolution::random(&problem));
+    let mut pareto_local_search =
+        ParetoLocalSearch::new(&problem, &initial_population, 1..=5, false);
+    let solutions = pareto_local_search.run(MAX_ITERATIONS, MAX_DURATION);
+    assert!(!solutions.is_empty(), "expected at least one solution");
+}
+
+#[test]
 fn test_4d_medium_instances() {
     for instance_file in MEDIUM_INSTANCES {
         let instance_path = Path::new(INSTANCES_PATH).join(instance_file);
@@ -179,8 +214,9 @@ fn test_4d_medium_instances() {
         let problem = ProblemBitset::<4>::from_minizinc_datafile(&instance_path, OBJECTIVE_TYPES)
             .expect("the instance file to be present");
 
-        let initial_population: NdTreeSolutionSet<BitsetEncodedSolution<ProblemBitset<4>, 4>, 4> =
+        let mut initial_population: NdTreeSolutionSet<BitsetEncodedSolution<ProblemBitset<4>, 4>, 4> =
             NdTreeSolutionSet::new("test_population");
+        initial_population.try_insert(&BitsetEncodedSolution::random(&problem));
         let is_deterministic = true;
 
         let mut pareto_local_search =
@@ -202,8 +238,9 @@ fn test_4d_large_instances() {
         let problem = ProblemBitset::<4>::from_minizinc_datafile(&instance_path, OBJECTIVE_TYPES)
             .expect("the instance file to be present");
 
-        let initial_population: NdTreeSolutionSet<BitsetEncodedSolution<ProblemBitset<4>, 4>, 4> =
+        let mut initial_population: NdTreeSolutionSet<BitsetEncodedSolution<ProblemBitset<4>, 4>, 4> =
             NdTreeSolutionSet::new("test_population");
+        initial_population.try_insert(&BitsetEncodedSolution::random(&problem));
         let is_deterministic = true;
 
         let mut pareto_local_search =
