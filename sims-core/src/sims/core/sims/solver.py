@@ -1,5 +1,7 @@
 import logging
+from collections.abc import Callable
 from pathlib import Path
+from typing import Optional
 
 try:
     import sims_problem
@@ -88,6 +90,8 @@ def solve(
     include_dominated: bool = False,
     max_solutions_count: int | None = None,
     pareto_archive: str = "nd-tree",
+    parallel: bool = False,
+    num_parallel_threads: int = 0,
 ) -> SolverResult:
     match solver_type:
         case SolverType.OR_TOOLS:
@@ -113,6 +117,8 @@ def solve(
                 objective_bounds=objective_bounds,
                 include_dominated=include_dominated,
                 pareto_archive=pareto_archive,
+                parallel=parallel,
+                num_parallel_threads=num_parallel_threads,
             )
         case _:
             raise ValueError(f"Solver type {solver_type} is not supported")
@@ -144,7 +150,20 @@ def solve_with_two_phases(
     include_dominated: bool = False,
     max_solutions_count: int | None = None,
     pareto_archive: str = "nd-tree",
+    parallel: bool = False,
+    num_parallel_threads: int = 0,
+    exact_solver_fn: Optional[Callable[..., SolverResult]] = None,
 ) -> TwoPhaseSolverResult:
+    """
+    Run the two-phase solver (exact + PLS).
+
+    Args:
+        exact_solver_fn: Optional override for the exact phase.  When provided it
+            is called instead of the configured exact solver (OR-Tools / Gurobi).
+            Signature: ``fn(problem_instance, problem_path, timeout_s, objectives) -> SolverResult``.
+            Use this to inject a pseudo-solver for testing without duplicating
+            two-phase orchestration logic.
+    """
     exact_solver_result = None
     pls_result = None
     timeout_s = solver_config.timeout_s
@@ -162,18 +181,26 @@ def solve_with_two_phases(
         )
 
         if not dry_run:
-            exact_solver_result = solve(
-                exact_solver_type,
-                problem_instance,
-                problem_path,
-                exact_solver_time,
-                summary_path,
-                objectives,
-                front_strategy,
-                enable_trace=enable_pls_trace,  # Enable tracing for exact solver too
-                include_dominated=include_dominated,
-                max_solutions_count=max_solutions_count,
-            )
+            if exact_solver_fn is not None:
+                exact_solver_result = exact_solver_fn(
+                    problem_instance=problem_instance,
+                    problem_path=problem_path,
+                    timeout_s=exact_solver_time,
+                    objectives=objectives,
+                )
+            else:
+                exact_solver_result = solve(
+                    exact_solver_type,
+                    problem_instance,
+                    problem_path,
+                    exact_solver_time,
+                    summary_path,
+                    objectives,
+                    front_strategy,
+                    enable_trace=enable_pls_trace,
+                    include_dominated=include_dominated,
+                    max_solutions_count=max_solutions_count,
+                )
 
         log.info(
             f"[{problem_instance.name}] - running {repr(exact_solver_type)} for {exact_solver_time} seconds...Done"
@@ -205,6 +232,8 @@ def solve_with_two_phases(
                 objective_bounds=objective_bounds,
                 include_dominated=include_dominated,
                 pareto_archive=pareto_archive,
+                parallel=parallel,
+                num_parallel_threads=num_parallel_threads,
             )
 
             log.info(f"[{problem_instance.name}][solve_with_two_phases] - PLS found {len(pls_result.pareto_front)} solutions")

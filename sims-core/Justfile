@@ -1,11 +1,19 @@
 # SIMS Core test recipes
 
-# Run all 4D medium instance tests with pseudo-solver (all ratios, archives, instances)
+# Run 4D medium instance tests with pseudo-solver, nd-tree archive only
 test:
     uv run pytest \
         "tests/test_two_phases_instances.py::TestTwoPhaseInstances::test_solve_two_phase_4d_on_medium_instances" \
         --use-pseudo-solver \
         --name "medium_instances" \
+        -k "nd-tree" \
         -v -s \
-        --log-cli-level=INFO \
-        --timeout=4200
+        --log-cli-level=INFO
+
+# Collect (but do not run) the same tests to verify parametrization
+collect:
+    uv run pytest \
+        "tests/test_two_phases_instances.py::TestTwoPhaseInstances::test_solve_two_phase_4d_on_medium_instances" \
+        --use-pseudo-solver \
+        -k "nd-tree" \
+        --collect-only

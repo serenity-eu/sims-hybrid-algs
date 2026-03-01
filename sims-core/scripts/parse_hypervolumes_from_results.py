@@ -500,9 +500,9 @@ def extract_instance_name(path: Path) -> Optional[str]:
     OR
     .../solve_two_phase_4d_small/lagos_nigeria_30/result.json
     OR
-    .../solve_two_phase_4d_small_nd-tree/lagos_nigeria_30/100_0/iter0/result.json
+    .../solve_two_phase_4d_small_nd-tree_sequential/lagos_nigeria_30/100_0/iter0/result.json
     OR
-    .../solve_two_phase_4d_small_vector/lagos_nigeria_30/100_0/iter0/result.json
+    .../solve_two_phase_4d_small_nd-tree_concurrent/lagos_nigeria_30/100_0/iter0/result.json
     
     Returns: "lagos_nigeria_30"
     """
@@ -2466,7 +2466,7 @@ def auto_detect_archives(base_dir: Path) -> Dict[str, List[Path]]:
         if not subdir.is_dir():
             continue
         
-        # Extract suffix pattern (e.g., 'nd-tree', 'vector', 'linkedlist')
+        # Extract suffix pattern (e.g., 'sequential', 'concurrent')
         name = subdir.name
         
         # Skip comparison directories
@@ -2474,12 +2474,10 @@ def auto_detect_archives(base_dir: Path) -> Dict[str, List[Path]]:
             continue
         
         # Common patterns to look for
-        if '_nd-tree' in name:
-            archives_by_suffix['nd-tree'].append(subdir)
-        elif '_vector' in name:
-            archives_by_suffix['vector'].append(subdir)
-        elif '_linkedlist' in name:
-            archives_by_suffix['linkedlist'].append(subdir)
+        if '_concurrent' in name:
+            archives_by_suffix['concurrent'].append(subdir)
+        elif '_sequential' in name:
+            archives_by_suffix['sequential'].append(subdir)
     
     return dict(archives_by_suffix)
 
@@ -2765,18 +2763,18 @@ Examples:
   # Single directory analysis
   python parse_hypervolumes_from_results.py test_artifacts/hybrid_4d_wednesday_20251022_202800
   
-  # Auto-detect and compare all archives in directory (compares nd-tree vs vector automatically)
-  python parse_hypervolumes_from_results.py test_artifacts/pareto_archive_20251205_004444 --compare
+  # Auto-detect and compare all archives in directory (compares sequential vs concurrent automatically)
+  python parse_hypervolumes_from_results.py test_artifacts/medium_instances_20260222_120000 --compare
   
   # Manual comparison mode (compare two specific subdirectories)
-  python parse_hypervolumes_from_results.py test_artifacts/pareto_archive --compare solve_nd_tree solve_vector
-  python parse_hypervolumes_from_results.py test_artifacts/pareto_archive --compare solve_nd_tree solve_vector --labels "ND-Tree" "Vector"
+  python parse_hypervolumes_from_results.py test_artifacts/medium_instances --compare solve_nd-tree_sequential solve_nd-tree_concurrent
+  python parse_hypervolumes_from_results.py test_artifacts/medium_instances --compare solve_nd-tree_sequential solve_nd-tree_concurrent --labels "Sequential" "Concurrent"
         '''
     )
     
     parser.add_argument('artifacts_dir', help='Base directory containing archives')
     parser.add_argument('--compare', nargs='*', metavar='ARCHIVE',
-                       help='Enable comparison mode. If no archives specified, auto-detect nd-tree vs vector. Otherwise specify two archive names.')
+                       help='Enable comparison mode. If no archives specified, auto-detect sequential vs concurrent. Otherwise specify two archive names.')
     parser.add_argument('--labels', nargs=2, metavar=('LABEL1', 'LABEL2'),
                        help='Labels for the two directories in comparison mode')
     parser.add_argument('--output', help='Output JSON file (default: artifacts_dir/summary.json)')
@@ -2800,31 +2798,31 @@ Examples:
             print("Auto-detecting archives for comparison...", file=sys.stderr)
             archives_by_suffix = auto_detect_archives(artifacts_dir)
             
-            if 'nd-tree' not in archives_by_suffix or 'vector' not in archives_by_suffix:
-                print(f"Error: Could not find both nd-tree and vector archives in {artifacts_dir}", file=sys.stderr)
+            if 'sequential' not in archives_by_suffix or 'concurrent' not in archives_by_suffix:
+                print(f"Error: Could not find both sequential and concurrent archives in {artifacts_dir}", file=sys.stderr)
                 print(f"Found archives: {list(archives_by_suffix.keys())}", file=sys.stderr)
                 sys.exit(1)
             
-            # Merge all nd-tree directories and all vector directories
-            ndtree_dirs = archives_by_suffix['nd-tree']
-            vector_dirs = archives_by_suffix['vector']
+            # Merge all sequential directories and all concurrent directories
+            ndtree_dirs = archives_by_suffix['sequential']
+            vector_dirs = archives_by_suffix['concurrent']
             
-            print(f"Found {len(ndtree_dirs)} nd-tree archive(s): {[d.name for d in ndtree_dirs]}", file=sys.stderr)
-            print(f"Found {len(vector_dirs)} vector archive(s): {[d.name for d in vector_dirs]}", file=sys.stderr)
+            print(f"Found {len(ndtree_dirs)} sequential archive(s): {[d.name for d in ndtree_dirs]}", file=sys.stderr)
+            print(f"Found {len(vector_dirs)} concurrent archive(s): {[d.name for d in vector_dirs]}", file=sys.stderr)
             
             # Use custom labels or default
-            labels = args.labels if args.labels else ['ND-Tree', 'Vector']
+            labels = args.labels if args.labels else ['Sequential', 'Concurrent']
             
             # Merge all directories of each type for comprehensive comparison
             if len(ndtree_dirs) > 1 or len(vector_dirs) > 1:
-                print(f"Merging {len(ndtree_dirs)} nd-tree and {len(vector_dirs)} vector archives for comprehensive comparison", file=sys.stderr)
+                print(f"Merging {len(ndtree_dirs)} sequential and {len(vector_dirs)} concurrent archives for comprehensive comparison", file=sys.stderr)
                 
                 # Collect unified bounds from all directories
                 all_dirs = ndtree_dirs + vector_dirs
                 unified_bounds, unified_ref = compute_unified_bounds(all_dirs)
                 
-                # Merge results from all nd-tree directories
-                print(f"\nMerging results from all ND-Tree archives...", file=sys.stderr)
+                # Merge results from all sequential directories
+                print(f"\nMerging results from all Sequential archives...", file=sys.stderr)
                 merged_results1 = {}
                 for nd_dir in ndtree_dirs:
                     results = recompute_with_unified_bounds(nd_dir, unified_bounds, unified_ref)
@@ -2841,8 +2839,8 @@ Examples:
                                     merged_results1[instance]["hypervolumes_stderr"].append(data["hypervolumes_stderr"][idx])
                                     merged_results1[instance]["phase_counts"].append(data["phase_counts"][idx])
                 
-                # Merge results from all vector directories
-                print(f"Merging results from all Vector archives...", file=sys.stderr)
+                # Merge results from all concurrent directories
+                print(f"Merging results from all Concurrent archives...", file=sys.stderr)
                 merged_results2 = {}
                 for vec_dir in vector_dirs:
                     results = recompute_with_unified_bounds(vec_dir, unified_bounds, unified_ref)
@@ -2864,7 +2862,7 @@ Examples:
                     sys.exit(1)
                 
                 # Create output directory for merged comparison
-                output_dir = artifacts_dir / f"comparison_merged_nd-tree_vs_vector"
+                output_dir = artifacts_dir / f"comparison_merged_sequential_vs_concurrent"
                 output_dir.mkdir(exist_ok=True)
                 
                 common_instances = sorted(set(merged_results1.keys()) & set(merged_results2.keys()))

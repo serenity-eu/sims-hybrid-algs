@@ -18,18 +18,21 @@ use crate::{
     timer::Timer,
 };
 
-/// Statistics tracking during a single step of the algorithm
-struct StepStats {
-    explored_neighbor_count: usize,
-    duplicated_neighbor_count: usize,
-    auxiliary_added_count: usize,
-    auxiliary_len: usize,
-    pareto_added_count: usize,
-    pareto_initial_count: usize,
+
+
+/// Statistics tracking during a single step of the algorithm.
+/// Exposed as `pub(crate)` so concurrent workers can aggregate per-step metrics.
+pub(crate) struct StepStats {
+    pub(crate) explored_neighbor_count: usize,
+    pub(crate) duplicated_neighbor_count: usize,
+    pub(crate) auxiliary_added_count: usize,
+    pub(crate) auxiliary_len: usize,
+    pub(crate) pareto_added_count: usize,
+    pub(crate) pareto_initial_count: usize,
 }
 
 impl StepStats {
-    const fn new(pareto_initial_count: usize) -> Self {
+    pub(crate) const fn new(pareto_initial_count: usize) -> Self {
         Self {
             explored_neighbor_count: 0,
             duplicated_neighbor_count: 0,
@@ -39,6 +42,12 @@ impl StepStats {
             pareto_initial_count,
         }
     }
+}
+
+/// Result bundle from a single PLS step: status + accumulated statistics.
+pub(crate) struct StepResult {
+    pub(crate) status: StepStatus,
+    pub(crate) stats: StepStats,
 }
 
 /// Metrics calculated during an iteration for logging
@@ -84,6 +93,19 @@ pub enum StepStatus {
     IncreasedNeighborhoodStructure,
     /// All neighborhood structures were explored
     AllNeighborhoodStructuresExplored,
+}
+
+/// SA-PLS step outcome. Maps to the design doc's section 16.7 termination semantics.
+#[derive(Eq, PartialEq, Debug, Clone, Copy)]
+#[cfg(feature = "parallel")]
+pub enum SAPlsStatus {
+    /// Scalarized auxiliary was non-empty; new population generated.
+    NewPopulation,
+    /// Scalarized auxiliary was empty; neighborhood structure increased.
+    IncreasedNeighborhoodStructure,
+    /// All neighborhood structures exhausted under scalarized criterion.
+    /// Worker can switch to fallback (standard PLS) or stop.
+    ScalarizedExhausted,
 }
 
 impl<'a, T, S, P, const D: usize> ParetoLocalSearch<'a, T, S, P, D>
@@ -220,12 +242,14 @@ where
         }
     }
 
+    /// Single PLS step, exposed for concurrent worker use.
+    /// Returns `StepResult` bundling both the step status and per-step statistics.
     #[instrument(level = "debug", skip(self, timer), fields(
         iteration,
         population_size = self.population.len(),
         neighborhood_structure = self.neigborhood_structure
     ))]
-    fn step(&mut self, iteration: usize, timer: &Timer) -> StepStatus {
+    pub(crate) fn step(&mut self, iteration: usize, timer: &Timer) -> StepResult {
         let step_time = Instant::now();
         let mut step_stats = StepStats::new(self.approximated_pareto_set.len());
         let mut auxiliary_population = S::new("auxiliary");
@@ -259,7 +283,8 @@ where
         Self::log_auxiliary_population(&auxiliary_population);
         self.log_pareto_front();
 
-        self.determine_next_step(auxiliary_population)
+        let status = self.determine_next_step(auxiliary_population);
+        StepResult { status, stats: step_stats }
     }
 
     #[instrument(level = "debug", skip(self, population, timer, step_stats, auxiliary_population), fields(
@@ -498,6 +523,205 @@ where
         }
     }
 
+    /// Returns a reference to the approximated Pareto set (concurrent worker use).
+    #[cfg(feature = "parallel")]
+    pub(crate) fn archive(&self) -> &S {
+        &self.approximated_pareto_set
+    }
+
+    /// Returns a mutable reference to the archive (concurrent worker use).
+    #[cfg(feature = "parallel")]
+    pub(crate) fn archive_mut(&mut self) -> &mut S {
+        &mut self.approximated_pareto_set
+    }
+
+    /// Returns a reference to the explored solutions data (concurrent worker use).
+    #[cfg(feature = "parallel")]
+    pub(crate) fn explored_solutions_data(&self) -> &ExploredSolutionsData<D> {
+        &self.explored_solutions
+    }
+
+    /// Try to adopt a globally non-dominated solution into archive and population.
+    /// Also registers the solution in explored_solutions (with placeholder iteration/time) so
+    /// the PLS internals never see an unregistered solution.
+    /// Returns `true` if the solution was inserted into the archive.
+    #[cfg(feature = "parallel")]
+    pub(crate) fn try_adopt_solution(&mut self, solution: &T) -> bool {
+        if self.approximated_pareto_set.try_insert(solution) {
+            // Register in explored_solutions so add_eligible_pareto_solutions won't panic.
+            // Use register_without_selected_images with iteration=0 and time=0 as placeholders.
+            if !self.explored_solutions.is_registered(solution) {
+                self.explored_solutions.register_without_selected_images(
+                    0,
+                    solution,
+                    std::time::Duration::from_secs(0),
+                );
+            }
+            self.population.insert_unchecked(solution);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// SA-PLS step: sorts population by augmented Tchebycheff score, then explores neighborhoods
+    /// with decoupled archive/auxiliary gates.
+    ///
+    /// - **Gate 1 (archive)**: `archive.try_insert(n)` -- global Pareto non-dominance (unchanged).
+    /// - **Gate 2 (auxiliary)**: `g_atch(n, w, z*) < g_atch(parent, w, z*)` -- scalarized
+    ///   improvement over the parent, independent of archive insertion.
+    /// - **Gate 3 (ideal)**: updates `local_ideal` component-wise for every explored neighbor.
+    ///
+    /// Returns `SAPlsStatus` indicating whether a new population was generated, k was increased,
+    /// or scalarized search is exhausted.
+    #[cfg(feature = "parallel")]
+    pub(crate) fn step_scalarized(
+        &mut self,
+        iteration: usize,
+        timer: &Timer,
+        weight: &[f64; D],
+        local_ideal: &mut pareto::Objectives<D>,
+        objective_bounds: &[(f64, f64); D],
+        rho: f64,
+    ) -> (SAPlsStatus, StepStats) {
+        use crate::concurrent_pls::decomposition::TchebycheffCoeffs;
+
+        let step_time = Instant::now();
+        let mut step_stats = StepStats::new(self.approximated_pareto_set.len());
+
+        tracing::debug!("Starting SA-PLS step");
+
+        self.population.validate();
+
+        let population = mem::replace(&mut self.population, S::new("population"));
+
+        // Precompute Tchebycheff coefficients (weight/range ratios) once per step
+        // to avoid repeated divisions in the inner loop. Recomputed each step
+        // because local_ideal changes across steps.
+        let coeffs = TchebycheffCoeffs::new(weight, objective_bounds, rho);
+
+        // Sort population by g_atch ascending (best scalarized score first) -- D15
+        let mut population_vec: Vec<T> = population.into_iter().collect();
+        population_vec.sort_by(|a, b| {
+            let score_a = coeffs.score(a.objectives(), local_ideal);
+            let score_b = coeffs.score(b.objectives(), local_ideal);
+            score_a.partial_cmp(&score_b).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // Scalarized auxiliary candidates (independent from archive -- section 16.6)
+        let mut aux_candidates: Vec<T> = Vec::new();
+
+        let spare_tracker = &mut self.spare_tracker;
+        let explored_solutions = &mut self.explored_solutions;
+        let approximated_pareto_set = &mut self.approximated_pareto_set;
+        let problem = self.problem;
+        let neighborhood_structure = self.neigborhood_structure;
+        let is_deterministic = self.is_deterministic;
+
+        'population: for (_index, solution) in population_vec.iter().enumerate() {
+            let parent_score = coeffs.score(solution.objectives(), local_ideal);
+
+            let mut neighborhood_iter = solution.neighborhood_iter(
+                spare_tracker,
+                neighborhood_structure,
+                problem,
+                timer,
+                is_deterministic,
+            );
+
+            for (_neighbor_index, neighbor) in neighborhood_iter.by_ref().enumerate() {
+                step_stats.explored_neighbor_count += 1;
+
+                // Dedup check (unchanged)
+                if explored_solutions.is_registered(&neighbor) {
+                    step_stats.duplicated_neighbor_count += 1;
+                    continue;
+                }
+
+                explored_solutions.register_without_selected_images(
+                    iteration, &neighbor, timer.elapsed(),
+                );
+
+                // Gate 3: update local ideal for every explored neighbor (section 16.4)
+                for j in 0..D {
+                    let fj = neighbor.objectives()[j];
+                    if fj < local_ideal[j] {
+                        local_ideal[j] = fj;
+                    }
+                }
+
+                // Skip if dominated by parent (unchanged from standard PLS)
+                if neighbor.is_covered_by(solution.objectives()) {
+                    continue;
+                }
+
+                // Gate 1: global archive insertion (unchanged, always run)
+                if approximated_pareto_set.try_insert(&neighbor) {
+                    step_stats.pareto_added_count += 1;
+                }
+
+                // Gate 2: scalarized auxiliary (independent of Gate 1 -- section 16.3)
+                let neighbor_score = coeffs.score(neighbor.objectives(), local_ideal);
+                if neighbor_score < parent_score {
+                    aux_candidates.push(neighbor);
+                    step_stats.auxiliary_added_count += 1;
+                }
+
+                if timer.is_expired() {
+                    tracing::debug!("Timer expired during SA-PLS neighbor processing");
+                    break 'population;
+                }
+            }
+
+            explored_solutions.update_explored_neighborhood_size(solution, neighborhood_structure);
+        }
+
+        step_stats.auxiliary_len = aux_candidates.len();
+
+        tracing::debug!(
+            explored_neighbors = step_stats.explored_neighbor_count,
+            duplicated_neighbors = step_stats.duplicated_neighbor_count,
+            aux_candidates = step_stats.auxiliary_len,
+            "SA-PLS step completed"
+        );
+
+        self.log_iteration_stats(iteration, step_time, &step_stats);
+
+        // Determine next step using scalarized semantics (section 16.7)
+        let status = if !aux_candidates.is_empty() {
+            // Dominance-filter to bound auxiliary size (R9 mitigation).
+            // NdTreeSolutionSet::from_iter inserts all candidates via try_insert,
+            // retaining only non-dominated solutions. No pre-sort needed: the tree
+            // does not preserve insertion order, and the population will be re-sorted
+            // by g_atch at the start of the next step (D15).
+            self.population = S::from_iter(aux_candidates).with_name("population");
+            self.neigborhood_structure = *self.neighborhood_size_range.start();
+            SAPlsStatus::NewPopulation
+        } else if self.can_increase_neighborhood_structure() {
+            tracing::info!(
+                old_structure = self.neigborhood_structure,
+                new_structure = self.neigborhood_structure + 1,
+                "SA-PLS: increasing neighborhood structure"
+            );
+            self.neigborhood_structure += 1;
+            self.add_eligible_pareto_solutions();
+            SAPlsStatus::IncreasedNeighborhoodStructure
+        } else {
+            tracing::info!("SA-PLS: scalarized search exhausted");
+            SAPlsStatus::ScalarizedExhausted
+        };
+
+        (status, step_stats)
+    }
+
+    /// Re-seed the population from the archive for fallback mode after scalarized exhaustion.
+    /// Uses the same k-increase mechanism as standard PLS.
+    #[cfg(feature = "parallel")]
+    pub(crate) fn reseed_population_from_archive(&mut self) {
+        self.neigborhood_structure = *self.neighborhood_size_range.start();
+        self.population = self.approximated_pareto_set.clone().with_name("population");
+    }
+
     #[instrument(level = "info", skip(self), fields(
         max_iterations,
         max_duration_ms = max_duration.as_millis(),
@@ -533,10 +757,10 @@ where
             );
             debug!("******************************************************");
 
-            let step_status = self.step(i, &pls_timer);
+            let step_result = self.step(i, &pls_timer);
             self.explored_solutions.num_iterations = i;
 
-            if step_status == StepStatus::AllNeighborhoodStructuresExplored {
+            if step_result.status == StepStatus::AllNeighborhoodStructuresExplored {
                 info!(
                     "All neighborhood structures were explored. Number of iterations: {i}. Elapsed time: [{:?} ms]",
                     pls_timer.elapsed()

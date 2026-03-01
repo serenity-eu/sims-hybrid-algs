@@ -9,10 +9,11 @@ name = "sims_problem"
 crate-type = ["cdylib"]
 
 [features]
-default = ["bounds_check"]
+default = ["bounds_check", "parallel"]
 plotting = ["pls/plotting"]
 milp = ["augmecon", "augmecon/coin_cbc"]
 bounds_check = ["pls/bounds_check"]
+parallel = ["pls/parallel"]
 
 [dependencies]
 pyo3 = { version = "0.27.2", features = ["extension-module"] }

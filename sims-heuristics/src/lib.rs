@@ -158,6 +158,8 @@ pub mod solution_impl;
 pub mod solution_set_impl;
 pub mod timer;
 pub mod util;
+#[cfg(feature = "parallel")]
+pub mod concurrent_pls;
 pub use problem_bitset::ProblemBitset;
 
 // Re-export key traits
