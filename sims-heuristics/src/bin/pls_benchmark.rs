@@ -7,7 +7,6 @@
 /// Usage:
 ///   cargo run --release --bin pls-benchmark --features parallel -- \
 ///     --instances-dir tests/data --timeout 120s
-
 use std::{
     ops::RangeInclusive,
     path::PathBuf,
@@ -17,9 +16,13 @@ use std::{
 use clap::{Parser, ValueEnum};
 use pareto::{HasObjectives, ParetoFront};
 use pls::{
-    concurrent_pls::{ConcurrentPLS, ConcurrentPLSConfig, ConcurrentPLSResult, RegionResult, RegionSearchMode},
+    PlsOptimizations,
+    concurrent_pls::{
+        ConcurrentPLS, ConcurrentPLSConfig, ConcurrentPLSResult, RegionResult, RegionSearchMode,
+    },
     objectives::ObjectiveType,
     pareto_local_search::ParetoLocalSearch,
+    pls_config::SolutionSelectionMode,
     problem_bitset::ProblemBitset,
     solution_impl::bitset_encoded_solution::BitsetEncodedSolution,
     solution_set_impl::NdTreeSolutionSet,
@@ -116,6 +119,48 @@ struct Cli {
         default_value_t = 1e-3
     )]
     scalarized_rho: f64,
+
+    /// Parent-solution selection policy for sequential PLS
+    #[arg(
+        long = "solution-selection",
+        value_enum,
+        default_value = "random-shuffle",
+        help = "Parent-solution selection policy for sequential PLS"
+    )]
+    solution_selection: CliSolutionSelectionMode,
+
+    /// Number of parent solutions to probe when using diverse probing
+    #[arg(
+        long = "diverse-probe-budget",
+        help = "Number of parent solutions to probe when using diverse probing"
+    )]
+    diverse_probe_budget: Option<usize>,
+
+    #[cfg(feature = "scalarized_selection")]
+    /// Maximum number of parent solutions selected per step by scalarized selection
+    #[arg(
+        long = "sequential-scalarized-parent-budget",
+        help = "Maximum number of parent solutions selected per step by sequential scalarized selection"
+    )]
+    sequential_scalarized_parent_budget: Option<usize>,
+
+    #[cfg(feature = "scalarized_selection")]
+    /// Number of random weight vectors sampled per step for scalarized selection
+    #[arg(
+        long = "sequential-scalarized-weight-samples",
+        default_value_t = 1,
+        help = "Number of random weight vectors sampled per step for sequential scalarized selection"
+    )]
+    sequential_scalarized_weight_samples: usize,
+
+    #[cfg(feature = "scalarized_selection")]
+    /// Augmentation coefficient for weighted Chebycheff scalarization in sequential PLS
+    #[arg(
+        long = "sequential-scalarized-rho",
+        default_value_t = 1e-3,
+        help = "Augmentation coefficient for weighted Chebycheff scalarization in sequential PLS"
+    )]
+    sequential_scalarized_rho: f64,
 }
 
 /// CLI-facing enum mirroring `RegionSearchMode` with `clap::ValueEnum` derive.
@@ -127,6 +172,31 @@ enum CliRegionSearchMode {
     Scalarized,
     /// SA-PLS with fallback: standard PLS after scalarized exhaustion.
     ScalarizedWithFallback,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliSolutionSelectionMode {
+    RandomShuffle,
+    DiverseProbe,
+    #[cfg(feature = "scalarized_selection")]
+    ScalarizedChebycheff,
+    #[cfg(feature = "scalarized_selection")]
+    DiverseThenScalarizedChebycheff,
+}
+
+impl CliSolutionSelectionMode {
+    const fn to_runtime(self) -> SolutionSelectionMode {
+        match self {
+            Self::RandomShuffle => SolutionSelectionMode::RandomShuffle,
+            Self::DiverseProbe => SolutionSelectionMode::DiverseProbe,
+            #[cfg(feature = "scalarized_selection")]
+            Self::ScalarizedChebycheff => SolutionSelectionMode::ScalarizedChebycheff,
+            #[cfg(feature = "scalarized_selection")]
+            Self::DiverseThenScalarizedChebycheff => {
+                SolutionSelectionMode::DiverseThenScalarizedChebycheff
+            }
+        }
+    }
 }
 
 impl CliRegionSearchMode {
@@ -152,20 +222,49 @@ fn main() {
 
     let physical_cpus = num_cpus::get_physical();
     let logical_cpus = num_cpus::get();
-    let num_threads = if args.threads == 0 { physical_cpus } else { args.threads };
+    let num_threads = if args.threads == 0 {
+        physical_cpus
+    } else {
+        args.threads
+    };
 
     println!();
     println!("=== PLS Benchmark: Sequential vs Concurrent ===");
     println!("  instances dir  : {}", args.instances_dir.display());
-    println!("  timeout        : {}", humantime::format_duration(args.timeout));
+    println!(
+        "  timeout        : {}",
+        humantime::format_duration(args.timeout)
+    );
     println!(
         "  threads        : {} (physical={}, logical={})",
         num_threads, physical_cpus, logical_cpus
     );
     println!("  population     : {}", args.pop_size);
     println!("  search mode    : {:?}", args.region_search_mode);
-    if matches!(args.region_search_mode, CliRegionSearchMode::Scalarized | CliRegionSearchMode::ScalarizedWithFallback) {
+    println!("  seq selection  : {:?}", args.solution_selection);
+    if let Some(budget) = args.diverse_probe_budget {
+        println!("  diverse budget : {budget}");
+    }
+    if matches!(
+        args.region_search_mode,
+        CliRegionSearchMode::Scalarized | CliRegionSearchMode::ScalarizedWithFallback
+    ) {
         println!("  scalarized rho : {:.0e}", args.scalarized_rho);
+    }
+    #[cfg(feature = "scalarized_selection")]
+    if matches!(
+        args.solution_selection,
+        CliSolutionSelectionMode::ScalarizedChebycheff
+            | CliSolutionSelectionMode::DiverseThenScalarizedChebycheff
+    ) {
+        if let Some(parent_budget) = args.sequential_scalarized_parent_budget {
+            println!("  seq scal. par. : {parent_budget}");
+        }
+        println!(
+            "  seq scal. samp.: {}",
+            args.sequential_scalarized_weight_samples
+        );
+        println!("  seq scal. rho  : {:.0e}", args.sequential_scalarized_rho);
     }
     if let Some(ref f) = args.filter {
         println!("  filter         : {f}");
@@ -203,7 +302,15 @@ fn main() {
     // -----------------------------------------------------------------------
     println!(
         " {:<30} {:>6} {:>10} {:>10} {:>11} {:>11} {:>10} {:>10} {:>8}",
-        "Instance", "Size", "Seq.front", "Par.front", "Seq.HV", "Par.HV", "Seq.iter", "Par.iter", "Speedup"
+        "Instance",
+        "Size",
+        "Seq.front",
+        "Par.front",
+        "Seq.HV",
+        "Par.HV",
+        "Seq.iter",
+        "Par.iter",
+        "Speedup"
     );
     println!(" {}", "-".repeat(108));
 
@@ -238,7 +345,19 @@ fn main() {
         let seq_result = if args.parallel_only {
             None
         } else {
-            Some(run_sequential(&problem, initial_pop.clone(), args.timeout))
+            Some(run_sequential(
+                &problem,
+                initial_pop.clone(),
+                args.timeout,
+                args.solution_selection,
+                args.diverse_probe_budget,
+                #[cfg(feature = "scalarized_selection")]
+                args.sequential_scalarized_parent_budget,
+                #[cfg(feature = "scalarized_selection")]
+                args.sequential_scalarized_weight_samples,
+                #[cfg(feature = "scalarized_selection")]
+                args.sequential_scalarized_rho,
+            ))
         };
 
         // Concurrent run
@@ -256,7 +375,7 @@ fn main() {
         // normalisation is identical for seq and par (fair comparison).
         // Reference = nadir * 1.1, which strictly dominates every solution.
         let seq_front_size = seq_result.as_ref().map_or(0, |r| r.archive.len());
-        let seq_iters     = seq_result.as_ref().map_or(0, |r| r.iterations);
+        let seq_iters = seq_result.as_ref().map_or(0, |r| r.iterations);
 
         let union_objs: Vec<[u64; NUM_OBJECTIVES]> = seq_result
             .as_ref()
@@ -270,7 +389,10 @@ fn main() {
         let seq_hv = seq_result.as_ref().map_or(0.0, |r| {
             normalized_hv_4d(r.archive.iter().map(|s| *s.objectives()), &hv_bounds)
         });
-        let par_hv = normalized_hv_4d(par_result.archive.iter().map(|s| *s.objectives()), &hv_bounds);
+        let par_hv = normalized_hv_4d(
+            par_result.archive.iter().map(|s| *s.objectives()),
+            &hv_bounds,
+        );
 
         let speedup = if seq_front_size > 0 {
             par_result.archive.len() as f64 / seq_front_size as f64
@@ -282,19 +404,27 @@ fn main() {
             " {:<30} {:>6} {:>10} {:>10} {:>11.6} {:>11.6} {:>10} {:>10} {:>7.2}x",
             name,
             size,
-            if args.parallel_only { "-".to_string() } else { seq_front_size.to_string() },
+            if args.parallel_only {
+                "-".to_string()
+            } else {
+                seq_front_size.to_string()
+            },
             par_result.archive.len(),
             if args.parallel_only { f64::NAN } else { seq_hv },
             par_hv,
-            if args.parallel_only { "-".to_string() } else { seq_iters.to_string() },
+            if args.parallel_only {
+                "-".to_string()
+            } else {
+                seq_iters.to_string()
+            },
             par_result.total_iterations,
             if speedup.is_nan() { 0.0 } else { speedup },
         );
 
         total_seq_front += seq_front_size;
         total_par_front += par_result.archive.len();
-        total_seq_hv    += seq_hv;
-        total_par_hv    += par_hv;
+        total_seq_hv += seq_hv;
+        total_par_hv += par_hv;
         seq_iters_total += seq_iters;
         par_iters_total += par_result.total_iterations;
         num_instances += 1;
@@ -308,17 +438,37 @@ fn main() {
     } else {
         0.0
     };
-    let avg_seq_hv = if num_instances > 0 { total_seq_hv / num_instances as f64 } else { 0.0 };
-    let avg_par_hv = if num_instances > 0 { total_par_hv / num_instances as f64 } else { 0.0 };
+    let avg_seq_hv = if num_instances > 0 {
+        total_seq_hv / num_instances as f64
+    } else {
+        0.0
+    };
+    let avg_par_hv = if num_instances > 0 {
+        total_par_hv / num_instances as f64
+    } else {
+        0.0
+    };
     println!(
         " {:<30} {:>6} {:>10} {:>10} {:>11.6} {:>11.6} {:>10} {:>10} {:>7.2}x",
         format!("TOTAL ({num_instances})"),
         "",
-        if args.parallel_only { "-".to_string() } else { total_seq_front.to_string() },
+        if args.parallel_only {
+            "-".to_string()
+        } else {
+            total_seq_front.to_string()
+        },
         total_par_front,
-        if args.parallel_only { f64::NAN } else { avg_seq_hv },
+        if args.parallel_only {
+            f64::NAN
+        } else {
+            avg_seq_hv
+        },
         avg_par_hv,
-        if args.parallel_only { "-".to_string() } else { seq_iters_total.to_string() },
+        if args.parallel_only {
+            "-".to_string()
+        } else {
+            seq_iters_total.to_string()
+        },
         par_iters_total,
         avg_speedup,
     );
@@ -333,9 +483,8 @@ fn main() {
 
     if !args.parallel_only {
         println!();
-        let improvement_pct = (total_par_front as f64 - total_seq_front as f64)
-            / total_seq_front as f64
-            * 100.0;
+        let improvement_pct =
+            (total_par_front as f64 - total_seq_front as f64) / total_seq_front as f64 * 100.0;
         if total_par_front >= total_seq_front {
             println!(
                 "  => Concurrent PLS found {:.1}% MORE non-dominated solutions ({} vs {}).",
@@ -377,7 +526,9 @@ fn main() {
 
 fn print_region_table(regions: &[RegionResult<Solution, NUM_OBJECTIVES>]) {
     // Detect if any region used SA-PLS (has scalarized_exhausted_at_iteration)
-    let any_sa_pls = regions.iter().any(|r| r.stats.scalarized_exhausted_at_iteration.is_some());
+    let any_sa_pls = regions
+        .iter()
+        .any(|r| r.stats.scalarized_exhausted_at_iteration.is_some());
 
     println!(
         "    {:>3}  {:<26}  {:>8}  {:>7}  {:>9}  {:>7}  {:>8}  {:>9}  {:>7}  {:>7}  {:>8}{}",
@@ -425,7 +576,8 @@ fn print_region_table(regions: &[RegionResult<Solution, NUM_OBJECTIVES>]) {
             0.0
         };
         let dup_pct = if s.neighbors_explored + s.duplicates_skipped > 0 {
-            s.duplicates_skipped as f64 / (s.neighbors_explored + s.duplicates_skipped) as f64 * 100.0
+            s.duplicates_skipped as f64 / (s.neighbors_explored + s.duplicates_skipped) as f64
+                * 100.0
         } else {
             0.0
         };
@@ -587,8 +739,11 @@ fn print_aggregate_region_stats(
         let n = region_rows.len() as f64;
         let wv = format_weight_vector(&region_rows[0].weight_vector);
 
-        let avg_archive =
-            region_rows.iter().map(|r| r.stats.final_archive_size).sum::<usize>() as f64 / n;
+        let avg_archive = region_rows
+            .iter()
+            .map(|r| r.stats.final_archive_size)
+            .sum::<usize>() as f64
+            / n;
         let avg_out_pct = region_rows
             .iter()
             .map(|r| {
@@ -601,8 +756,11 @@ fn print_aggregate_region_stats(
             .sum::<f64>()
             / n;
         let avg_in_pct = 100.0 - avg_out_pct;
-        let avg_iters =
-            region_rows.iter().map(|r| r.stats.iterations_completed).sum::<usize>() as f64 / n;
+        let avg_iters = region_rows
+            .iter()
+            .map(|r| r.stats.iterations_completed)
+            .sum::<usize>() as f64
+            / n;
         let avg_iter_s = region_rows
             .iter()
             .map(|r| {
@@ -615,10 +773,16 @@ fn print_aggregate_region_stats(
             })
             .sum::<f64>()
             / n;
-        let avg_neighbors =
-            region_rows.iter().map(|r| r.stats.neighbors_explored).sum::<usize>() as f64 / n;
-        let avg_adopted =
-            region_rows.iter().map(|r| r.stats.solutions_adopted).sum::<usize>() as f64 / n;
+        let avg_neighbors = region_rows
+            .iter()
+            .map(|r| r.stats.neighbors_explored)
+            .sum::<usize>() as f64
+            / n;
+        let avg_adopted = region_rows
+            .iter()
+            .map(|r| r.stats.solutions_adopted)
+            .sum::<usize>() as f64
+            / n;
         let avg_dup_pct = region_rows
             .iter()
             .map(|r| {
@@ -634,16 +798,29 @@ fn print_aggregate_region_stats(
 
         println!(
             "    {:>3}  {:<26}  {:>10.1}  {:>9.1}%  {:>10.0}  {:>10.0}  {:>11.0}  {:>10.1}  {:>8.1}%",
-            ri, wv, avg_archive, avg_in_pct, avg_iters, avg_iter_s, avg_neighbors,
-            avg_adopted, avg_dup_pct,
+            ri,
+            wv,
+            avg_archive,
+            avg_in_pct,
+            avg_iters,
+            avg_iter_s,
+            avg_neighbors,
+            avg_adopted,
+            avg_dup_pct,
         );
     }
     println!("    {}", "-".repeat(112));
     println!("  Notes:");
-    println!("    - in-reg% = fraction of final archive belonging to this region's weight direction.");
+    println!(
+        "    - in-reg% = fraction of final archive belonging to this region's weight direction."
+    );
     println!("    - dup% = fraction of neighbor evaluations skipped (already explored).");
-    println!("    - Large iter-range means load imbalance -- some regions exhaust their space early.");
-    println!("    - High adoption + low in-reg% = cross-pollination is active but region search is weak.");
+    println!(
+        "    - Large iter-range means load imbalance -- some regions exhaust their space early."
+    );
+    println!(
+        "    - High adoption + low in-reg% = cross-pollination is active but region search is weak."
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -685,9 +862,36 @@ struct SeqResult {
     wall_time: Duration,
 }
 
-fn run_sequential(problem: &Problem, initial_pop: Archive, timeout: Duration) -> SeqResult {
+fn run_sequential(
+    problem: &Problem,
+    initial_pop: Archive,
+    timeout: Duration,
+    solution_selection: CliSolutionSelectionMode,
+    diverse_probe_budget: Option<usize>,
+    #[cfg(feature = "scalarized_selection")] sequential_scalarized_parent_budget: Option<usize>,
+    #[cfg(feature = "scalarized_selection")] sequential_scalarized_weight_samples: usize,
+    #[cfg(feature = "scalarized_selection")] sequential_scalarized_rho: f64,
+) -> SeqResult {
     let start = Instant::now();
-    let mut pls = ParetoLocalSearch::new(problem, &initial_pop, NEIGHBORHOOD_SIZE_RANGE, false);
+    let mut optimizations = PlsOptimizations::default();
+    optimizations.solution_selection_mode = solution_selection.to_runtime();
+    optimizations.use_diverse_probing =
+        matches!(solution_selection, CliSolutionSelectionMode::DiverseProbe);
+    optimizations.diverse_probe_budget = diverse_probe_budget;
+    #[cfg(feature = "scalarized_selection")]
+    {
+        optimizations.scalarized_parent_budget = sequential_scalarized_parent_budget;
+        optimizations.scalarized_weight_samples = sequential_scalarized_weight_samples;
+        optimizations.scalarized_rho = sequential_scalarized_rho;
+    }
+
+    let mut pls = ParetoLocalSearch::new(
+        problem,
+        &initial_pop,
+        NEIGHBORHOOD_SIZE_RANGE,
+        false,
+        optimizations,
+    );
     let archive = pls.run(usize::MAX, timeout);
     SeqResult {
         archive,
@@ -714,8 +918,12 @@ fn bounds_from_objectives(objs: &[[u64; NUM_OBJECTIVES]]) -> [[u64; 2]; NUM_OBJE
     }
     // Guard: if all objectives identical (or empty), ensure range >= 1.
     for b in &mut bounds {
-        if b[0] == u64::MAX { *b = [0, 1]; } // empty
-        if b[1] <= b[0]    { b[1] = b[0] + 1; }
+        if b[0] == u64::MAX {
+            *b = [0, 1];
+        } // empty
+        if b[1] <= b[0] {
+            b[1] = b[0] + 1;
+        }
     }
     bounds
 }
@@ -745,7 +953,9 @@ fn normalized_hv_4d(
 
 /// 4-D minimisation HV via sweep over the 4th objective.
 fn hv_4d(pts: &mut [Vec<f64>], r: &[f64; 4]) -> f64 {
-    if pts.is_empty() { return 0.0; }
+    if pts.is_empty() {
+        return 0.0;
+    }
     pts.sort_by(|a, b| a[3].partial_cmp(&b[3]).unwrap());
     let mut total = 0.0;
     let mut prev = r[3];
@@ -754,18 +964,23 @@ fn hv_4d(pts: &mut [Vec<f64>], r: &[f64; 4]) -> f64 {
         i -= 1;
         let bound = pts[i][3];
         if bound < prev {
-            let mut slice: Vec<Vec<f64>> = pts[..=i].iter().map(|p| vec![p[0], p[1], p[2]]).collect();
+            let mut slice: Vec<Vec<f64>> =
+                pts[..=i].iter().map(|p| vec![p[0], p[1], p[2]]).collect();
             total += (prev - bound) * hv_3d(&mut slice, &[r[0], r[1], r[2]]);
             prev = bound;
         }
-        while i > 0 && (pts[i - 1][3] - bound).abs() < f64::EPSILON { i -= 1; }
+        while i > 0 && (pts[i - 1][3] - bound).abs() < f64::EPSILON {
+            i -= 1;
+        }
     }
     total
 }
 
 /// 3-D minimisation HV via sweep over the 3rd objective.
 fn hv_3d(pts: &mut [Vec<f64>], r: &[f64; 3]) -> f64 {
-    if pts.is_empty() { return 0.0; }
+    if pts.is_empty() {
+        return 0.0;
+    }
     pts.sort_by(|a, b| a[2].partial_cmp(&b[2]).unwrap());
     let mut total = 0.0;
     let mut prev = r[2];
@@ -778,7 +993,9 @@ fn hv_3d(pts: &mut [Vec<f64>], r: &[f64; 3]) -> f64 {
             total += (prev - bound) * hv_2d(&mut slice, &[r[0], r[1]]);
             prev = bound;
         }
-        while i > 0 && (pts[i - 1][2] - bound).abs() < f64::EPSILON { i -= 1; }
+        while i > 0 && (pts[i - 1][2] - bound).abs() < f64::EPSILON {
+            i -= 1;
+        }
     }
     total
 }
@@ -787,7 +1004,9 @@ fn hv_3d(pts: &mut [Vec<f64>], r: &[f64; 3]) -> f64 {
 /// Sweeps by y (dim 1), maintaining the running minimum x seen so far
 /// (same logic as `hypervolume_2d_min_generic` in sims-problem).
 fn hv_2d(pts: &mut [Vec<f64>], r: &[f64; 2]) -> f64 {
-    if pts.is_empty() { return 0.0; }
+    if pts.is_empty() {
+        return 0.0;
+    }
     pts.sort_by(|a, b| a[1].partial_cmp(&b[1]).unwrap());
     let mut total = 0.0;
     let mut prev_y = r[1];

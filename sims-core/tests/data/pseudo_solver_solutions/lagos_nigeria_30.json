@@ -7,7 +7,7 @@
     "min_max_incidence_angle",
     "min_resolution"
   ],
-  "num_solutions": 122,
+  "num_solutions": 120,
   "solutions": [
     {
       "selected_images": [
@@ -28,41 +28,6 @@
       "timestamp_s": 0.059224,
       "phase": "exact",
       "index": 0
-    },
-    {
-      "selected_images": [
-        2,
-        3,
-        6,
-        8,
-        9,
-        10,
-        11,
-        12,
-        14,
-        15,
-        16,
-        17,
-        18,
-        19,
-        20,
-        21,
-        22,
-        23,
-        24,
-        25,
-        26,
-        27,
-        28,
-        29
-      ],
-      "cost": 8721200,
-      "cloudy_area": 53469,
-      "max_incidence_angle": 479,
-      "min_resolutions_sum": 14230,
-      "timestamp_s": 0.126872,
-      "phase": "exact",
-      "index": 1
     },
     {
       "selected_images": [
@@ -133,34 +98,6 @@
       "timestamp_s": 0.222317,
       "phase": "exact",
       "index": 0
-    },
-    {
-      "selected_images": [
-        3,
-        4,
-        6,
-        8,
-        9,
-        10,
-        11,
-        12,
-        16,
-        17,
-        19,
-        20,
-        22,
-        24,
-        25,
-        26,
-        28
-      ],
-      "cost": 5961420,
-      "cloudy_area": 199375,
-      "max_incidence_angle": 475,
-      "min_resolutions_sum": 14230,
-      "timestamp_s": 0.227422,
-      "phase": "exact",
-      "index": 3
     },
     {
       "selected_images": [

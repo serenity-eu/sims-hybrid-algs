@@ -1,6 +1,8 @@
 use std::collections::{BTreeSet, btree_set};
 
-use pareto::{MoSolution, ParetoFront, Random, RandomCollection};
+use pareto::{
+    MoSolution, Objectives, ParetoFront, Random, RandomCollection, ScalarizedArchiveQuery,
+};
 use tracing::{trace, warn};
 
 #[derive(Clone)]
@@ -130,13 +132,47 @@ where
 
 impl<T> IntoIterator for BTreeSolutionSet<T, 2>
 where
-    T: MoSolution<2> + PartialEq + Sized + Clone,
+    T: MoSolution<2> + PartialEq + Sized + Clone + Ord,
 {
     type Item = T;
     type IntoIter = btree_set::IntoIter<T>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.btree_set.into_iter()
+    }
+}
+
+impl<T> ScalarizedArchiveQuery<T, 2> for BTreeSolutionSet<T, 2>
+where
+    T: MoSolution<2> + PartialEq + Sized + Clone + Ord,
+{
+    fn find_best_with_pruning<Accept, NodeLowerBound, SolutionScore>(
+        &self,
+        mut accept: Accept,
+        _node_lower_bound: NodeLowerBound,
+        solution_score: SolutionScore,
+    ) -> Option<(&T, f64)>
+    where
+        Accept: FnMut(&T) -> bool,
+        NodeLowerBound: Fn(&Objectives<2>) -> f64,
+        SolutionScore: Fn(&T) -> f64,
+    {
+        let mut best_solution: Option<&T> = None;
+        let mut best_score = f64::INFINITY;
+
+        for solution in &self.btree_set {
+            if !accept(solution) {
+                continue;
+            }
+
+            let score = solution_score(solution);
+            if score < best_score {
+                best_score = score;
+                best_solution = Some(solution);
+            }
+        }
+
+        best_solution.map(|solution| (solution, best_score))
     }
 }
 

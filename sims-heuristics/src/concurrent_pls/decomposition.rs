@@ -2,8 +2,9 @@
 ///
 /// Each region owns a weight vector and uses augmented Tchebycheff scalarization
 /// to determine which solutions "belong" to it.
-
 use pareto::Objectives;
+
+use crate::scalarization::{DEFAULT_RHO, WeightedChebycheffCoeffs, weighted_chebycheff_score};
 
 /// Augmentation coefficient for Tchebycheff scalarization.
 ///
@@ -14,7 +15,7 @@ use pareto::Objectives;
 /// true Tchebycheff landscape geometry.  Values above $10^{-2}$ begin to distort region
 /// assignment and SA-PLS acceptance decisions; values below $10^{-5}$ may fail to break ties
 /// for coarse objective ranges.
-pub const RHO: f64 = 1e-3;
+pub const RHO: f64 = DEFAULT_RHO;
 
 /// A single region in the decomposition, owning one weight vector.
 #[derive(Clone, Debug)]
@@ -29,8 +30,13 @@ impl<const D: usize> Region<D> {
     /// Compute the augmented Tchebycheff score for `objectives` against this region.
     #[inline]
     #[must_use]
-    pub fn score(&self, objectives: &[u64; D], ideal: &Objectives<D>, bounds: &[(f64, f64); D]) -> f64 {
-        tchebycheff_score(objectives, &self.weight_vector, ideal, bounds, RHO)
+    pub fn score(
+        &self,
+        objectives: &[u64; D],
+        ideal: &Objectives<D>,
+        bounds: &[(f64, f64); D],
+    ) -> f64 {
+        weighted_chebycheff_score(objectives, &self.weight_vector, ideal, bounds, RHO)
     }
 }
 
@@ -88,10 +94,20 @@ pub fn build_regions<const D: usize>(
     if weight_vectors.len() > num_regions {
         let centroid: [f64; D] = std::array::from_fn(|_| 1.0 / D as f64);
         weight_vectors.sort_by(|a, b| {
-            let dist_a: f64 = a.iter().zip(centroid.iter()).map(|(x, c)| (x - c).powi(2)).sum();
-            let dist_b: f64 = b.iter().zip(centroid.iter()).map(|(x, c)| (x - c).powi(2)).sum();
+            let dist_a: f64 = a
+                .iter()
+                .zip(centroid.iter())
+                .map(|(x, c)| (x - c).powi(2))
+                .sum();
+            let dist_b: f64 = b
+                .iter()
+                .zip(centroid.iter())
+                .map(|(x, c)| (x - c).powi(2))
+                .sum();
             // sort descending by distance (most corner-like first, trim interior)
-            dist_b.partial_cmp(&dist_a).unwrap_or(std::cmp::Ordering::Equal)
+            dist_b
+                .partial_cmp(&dist_a)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
         weight_vectors.truncate(num_regions);
     }
@@ -121,22 +137,7 @@ pub fn tchebycheff_score<const D: usize>(
     bounds: &[(f64, f64); D],
     rho: f64,
 ) -> f64 {
-    let mut max_term = f64::NEG_INFINITY;
-    let mut sum_term = 0.0;
-
-    for j in 0..D {
-        let (min_j, max_j) = bounds[j];
-        let range = (max_j - min_j).max(1.0); // avoid division by zero
-        let dist_from_ideal = objectives[j].saturating_sub(ideal[j]) as f64;
-        let normalized = dist_from_ideal / range;
-        let weighted = weight[j] * normalized;
-        if weighted > max_term {
-            max_term = weighted;
-        }
-        sum_term += weighted;
-    }
-
-    max_term + rho * sum_term
+    weighted_chebycheff_score(objectives, weight, ideal, bounds, rho)
 }
 
 /// Precomputed coefficients for fast repeated Tchebycheff scoring.
@@ -145,52 +146,7 @@ pub fn tchebycheff_score<const D: usize>(
 /// `weight[j] / range[j]` for each dimension. Use when `weight`, `bounds`,
 /// and `rho` are constant across many calls (e.g., the inner loop of
 /// `step_scalarized`).
-///
-/// Construct via [`TchebycheffCoeffs::new`], then call [`tchebycheff_score_fast`].
-pub struct TchebycheffCoeffs<const D: usize> {
-    /// Precomputed `weight[j] / range[j]` for each dimension.
-    weighted_inv_range: [f64; D],
-    rho: f64,
-}
-
-impl<const D: usize> TchebycheffCoeffs<D> {
-    /// Precompute coefficients from weight vector, objective bounds, and rho.
-    #[inline]
-    #[must_use]
-    pub fn new(weight: &[f64; D], bounds: &[(f64, f64); D], rho: f64) -> Self {
-        let mut weighted_inv_range = [0.0; D];
-        for j in 0..D {
-            let (min_j, max_j) = bounds[j];
-            let range = (max_j - min_j).max(1.0);
-            weighted_inv_range[j] = weight[j] / range;
-        }
-        Self {
-            weighted_inv_range,
-            rho,
-        }
-    }
-
-    /// Compute augmented Tchebycheff score with precomputed coefficients.
-    ///
-    /// Equivalent to [`tchebycheff_score`] but avoids per-call divisions.
-    #[inline]
-    #[must_use]
-    pub fn score(&self, objectives: &[u64; D], ideal: &Objectives<D>) -> f64 {
-        let mut max_term = f64::NEG_INFINITY;
-        let mut sum_term = 0.0;
-
-        for j in 0..D {
-            let dist_from_ideal = objectives[j].saturating_sub(ideal[j]) as f64;
-            let weighted = self.weighted_inv_range[j] * dist_from_ideal;
-            if weighted > max_term {
-                max_term = weighted;
-            }
-            sum_term += weighted;
-        }
-
-        max_term + self.rho * sum_term
-    }
-}
+pub type TchebycheffCoeffs<const D: usize> = WeightedChebycheffCoeffs<D>;
 
 /// Assign a solution to all regions whose Tchebycheff score is within `threshold`
 /// (relative) of the best score. Returns a sorted list of (region_idx, score) pairs.
@@ -254,7 +210,10 @@ mod tests {
         assert_eq!(vecs.len(), 4);
         for v in &vecs {
             let sum: f64 = v.iter().sum();
-            assert!((sum - 1.0).abs() < 1e-10, "weights should sum to 1.0, got {sum}");
+            assert!(
+                (sum - 1.0).abs() < 1e-10,
+                "weights should sum to 1.0, got {sum}"
+            );
         }
     }
 

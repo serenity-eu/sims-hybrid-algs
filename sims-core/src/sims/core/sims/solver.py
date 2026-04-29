@@ -25,31 +25,42 @@ def _compute_hypervolume_for_result(
 ) -> float:
     """
     Compute hypervolume for a SolverResult using sims_problem.compute_hypervolume.
-    
+
     Args:
         result: The solver result containing the Pareto front
         objectives: List of objective names (e.g., ["min_cost", "cloud_coverage"])
         objective_bounds: Objective bounds as [[min, max], ...] for each objective.
-    
+
     Returns:
         The computed hypervolume value
     """
     if not result.pareto_front:
         log.info("_compute_hypervolume_for_result: empty pareto_front, returning 0.0")
         return 0.0
-    
+
     # Extract raw objective values as points
     points = [
         _extract_objectives(sol, objectives)
         for sol in result.pareto_front
     ]
-    
+
     log.info(f"_compute_hypervolume_for_result: {len(points)} points, first 3: {points[:3]}")
-    
+
+    # Expand bounds to cover every point so compute_hypervolume never panics
+    # on out-of-range values (can happen with pseudo-solver replays or when
+    # objective bounds were pre-computed from a different solution set).
+    expanded_bounds = [list(b) for b in objective_bounds]
+    for pt in points:
+        for i, v in enumerate(pt):
+            if v < expanded_bounds[i][0]:
+                expanded_bounds[i][0] = v
+            if v > expanded_bounds[i][1]:
+                expanded_bounds[i][1] = v
+
     try:
         hv = sims_problem.compute_hypervolume(
             data=points,
-            objective_bounds=objective_bounds,
+            objective_bounds=expanded_bounds,
             normalized=True,
         )
         log.info(f"_compute_hypervolume_for_result: computed hypervolume = {hv}")
@@ -92,6 +103,13 @@ def solve(
     pareto_archive: str = "nd-tree",
     parallel: bool = False,
     num_parallel_threads: int = 0,
+    neighborhood_budget: int | None = None,
+    use_checkpoint: bool = True,
+    use_ranked_candidates: bool = True,
+    max_k1_candidates: int = 15,
+    probing_budget: int | None = None,
+    use_greedy_initial_population: bool = True,
+    use_perturbation_restart: bool = True,
 ) -> SolverResult:
     match solver_type:
         case SolverType.OR_TOOLS:
@@ -119,10 +137,17 @@ def solve(
                 pareto_archive=pareto_archive,
                 parallel=parallel,
                 num_parallel_threads=num_parallel_threads,
+                neighborhood_budget=neighborhood_budget,
+                use_checkpoint=use_checkpoint,
+                use_ranked_candidates=use_ranked_candidates,
+                max_k1_candidates=max_k1_candidates,
+                probing_budget=probing_budget,
+                use_greedy_initial_population=use_greedy_initial_population,
+                use_perturbation_restart=use_perturbation_restart,
             )
         case _:
             raise ValueError(f"Solver type {solver_type} is not supported")
-    
+
     # Compute hypervolume for the result if bounds are provided
     if objective_bounds is not None:
         log.info(f"Computing hypervolume with bounds: {objective_bounds}, objectives: {objectives}, pareto_front size: {len(result.pareto_front)}")
@@ -152,6 +177,13 @@ def solve_with_two_phases(
     pareto_archive: str = "nd-tree",
     parallel: bool = False,
     num_parallel_threads: int = 0,
+    neighborhood_budget: int | None = None,
+    use_checkpoint: bool = True,
+    use_ranked_candidates: bool = True,
+    max_k1_candidates: int = 15,
+    probing_budget: int | None = None,
+    use_greedy_initial_population: bool = True,
+    use_perturbation_restart: bool = True,
     exact_solver_fn: Optional[Callable[..., SolverResult]] = None,
 ) -> TwoPhaseSolverResult:
     """
@@ -218,7 +250,7 @@ def solve_with_two_phases(
                 # Use solutions from the first phase as initial population for PLS
                 initial_population = exact_solver_result.pareto_front
                 log.info(f"[{problem_instance.name}] - seeding PLS with {len(initial_population)} solutions from MILP phase")
-            
+
             pls_result = solve(
                 SolverType.PLS,
                 problem_instance,
@@ -234,6 +266,13 @@ def solve_with_two_phases(
                 pareto_archive=pareto_archive,
                 parallel=parallel,
                 num_parallel_threads=num_parallel_threads,
+                neighborhood_budget=neighborhood_budget,
+                use_checkpoint=use_checkpoint,
+                use_ranked_candidates=use_ranked_candidates,
+                max_k1_candidates=max_k1_candidates,
+                probing_budget=probing_budget,
+                use_greedy_initial_population=use_greedy_initial_population,
+                use_perturbation_restart=use_perturbation_restart,
             )
 
             log.info(f"[{problem_instance.name}][solve_with_two_phases] - PLS found {len(pls_result.pareto_front)} solutions")
@@ -243,7 +282,7 @@ def solve_with_two_phases(
         )
 
     two_phase_result = TwoPhaseSolverResult.from_results_pair(exact_solver_result, pls_result, solver_config, filter_invalid=False)
-    
+
     # Compute hypervolume for both phase results if bounds are provided
     if objective_bounds is not None:
         if two_phase_result.exact_solver_result is not None:
@@ -254,5 +293,5 @@ def solve_with_two_phases(
             two_phase_result.pls_result.hypervolume = _compute_hypervolume_for_result(
                 two_phase_result.pls_result, objectives, objective_bounds
             )
-    
+
     return two_phase_result

@@ -1,0 +1,1107 @@
+                                                                       Computers & Operations Research 37 (2010) 521 -- 533
+
+
+
+                                                                  Contents lists available at ScienceDirect
+
+
+                                                       Computers & Operations Research
+                                                       journal homepage: w w w . e l s e v i e r . c o m / l o c a t e / c o r
+
+
+
+
+Speed-up techniques for solving large-scale biobjective TSP
+T. Lust a,∗ , A. Jaszkiewicz b
+a
+    Faculté Polytechnique de Mons, Laboratory of Mathematics and Operational Research, 9, rue de Houdain, 7000 Mons, Belgium
+b
+    Poznan University of Technology, Institute of Computing Science, Ul. Piotrowo 3A, 60-965 Poznan, Poland
+
+
+
+
+A R T I C L E         I N F O                               A B S T R A C T
+
+Available online 23 January 2009                            In this paper, we present the Two-Phase Pareto Local Search (2PPLS) method with speed-up techniques
+                                                            for the heuristic resolution of the biobjective traveling salesman problem. The 2PPLS method is a state-
+Keywords:                                                   of-the-art method for this problem. However, because of its running time that strongly grows with the
+Multiobjective combinatorial optimization                   instances size, the method can be hardly applied to instances with more than 200 cities. We thus adapt
+Hybrid metaheuristics
+                                                            some speed-up techniques used in single-objective optimization to the biobjective case. The proposed
+TSP
+                                                            method is able to solve instances with up to 1000 cities in a reasonable time with no, or very small,
+Local search
+Speed-up techniques                                         reduction of the quality of the generated approximations.
+                                                                                                                               © 2009 Elsevier Ltd. All rights reserved.
+
+
+
+
+1. Introduction                                                                             single-objective problems. Then, it uses the adaptation of one of the
+                                                                                            most simple metaheuristics: the hill-climbing method. This approach
+    Considering more than one objective in combinatorial optimiza-                          implies that no new numerical parameters are introduced. Lust and
+tion considerably increases the complexity of resolution, even if the                       Teghem applied 2PPLS to the bTSP and obtained better results on
+multiobjective problem is derived from a single-objective problem                           several indicators than previous state-of-the-art algorithms. How-
+solvable in polynomial time. Thus, during the last two decades, many                        ever, a weak point of the method is the running time that becomes
+papers have been published on the adaptation of metaheuristics to                           high when larger instances are tried to be solved. We show that our
+multiobjective problems [7,9].                                                              proposed method is able to solve instances with up to 1000 cities in
+    The multiobjective metaheuristics are usually based on relatively                       a reasonable time with no, or very small, reduction of the quality of
+simple versions of single-objective methods, while the state-of-the-                        the generated approximations. Note that before only instances with
+art results in single-objective optimization are often achieved by                          up to 200 cities were solved.
+methods using a number of advanced components, e.g. speed-up                                    The paper is organized as follows: in the next section, we
+techniques that can substantially reduce the running time of local-                         present general definitions relating to multiobjective combinato-
+search-based methods. In the opinion of the authors, multiobjec-                            rial optimization. In the third section, we define the bTSP and the
+tive metaheuristics should fully utilize the most powerful techniques                       instances used in this work. The different quality indicators nec-
+proposed for the single-objective case. Of course, these techniques                         essary to evaluate the quality of the results found by the different
+have to be properly adapted to the multiobjective case.                                     methods are presented at Section 4. Section 5 is dedicated to a
+    In this paper, we adapt two techniques used in single-objective lo-                     brief presentation of the two phases of the 2PPLS method. After
+cal search to the biobjective traveling salesman problem (bTSP). The                        that we present the main contribution of this paper, speed-up tech-
+techniques are “candidate list” and “don't look bits”. To our knowl-                        niques applied to the 2PPLS method for solving large-scale bTSP.
+edge those techniques have not yet been applied in multiobjective                           Finally, the results obtained with the new method are discussed at
+metaheuristics.                                                                             Section 7.
+    We apply the speed-up techniques within the Two-Phase Pareto
+Local Search (2PPLS) method proposed by Lust and Teghem [17,18].                            2. Multiobjective combinatorial optimization
+Initially, this method benefits to the maximum from very effi-
+cient heuristics developed for the resolution of the corresponding                              A multiobjective combinatorial optimization problems is defined
+                                                                                            as follows:
+                                                                                             “ min ”       z(x) = Cx
+      ∗ Corresponding author.                                                                   x
+        E-mail address: thibaut.lust@fpms.ac.be (T. Lust)                                    subject to    x : Ax = b
+       URL: http://www.ig.fpms.ac.be/∼lustt (T. Lust).                                                     x ∈ {0, 1}n
+
+0305-0548/$ - see front matter © 2009 Elsevier Ltd. All rights reserved.
+doi:10.1016/j.cor.2009.01.005
+522                                                T. Lust, A. Jaszkiewicz / Computers & Operations Research 37 (2010) 521 -- 533
+
+
+x ∈ {0, 1}n −→ n variables,          i = 1, . . . , n                                        • Extreme supported efficient solutions: The objective vectors z(x)
+C ∈ Np×n −→ p objective functions,                  k = 1, . . . , p                           of these supported efficient solutions (called extreme supported
+                                                                                               non-dominated points) are located on the vertex set of (conv Z),
+A ∈ Nm×n and b ∈ Nm×1 −→ m constraints,                        j = 1, . . . , m                                                                 p
+                                                                                               that is there are extreme points of (conv Z) + R+ .
+A combinatorial structure is associated to this problem, which can                           • Non-extreme supported efficient solutions: The objective vectors
+be path, tree, flow, tour, etc.                                                                z(x) of these supported efficient solutions (called non-extreme
+    We denote by X the feasible set in the decision space, defined                             supported non-dominated points) are not located on the vertex
+by X = {x ∈ {0, 1}n : Ax = b}. The feasible set in objective space is                          set of (conv Z) and located in the relative interior of the faces of
+                                                                                                             p
+called Z and is defined by Z = z(X) = {Cx : x ∈ X} ⊂ Np ⊂ Rp . Due                             (conv Z) + R+ .
+to the contradictory features of the objectives, it does not exist a
+feasible solution simultaneously minimizing each objective but a set                            It is also important to introduce the following classification of the
+of feasible solutions called efficient solutions. We present below some                      set XE [13].
+definitions that characterize these efficient solutions.
+    We first define two different dominance relations:                                       Definition 7 (Equivalent solutions). Two solutions x1 , x2 ∈ XE are
+                                                                                             equivalent if z(x1 ) = z(x2 ).
+Definition 1 (Dominance relation of Pareto). We say that a vector
+u = (u1 , . . . , up ) dominates a vector v = (v1 , . . . , vp ) if, and only if,
+                                                                                             Definition 8 (Complete set). A complete set XEc is a subset of XE such
+uk  vk , ∀k ∈ {1, . . . , p} ∧ ∃k ∈ {1, . . . , p} : uk < vk . We denote this rela-
+                                                                                             that each x ∈ X\XEc is weakly dominated by at least one x ∈ XEc , that
+tion by u ≺ v.
+                                                                                             is either dominated by or equivalent to at least one x ∈ XEc . In other
+                                                                                             words, for each non-dominated point z ∈ ZN there exists at least one
+Definition 2 (Weak dominance relation of Pareto). We say that a vec-
+                                                                                             x ∈ XEc with z(x) = z.
+tor u = (u1 , . . . , up ) weakly dominates a vector v = (v1 , . . . , vp ) if, and
+only if, uk  vk , ∀ k ∈ {1, . . . , p}. We denote this relation by u  v.
+                                                                                             Definition 9 (Minimal complete set). A minimal complete set XEm
+   We can now define an efficient solution, a non-dominated point,                           is a complete set without equivalent solutions. Every complete set
+the efficient set and the Pareto front.                                                      contains a minimal complete set.
+
+Definition 3 (Efficient solution). A feasible solution x∗ ∈ X is called                         In this work, we will only try to find an approximation of a min-
+efficient if there does not exist any other feasible solution x ∈ X such                     imal complete set: no equivalent solution generated will be thus
+as z(x) ≺ z(x∗ ).                                                                            retained.
+
+Definition 4 (Non-dominated point). The image z(x∗ ) in objective
+                                                                                             3. The bTSP
+space of an efficient solution x∗ is called a non-dominated point.
+
+Definition 5 (Efficient set). The efficient set denoted by XE contains                           Given a set {v1 , v2 , . . . , vN } of cities and two costs c1 (vi , vj ) and
+all the efficient solutions.                                                                 c2 (vi , vj ) between each pair of distinct cities {vi , vj } (with i  j), the
+                                                                                             bTSP consists of finding a solution, that is an order  of the cities, so
+                                                                                             as to minimize the following costs (k = 1, 2):
+Definition 6 (Pareto front). The image of the efficient set in Z is called
+the Pareto front (or non-dominated frontier), and is denoted by ZN .
+                                                                                                               N−1
+                                                                                                               
+                                                                                             “ min ”zk () =         ck (v(i) , v(i+1) ) + ck (v(N) , v(1) )
+    We can distinguish two types of efficient solutions: supported                                             i=1
+efficient solutions and non-supported efficient solutions [8].
+                                                                                                 Hence, two values are associated to a tour realized by a trav-
+• Supported efficient solutions: Supported efficient solutions are                           eling salesman, who has to visit each city exactly once and to
+  optimal solutions of a weighted sum single-objective problem                               return to the starting city. We are interested here only in the sym-
+       ⎧                      ⎫
+       ⎨ p                   ⎬                                                              metric bTSP, that is ck (vi , vj ) = ck (vj , vi ) for 1  i, j  N. In this paper,
+   min      k zk (x) : x ∈ X                                                                we use biobjective instances of size going from 100 to 1000, called
+       ⎩                      ⎭                                                              KroAB100, . . . , KroAB1000. The instances with less than or equal to
+            k=1
+                                                                                             200 cities have been generated on the basis of single-objective TSP
+  for some vector  > 0, that is with all positive components                                instances of the TSPLIB library [22]. The costs between the cities are
+  (k > 0, ∀k ∈ {1, . . . , p}). The image in objective space of the sup-                    computed by calculating the euclidean distance between each city.
+  ported efficient solutions, called supported non-dominated points,                         Two files of randomly generated Cartesian coordinates are available
+  are located on the “lowerleft boundary” of the convex hull of Z                            for each biobjective instance. For the instances of at least 300 cities,
+                                                                       p
+  (conv Z), that is they are non-dominated points of (conv Z) + R+ .                         we have generated ourselves the bTSP instances, by randomly gen-
+  We can obtain all supported solutions by varying the weight set                           erating coordinates. The costs between the cities are computed in
+  and by solving the corresponding weighted sum single-objective                             the same way than the instances with less than or equal to 200
+  problems.                                                                                  cities. All the instances and results are available on the web site of
+• Non-supported efficient solutions: Non-supported efficient so-                             the first author (http://www.ig.fpms.ac.be/∼lustt).
+  lutions are efficient solutions that are not optimal solutions of
+  any weighted sum single-objective problem with  > 0. Non-
+  supported non-dominated points are located in the interior of                              4. Quality indicators
+                p
+  (conv Z) + R+ .
+                                                                                             4.1. Quality indicators used
+   We can also make a distinction between supported efficient
+solutions and define extreme supported efficient solutions and                                  In single-objective optimization, it is quite easy to measure the
+non-extreme supported efficient solutions [8].                                               quality of a solution or to compare the solutions obtained by various
+                                            T. Lust, A. Jaszkiewicz / Computers & Operations Research 37 (2010) 521 -- 533                                        523
+
+
+methods. That is more difficult in the multicriteria case and it re-                      z2
+mains an open problem [27], because the solutions are represented
+by a trade-off surface. Consequently, we use several indicators to
+measure the quality of an approximation A of the efficient set. We
+call the representation in objective space of an approximation A a
+non-dominated set (NS). An approximation A has the following prop-
+erty: ∀x1 , x2 ∈ A, z(x1 ) ⱕ z(x2 ) ∧ z(x2 ) ⱕ z(x1 ) (no solution of the ap-
+proximation weakly dominates another).
+    We use the following indicators in this work:
+
+• The hypervolume H (to be maximized) [26]: Approximation of
+  the volume included under the curve formed by the NS.
+• The R measure (normalized between 0 and 1, to be maximized)
+  [15]: Evaluates a NS by the expected value of the weighted Tcheby-
+  cheff utility function over a set of normalized weight vectors.
+• The average distance D1 and maximal distance D2 (to be mini-
+  mized) [6,25] between a reference set of good quality and the NS,
+  by using the euclidean distance. Ideally, the reference set is the
+  Pareto front.
+• The number of potentially efficient solutions found, noted |PE|.
+                                                                                                                                                             z1
+    Both distances D1 and D2 are rather good indicators, provided
+that the reference set is of good quality. The distance D1 reflects the               Fig. 1. Ideal set produced on the basis of five extreme supported non-dominated
+capacity of an algorithm to reach solutions close to the reference set,               points.
+so it can be interpreted as an indicator to measure the intensification
+property of a multiobjective algorithm. On the other hand, the dis-
+tance D2 is a good indicator to measure the diversification property                  instances of more than 200 cities, numerical problems were encoun-
+of an algorithm.                                                                      tered. Thus, for these instances, we have generated the extreme sup-
+                                                                                      ported non-dominated points of the biobjective minimum spanning
+                                                                                      tree (bMST) problem associated to the same data than the bTSP. The
+4.2. Reference set                                                                    ideal set is then produced on the basis of the extreme supported
+                                                                                      non-dominated points of the bMST. As the bMST problem is a relax-
+    As said before, to compute the D1 and D2 indicators, it is im-                    ation of the bTSP, all feasible solutions of the bTSP remain weakly
+portant to have a reference set of excellent quality. To compute the                  dominated by the solutions of the ideal set of the bMST.
+reference set, we use the notion of ideal set [17], which is a lower
+bound of the Pareto front [10]. The ideal set is defined as the best po-              5. Two-Phase Pareto Local Search
+tential Pareto front that can be produced from a minimal complete
+set of extreme supported efficient solutions. Extreme supported ef-                       The 2PPLS has been developed recently by Lust and Teghem
+ficient solutions are used since these solutions are easier to generate               [17,18] and has been applied to the bTSP. The spirit of the two phases
+than non-extreme supported efficient solutions and non-supported                      of 2PPLS is similar to that of the exact Two-Phase method developed
+efficient solutions. For instance, we can see at Fig. 1 the represen-                 by Ulungu and Teghem [24], but here, approximation methods are
+tation of five extreme supported non-dominated points of a biob-                      used in both phases. The two phases of the method are as follows:
+jective problem (filled black points). This set can only be improved
+by adding non-extreme supported non-dominated points or non-                          (1) Phase 1: Find a good approximation of the supported efficient
+supported non-dominated points. Since the cijk values of the bTSP are                     solutions. These solutions can be generated by resolution of
+supposed to belong to N, and so Z ⊂ N2 , it is easy to compute the                        weighted sum single-objective problems obtained by applying a
+best places than non-dominated points can possibly take. The coordi-                      linear aggregation of the objectives. Only a good approximation
+nates of ideal non-extreme supported non-dominated points are the                         of a minimal complete set of the extreme supported efficient so-
+integer values located on the line between two consecutive extreme                        lutions is sought. To this aim, Lust and Teghem have heuristically
+supported non-dominated points, and the coordinates of ideal non-                         adapted the method of Aneja and Nair [1], initially proposed
+supported non-dominated points are the integer values located the                         for the resolution of a biobjective transportation problem. The
+closest possible to this line. In Fig. 1, we have added these ideal non-                  method consists in generating all the weight sets which make
+extreme supported non-dominated points and ideal non-supported                            it possible to obtain a minimal complete set of extreme sup-
+non-dominated points, represented by the circles.                                         ported efficient solutions of a biobjective problem. Each single-
+   So, it is impossible to improve this set with feasible solutions,                      objective problem is solved with one of the best heuristics for
+and that is why this set is called ideal set. It gives an excellent lower                 the single-objective TSP: the Lin–Kernighan heuristic. They use
+bound of the Pareto front. At final, to pass from one solution to                         the chained Lin–Kernighan version of Applegate et al. [3].
+another, only a step of one unity is produced, for the objective 1 or 2,              (2) Phase 2: Find non-supported efficient solutions located be-
+what depends on the gradient of the line between two consecutive                          tween the supported efficient solutions. In this phase, they use
+extreme supported non-dominated points.                                                   the Pareto Local Search (PLS) method, used and developed by
+   All feasible solutions are weakly dominated by a solution of the                       different authors [2,4,19]. The PLS method is a purely local
+ideal set. Therefore it is impossible to find a feasible solution that                    search algorithm, generalization in the multiobjective case of
+dominates a solution of the ideal set.                                                    the most simple metaheuristic: the hill-climbing method. The
+   For generating the extreme supported non-dominated points, we                          PLS method does not require any objectives aggregation nor
+use the method proposed by Przybylski et al. [21]. However, for the                       any numerical parameters. In PLS, the neighborhood of every
+524                                                T. Lust, A. Jaszkiewicz / Computers & Operations Research 37 (2010) 521 -- 533
+
+
+             7000
+                                                                      P1
+                                                                                             6. Speed-up techniques
+                                                                      PLS
+             6000                                                                            6.1. Introduction
+
+             5000                                                                                Before applying speed-up techniques, let us take a look at the
+                                                                                             edges used by the solutions of an efficient set. As for biobjective in-
+             4000
+  Time (s)
+
+
+
+
+                                                                                             stances, the edges can be represented in a two-dimensional graph
+             3000                                                                            (the x-coordinate and y-coordinate of the graph are, respectively,
+                                                                                             given by the costs 1 and 2 of the edges), we will employ such repre-
+             2000                                                                            sentation to study what are the edges of a biobjective instance used
+                                                                                             by the efficient set.
+             1000                                                                                We have represented in Fig. 3, on the left, all the 4950 edges
+                                                                                             of the biobjective instance KroAB100. On the right, we have repre-
+                0                                                                            sented the edges used by a near-efficient set, which is a very good
+                    100 200 300 400 500 600 700 800 900 1000                                 approximation of the efficient set, obtained with a method presented
+                                  Number of cities                                           in [17].
+                                                                                                 It is noted that only a small proportion of the edges are used
+                Fig. 2. Evolution of the running time of the two phases.
+                                                                                             by the near-efficient set, and the edges that are bad for both costs
+                                                                                             are not used at all. So, it clearly seems that it will be possible to
+         solution of a population is explored, and if the neighbor is                        implement efficient speed-up techniques. In the right graph, we also
+         not weakly dominated by a solution of the list of potentially                       add frequencies with which the edges are used by the solutions of
+         efficient solutions, the neighbor is added to the population and                    the near-efficient set, and we remark that well-located edges (both
+         to the list of potentially efficient solutions. The method stops                    costs are low) are intensively employed (near to 100% for certain
+         when it is no more possible to find new non-dominated neigh-                        edges, what means that almost all solutions use these edges) while
+         bors starting from a solution of the population. Two different                      other are slightly used. But the relation between the location of the
+         versions of PLS are known depending on how the population                           edges and the frequencies is not clear and would be difficult to take
+         is updated: the version of Angel et al. [2] and the version of                      into account.
+         Paquete et al. [19]. Lust and Teghem use the version of PLS
+         of Angel et al., version also been used by Basseur [4] as local
+         search in a memetic algorithm. This version presents two main                       6.2. Candidate list for the bTSP
+         advantages: not being dependent on the order in which the
+         solutions of the population are examined (contrarily to the ver-                       A classic speed-up technique for solving single-objective TSP is
+         sion of Paquete et al.) and giving better results than the version                  the candidate list. This speed-up technique is based on the obser-
+         of Paquete et al. in similar running times [17].                                    vation of Steiglitz and Weiner [23]: for an improving two-exchange
+                                                                                             move where (t1 , t2 ) and (t3 , t4 ) are the leaving edges and where (t1 , t4 )
+    Lust and Teghem have compared the 2PPLS method with state-                               and (t2 , t3 ) are the entering edges (see Fig. 4), it must be the case that
+of-the-art algorithms and have showed that the 2PPLS method is
+better on several indicators for instances with up to 200 cities.
+    We have represented in Fig. 2 the evolution of the running time                          Either c1 (t1 , t2 ) > c1 (t2 , t3 ) or c1 (t3 , t4 ) > c1 (t1 , t4 ) or both   (1)
+of the two phases (P1 and PLS) of the 2PPLS method according to
+the instance size. We use the instances KroAB from size 100 to 1000.
+    We remark that the running time of the first phase increases more                        (where c1 represents the single-objective cost). That is to say, one of
+or less linearly according to the instance size. On the other hand,                          the entering edges must be cheaper than one of the leaving edges.
+the running time of the second phase, the PLS method, strongly                                   To take advantage of this observation, a first step is to compute
+increases. Indeed, in the second phase, Lust and Teghem totally ex-                          for each city vi a static list containing the cities in order of increas-
+plore the neighborhood of every solution of a population, by making                          ing cost with vi . The size of the list is limited to a reasonable size. All
+two-exchange moves. Since for each solution of the population the                            the cities are then considered as starting cities for the two-exchange
+number of neighbors generated is equal to N(N − 3)/2, it takes O(n2 )                        moves. For a starting city t1 with t2 the next city in the tour, to
+time to generate neighbors from one solution of the population.                              consider candidates for t3 (see Fig. 4), we only need to start at the
+    Therefore, solving instances of more than 500 cities with the                            beginning of the t2 list and proceed down it until c1 (t2 , x) > c1 (t1 , t2 )
+2PPLS method without speed-up techniques is practically impossi-                             or when the end of the list has been reached. To check all possi-
+ble. Effectively, we did not manage to solve the instances of 750 and                        bilities, it is also necessary to start at the beginning of the t1 list
+1000 cites in a reasonable time with the 2PPLS method (for the 500                           and proceed down it until c1 (t1 , x) > c1 (t1 , t2 ) or when the end of
+cities instance, the second phase already takes more than 6000 s).                           the list has been reached. So, for each starting city, two lists are ex-
+So, speed-up techniques will be useful to reduce the running time                            plored: the candidate list of the starting city and the candidate list
+of 2PPLS, while keeping better quality results than state-of-the-art                         of the city following the starting city in the tour. As each city of the
+methods.                                                                                     current tour is considered as starting city, each list is explored two
+    Many speed-up techniques have been developed for the single-                             times.
+objective TSP [5], but to our knowledge, none of these techniques                                We can then consider two different techniques: to consider
+have been adapted to the resolution of the bTSP (excluding biob-                             the first improvement move, or among all the moves, the best
+jective instances resolved by a method using aggregation functions                           improvement move [14]. If the first improvement technique is
+to transform the biobjective problem into several single-objective                           used, the examination of the candidate lists is stopped as soon
+problems).                                                                                   as an improvement move has been found; if there is one. If the
+    Hence, we present at the next section speed-up techniques for                            best improvement technique is used, among all the improving
+solving the bTSP with the 2PPLS method, to reduce the running time                           moves, the move that allows to produce the best improvement is
+of the second phase.                                                                         considered.
+                                                  T. Lust, A. Jaszkiewicz / Computers & Operations Research 37 (2010) 521 -- 533                                    525
+
+
+                                      Edges of the KroAB100 instance                                          Edges used by near-efficient solutions
+                 4500                                                                          4500
+                                                                                                                                                75-100
+                 4000                                                                          4000                                              50-75
+                                                                                                                                                 25-50
+                 3500                                                                          3500                                               0-25
+
+                 3000                                                                          3000
+                 2500                                                                          2500
+
+
+
+
+                                                                                          C2
+          C2
+
+
+
+
+                 2000                                                                          2000
+                 1500                                                                          1500
+                 1000                                                                          1000
+                  500                                                                           500
+                    0                                                                              0
+                        0   500 1000 1500 2000 2500 3000 3500 4000 4500                                0   500 1000 1500 2000 2500 3000 3500 4000 4500
+                                                 C1                                                                                C1
+
+                                                                    Fig. 3. Edges of the KroAB100 instance.
+
+
+
+
+                                                      t1               t2                   cost, for the objective 2. We then merge the two lists to obtain a
+            t1                   t2
+                                                                                            unique candidate list of size 2 ∗ k by paying attention to two things:
+                                                                                            the same city cannot appear twice in the same list and if the city
+                                                                                            vj is in the candidate list of the city vi , the city vi cannot be in the
+                                                                                            candidate list of the city vj , to avoid double evaluation of the same
+                                                                                            move.
+                        t3 ?                                                                    We have represented in Fig. 5 the edges that are taken into ac-
+                                                                                            count for the two-exchange moves (called candidate edges) for k = 1
+                                                                                            and 5. We see that with this technique edges having high costs for
+                                                                                            both objectives are not candidates.
+                                                      t3              t4
+
+                               Fig. 4. Two-exchange move.                                   6.2.2. Data dominance relations
+                                                                                                Another way to create candidate lists is to use data dominance
+                                                                                            relations. Indeed, as we have seen in Fig. 3, edges that are Pareto
+   The candidate list technique is very efficient, and allows to con-                       dominated by many other edges do not appear in the near-efficient
+siderably reduce the running time of single-objective heuristics with                       set.
+very small degradations of the quality of the solutions obtained [16].                          So, to determine the edges that will be used, we associate to each
+   For the bTSP, for an improving two-exchange move where (t1 , t2 )                        edge a rank, based on the dominance ranking developed by Goldberg
+and (t3 , t4 ) are the leaving edges and where (t1 , t4 ) and (t2 , t3 ) are                [12].
+the entering edges, it must be the case that                                                    All the non-dominated edges have a rank equal to 0. These edges
+                                                                                            are then removed, and the following non-dominated edges obtain a
+Either c(t1 , t2 )c(t2 , t3 ) or c(t3 , t4 )c(t1 , t4 ) or both                 (2)       rank equal to 1. This process is repeated until a rank equal to the
+                                                                                            value given by a parameter D has been obtained.
+(where c represents the cost vector, of dimension 2 in the biobjective                          We show in Fig. 6 the representation of the edges, for D = 0, 1,
+case). That is to say, at least one of the entering edges must not                          10 and 20. We remark that with this technique, the set of candidate
+to be dominated by one of the leaving edges. Otherwise, the move                            edges visually better fits to the edges used by the near-efficient set,
+will not lead to a new non-dominated tour as the cost vector of the                         than with the k-nearest neighbors technique (Fig. 5).
+entering edges (equal to c(t2 , t3 ) + c(t1 , t4 )) will be dominated by the                    At the end, we create for each city a candidate list by only con-
+cost vector of the leaving edges (equal to c(t1 , t2 ) + c(t3 , t4 )).                      sidering the candidate edges given by the data dominance relations.
+    In the biobjective case, it is not more possible to sort out each                       To do that, we explore the set of candidate edges, and for each can-
+candidate list, since there is no more total order between the cost                         didate edge {vi , vj }, we add the city vj to the candidate list of the city
+vectors c. We have thus to explore each candidate list of each city                         vi (if vi is not already in the candidate list of vj ).
+until the end of the list has been reached. We see that this technique
+will not be as effective as in the single-objective case since each
+candidate list has to be explore until the end. For this reason, we                         6.3. “Don't look bits”
+do not take into account the relation (2) in the exploration of the
+candidate lists. In this way, to check all possibilities, each list has to                     In the previous speed-up techniques, all the cities are always con-
+be explore only one time.                                                                   sidered as starting cities for the two-exchange moves. It is possible to
+    We present below how to create the candidate lists in the biob-                         not consider all the cities, with a simple rule, often implemented in
+jective case. Two different techniques are presented.                                       singe-objective heuristics. This rule is known under the name “don't
+                                                                                            look bits” [5]. Here the observation is that if a starting city t1 pre-
+6.2.1. k-Nearest neighbors                                                                  viously failed to find an improving move (a move that generates a
+    A simple way to consider both costs is to create first two lists for                    new potentially non-dominated tour), and if the neighbors of t1 in
+each city. The first list contains the cities in order of increasing cost,                  the tour have not changed since that time, the probability that an
+for the objective 1, and the second, the cities in order of increasing                      improved move will be found starting from t1 is low.
+526                                      T. Lust, A. Jaszkiewicz / Computers & Operations Research 37 (2010) 521 -- 533
+
+
+                                    KroAB100 k = 1                                                                 KroAB100 k = 5
+             4000                                                                      4000
+             3500                                                                      3500
+             3000                                                                      3000
+             2500                                                                      2500
+        C2
+
+
+
+
+                                                                                  C2
+             2000                                                                      2000
+             1500                                                                      1500
+             1000                                                                      1000
+              500                                                                       500
+                0                                                                         0
+                    0   500 1000 1500 2000 2500 3000 3500 4000 4500                             0   500 1000 1500 2000 2500 3000 3500 4000 4500
+                                           C1                                                                       C1
+
+                                                                 Fig. 5. k-Nearest neighbors.
+
+
+
+                                   KroAB100 D = 0                                                                 KroAB100 D = 1
+             4000                                                                      4000
+             3500                                                                      3500
+             3000                                                                      3000
+             2500                                                                      2500
+        C2
+
+
+
+
+                                                                                 C2
+
+
+
+             2000                                                                      2000
+             1500                                                                      1500
+             1000                                                                      1000
+              500                                                                       500
+                0                                                                         0
+                    0   500 1000 1500 2000 2500 3000 3500 4000 4500                           0     500 1000 1500 2000 2500 3000 3500 4000 4500
+                                          C1                                                                              C1
+
+                                   KroAB100 D = 10                                                                KroAB100 D = 20
+             4000                                                                      4000
+             3500                                                                      3500
+             3000                                                                      3000
+             2500                                                                      2500
+        C2
+
+
+
+
+                                                                                 C2
+
+
+
+
+             2000                                                                      2000
+             1500                                                                      1500
+             1000                                                                      1000
+              500                                                                       500
+                0                                                                         0
+                    0   500 1000 1500 2000 2500 3000 3500 4000 4500                           0     500 1000 1500 2000 2500 3000 3500 4000 4500
+                                          C1                                                                              C1
+
+                                                         Fig. 6. Data dominance relations KroAB100.
+
+
+
+
+    We exploit this observation by means of special bits for each city.            7. Results
+Before applying the PLS method, we associate to each solution of
+the population a boolean array “don't look bits”, containing bits all                 We first present in this section the results of the compari-
+turned off. For a solution, the bit for city c is turned on whenever               son between the speed-up techniques, based on different figures
+a search for an improving move with t1 = c fails and is turned off                 showing the evolution of the D1 and R indicators according to
+whenever its predecessors and successors have changed, that is to                  the running time of the second phase of 2PPLS (the speed-up
+say an improving move is performed in which c is an endpoint of                    techniques have no influence on the running time of the first
+one of the deleted edges.                                                          phase). As the 2PPLS method is stochastic (the stochasticity comes
+    When we try to generate non-dominated tours from a solution                    from the first phase only), we make the average of the indica-
+of the population, we ignore all starting cities t1 whose bits given by            tors over three executions. This number of executions is enough
+the array “don't look bits” of the solution are switched on.                       since the aim of the different figures is to see which speed-up
+                                            T. Lust, A. Jaszkiewicz / Computers & Operations Research 37 (2010) 521 -- 533                                    527
+
+
+                                           kroAB200                                                                           kroAB200
+               0.21                                                                      0.94507
+                                                              Complete
+                0.2                                                                                                                         Complete
+                                                              Dominance
+               0.19                                           KNearest
+                                                                                         0.94506                                            Dominance
+                                                                                                                                            KNearest
+               0.18
+                                                                                         0.94505
+               0.17
+        D1
+
+
+
+
+                                                                                    R
+               0.16                                                                      0.94504
+               0.15
+               0.14                                                                      0.94503
+               0.13
+                                                                                         0.94502
+               0.12
+               0.11                                                                      0.94501
+                      0    20         40          60       80       100      120                     0      20     40        60    80     100   120     140
+                                            Time (s)                                                                          Time (s)
+
+                                            kroAB300                                                                         kroAB300
+             15.065                                                                     0.942565
+                                                            Complete
+                                                                                                                                            Complete
+                                                            Dominance                    0.94256
+              15.06                                                                                                                         Dominance
+                                                            KNearest
+                                                                                        0.942555                                            KNearest
+
+             15.055
+                                                                                         0.94255
+        D1
+
+
+
+
+                                                                                    R
+              15.05                                                                     0.942545
+                                                                                         0.94254
+             15.045
+                                                                                        0.942535
+              15.04
+                                                                                         0.94253
+             15.035                                                                     0.942525
+                      0   100   200        300     400     500     600     700                       0    100 200 300 400 500 600 700 800 900
+                                           Time (s)                                                                            Time (s)
+
+                                                 Fig. 7. Comparison between k-nearest and data dominance relations.
+
+
+
+
+techniques dominate the others for different lengths of the candidate                 D or k is reached, the results with these two techniques are similar,
+lists.                                                                                since the sets of candidate edges become the same.
+    We then statistically compare the speed-up techniques between                         We have also represented the results of the complete exploration
+them, with the standard 2PPLS method (with no speed-up tech-                          of the neighborhood (under the name Complete) and we can see
+niques) and with another state-of-the-art method. For these com-                      that both techniques allow to improve the running time (with a
+parisons, we make the average of the indicators over 20 executions.                   speed-up factor equal to about 3) by keeping results of same quality.
+    All the algorithms experimented in this work have been run on                         The value of D that allows to obtain the same quality result than
+a Pentium with 3 Ghz and 512 Mo of memory. The running time of                        the complete exploration is equal to 60 for the KroAB200 instance
+our implementation of the algorithms corresponds to the wall clock                    and 70 for the KroAB300 instance. For k, the values are, respectively,
+time.                                                                                 equal to 12 and 16.
+
+
+7.1. Comparison between k-nearest and data dominance relations                        7.2. Use of the edges found after P1
+
+   We compare two different techniques to create candidate lists:                         Fixing a good value for D is not necessarily obvious, so we propose
+candidate list based on k-nearest neighbors and candidate list based                  here a simple way to determine candidate edges without having to
+on data dominance relations.                                                          fix a value for D.
+   To do that, we vary the value of k for the k-nearest technique and                     The idea comes from the following observation: after application
+the value of D for the data dominance relations technique.                            of the P1 of 2PPLS, a set of potentially efficient solutions is already
+   We have represented in Fig. 7 the values obtained by the k-nearest                 discovered and it would be relevant to retrieve information from
+neighbor technique (under the name KNearest) and the data dom-                        this set.
+inance relations technique (under the name Dominance) for the D1                          We have represented in Fig. 8 all the edges used in at least one
+and R indicators according to the running time, for the KroAB200                      solution generated in P1 and edges used by a near-efficient set for
+and KroAB300 instances.                                                               the KroAB100 instance. We can see that both sets of candidate edges
+   The running time is controlled by the value of k for KNearest                      are very close. So, it seems that using only the edges found af-
+and by the value of D for Dominance.                                                  ter P1 for the creation of the candidate lists will already give good
+   We can see that the Dominance technique is more efficient than                     results.
+the KNearest technique: for the same running time, the values of                          We have represented in Fig. 9 the comparison for the D1 and
+the D1 and R indicators obtained with Dominance are better than the                   R indicators according to the running time between candidate lists
+values obtained with KNearest. Obviously, when a certain value for                    created with the Dominance technique and candidate lists created
+528                                             T. Lust, A. Jaszkiewicz / Computers & Operations Research 37 (2010) 521 -- 533
+
+
+                              Edges used by near-efficient solutions                                                 Edges used after phase 1
+             4500                                                                            4500
+                                                                       75-100                                                                        75-100
+                                                                        50-75                                                                         50-75
+             4000                                                       25-50                4000                                                     25-50
+                                                                         0-25                                                                          0-25
+             3500                                                                            3500
+             3000                                                                            3000
+             2500                                                                            2500
+        C2
+
+
+
+
+                                                                                        C2
+             2000                                                                            2000
+             1500                                                                            1500
+             1000                                                                            1000
+              500                                                                             500
+                0                                                                                0
+                    0       500 1000 1500 2000 2500 3000 3500 4000 4500                              0   500 1000 1500 2000 2500 3000 3500 4000 4500
+                                                 C1                                                                               C1
+
+                                     Fig. 8. Edges used by a near-efficient set and by the set obtained after P1 (KroAB100 instance).
+
+
+
+
+                                              kroAB200                                                                           kroAB200
+              0.136                                                                          0.945067
+                                                                Complete
+              0.134                                             Dominance                    0.945066
+                                                                DominanceP1
+              0.132                                             SpeedP1
+                                                                                             0.945065                                        Complete
+                                                                                                                                             Dominance
+               0.13                                                                          0.945064                                        DominanceP1
+                                                                                                                                             SpeedP1
+              0.128                                                                          0.945063
+        D1
+
+
+
+
+                                                                                             0.945062
+                                                                                        R
+
+
+
+
+              0.126
+              0.124                                                                          0.945061
+              0.122                                                                           0.94506
+               0.12                                                                          0.945059
+              0.118                                                                          0.945058
+              0.116                                                                          0.945057
+                        0    10 20 30 40 50 60 70 80 90 100 110                                          0      20     40        60    80    100   120      140
+                                               Time (s)                                                                           Time (s)
+
+                                              kroAB300                                                                           kroAB300
+             15.046                                                                          0.942563
+                                                              Complete
+                                                              Dominance
+                                                                                             0.942563                                         Complete
+             15.045                                                                                                                           Dominance
+                                                              DominanceP1                    0.942562
+                                                              SpeedP1                                                                         DominanceP1
+             15.044                                                                          0.942562                                         SpeedP1
+                                                                                             0.942561
+             15.043
+        D1
+
+
+
+
+                                                                                             0.942561
+                                                                                       R
+
+
+
+
+             15.042                                                                           0.94256
+             15.041                                                                           0.94256
+                                                                                             0.942559
+              15.04                                                                          0.942559
+             15.039                                                                          0.942558
+                        0      100    200     300     400      500     600      700                      0    100 200 300 400 500 600 700 800 900
+                                              Time (s)                                                                            Time (s)
+
+                                     Fig. 9. Comparison between data dominance relations and data dominance relations based on P1.
+
+
+
+
+from the edges found after P1 (under the name SpeedP1), for the                           lower running time (the speed-up factor is equal to about 10). On
+KroAB200 and KroAB300 instances (note that the scale of this fig-                         the other hand, we can improve the results given by SpeedP1 by
+ure is different to the scale of the preceding ones). We can see                          adding edges that were not used after P1, in the order given by
+that the SpeedP1 technique allows to obtain better results than the                       the data dominance relations. We can see these results on the same
+Dominance technique: for the same running time the indicators D1                          figure under the name DominanceP1. By increasing D and therefore
+and R found by SpeedP1 are better than the indicators found by                            the running time, the results given by SpeedP1 are better and are
+Dominance.                                                                                finally as good as the complete exploration, always with a lower
+   Comparing to the complete exploration of the neighborhood, the                         running time. Also, after a certain running time, the results given
+results given by the SpeedP1 technique are very close with a much                         by DominanceP1 and Dominance are the same given that from a
+                                          T. Lust, A. Jaszkiewicz / Computers & Operations Research 37 (2010) 521 -- 533                                           529
+
+
+                                      kroAB200                                                                             kroAB200
+               1.4                                                                       0.9451
+                                                             Dominance
+                                                          Dominance Dlb                 0.94505
+               1.2
+                                                                                          0.945
+                                                                                                                                               Dominance
+                 1                                                                      0.94495                                             Dominance Dlb
+
+                                                                                         0.9449
+               0.8
+
+
+
+
+                                                                                    R
+                                                                                        0.94485
+        D1
+
+
+
+
+               0.6                                                                       0.9448
+               0.4                                                                      0.94475
+                                                                                         0.9447
+               0.2
+                                                                                        0.94465
+                 0                                                                       0.9446
+                     0    5     10   15      20      25      30      35     40                    0           10           20          30           40        50
+                                          Time (s)                                                                          Time (s)
+
+                                          kroAB300                                                                         kroAB300
+              15.2                                                                       0.9426
+                                                             Dominance
+             15.18                                        Dominance Dlb
+                                                                                        0.94255
+             15.16                                                                       0.9425
+                                                                                                                                           Dominance
+             15.14                                                                                                                      Dominance Dlb
+                                                                                        0.94245
+             15.12
+                                                                                    R
+                                                                                         0.9424
+        D1
+
+
+
+
+              15.1
+                                                                                        0.94235
+             15.08
+                                                                                         0.9423
+             15.06
+             15.04                                                                      0.94225
+
+             15.02                                                                       0.9422
+                     0     20   40   60       80     100     120    140     160                   0            50               100           150           200
+                                          Time (s)                                                                         Time (s)
+
+                                                   Fig. 10. Data dominance relations and “don't look bits”.
+
+
+
+
+certain value of D, the sets of candidate edges are equal for both                  7.4. Summary
+techniques.
+                                                                                    7.4.1. Statistical comparison between speed-up techniques
+7.3. Use of “don't look bits”                                                           We can see in Table 1 the results obtained with the different
+                                                                                    methods, that is to say:
+    We can see in Fig. 10 the results obtained with the data dom-
+inance relations without and with the “don't look bits” technique                   • the standard 2PPLS method, that is the method without speed-up
+(respectively, under the name Dominance and Dominance Dlb).                           techniques;
+    We remark that for a low running time, the “don't look bits”                    • 2PPLS with the “don't look bits” technique (Dlb);
+technique gives better results on the D1 and R indicators for the                   • 2PPLS with the speed-up technique based on the edges found
+KroAB200 and KroAB300 instances. But by increasing D and there-                       after P1 (SpeedP1); and
+fore the running time, the performances without “don't look bits”                   • 2PPLS with both techniques (SpeedP1+Dlb) on the KroAB200,
+are better. Furthermore, with the “don't look bits” technique, we                     KroAB300, KroAB400 and KroAB500 instances.
+do not manage to reach the same quality results than without,
+even when the value of D is increased. But the difference remains                      We remark that the values of the indicators are practically the
+low.                                                                                same but the running time of PLS (second phase of 2PPLS) is strongly
+    We can see in Fig. 11 the results obtained with the speedP1                     reduced by employing the speed-up techniques. We also observe that
+technique without and with the “don't look bits” technique (respec-                 the SpeedP1 technique is more efficient than the Dlb technique.
+tively, under the name SpeedP1 and SpeedP1 Dlb) and the results                        We also tried to solve instances of size equal to 750 and 1000.
+obtained by adding edges that were not used after P1, in the order                  For these instances, it was not possible to apply the standard 2PPLS
+given by the data dominance relations, without and with the “don't                  method while keeping reasonable running times. We have repre-
+look bits” technique (respectively, under the name DominanceP1                      sented these results in Table 2. Even with the SpeedP1 technique,
+and DominanceP1Dlb).                                                                the running time is high (more than 5000 s for the KroAB1000 in-
+    We remark that the results obtained with the “don't look bits”                  stance). But by applying the “don't look bits” technique coupled to
+technique are of worse quality than without (for a same run-                        the SpeedP1 technique, it is possible to strongly reduce the running
+ning time, the indicators without “don't look bits” technique are                   time.
+better). But this technique remains interesting, since it allows to                    To take into account the variations in the results of the algorithms,
+give approximations of relatively good quality in a low running                     as we do not know the distributions of the indicators, we also car-
+time.                                                                               ried out the non-parametric statistical test of Mann–Whitney [11].
+530                                           T. Lust, A. Jaszkiewicz / Computers & Operations Research 37 (2010) 521 -- 533
+
+
+                                              kroAB200                                                                            kroAB200
+                  0.138                                                                        0.94507
+                  0.136                                      SpeedP1
+                                                             DominanceP1                      0.945068
+                  0.134                                      DominanceP1Dlb
+                  0.132                                      SpeedP1Dlb                       0.945066
+                   0.13                                                                       0.945064
+                  0.128
+           D1
+
+
+
+
+                                                                                          R
+                                                                                              0.945062
+                  0.126
+                  0.124                                                                        0.94506
+                  0.122                                                                                                                        SpeedP1
+                                                                                              0.945058                                         DominanceP1
+                   0.12                                                                                                                        DominanceP1Dlb
+                  0.118                                                                       0.945056                                         SpeedP1Dlb
+
+                  0.116                                                                       0.945054
+                           0     5      10   15      20    25       30      35      40                    0    5        10       15   20         25    30       35     40
+                                                  Time (s)                                                                     Time (s)
+
+                                              kroAB300                                                                            kroAB300
+                 15.045                                                                       0.942565
+                15.0445                                   SpeedP1                             0.942564
+                                                          DominanceP1
+                 15.044                                   DominanceP1Dlb                      0.942563
+                15.0435                                   SpeedP1Dlb
+
+                 15.043                                                                       0.942562
+                15.0425                                                                       0.942561
+           D1
+
+
+
+
+                                                                                          R
+                 15.042                                                                        0.94256
+                15.0415                                                                       0.942559
+                 15.041
+                                                                                              0.942558                                         SpeedP1
+                15.0405                                                                                                                        DominanceP1
+                                                                                              0.942557                                         DominanceP1Dlb
+                  15.04                                                                                                                        SpeedP1Dlb
+                15.0395                                                                       0.942556
+                           0    20      40   60      80      100   120     140     160                    0   20          40    60      80       100 120 140 160
+                                                  Time (s)                                                                           Time (s)
+
+                                                                   Fig. 11. SpeedP1 and “don't look bits”.
+
+
+Table 1
+Comparison between speed-up techniques (1).
+
+Instance              Speed-up                     H(108 )                 R                   D1                  D2                   |PE|                     Time (s) (P1+PLS)
+
+KroAB200              /                            1076.0781               0.945067             0.115               4.410                 6736.50                106 + 106
+                      Dlb                          1076.0600               0.945062             0.125               4.410                 6168.00                106 + 26
+                      SpeedP1                      1076.0619               0.945062             0.123               4.410                 6210.75                106 + 9
+                      SpeedP1+Dlb                  1076.0411               0.945056             0.134               4.410                 5569.95                106 + 3
+
+KroAB300              /                            1952.8212               0.942563            15.040              18.692               14 853.10                188 + 640
+                      Dlb                          1952.9939               0.942558            15.045              18.716               13 446.85                188 + 125
+                      SpeedP1                      1952.1064               0.942561            15.042              19.048               14 101.25                188 + 44
+                      SpeedP1+Dlb                  1952.2790               0.942556            15.047              19.052               12 514.85                188 + 14
+
+KroAB400              /                            3461.5350               0.944511            16.781              36.307               22 068.25                312 + 2085
+                      Dlb                          3461.4723               0.944505            16.788              36.309               19 249.45                312 + 339
+                      SpeedP1                      3461.5105               0.944509            16.784              36.583               21 098.90                312 + 122
+                      SpeedP1+Dlb                  3461.4436               0.944503            16.790              36.585               18 092.00                312 + 33
+
+KroAB500              /                            5495.8583               0.946919            17.332              22.559               33 690.80                404 + 6197
+                      Dlb                          5495.7553               0.946913            17.339              22.575               28 459.75                404 + 784
+                      SpeedP1                      5495.8286               0.946917            17.334              22.568               32 245.95                404 + 327
+                      SpeedP1+Dlb                  5495.7208               0.946911            17.340              22.580               26 496.60                404 + 73
+
+
+
+Table 2
+Comparison between speed-up techniques (2).
+
+Instance                  Speed-up                 H(108 )                     R                    D1               D2                   |PE|                       Time(s)(P1+PLS)
+
+KroAB750                  Dlb                      12 924.4508                 0.952319          17.181             31.616                50 162.40                  708 + 3367
+                          SpeedP1                  12 924.6259                 0.952323          17.174             32.233                59 345.00                  708 + 1593
+                          SpeedP1+Dlb              12 924.3840                 0.952317          17.184             31.414                46 332.20                  708 + 266
+
+KroAB1000                 Dlb                      22 656.9005                 0.954128          17.538             23.300                79 793.85                  1222 + 10872
+                          SpeedP1                  22 658.5914                 0.954132          17.531             23.581                97 119.10                  1222 + 5984
+                          SpeedP1+Dlb              22 658.2416                 0.954127          17.540             23.382                73 990.75                  1222 + 798
+                                            T. Lust, A. Jaszkiewicz / Computers & Operations Research 37 (2010) 521 -- 533                                                531
+
+
+This test allows to compare the distributions of the indicators of the                    We can see thanks to these box-plot graphs that about 80% of the
+standard 2PPLS method with the indicators of 2PPLS+SpeedP1.                           solutions obtained with the 2PPLS+SpeedP1 method are also gener-
+    The results of the comparison of 2PPLS with 2PPLS+SpeedP1 are                     ated by 2PPLS. Only about 15% of the solutions of 2PPLS+SpeedP1
+given in Table 3. We only use the D1 and R indicators, particularly                   are dominated by 2PPLS. Moreover, the 2PPLS+SpeedP1 method
+revealing. We test the following hypothesis: “the two samples come                    allows to generate some new solutions that dominate solutions ob-
+from identical populations” for the D1 or R indicator on a given                      tained with 2PPLS.
+instance. When the hypothesis is satisfied, the result “=” is indicated
+(no differences between the indicators of the algorithms). When the                   7.4.2. Gain in running time and number of neighbors generated
+hypothesis is not satisfied, the sign “>” (2PPLS+SpeedP1 is better)                       In Fig. 13, we have represented the evolution of the gain in run-
+or “<” (2PPLS+SpeedP1 is worse) is indicated. The level of risk of                    ning time by applying the SpeedP1 technique comparing to the stan-
+the test has been fixed to 5%.                                                        dard 2PPLS method.
+    We remark that for the KroAB200 instance, the standard 2PPLS                          We can see than the gain in running time is increasing according
+method is statistically better than the 2PPLS+SpeedP1 method on                       to the instance size.
+the D1 and R indicators. For the KroAB300, the 2PPLS method is                            In Fig. 14, we show two things: the evolution of the ratio equal
+better only on the R indicator. For the rest of the instances, that is the            to the number of edges found after P1 and the total number of
+large-scale instances, they are no statistically differences between                  edges, and the ratio between the number of neighbors generated by
+both methods.                                                                         2PPLS+SpeedP1 and the number of neighbors generated by 2PPLS.
+    Furthermore, we show in Fig. 12 the results of the comparison                         As we can see, both rations are decreasing, what can explain why
+between the potentially non-dominated points found by 2PPLS                           the gain in running time is increasing.
+and by 2PPLS+SpeedP1, for the 300 and 500 cities instances.
+To create these box-plot graphs, we compare the points found                          7.4.3. Comparison between 2PPLS and PD-TPLS
+by the 2PPLS+SpeedP1 method with the points found by the                                  The PD-TPLS method is an efficient method for the resolution
+2PPLS method. Four cases can occur: a point of 2PPLS+SpeedP1                          of the bTSP proposed by Paquete and Stützle [20]. In [18], Lust
+is dominated by at least one point of 2PPLS (Dominated), a                            and Teghem have shown that the standard 2PPLS method gener-
+point of 2PPLS+SpeedP1 dominates at least one point of 2PPLS                          ates results of better quality than PD-TPLS on instances with up to
+(Dominate), a point of 2PPLS+SpeedP1 is equal to an another point
+of 2PPLS (Commons), or the result of the comparison belongs to
+none of these three possibilities (Others). As the algorithms are                                                 10
+run 20 times, we compare the potentially non-dominated points                                                      9
+of the execution i of 2PPLS with the potentially non-dominated
+                                                                                        Time of 2PPLS+SpeedP1)
+
+
+
+
+                                                                                                                   8
+points of the execution i of 2PPLS+SpeedP1, with 1  i  20.
+                                                                                          Ratio (Time of 2PPLS/
+
+
+
+
+We choose this scheme because the execution i of 2PPLS is                                                          7
+launched with the same initial population than the execution i of
+                                                                                                                   6
+2PPLS+SpeedP1.
+                                                                                                                   5
+                                                                                                                   4
+
+Table 3                                                                                                            3
+Results of the Mann–Whitney test for the D1 and R indicators (2PPLS+SpeedP1
+compared to 2PPLS).
+                                                                                                                   2
+
+Instance                               D1                                    R                                     1
+                                                                                                                       100   150   200    250   300    350   400   450   500
+KroAB200                                <                                    <
+                                                                                                                                          Number of cities
+KroAB300                                =                                    <
+KroAB400                                =                                    =
+KroAB500                                =                                    =        Fig. 13. Evolution of the gain in running time between SpeedP1 and the standard
+                                                                                      2PPLS method.
+
+
+
+
+                                         KroAB300                                                                                        KroAB500
+               100                                                                        100
+                                                              SpeedP1                                                                                   SpeedP1
+
+                80                                                                              80
+
+
+                60                                                                              60
+                                                                                   %
+           %
+
+
+
+
+                40                                                                              40
+
+
+                20                                                                              20
+
+
+                 0                                                                                     0
+                     Dominated     Dominate       Commons           Others                                         Dominated       Dominate     Commons      Others
+
+                                                            Fig. 12. Comparison between the solutions.
+532                                                                          T. Lust, A. Jaszkiewicz / Computers & Operations Research 37 (2010) 521 -- 533
+
+
+           Ratio (# Edges used in P1/# Edges) (%)   9                                                                                              4
+
+
+
+
+                                                                                                                    Ratio (# Neighbors SpeedP1/
+                                                    8
+                                                                                                                                                  3.5
+
+
+
+
+                                                                                                                      # Neighbors 2PPLS) (%)
+                                                    7
+                                                                                                                                                   3
+                                                    6
+
+                                                    5                                                                                             2.5
+                                                    4
+                                                                                                                                                   2
+                                                    3
+                                                                                                                                                  1.5
+                                                    2
+
+                                                    1                                                                                              1
+                                                     100 200 300 400 500 600 700 800 900 1000                                                           100    150     200   250 300 350          400   450   500
+                                                                   Number of cities                                                                                          Number of cities
+
+Fig. 14. Evolution of the ratio between the number of edges found after P1 and the total number of edges (%) and evolution of the ratio between the number of neighbors
+generated by 2PPLS+SpeedP1 and the number of neighbors generated by 2PPLS (%).
+
+
+
+
+Table 4
+Comparison between 2PPLS+SpeedP1, 2PPLS+SpeedP1+Dlb and PD-TPLS.
+
+Instance                                                 Method                        H(108 )                  R                                             D1              D2                |PE|                Time (s)
+
+KroAB300                                                 2PPLS+SpeedP1                 1952.1064                0.942561                                      15.042          19.048            14 101.25           232
+                                                         2PPLS+SpeedP1+Dlb             1952.2790                0.942556                                      15.047          19.052            12 514.85           202
+                                                         PD-TPLS                       1929.8330                0.942473                                      15.155          18.903            4464.90             258
+
+KroAB400                                                 2PPLS+SpeedP1                 3461.5105                0.944509                                      16.784          36.583            21 098.90           434
+                                                         2PPLS+SpeedP1+Dlb             3461.4436                0.944503                                      16.790          36.585            18 092.00           345
+                                                         PD-TPLS                       3460.5673                0.944428                                      16.912          38.874            6478.75             591
+
+KroAB500                                                 2PPLS+SpeedP1                 5495.8286                0.946917                                      17.334          22.568            32 245.95           731
+                                                         2PPLS+SpeedP1+Dlb             5495.7208                0.946911                                      17.340          22.580            26 496.60           477
+                                                         PD-TPLS                       5493.4948                0.946848                                      17.468          22.751            8634.45             1137
+
+KroAB750                                                 2PPLS+SpeedP1                 12 924.6259              0.952323                                      17.174          32.233            59 345.00           2301
+                                                         2PPLS+SpeedP1+Dlb             12 924.3840              0.952317                                      17.184          31.414            46 332.20           974
+                                                         PD-TPLS                       12 921.4842              0.952270                                      17.298          30.861            14 511.80           3579
+
+KroAB1000                                                SpeedP1                       22 658.5914              0.954132                                      17.531          23.581            97 119.10           7206
+                                                         SpeedP1+Dlb                   22 658.2416              0.954127                                      17.540          23.382            73 990.75           2020
+                                                         PD-TPLS                       22 493.5355              0.954090                                      17.653          24.598            21 984.25           8103
+
+
+
+
+200 cities. But for instances with more than 200 cities, the running                                                           Table 5
+                                                                                                                               Results of the Mann–Whitney test for the D1 and R indicators (2PPLS+SpeedP1
+times of the standard 2PPLS method are higher than the running
+                                                                                                                               compared to PD-TPLS).
+times of PD-TPLS. Thus, we compare our method with speed-up
+techniques with our own implementation of the PD-TPLS method.                                                                   Instance                                                D1                                 R
+For this implementation, we have fixed the parameters of this                                                                   KroAB300                                                >                                  >
+method as follows, as done in [20]:                                                                                             KroAB400                                                >                                  >
+                                                                                                                                KroAB500                                                >                                  >
+                                                                                                                                KroAB750                                                >                                  >
+• The number of iterations for the number of perturbation steps is                                                              KroAB1000                                               >                                  >
+  equal to the number of cities N minus 50.
+• The number of aggregations is equal to N.
+
+    We can see the results in Table 4 for the instances with more                                                              8. Conclusion
+than 200 cities, and we remark, that the 2PPLS method with the
+SpeedP1 technique with or without the Dlb technique allows to                                                                      We have proposed different speed-up techniques to solve large-
+obtain better results in lower running times, for all the indicators                                                           scale bTSP instances with the 2PPLS method. With the candidate
+considered, except for the D2 indicator in some cases.                                                                         lists we are able to achieve in much shorter time results as good
+    The results of the comparison of 2PPLS+SpeedP1 with PD-TPLS                                                                as the standard 2PPLS method with a complete exploration of the
+for the Mann–Whitney test are given in Table 5.                                                                                neighborhood. With further reduction of the running time, e.g. if only
+    We remark that the 2PPLS+SpeedP1 method finds statistically                                                                the edges found after the phase 1 are considered in the second phase,
+better results than the PD-TPLS method on the D1 and R indicators.                                                             the quality of the generated solutions only slightly deteriorates and
+We can thus affirm with a very low risk that, for the D1 and R                                                                 are statically comparable for instances with at least 400 cities. So, this
+indicators, 2PPLS+SpeedP1 is better than PD-TPLS on the large-                                                                 simple parameter-free method gives a good compromise between
+scale instances experimented in this work.                                                                                     performances and running time. Further reduction of the running
+                                               T. Lust, A. Jaszkiewicz / Computers & Operations Research 37 (2010) 521 -- 533                                                533
+
+
+time, at the additional cost of the quality, may be obtained by adding                   [10] Ehrgott M, Gandibleux X. Bound sets for biobjective combinatorial optimization
+the “don't look bits” technique. Such method may be used to obtain                            problems. Computers and Operations Research 2007;34:2674–94.
+                                                                                         [11] Ferguson TS. Mathematical statistics, a decision theoretic approach. New-York
+in a very short time a reasonably good approximation of the Pareto                            and London: Academic Press; 1967.
+front of large-scale instances.                                                          [12] Goldberg DE. Genetic algorithms for search, optimization, and machine learning.
+    Our method has been compared to another state-of-the-art                                  Reading, MA: Addison-Wesley; 1989.
+                                                                                         [13] Hansen P. Bicriterion path problems. In: Lecture notes in economics and
+method for bTSP, the PD-TPLS method, on large-scale instances.                                mathematical systems, vol. 177, 1979, p. 109–27.
+We have shown that our new method outperforms PD-TPLS on                                 [14] Hansen P, Mladenovic N. First vs. best improvement: an empirical study.
+both quality of results and running time.                                                     Discrete Applied Mathematics 2006;154:802–17.
+                                                                                         [15] Jaszkiewicz A. On the performance of multiple-objective genetic local search
+    We also gave by this work state-of-the-art results for biobjective                        on the 0/1 Knapsack problem—a comparative experiment. IEEE Transactions
+instances of the TSP with more than 200 cities, until 1000 cities,                            on Evolutionary Computation 2002;6(4):402–12.
+while before only instances with up to 200 cities have been tackled.                     [16] Johnson DS, McGeoch LA. The traveling salesman problem: a case study. In:
+                                                                                              Aarts EHL, Lenstra JK, editors. Local search in combinatorial optimization. New
+Among the research perspectives, automatically fixing a good value
+                                                                                              York: Wiley; 1997. p. 215–310.
+for D for the speed-up technique based on data dominance relations                       [17] Lust T, Teghem J. Two-phase Pareto local search for the biobjective traveling
+will be interesting, as well as taking into account the frequencies with                      salesman problem. Journal of Heuristics 2009; doi:10.1007/s10732-009-9103-9.
+which the edges are used. Another interesting and obvious future                         [18] Lust T, Teghem J. Two-phase stochastic local search algorithms for the
+                                                                                              biobjective traveling salesman problem. Technical Report, IRIDIA, Technical
+work would be to test the 2PPLS method on more than two objective                             Report No.TR/IRIDIA/2007-014; 2007.
+instances. The speed-up techniques could also be adapted to another                      [19] Paquete L, Chiarandini M, Stützle T. Pareto local optimum sets in the biobjective
+large-scale biobjective combinatorial optimization problems.                                  traveling salesman problem: an experimental study. In: Gandibleux X, Sevaux
+                                                                                              M, Sörensen K, T'kindt V, editors. Metaheuristics for multiobjective optimisation.
+                                                                                              Lecture notes in economics and mathematical systems, vol. 535. Berlin:
+Acknowledgment                                                                                Springer; 2004. p. 177–99.
+                                                                                         [20] Paquete L, Stützle T. A two-phase local search for the biobjective traveling
+                                                                                              salesman problem. In: Fonseca CM, Fleming PJ, Zitzler E, Deb K, Thiele L, editors.
+    T. Lust thanks the “Fonds National de la Recherche Scientifique”                          Evolutionary multi-criterion optimization. Second international conference,
+for a research fellow grant (Aspirant FNRS).                                                  EMO 2003. Lecture notes in computer science, vol. 2632. Faro, Portugal:
+                                                                                              Springer; April 2003. p. 479–93.
+                                                                                         [21] Przybylski A, Gandibleux X, Ehrgott M. Two-phase algorithms for the
+References                                                                                    biobjective assignment problem. European Journal of Operational Research
+                                                                                              2008;185(2):509–33.
+ [1] Aneja YP, Nair KPK. Bicriteria transportation problem. Management Science           [22] Reinelt G. Tsplib—a traveling salesman problem library. ORSA Journal of
+     1979;25:73–8.                                                                            Computing 1991;3(4):376–84.
+ [2] Angel E, Bampis E, Gourvès L. A dynasearch neighborhood for the bicriteria          [23] Steiglitz K, Weiner P. Some improved algorithms for computer solution of the
+     traveling salesman problem. In: Gandibleux X, Sevaux M, Sörensen K, T'kindt             traveling salesman problem. In: Proceedings 6th annual allerton conference
+     V, editors. Metaheuristics for multiobjective optimisation. Lecture notes in             on communication, control, and computing. Urbana: Department of Electrical
+     economics and mathematical systems, vol. 535. Berlin: Springer; 2004.                    Engineering and the Coordinated Science Laboratory, University of Illinois;
+     p. 153–76.                                                                               1968. p. 814–21.
+ [3] Appletgate D. Chained Lin–Kernighan for large traveling salesman problems.          [24] Ulungu EL, Teghem J. The two phases method: an efficient procedure to solve
+     INFORMS Journal on Computing 2003;15:82–92.                                              biobjective combinatorial optimization problems. Foundation of Computing and
+ [4] Basseur M. Design of cooperative algorithms for multi-objective optimization:            Decision Science 1995;20:149–56.
+     application to the flow-shop scheduling problem. 4OR 2006;4(3):255–8.               [25] Ulungu EL, Teghem J, Fortemps Ph, Tuyttens D. MOSA method: a tool for solving
+ [5] Bentley JL. Fast algorithms for geometric traveling salesman problems. ORSA              multiobjective combinatorial optimization problems. Journal of Multi-Criteria
+     Journal on Computing 1992;4:387–411.                                                     Decision Analysis 1999;8(4):221–36.
+ [6] Czyzak P, Jaszkiewicz A. Pareto simulated annealing—a metaheuristic technique       [26] Zitzler E. Evolutionary algorithms for multiobjective optimization: methods and
+     for multiple-objective combinatorial optimization. Journal of Multi-Criteria             applications. PhD thesis, Swiss Federal Institute of Technology (ETH), Zurich,
+     Decision Analysis 1998;7:34–47.                                                          Switzerland; November 1999.
+ [7] Deb K. Multi-objective optimization using evolutionary algorithms. Wiley-           [27] Zitzler E, Laumanns M, Thiele L, Fonseca CM, Grunert da Fonseca V. Why
+     interscience series in systems and optimization. Chichester: Wiley; 2001.                quality assessment of multiobjective optimizers is difficult. In: Langdon WB,
+ [8] Ehrgott M. Multicriteria optimization. 2nd ed., Berlin: Springer; 2005.                  Cantú-Paz E, Mathias K, Roy R, Davis D, Poli R et al., editors. Proceedings of the
+ [9] Ehrgott M, Gandibleux X. Multiple criteria optimization: state of the art                genetic and evolutionary computation conference (GECCO'2002). San Francisco,
+     annotated bibliographic surveys. Boston: Kluwer Academic Publishers; 2002.               California: Morgan Kaufmann Publishers; July 2002. p. 666–73.
+

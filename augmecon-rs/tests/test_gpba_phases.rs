@@ -11,7 +11,7 @@
 //!
 //! Expected Results (from Python golden run):
 //! - Payoff table: 2 solutions (extreme points)
-//! - Main loop: 52 solutions  
+//! - Main loop: 52 solutions
 //! - Total: 54 solutions discovered
 //! - Non-dominated: 52 solutions
 //!
@@ -24,8 +24,8 @@
 //! `TestEpsilonSetup`                    | ✅ COMPLETE       | 1/1
 //! `TestEpsilonAdjustment`               | ✅ COMPLETE       | 2/2
 //! `TestRelaxationSearch`                | ✅ COMPLETE       | 4/4
-//! `TestMainLoop`                        | ✅ COMPLETE       | 1/1  
-//! `TestCompletePipeline`                | ✅ COMPLETE       | 1/1  
+//! `TestMainLoop`                        | ✅ COMPLETE       | 1/1
+//! `TestCompletePipeline`                | ✅ COMPLETE       | 1/1
 //!
 //! Total Active Tests: 15 passing
 //! Total Ignored: 0
@@ -141,7 +141,7 @@ fn parse_dzn_file(
     // BUILD CLOUD COVERAGE RELATIONSHIPS (matching Python logic)
     // clouds_data contains which elements are cloudy in each image
     // We need to build which clouds each image can COVER
-    
+
     // A cloud from image i can be covered by image j if:
     // - j contains that element AND
     // - j does not have clouds on that element
@@ -303,10 +303,7 @@ fn parse_array_of_sets(content: &str, var_name: &str) -> Vec<Vec<usize>> {
 }
 
 /// Parse a numeric array from DZN content
-fn parse_numeric_array(
-    content: &str,
-    var_name: &str,
-) -> Vec<f64> {
+fn parse_numeric_array(content: &str, var_name: &str) -> Vec<f64> {
     let mut buffer = String::new();
     let mut in_target = false;
 
@@ -448,15 +445,15 @@ fn test_payoff_table_with_real_data() {
         return;
     }
 
-    // Parse DZN and create SIMS problem
+    // Parse DZN and create SIMS problem with only the 2 objectives used by Python test
     let config = parse_dzn_file(dzn_path).expect("Failed to parse DZN file");
-    let mut problem = sims_problem::create_sims_problem(&config);
-
-    // Python test uses only 2 objectives: min_cost and cloud_coverage
-    // Remove objectives 3 and 4 (resolution and incidence angle)
-    if problem.num_objectives() > 2 {
-        problem.objectives.truncate(2);
-    }
+    let two_obj: HashSet<sims_problem::SimsObjective> = [
+        sims_problem::SimsObjective::MinCost,
+        sims_problem::SimsObjective::CloudCoverage,
+    ]
+    .into_iter()
+    .collect();
+    let problem = sims_problem::create_sims_problem_with_objectives(&config, Some(&two_obj));
 
     let options = Options::default().with_solver(Solver::CoinCbc);
 
@@ -576,12 +573,15 @@ fn test_main_loop_with_hardcoded_inputs() {
     assert!(dzn_path.exists(), "❌ Test file not found: {dzn_path:?}");
 
     let config = parse_dzn_file(dzn_path).expect("Failed to parse DZN file");
-    let mut problem = sims_problem::create_sims_problem(&config);
-
-    // Use only 2 objectives (matching Python test)
-    if problem.num_objectives() > 2 {
-        problem.objectives.truncate(2);
-    }
+    // Use only 2 objectives (matching Python test) — conditional model avoids
+    // creating resolution/incidence-angle variables and constraints
+    let two_obj: HashSet<sims_problem::SimsObjective> = [
+        sims_problem::SimsObjective::MinCost,
+        sims_problem::SimsObjective::CloudCoverage,
+    ]
+    .into_iter()
+    .collect();
+    let problem = sims_problem::create_sims_problem_with_objectives(&config, Some(&two_obj));
 
     // Configure GPBA-A with hardcoded bounds and Python-compatible settings
     let timeout = std::time::Duration::from_secs(300);
@@ -589,6 +589,8 @@ fn test_main_loop_with_hardcoded_inputs() {
     let gpba_config = GpbaConfig {
         primary_objective: 0,
         manual_bounds: Some((ideal, nadir)),
+        target_solutions: None,
+        per_solve_timeout: None,
     };
 
     let mut gpba = GpbaA::new(gpba_config).with_timeout(timeout);
@@ -657,6 +659,8 @@ fn test_complete_pipeline_end_to_end() {
     let gpba_config = GpbaConfig {
         primary_objective: 0,
         manual_bounds: None,
+        target_solutions: None,
+        per_solve_timeout: None,
     };
     let mut gpba = GpbaA::new(gpba_config).with_timeout(timeout);
 
@@ -750,9 +754,7 @@ fn test_complete_pipeline_end_to_end() {
     let total_solutions = pareto_front.solutions.len();
 
     println!("Expected: 52-54 solutions, 52 non-dominated");
-    println!(
-        "Actual:   {total_solutions} solutions, {non_dominated_count} non-dominated"
-    );
+    println!("Actual:   {total_solutions} solutions, {non_dominated_count} non-dominated");
 
     println!("\n✅ Complete pipeline test results:");
     println!(

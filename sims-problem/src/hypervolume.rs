@@ -26,9 +26,20 @@ impl HVNumeric for f64 {
     fn from_f64(val: f64) -> Self { val }
 }
 
-/// Compute hypervolume for 4D minimization front (generic version).
-/// Input: non-dominated points (Pareto front), reference point >= all coords.
-/// Returns exact HV.
+/// Compute hypervolume for 4D minimization front.
+///
+/// Uses the dimension-sweep approach: sort by dim-4, then for each unique
+/// dim-4 "slab" compute the 3-D hypervolume of the projection.  The 3-D
+/// subroutine similarly sweeps dim-3 and calls an O(n log n) 2-D routine.
+///
+/// **Sweep direction**: LOW → HIGH.  A point with a small dim-4 value
+/// dominates all the way up to the reference, so it must be active in
+/// every slab above it.  We therefore sort ascending and accumulate
+/// points as we go.  Slab `[z_k, z_{k+1})` has cross-section equal to
+/// the `(D-1)`-dim HV of all points with `dim-4 ≤ z_k`.
+///
+/// Complexity: O(k₄ · k₃ · n log n) where kᵢ = number of unique values
+/// in dimension i.
 pub fn hypervolume_4d_min_generic<T>(points: &mut [Vec<T>], reference: &[T]) -> T
 where
     T: HVNumeric + std::iter::Sum,
@@ -37,34 +48,145 @@ where
         return T::ZERO;
     }
 
-    // Sort by 4th dim
+    // Sort ascending by dim-4.
     points.sort_by(|a, b| a[3].partial_cmp(&b[3]).unwrap());
 
     let mut total = T::ZERO;
-    let mut prev = reference[3];
-    let n = points.len();
-    let mut i = n;
 
-    while i > 0 {
-        i -= 1;
-        let bound = points[i][3];
-        
-        if bound < prev {
-            let width = prev - bound;
-            
-            // Extract 3D points from slice [0..=i]
-            let mut points_3d: Vec<Vec<T>> = points[..=i].iter()
-                .map(|p| vec![p[0], p[1], p[2]])
-                .collect();
-                
-            let vol3d = hypervolume_3d_min_generic(&mut points_3d, &[reference[0], reference[1], reference[2]]);
-            total = total + width * vol3d;
-            prev = bound;
+    // Reusable buffer for the 3-D projection — grows as we sweep low → high.
+    let mut buf_3d: Vec<[T; 3]> = Vec::with_capacity(points.len());
+
+    let n = points.len();
+    let mut cursor = 0;
+
+    while cursor < n {
+        let bound_d4 = points[cursor][3];
+
+        // Skip points at or beyond the reference — they contribute nothing.
+        if bound_d4 >= reference[3] {
+            cursor += 1;
+            continue;
         }
-        
-        // Skip all points with the same coordinate to handle ties correctly
-        while i > 0 && points[i-1][3] == bound {
-            i -= 1;
+
+        // Collect all points at this dim-4 level (handle ties).
+        while cursor < n && points[cursor][3] == bound_d4 {
+            buf_3d.push([points[cursor][0], points[cursor][1], points[cursor][2]]);
+            cursor += 1;
+        }
+
+        // Slab upper bound: next distinct dim-4 value, or reference.
+        let next_d4 = if cursor < n && points[cursor][3] < reference[3] {
+            points[cursor][3]
+        } else {
+            reference[3]
+        };
+
+        let width = next_d4 - bound_d4;
+        let vol3d = hv_3d_sweep(&mut buf_3d, [reference[0], reference[1], reference[2]]);
+        total = total + width * vol3d;
+    }
+
+    total
+}
+
+/// 3-D hypervolume via dimension-sweep on a buffer of `[T; 3]` points.
+///
+/// Sweeps LOW → HIGH on dim-3.  The buffer is sorted in-place but the
+/// caller retains ownership (it grows across successive 4-D slabs).
+fn hv_3d_sweep<T>(points: &mut [[T; 3]], reference: [T; 3]) -> T
+where
+    T: HVNumeric + std::iter::Sum,
+{
+    if points.is_empty() {
+        return T::ZERO;
+    }
+
+    // Sort ascending by dim-3.
+    points.sort_by(|a, b| a[2].partial_cmp(&b[2]).unwrap());
+
+    let mut total = T::ZERO;
+
+    // Reusable buffer for the 2-D projection.
+    let mut buf_2d: Vec<[T; 2]> = Vec::with_capacity(points.len());
+
+    let n = points.len();
+    let mut cursor = 0;
+
+    while cursor < n {
+        let bound_d3 = points[cursor][2];
+
+        if bound_d3 >= reference[2] {
+            cursor += 1;
+            continue;
+        }
+
+        while cursor < n && points[cursor][2] == bound_d3 {
+            buf_2d.push([points[cursor][0], points[cursor][1]]);
+            cursor += 1;
+        }
+
+        let next_d3 = if cursor < n && points[cursor][2] < reference[2] {
+            points[cursor][2]
+        } else {
+            reference[2]
+        };
+
+        let width = next_d3 - bound_d3;
+        let area2d = hv_2d_sweep(&mut buf_2d, [reference[0], reference[1]]);
+        total = total + width * area2d;
+    }
+
+    total
+}
+
+/// 2-D hypervolume: sort by x ascending, sweep left-to-right.
+///
+/// For each point in x-order, the strip `[x_i, x_{i+1}) × [min_y, ref_y)`
+/// contributes `(x_{i+1} - x_i) × (ref_y - min_y)` where `min_y` is the
+/// running minimum y among all points processed so far.  This correctly
+/// computes the union of axis-aligned rectangles `[x_i, ref_x] × [y_i, ref_y]`.
+///
+/// Complexity: O(n log n) for the sort, O(n) for the sweep.
+fn hv_2d_sweep<T>(points: &mut [[T; 2]], reference: [T; 2]) -> T
+where
+    T: HVNumeric + std::iter::Sum,
+{
+    if points.is_empty() {
+        return T::ZERO;
+    }
+
+    // Sort ascending by x (dim-1).  Ties broken by y ascending.
+    points.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap()
+        .then_with(|| a[1].partial_cmp(&b[1]).unwrap()));
+
+    let mut total = T::ZERO;
+    let mut min_y = reference[1]; // running minimum y
+    let n = points.len();
+
+    for i in 0..n {
+        let x_i = points[i][0];
+        let y_i = points[i][1];
+
+        // Skip points at or beyond the reference in x.
+        if x_i >= reference[0] {
+            continue;
+        }
+
+        if y_i < min_y {
+            min_y = y_i;
+        }
+
+        // Width of this strip: from x_i to x_{i+1} (or ref_x for the last point).
+        let x_next = if i + 1 < n && points[i + 1][0] < reference[0] {
+            points[i + 1][0]
+        } else {
+            reference[0]
+        };
+
+        if x_next > x_i && min_y < reference[1] {
+            let width_x = x_next - x_i;
+            let height_y = reference[1] - min_y;
+            total = total + width_x * height_y;
         }
     }
 
@@ -72,80 +194,24 @@ where
 }
 
 /// 3D HV with slice view (generic version)
+/// Public 3-D entry point that accepts `Vec<Vec<T>>` for backward compat.
+/// Converts to the internal `[T; 3]` representation and delegates.
 pub fn hypervolume_3d_min_generic<T>(points: &mut [Vec<T>], reference: &[T]) -> T
 where
     T: HVNumeric + std::iter::Sum,
 {
-    if points.is_empty() {
-        return T::ZERO;
-    }
-
-    points.sort_by(|a, b| a[2].partial_cmp(&b[2]).unwrap());
-
-    let mut total = T::ZERO;
-    let mut prev = reference[2];
-    let n = points.len();
-    let mut i = n;
-
-    while i > 0 {
-        i -= 1;
-        let bound = points[i][2];
-        
-        if bound < prev {
-            let width = prev - bound;
-            
-            // Extract 2D points from slice [0..=i]
-            let mut points_2d: Vec<Vec<T>> = points[..=i].iter()
-                .map(|p| vec![p[0], p[1]])
-                .collect();
-            
-            let area2d = hypervolume_2d_min_generic(&mut points_2d, &[reference[0], reference[1]]);
-            total = total + width * area2d;
-            prev = bound;
-        }
-        
-        // Skip all points with the same z-coordinate to handle ties correctly
-        while i > 0 && points[i-1][2] == bound {
-            i -= 1;
-        }
-    }
-
-    total
+    let mut buf: Vec<[T; 3]> = points.iter().map(|p| [p[0], p[1], p[2]]).collect();
+    hv_3d_sweep(&mut buf, [reference[0], reference[1], reference[2]])
 }
 
-/// 2D HV: union area = sum over strips (generic version)
+/// Public 2-D entry point that accepts `Vec<Vec<T>>` for backward compat.
+/// Converts to the internal `[T; 2]` representation and delegates.
 pub fn hypervolume_2d_min_generic<T>(points: &mut [Vec<T>], reference: &[T]) -> T
 where
     T: HVNumeric + std::iter::Sum,
 {
-    if points.is_empty() {
-        return T::ZERO;
-    }
-
-    // Sort by y-coordinate (second dimension)
-    points.sort_by(|a, b| a[1].partial_cmp(&b[1]).unwrap());
-
-    let mut total = T::ZERO;
-    let mut prev_y = reference[1];
-
-    for i in (0..points.len()).rev() {
-        let curr_y = points[i][1];
-        
-        if curr_y < prev_y {
-            // Find minimum x-coordinate among points[0..=i]
-            let min_x = points[..=i].iter().map(|p| p[0]).min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
-            
-            if min_x < reference[0] {
-                let width_y = prev_y - curr_y;
-                let width_x = reference[0] - min_x;
-                total = total + width_y * width_x;
-            }
-            
-            prev_y = curr_y;
-        }
-    }
-
-    total
+    let mut buf: Vec<[T; 2]> = points.iter().map(|p| [p[0], p[1]]).collect();
+    hv_2d_sweep(&mut buf, [reference[0], reference[1]])
 }
 
 /// Compute hypervolume for generic structure implementing HasObjectives
@@ -180,40 +246,40 @@ pub fn compute<const D: usize, T: HasObjectives<D>>(pareto_front: Vec<T>, refere
 }
 
 /// Unified hypervolume computation function.
-/// 
+///
 /// # Arguments
 /// * `data` - Either a list of points (Vec<Vec<u64>>) or a list of Solution objects
 /// * `objective_bounds` - Bounds for each dimension. Format: [[min1, max1], [min2, max2], ...] for each dimension
 /// * `reference_point` - Optional reference point. If not provided, computed as the maximum bounds
 /// * `normalized` - Optional normalization flag. If true, normalizes objectives to [0, 1] range using objective_bounds
-/// 
+///
 /// # Returns
 /// The hypervolume as an integer
-/// 
+///
 /// # Examples
 /// ```python
 /// # Basic usage with bounds only (reference computed as max bounds)
 /// points = [[1, 2], [2, 1]]
 /// bounds = [[0, 10], [0, 10]]  # min/max for each dimension
 /// hv = compute_hypervolume(points, bounds)
-/// 
+///
 /// # With explicit reference point
 /// reference = [8, 8]
 /// hv = compute_hypervolume(points, bounds, reference_point=reference)
-/// 
+///
 /// # With normalization
 /// hv_normalized = compute_hypervolume(points, bounds, normalized=True)
-/// 
+///
 /// # Solutions with bounds
 /// hv = compute_hypervolume(solutions, bounds)
-/// 
+///
 /// # Solutions with normalization and custom reference
 /// hv_normalized = compute_hypervolume(solutions, bounds, reference_point=reference, normalized=True)
 /// ```
 #[pyfunction]
 #[pyo3(signature = (data, objective_bounds, reference_point=None, normalized=false))]
 pub fn compute_hypervolume(
-    data: &Bound<'_, pyo3::PyAny>, 
+    data: &Bound<'_, pyo3::PyAny>,
     objective_bounds: Vec<Vec<u64>>,
     reference_point: Option<Vec<u64>>,
     normalized: bool
@@ -221,7 +287,7 @@ pub fn compute_hypervolume(
     // Validate objective bounds first
     let dimension = objective_bounds.len();
     validate_objective_bounds(&objective_bounds, dimension)?;
-    
+
     // Compute reference point if not provided (use max bounds)
     let reference_point = if let Some(ref_point) = reference_point {
         // Validate provided reference point matches dimensions
@@ -236,7 +302,7 @@ pub fn compute_hypervolume(
         // Use max bounds as reference point
         objective_bounds.iter().map(|bound| bound[1]).collect()
     };
-    
+
     // Convert input data to points format
     let points = if let Ok(solutions) = data.extract::<Vec<Solution>>() {
         // Input is solutions
@@ -270,7 +336,7 @@ pub fn compute_hypervolume(
     let result = if normalized {
         // Normalize to [0,1] range like pymoo
         let (normalized_points, normalized_reference) = normalize_points_to_unit_range(&points, &reference_point, &objective_bounds);
-        
+
         match dimension {
             2 => {
                 let mut points_vec: Vec<Vec<f64>> = normalized_points.to_vec();
@@ -340,7 +406,7 @@ fn validate_objective_bounds(bounds: &[Vec<u64>], dimension: usize) -> PyResult<
             dimension, bounds.len()
         )));
     }
-    
+
     for (i, bound) in bounds.iter().enumerate() {
         if bound.len() != 2 {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -348,7 +414,7 @@ fn validate_objective_bounds(bounds: &[Vec<u64>], dimension: usize) -> PyResult<
                 i, bound.len()
             )));
         }
-        
+
         if bound[0] > bound[1] {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "Bound minimum must be <= maximum for dimension {}, but got min={}, max={}",
@@ -356,15 +422,15 @@ fn validate_objective_bounds(bounds: &[Vec<u64>], dimension: usize) -> PyResult<
             )));
         }
     }
-    
+
     Ok(())
 }
 
 
 /// Normalize points to [0,1] unit range for pymoo compatibility
 fn normalize_points_to_unit_range(
-    points: &[Vec<u64>], 
-    reference_point: &[u64], 
+    points: &[Vec<u64>],
+    reference_point: &[u64],
     bounds: &[Vec<u64>]
 ) -> (Vec<Vec<f64>>, Vec<f64>) {
     // Calculate ranges for each dimension
@@ -372,7 +438,7 @@ fn normalize_points_to_unit_range(
         let range = bound[1] - bound[0];
         if range > 0 { range as f64 } else { 1.0 }
     }).collect();
-    
+
     // Normalize points to [0, 1] range - panic if values are outside bounds
     let normalized_points: Vec<Vec<f64>> = points.iter().enumerate().map(|(point_idx, point)| {
         point.iter().enumerate().map(|(i, &val)| {
@@ -386,7 +452,7 @@ fn normalize_points_to_unit_range(
             (val as f64 - min_bound) / ranges[i]
         }).collect()
     }).collect();
-    
+
     // Normalize reference point
     let normalized_reference: Vec<f64> = reference_point.iter().enumerate().map(|(i, &val)| {
         if val < bounds[i][0] || val > bounds[i][1] {
@@ -398,7 +464,7 @@ fn normalize_points_to_unit_range(
         let min_bound = bounds[i][0] as f64;
         (val as f64 - min_bound) / ranges[i]
     }).collect();
-    
+
     (normalized_points, normalized_reference)
 }
 
@@ -408,7 +474,7 @@ fn solutions_to_points(solutions: &[Solution], dimension: usize) -> Vec<Vec<u64>
     if solutions.is_empty() {
         return Vec::new();
     }
-    
+
     solutions.iter().map(|s| {
         match dimension {
             2 => s.objectives_2d().to_vec(),

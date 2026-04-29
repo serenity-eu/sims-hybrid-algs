@@ -1,0 +1,747 @@
+                                                       European Journal of Operational Research 271 (2018) 1001–1013
+
+
+
+                                                                Contents lists available at ScienceDirect
+
+
+                                          European Journal of Operational Research
+                                                           journal homepage: www.elsevier.com/locate/ejor
+
+
+Decision Support
+
+Many-Objective Pareto Local Search
+Andrzej Jaszkiewicz
+Faculty of Computing, Institute of Computing Science, Poznan University of Technology, ul. Piotrowo 2, 60-965 Poznan, Poland
+
+
+
+
+a r t i c l e         i n f o                           a b s t r a c t
+
+Article history:                                        We propose a new Pareto Local Search Algorithm for the many-objective combinatorial optimization.
+Received 25 July 2017                                   Pareto Local Search proved to be a very effective tool in the case of the bi-objective combinatorial opti-
+Accepted 5 June 2018
+                                                        mization and it was used in a number of the state-of-the-art algorithms for problems of this kind. On the
+Available online 15 June 2018
+                                                        other hand, the standard Pareto Local Search algorithm becomes very ineﬃcient for problems with more
+Keywords:                                               than two objectives. We build an effective Many-Objective Pareto Local Search algorithm using three new
+Metaheuristics                                          mechanisms: the eﬃcient update of large Pareto archives with ND-Tree data structure, a new mechanism
+Multiobjective optimization                             for the selection of the promising solutions for the neighborhood exploration, and a partial exploration of
+Combinatorial optimization                              the neighborhoods. We apply the proposed algorithm to the instances of two different problems, i.e. the
+Pareto Local Search                                     traveling salesperson problem and the traveling salesperson problem with proﬁts with up to 5 objectives
+                                                        showing high effectiveness of the proposed algorithm.
+                                                                                                                                 © 2018 Published by Elsevier B.V.
+
+
+
+
+1. Introduction                                                                            2014; Lust & Jaszkiewicz, 2010; Lust & Teghem, 2010), various bi-
+                                                                                           objective permutation ﬂowshop problems (Dubois-Lacoste, López-
+    Combinatorial optimization problems ﬁnd numerous applica-                              Ibáñez, & Stützle, 2011), the bi-objective set covering problem (Lust
+tions in transportation, logistics, scheduling, design, etc. (Yu, 2013).                   & Tuyttens, 2014), and the risk-cost optimization for procurement
+On the other hand, real-life optimization problems often require                           planning (Mori, Kobayashi, Samejima, & Komoda, 2017).
+taking into account multiple points of view corresponding to mul-                              The effectiveness of PLS as a component of the hybrid algo-
+tiple objectives. Since, multiple objective combinatorial optimiza-                        rithms may be explained by the fact that it has different charac-
+tion problems are usually NP-Hard, multiobjective metaheuristics                           teristics than most other multiobjective metaheuristics. In order to
+are often used to solve them approximately (Talbi, Basseur, Nebro,                         obtain a good approximation of the Pareto front each multiobjec-
+& Alba, 2012).                                                                             tive metaheuristic should search both towards and along this front.
+    Effective single objective algorithms for combinatorial optimiza-                      The search towards the Pareto front means generating new solu-
+tion problems usually use some kind of local search as one of their                        tions lying closer to the Pareto front than known solutions, and
+components. Pareto Local Search (PLS) (Angel, Bampis, & Gourvès,                           the search along the Pareto front means generating new poten-
+2004; Paquete, Schiavinotto, & Stuetzle, 2007; Paquete & Stutzle,                          tially Pareto-optimal solutions improving the representation of the
+2006) is a very natural extension of the concept of the local search                       Pareto front. PLS is very effective in the search along Pareto front
+to the multiobjective case. PLS works with a Pareto archive, i.e. a                        when started from a seed of high quality solutions. For example in
+set of potentially Pareto-optimal solutions that are not dominated                         the case of the bi-objective traveling salesperson problem such a
+by any other solution obtained so far. PLS explores neighborhood                           seed may be generated with the use of the Lin–Kernighan (Lin &
+of each solution in the archive and uses the neighbor solutions to                         Kernighan, 1973) heuristic (Cornu et al., 2017; Liangjun et al., 2014;
+update the Pareto archive.                                                                 Lust & Jaszkiewicz, 2010; Lust & Teghem, 2010).
+    Alike the single objective local search, PLS when used as a stan-                          The standard PLS algorithm becomes, however, very ineﬃcient
+dalone algorithm started with an initial archive of a low qual-                            in the case of more than two objectives because the number of
+ity is not very effective, however, it is an important component                           Pareto-optimal solutions grows very fast with the number of ob-
+of a number of the state-of-the-art hybrid algorithms e.g. for                             jectives. Thus, PLS has to search neighborhoods of a huge number
+the bi-objective knapsack (Lust & Teghem, 2012), the bi-objective                          of solutions and the process of updating large Pareto archives with
+traveling salesperson problem (TSP) (Cornu, Cazenave, & Vander-                            new solutions becomes very time-consuming. Indeed, with very
+pooten, 2017; Jaszkiewicz & Lust, 2017; Liangjun, Qingfu, & Battiti,                       few exceptions (e.g. Cornu et al., 2017; Liangjun et al., 2014), ma-
+                                                                                           jority of the publications on PLS concerns bi-objective optimization
+                                                                                           only.
+    E-mail address: andrzej.jaszkiewicz@cs.put.poznan.pl
+
+https://doi.org/10.1016/j.ejor.2018.06.009
+0377-2217/© 2018 Published by Elsevier B.V.
+1002                                         A. Jaszkiewicz / European Journal of Operational Research 271 (2018) 1001–1013
+
+
+   In this paper we propose a new Many-objective PLS algorithm                         by any other feasible solution are called Pareto-optimal and the im-
+(MPLS) dedicated to the problems with more than two objectives.                        age of the set of Pareto-optimal solutions in the objective space is
+Please note, that we use the term “Many-objective” in somehow                          the Pareto front.
+non-standard way, since it usually describes problems with ≥ 4                             A set of distinct and mutually non-dominated solutions, i.e. so-
+objectives (Chand & Wagner, 2015). However, in the context of PLS,                     lutions such that none of them dominates any other, is called a
+three objectives is already a high number.                                             Pareto archive. In the context of multiobjective metaheuristics the
+   The proposed algorithm is based on the following three new                          Pareto archive is used to store the set of potentially Pareto-optimal
+mechanisms that differ it from the standard PLS:                                       solutions generated by the method till a given iteration.
+                                                                                           PLS works with a Pareto archive. It starts with some initial
+ • The use of a recently proposed ND-Tree data structure                               Pareto archive and then searches whole neighborhoods of all so-
+   (Jaszkiewicz & Lust, 2018) for the eﬃcient update of the Pareto                     lutions whose neighborhoods have not been searched yet for new
+   archive.                                                                            potentially Pareto-optimal solutions until no such new solution can
+ • The use of a new mechanism for the selection of the promis-
+                                                                                       be found in any of the neighborhoods (see Algorithm 1 based on
+   ing solutions for the exploration of their neighborhoods based
+   on the randomly selected weighted Chebycheff scalarizing func-                      Algorithm 1 PLS.
+   tions.
+                                                                                         Parameter : A: an initial Pareto archive
+ • The partial exploration of the neighborhoods, i.e. testing only
+
+   some of the neighborhood solutions.
+                                                                                         P←A
+    The ﬁrst mechanism reduces the time needed to update the                             Pa ← ∅
+Pareto archive, while the two latter mechanisms improve the qual-                        while P = ∅ do
+ity of the archive with a limited number of the neighborhood so-                            for all x ∈ P do
+lutions tested.                                                                                for all x ∈ N (x ) do
+    We apply MPLS to two different multiobjective combinato-                                      if y(x )  y(x ) and y(x ) = y(x ) then
+rial optimization problems: the multiobjective traveling salesper-                                   if Update(A , x ↓) then
+son problem (MTSP) and the multiobjective traveling salesperson                                         Pa ← Pa ∪ {x }
+problem with proﬁts (MTSPWP) with up to 5 objectives. Through                                        end if
+a computational study we show that MPLS produces archives of                                      end if
+much better quality than the standard PLS in the same time. We                                 end for
+also show that each of the three new mechanisms described above                             end for
+contributes to the effectiveness of the proposed method. Further-                           P ← Pa
+more, since for the bi-objective traveling salesperson problem the                          Pa ← ∅
+best results have been obtained by properly balancing the CPU                            end while
+time assigned to the Lin–Kernighan heuristic and to PLS (Cornu
+et al., 2017; Jaszkiewicz & Lust, 2017; Liangjun et al., 2014; Lust &                    where N (x ) denotes the neighborhood of x and Update() up-
+Jaszkiewicz, 2010; Lust & Teghem, 2010) we test whether a similar                        dates the Pareto archive A.
+situation holds in the case of MTSP with more than two objectives.
+    The paper is organized in the following way. In the next section                   the particular version of PLS used e.g. in Lust & Teghem, 2010).
+we describe the proposed Many-Objective Pareto Local Search algo-
+rithm. Then the computational experiment is presented. In Section                      2.2. Mechanism I: eﬃcient update of the Pareto archive with the use
+4, related works are discussed. Finally, conclusions and directions                    of ND-Tree
+for further research are presented.
+                                                                                          Whenever a new neighbor solution not dominated by the cur-
+                                                                                       rent solution is found, the Pareto archive needs to be updated. Up-
+2. Many-Objective Pareto Local Search algorithm                                        dating a Pareto archive A with a new solution x means that:
+                                                                                        • x is added to A if it is not dominated nor equal to any solution
+    We start the description of the proposed MPLS algorithm with a
+                                                                                          in A,
+short presentation of the standard PLS that is a basis for our algo-
+                                                                                        • all solutions dominated by x are removed from A.
+rithm. Then we describe the three new mechanisms used in MPLS.
+Finally, we present the whole algorithm of MPLS.                                           Since the neighborhood solutions for many combinatorial prob-
+                                                                                       lems may be generated in a very short time and the number of
+                                                                                       Pareto-optimal solutions grows fast with growing number of ob-
+2.1. Pareto Local Search                                                               jectives, the process of updating the Pareto archive may easily be-
+                                                                                       come the main factor inﬂuencing the running time of PLS.
+   PLS is a relatively straightforward adaptation of the idea of the                       The simplest approach to the update of the Pareto archive is to
+single objective local search to the multiobjective case. In PLS the                   organize it as a simple list of solutions and compare the new solu-
+acceptance of a new neighborhood solution is based on the domi-                        tion to each solution in this list until a dominating or equal solu-
+nance relation.                                                                        tion has been found or all solutions have been compared. This ap-
+   Consider a general multiobjective optimization problem with a                       proach is, however, very time consuming for large Pareto archives.
+feasible set X and d objective functions yk (x). Without loss of                       In the bi-objective case the Pareto archive may be eﬃciently up-
+generality we assume that the objectives are maximized. The im-                        dated using the binary search in an archive sorted according to the
+age of a feasible solution x in the objective space Rd is a point                      values of the objectives (Jaszkiewicz & Lust, 2018). This approach,
+y(x ) = (y1 (x ), y2 (x ), . . . , yd (x )). We say that a point y1 ∈ Rd domi-         however, cannot be extended to the case of more than two objec-
+nates a point y2 ∈ Rd if, and only if, y1j ≥ y2j ∀ j ∈ {1, . . . , d} ∧ ∃ j ∈          tives.
+{1, . . . , d} : y1j > y2j . We denote this relation by y1 y2 . For the sake              In MPLS we use a recently proposed ND-Tree data structure
+of simplicity we will use the dominance relation with respect to                       (Jaszkiewicz & Lust, 2018). In ND-Tree the Pareto archive is recur-
+the corresponding solutions as well. The solutions not dominated                       sively split into disjoint subsets. For each subset approximate local
+                                          A. Jaszkiewicz / European Journal of Operational Research 271 (2018) 1001–1013                                   1003
+
+
+ideal and approximate local nadir points, i.e. points in the objec-
+tive space respectively dominating and dominated by all solutions
+in this subset, are kept. In other words, all solutions from each
+subset are contained in the hyper-box deﬁned by the two points.
+These hyper-boxes may in general overlap, but the tree is built
+such that the subsets contain close solutions contained in small
+hyper-boxes. By comparing the new solution to the approximate
+local ideal and the approximate local nadir points many branches
+of the tree can be omitted. The computational complexity of up-
+dating the Pareto archive with ND-Tree is sub-linear with respect
+to the size of the archive for any number of objectives under mild
+assumptions (Jaszkiewicz & Lust, 2018). Thus the overall running
+time of MPLS can be signiﬁcantly reduced with the use of this data
+structure.
+
+2.3. Mechanism II: selection of the promising solutions for the
+exploration of their neighborhoods
+
+    The standard PLS algorithm ends-up with a Pareto-archive be-
+ing locally optimal, i.e. when no solution being a neighbor of any
+solution in the archive can improve this archive. Obtaining a lo-
+                                                                                    Fig. 1. Comparison of the hypervolume and the expected value of the weighted
+cally optimal Pareto-archive is, however, usually prohibitively time-               Chebycheff scalarizing functions indicators.
+consuming in the case of three and more objectives even with the
+use of ND-Tree. On the other hand, the algorithm when stopped
+earlier may produce an archive of a low quality, because there                          Although the two indicators, i.e. the hypervolume and the ex-
+could be high variations in the CPU times spent in exploring var-                   pected value of the weighted Chebycheff scalarizing functions, are
+ious regions of the Pareto front. Dubois-Lacoste et al. (2011) and                  deﬁned in quite different terms, they are in fact closely related,
+Dubois-Lacoste, López-Ibáñez, and Stützle (2015) proposed anytime                   which is illustrated in Fig. 1. Consider the non-dominated border
+PLS algorithm for the bi-objective case whose goal is to generate                   of the dominated area used in the hypervolume indicator. Each
+archives of a good quality at any iteration. One of the main mech-                  point lying on this border is optimum of one or more weighted
+anisms of that algorithm is the selection of solutions whose neigh-                 Chebycheff scalarizing functions and has the same values of these
+borhood exploration has a high potential to improve the current                     scalarizing functions as some of the solutions in the archive. In
+archive. Dubois-Lacoste et al. use the so-called optimistic hypervol-               other words, the hyper-facets of this border belong to the same
+ume to select such solutions in the bi-objective case. This mecha-                  isoquants of multiple Chebycheff functions as some solutions from
+nism, however, cannot be directly extended to the case of more                      the archive. In result, any improvement of the hypervolume implies
+than two objectives. Thus, we propose a new selection mechanism                     an improvement of the best values of some weighted Chebycheff
+described below.                                                                    scalarizing functions.
+    In each iteration we would like to generate a new solution                          An important advantage of the expected value of the weighted
+highly improving the quality of the Pareto archive. Since the neigh-                Chebycheff scalarizing functions indicator is that to select good so-
+bor solutions are usually similar to the original solutions, it is nat-             lutions we do not need to explicitly calculate the contribution of
+ural to expect that new good solutions may be found in the neigh-                   each solution to this quality indicator. Instead in each iteration
+borhoods of known good solutions.                                                   we draw a random weight vector deﬁning a weighted Chebycheff
+    Assume that an indicator of the quality of the Pareto archive is                scalarizing function and select from the Pareto archive the solu-
+used. A good solution is a solution that substantially contributes to               tion that minimizes the value of this function. Thus, solutions be-
+the value of this indicator, i.e. its removal would substantially de-               ing minima of many scalarizing functions, and so having high im-
+teriorate the value of this indicator. A number of indicators for the               pact on the expected value, have higher chance to be selected. For
+evaluation of the quality of Pareto archives have been proposed. An                 example, in Fig. 1 solutions xa and xb have higher chance to be
+often used quality indicator is the hypervolume of the space dom-                   selected than solutions xc , xd , and xe .
+inated by the set of points (see e.g. Zitzler, Thiele, Laumanns, Fon-                   This mechanism not only selects promising solutions but also
+seca, & da Fonseca, 2003). Our approach is motivated by another                     assures a uniform coverage of all regions of the objective space.
+quality indicator – the expected value of the weighted Chebycheff                   If the solutions were selected at random with uniform probability,
+scalarizing functions (Jaszkiewicz, 2002). Such functions are de-                   regions that have more dense representation in the current archive
+ﬁned in the following way:                                                          would have a higher chance to be explored further. Thus, any ran-
+                                                                                    dom differences in the density would tend to be further increased,
+s∞ (y(x ), y0 , ) = max {λk (y0k − yk (x ))}
+                    k=1,...,d                                                       since the dense regions would be explored more than regions with
+                                                                                    a low density of solutions.
+where y0 is a reference point,  = [λ1 , . . . , λd ] is a weight vector
+                                                                                        Naive approach for ﬁnding the solution minimizing a given
+such that λk ≥ 0 ∀k. Each weighted Chebycheff scalarizing function
+                                                                                    scalarizing function through evaluation of each solution would be
+has at least one global minimum belonging to the set of Pareto-
+                                                                                    very time consuming. However, ND-Tree data structure used to up-
+optimal solutions. For each Pareto-optimal solution x there exists a
+                                                                                    date the Pareto archive may also be used to eﬃciently ﬁnd the so-
+weighted Chebycheff scalarizing function s∞ such that x is a global
+                                                                                    lution with the best value using Algorithm 2 proposed in this pa-
+minimum of s∞ (see Steuer, 1986, ch. 14.8).
+                                                                                    per. Let us remind that in ND-Tree the Pareto archive is recursively
+   The quality indicator is deﬁned as:
+                                                                                    split into disjoint subsets associated with approximate local ideal
+R(A, L ) = E∈L (mins∞ (y, y0 , ))                                                 points. The algorithm is based on the observation that the value of
+                   y∈A
+                                                                                    each weighted Chebycheff scalarizing function for any solution in
+where L is a set of all weight vectors.                                             a subset is not lower than its value for the approximate local ideal
+1004                                            A. Jaszkiewicz / European Journal of Operational Research 271 (2018) 1001–1013
+
+
+Algorithm 2 MinimizeChebycheffScalarizingFunction.                                        Lust (2018). We start by formally deﬁning the ND-Tree data struc-
+                                                                                          ture :
+  Parameter ↓: A node n
+  Parameter ↓: A weighted Chebycheff scalarizing function                                 Deﬁnition 1. ND-Tree data structure is a tree with the following
+  s∞ (. . . , )                                                                          properties:
+  Parameter : Minimum value of the scalarizing function known
+  so far s∗                                                                               1. With each node n is associated a set of solutions S (n ).
+  Parameter ↑: Solution x minimizing the scalarizing function                             2. Each leaf node contains a list L(n ) of solutions and S (n ) =
+                                                                                             L ( n ).
+  if n is a leaf node then                                                                3. For each internal node n, S (n ) is the union of disjoint sets as-
+     Calculate the value of s∞ (. . . , ) for each solution in the sub-                     sociated with all sub-nodes of n.
+     set                                                                                  4. Each node n stores an approximate ideal point y∗ (S (n )) such
+     if the best value is better than s∗ then                                                that y∗ (S (n ))  x ∀x ∈ S (n ) and an approximate nadir point
+        Return the best solution and update s∗                                               y∗ (S (n )) such that x  y∗ (S (n )) ∀x ∈ S (n ).
+     end if                                                                               5. If n is a sub-node of n, then y∗ (S (n ))  y∗ (S (n )) and
+  else                                                                                       y∗ (S (n ))  y∗ (S (n )).
+     Select the sub-node n with the minimum value of
+     s∞ (z∗ (S (n )), . . . , )                                                             In the worst case, at each intermediate node we need to ana-
+     if s∞ (z∗ (S (n )), . . . , ) < s∗ then                                            lyze each sub-node. Thus, all solutions will need to be evaluated
+        MinimizeChebycheffScalarizingFunction (n , s∞ (. . . , ),                        and the computational complexity of Algorithm 2 is (N) where N
+        s∗ , x)                                                                           is the number of solutions in the archive.
+        for all Remaining sub-nodes n do                                                      In the best case, at each intermediate node only one sub-node
+            if s∞ (z∗ (S (n )), . . . , ) < s∗ then                                     has to be analyzed and the solutions are equally split into a prede-
+                MinimizeChebycheffScalarizingFunction                (n ,                 ﬁned number of sub-nodes. In this case the number of evaluated
+                s∞ (. . . , ), s∗ , x)                                                   solutions and points is described by the following recurrence:
+            end if
+                                                                                          T (N ) = 2 + T (N/C ) = (logC N )                               (1)
+        end for
+     end if                                                                               where C is the number of sub-nodes. Please note, that it is possible
+  end if                                                                                  to consider even more optimistic scenarios, e.g. when only one so-
+                                                                                          lution needs to be evaluated, however, the scenario analyzed above
+                                                                                          is much more realistic.
+                                                                                              The most interesting but also the most diﬃcult to analyze or
+                                                                                          even deﬁne is the average case. Consider the case when each in-
+                                                                                          ternal node has exactly two sub-nodes. Assume that the number of
+                                                                                          solutions in one of the sub-nodes is drawn from the uniform dis-
+                                                                                          tribution, i.e. each number of solutions is equally likely. The other
+                                                                                          sub-node will contain the remaining number of solutions. In an
+                                                                                          internal node, either one or both sub-nodes will be processed. As-
+                                                                                          sume that the probability p2 of processing both nodes is constant.
+                                                                                          In this case:
+
+                                                                                                          1            N−1
+                                                                                          T (N ) = 2 +      ( 1 + p2 )   T (k )                            (2)
+                                                                                                          N
+                                                                                                                        k=1
+
+                                                                                          Multiply both sides by N:
+
+                                                                                                                         
+                                                                                                                         N−1
+                                                                                          N T ( N ) = 2N + ( 1 + p2 )            T (k )                    (3)
+                                                                                                                         k=1
+
+                                                                                          Assume that N ≥ 2:
+
+                                                                                                                                            
+                                                                                                                                            N−2
+
+Fig. 2. Set S(n) that could be omitted due to the knowledge of the scalarizing func-      ( N − 1 )T ( N − 1 ) = 2 ( N − 1 ) + ( 1 + p2 )         T (k )   (4)
+tion value for solution x.                                                                                                                  k=1
+
+                                                                                          Subtract Eqs. (3) and (4):
+point of this subset. Thus, if a value of this function for a solution
+is already known (upper bound) and this value is not worse than                                           N T (N ) − (N − 1 )T (N − 1 ) =           
+                                                                                                                          N−1            N−2
+the value for the approximate local ideal point, the whole subset                           2N − 2 ( N − 1 ) + ( 1 + p2 )    k=1 T (k ) −  k=1 T (k ) ⇒    (5)
+could be omitted (see Fig. 2). If this subset corresponds to an in-                                         T (N ) = N2 + N+Np2 T (N − 1 )
+ternal node, its whole subtree could be omitted. To ﬁnd quickly a
+solution with a good value of the scalarizing function deﬁning a                          The above recurrence has the following solution:
+good upper bound at each internal node we select ﬁrst the sub-                                       ( p2 + N + 1 )   2
+node with the best value for its approximate local ideal point.                           T (N ) =                   −                                     (6)
+                                                                                                       (N + 1 )       p2
+    Since Algorithm 2 is a new contribution reported in this pa-
+per, we analyze the computational complexity of this algorithm.                           where  denotes the Gamma function being an extension of the
+This analysis is similar to the analysis of the algorithm for updat-                      factorial to real number arguments.
+ing the Pareto archive with ND-Tree presented in Jaszkiewicz and                             Since
+                                         A. Jaszkiewicz / European Journal of Operational Research 271 (2018) 1001–1013                                                   1005
+
+
+      (N + α )                                                                    Jaszkiewicz (2002). Weighted Chebycheff scalarizing functions are
+lim             =1                                                       (7)
+N→∞   (N )Nα                                                                      applied to the objective values normalized on-line to the range [0,
+⇒                                                                                  1] based on the ranges of the objectives in the current archive,
+                                                                                   which is in fact achieved by dividing each individual weight by the
+T (N ) = (N p2 )                                                        (8)       range of the corresponding objective.
+Algorithm 2 is sub-linear for any p2 < 1 under the above assump-                      Algorithm 3 deﬁnes the general scheme of MPLS. To apply it to
+tions. Of course, it is still a very simpliﬁed analysis of the practical           a given problem a neighborhood structure has to be deﬁned. The
+behavior of the algorithm. For example, the probability p2 will not,               choice of the neighborhood structure may of course highly inﬂu-
+in general, be constant. In fact, it may happen that none of the                   ence the performance of the algorithm.
+sub-nodes will need to be processed, since the ideal points of all
+sub-nodes will have the values of the scalarizing function above                   3. Computational experiment
+the current upper bound. Such situations, would further improve
+the practical eﬃciency of the algorithm.                                               To test the effectiveness of the proposed algorithm we use two
+                                                                                   different combinatorial optimization problems. All algorithms were
+2.4. Mechanism III: partial exploration of the neighborhoods                       implemented in C++ sharing as much of the code as possible. The
+                                                                                   experiment has been run on an Intel Core i7-5500U CPU at 2.4 gi-
+    In the standard PLS the whole neighborhood of each solution is                 gahertz. The source code, the instances, and the detailed numerical
+explored. This strategy is not well adapted, however, to the goal of               results are available on-line.1
+obtaining a good anytime behavior since it may lead to the situa-
+tions where some regions of the Pareto front will be intensively ex-               3.1. Multiobjective traveling salesperson problem
+plored while other regions will be underexplored. Dubois-Lacoste
+et al. (2011, 2015) and Liefooghe, Humeau, Mesmoudi, Jourdan, and                      As one of the test problems we use the Multiobjective Traveling
+Talbi (2012) observed that the anytime behavior of PLS can be im-                  Salesperson Problem (MTSP) which is a typical benchmark problem
+proved by a partial exploration of the neighborhoods, i.e. testing                 for multiple objective metaheuristics.
+only some neighbor solutions.                                                          Given a set {v1 , v2 , . . . , vN } of nodes and d costs
+    On the other hand, the algorithm may become ineffective if too                 c1 (vi , v j ) . . . cd (vi , v j ) between each pair of distinct nodes {vi , v j },
+few neighbor solutions are tested. Please note, that before explor-                the multiobjective traveling salesperson problem (MTSP) consists
+ing a neighborhood, the solution for the exploration needs to be                   of ﬁnding an order π of the nodes, minimizing the following costs
+selected which takes non-negligible CPU time even with the use of                  ( k = 1, . . . , d ):
+ND-Tree. Thus the optimum strategy may be to test a randomly
+                                                                                                                
+                                                                                                                N−1
+selected subset of neighbor solutions. Dubois-Lacoste et al. and                     “minimize”yk (π ) =              ck (vπ (i ) , vπ (i+1) ) + ck (vπ (N ) , vπ (1) )
+Liefooghe et al. consider several options for partial exploration of                                            i=1
+the neighborhoods. Our approach is slightly different since we use
+                                                                                       In the computational experiment, we used the symmetric mul-
+the number of tested moves as a parameter of the method.
+                                                                                   tiobjective traveling salesperson problem with ck (vi , v j ) = ck (v j , vi )
+                                                                                   for 1 ≤ i, j ≤ N. We used Euclidean instances with 100 and 200
+2.5. MPLS algorithm
+                                                                                   nodes in which the costs of the edges correspond to the Euclidean
+                                                                                   distance between two points in a plane, and each objective cor-
+    The proposed method is summarized in Algorithm 3. To draw
+                                                                                   responds to a different plane. For the purpose of this experiment,
+                                                                                   we generated 10 instances for each size and each number of ob-
+Algorithm 3 MPLS.
+                                                                                   jectives.
+  Parameter ↓: Maximum running time T                                                  Following the successful methods proposed for the bi-objective
+  Parameter ↓: Number of neighborhood moves M                                      case, we used a two-phase approach (Lust & Teghem, 2010). In
+  Parameter : A: an initial Pareto archive                                        the ﬁrst phase we used Lin–Kernighan heuristic (Lin & Kernighan,
+                                                                                   1973) to generate an initial Pareto archive for the second phase in
+  while total running time is lower than T do                                      which MPLS was run. Precisely we used the eﬃcient implementa-
+    Use as the reference point y0 the point composedof the maxi-                   tion of this heuristic from the Concorde project (http://www.math.
+    mum values of particular objectives in the current archive in-                 uwaterloo.ca/tsp/concorde.html).
+    creased by 10% of the range of a given objective in this archive                   We used the 2-edge exchange move in MPLS. Alike Lust and
+    Draw at random a weight vector  deﬁning a Chebycheff                          Jaszkiewicz (2010) and Jaszkiewicz and Lust (2017) we used the
+    scalarizing function s∞ (. . . , y0 , )                                       mechanisms of candidate moves to speed-up the calculations.
+    Find in A the solution x minimizing s∞ (. . . , y0 , ), i.e. call
+    MinimizeChebycheffScalarizingFunction (rn, s∞ (. . . , y0 , ),                3.2. Comparison of the various versions of PLS
+    ∞, x) with rn being a root node of ND-Tree
+    for M times do                                                                    In the ﬁrst experiment we compare MPLS to the standard PLS
+       Generate a random neighbor x of x                                           and to several other versions of PLS. Particular versions of PLS al-
+       if y(x )  y(x ) and y(x ) = y(x ) then                                     low us to show not only that MPLS performs better than the stan-
+          UpdateNDTree(A , x ↓)                                                   dard PLS but also that each of the three new mechanisms used
+       end if                                                                      in MPLS indeed inﬂuences its effectiveness. The following methods
+    end for                                                                        are compared in this experiment:
+  end while
+                                                                                    •    “MPLS 100” described by Algorithm 3 with 100 random moves
+  where N (x ) denotes the neighborhood of x and UpdateNDTree()                          tested in each neighborhood, which is a relatively good value of
+  updates the Pareto archive A using ND-Tree data structure.                             this parameter according to our preliminary experiments.
+
+
+a random weight vector we use the algorithm proposed in                              1
+                                                                                         https://sites.google.com/view/mopls/mpls
+1006                                   A. Jaszkiewicz / European Journal of Operational Research 271 (2018) 1001–1013
+
+
+
+
+                                      Fig. 3. Hypervolume indicator for 3-objective MTSP instances with 100 nodes.
+
+
+
+ • “MPLS full neighborhood” – the algorithm equivalent to “MPLS                      The results of this experiment are presented in Figs. 3–6.
+   100” but with the full exploration of each neighborhood. This                 For each size and each number of objectives 10 different in-
+   algorithm allows us to show that the partial exploration of the               stances were used. As the quality measure we report the hypervol-
+   neighborhoods improves the performance of MPLS.                               ume indicator, but we calculated also the R indicator, i.e. average
+ • “MPLS 1” described by Algorithm 3 with just one random move                   value of the weighted Chebycheff scalarizing functions Jaszkiewicz
+   tested in each neighborhood. We use this algorithm to show                    (2002) (i.e. approximation of the expected value) with exactly the
+   that too small number of tested moves deteriorates the effec-                 same conclusions. The detailed numerical results of the two quality
+   tiveness of MPLS.                                                             indicators are available on-line.2 Each point represents the average
+ • “MPLS 100 Random” – the algorithm equivalent to “MPLS 100”                    value and the range of the hypervolume indicator on 10 different
+   but with the random selection of solutions with uniform prob-                 instances obtained by a given method. The ﬁrst point always cor-
+   ability. This algorithm allows us to show that the selection of               responds to the Pareto archive obtained after the ﬁrst phase. Since,
+   solutions based on the randomly selected weighted Chebycheff                  we used different instances we normalize the values of the hyper-
+   scalarizing functions improves the performance of MPLS.                       volume such that it is equal to 1 after the ﬁrst phase.
+ • “MPLS 100 List” – the algorithm equivalent to “MPLS 100” but                      The reference points for the hypervolume were set to approx-
+   with the Pareto archive organized as a simple list. This algo-                imate nadir points of each instance with objective values multi-
+   rithm allows us to show that the use of ND-Tree data structure                plied by 1.5. To obtain an approximate nadir point for a given in-
+   improves the performance of MPLS.                                             stance, each objective was optimized individually with either Lin–
+ • “Standard PLS tree” described by Algorithm 1 but using ND-Tree                Kernighan heuristic (MTSP) or local search (MTSPWP). Then the
+   data structure. This algorithm allows us to show that the se-                 worst obtained values of each objective were used as the coordi-
+   lection of solutions based on the randomly selected weighted                  nates of the approximate nadir point.
+   Chebycheff scalarizing functions and the partial exploration of                   The reported running times include also the running times of
+   the neighborhoods improves the performance of MPLS.                           the ﬁrst phase. For each instance, the maximum running time in
+ • “Standard PLS List” described by Algorithm 1. This algorithm is               the second phase was equal to the running time of the ﬁrst phase.
+   the straightforward adaptation of the algorithm used in the bi-               The values of the quality indicators were calculated in time steps
+   objective case to the many-objective case without any of the                  equal to 10% of the running time of the ﬁrst phase. The running
+   three new mechanisms used in MPLS.                                            times were averaged over 10 runs in 10 instances. Since the vari-
+                                                                                 ations of the running times of the ﬁrst phase were relatively low,
+                                                                                 we report just the average times.
+    The number of neighborhood moves M was set to 100 for all
+                                                                                     The main observations are:
+instances. It should not be considered, however, as the best value
+of this parameter in each case. We use this setting as a proof that               • The relative differences between the methods grow with the
+the best results may be achieved with some intermediate approach                    growing number of objectives. In other words, the more objec-
+between testing just one move or the whole neighborhood.                            tives the more important are the three new mechanisms used
+    Please note, that in fact the standard PLS algorithm (see                       in MPLS.
+Algorithm 1) does not specify in which order set P is processed. In               • Each of the three new mechanisms of MPLS is important for
+our experiment we processed set P in the natural order in which                     the ﬁnal performance of the method. The comparison of “MPLS
+the solutions were added to this set.                                               100” to “MPLS 100 List” indicates that the mechanism with the
+    In the ﬁrst phase, we used 10 0 0, 20 0 0, and 30 0 0 random                    highest inﬂuence on the effectiveness of MPLS is the use of ND-
+weight vectors for d = 3, 4, 5, respectively. For each of the weight                Tree data structure to update the Pareto archive and to select
+vectors the Lin–Kernighan heuristic was run optimizing a weighted                   the best solution for a given scalarizing function. The compar-
+sum of the objectives. Then, in the second phase MPLS/PLS was al-
+lowed to run for the maximum time equal to the running time of
+the ﬁrst phase.                                                                    2
+                                                                                       https://sites.google.com/view/mopls/mpls
+                                      A. Jaszkiewicz / European Journal of Operational Research 271 (2018) 1001–1013                           1007
+
+
+
+
+                                     Fig. 4. Hypervolume indicator for 4-objective MTSP instances with 100 nodes.
+
+
+
+
+                                     Fig. 5. Hypervolume indicator for 5-objective MTSP instances with 100 nodes.
+
+
+
+
+   ison of “MPLS 100” to “Standard PLS Tree” indicates that the                 all other methods in all cases except of “MPLS full neighborhood”
+   second mechanism with the highest inﬂuence on the effective-                 with d = 3.
+   ness of MPLS is the selection of solutions based on the ran-                     We have made some additional experiments with full MPLS
+   domly selected weighted Chebycheff scalarizing functions. Fur-               using 1ࣩ and 1≺ stopping conditions described in Liefooghe
+   thermore, the comparison to “MPLS 100 Random” indicates that                 et al. (2012). With these stopping conditions the exploration of
+   the random selection of solutions with uniform probability is                a neighborhood was stopped after ﬁnding the ﬁrst solution non-
+   even worse that the selection mechanism used in the standard                 dominated with respect to the current one (1ࣩ ) or the ﬁrst so-
+   PLS. The comparison of “MPLS 100” to “MPLS Full neighbor-                    lution dominating the current one (1≺ ). These results are avail-
+   hood” and “MPLS 1” indicates that the partial exploration of                 able on-line (see Section 3) but not included in this paper since
+   the neighborhoods also substantially improves the performance                they were very similar to other algorithms tested. 1≺ version be-
+   of MPLS.                                                                     haved very similarly to “MPLS full neighborhood”. This is because
+ • “Standard PLS List”, i.e. the algorithm that uses none of the                unlike Liefooghe et al. (2012) we initialize the archive with very
+   three new mechanisms used in MPLS is the worst algorithm in                  high quality solutions. In result we observed that only very rarely
+   all cases.                                                                   a dominating solution was found in a neighborhood. Thus, in most
+                                                                                cases the whole neighborhood was tested as in “MPLS full neigh-
+   In order to test the signiﬁcance of the differences we used the              borhood”. On the other hand 1ࣩ stopping condition resulted in
+non-parametric statistical test of Mann–Whitney (Ferguson, 1967).               testing very few moves (often just one) since a solution non-
+The level of risk of the test has been ﬁxed to 5%. The ﬁnal results             dominated with respect to the current one was quickly found.
+of “MPLS 100” were signiﬁcantly better than the ﬁnal results of                 Again please note, that unlike Liefooghe et al. (2012) we use the
+1008                                     A. Jaszkiewicz / European Journal of Operational Research 271 (2018) 1001–1013
+
+
+
+
+                                       Fig. 6. Hypervolume indicator for 5-objective MTSP instances with 200 nodes.
+
+
+
+concept of candidate moves that increases the chance of testing                    periment the number of weight vectors was gradually reduced and
+high quality moves only.                                                           only the remaining time was allocated to MPLS/PLS. Thus, the total
+    In addition, we compared MPLS to the Multiobjective Genetic                    running time was approximately the same in both experiments.
+Local Search (MOGLS) algorithm with path relinking (Jaszkiewicz                       The results are presented in Figs. 7–10. The values of the hy-
+& Zielniewicz, 2009) for the multiobjective traveling salesperson                  pervolume are again normalized such that it is 1 after the ﬁrst
+problem. According to our knowledge the only methods reported                      phase with the maximum number of the Lin–Kernighan heuristic
+in the literature that improved the results of this version of MOGLS               runs. Please note, that for the lower numbers of the Lin–Kernighan
+are those using PLS. The initial archive of MOGLS was exactly the                  heuristic runs the quality after the ﬁrst phase is not shown since it
+same as in the case of MPLS. The expected rank of recombined                       was much lower and the ﬁgures would become incomprehensible.
+solutions was set to 20 based on preliminary experiments. MOGLS                       The main observations are:
+outperformed several variants of PLS/MPLS including “Standard PLS
+List” and “MPLS 100 Random” but was signiﬁcantly outperformed
+by the full version of MPLS, i.e. “MPLS 100”.
+
+
+3.3. MPLS with various number of runs of the Lin–Kernighan                          • In almost all cases, the results with the use of MPLS are bet-
+heuristic                                                                             ter than with the use of the Lin–Kernighan heuristic standalone
+                                                                                      even with the lowest number of runs of the Lin–Kernighan
+    In the above experiment we have shown that MPLS performs                          heuristic. The only exception is the result for the 5-objective
+better than other versions of PLS. The question remains, however,                     instances with 200 nodes with the smallest number of the Lin–
+whether it is competitive to Lin–Kernighan heuristic standalone                       Kernighan heuristic runs. This exception is caused by the fact
+applied alike in the initial phase. Since, in the bi-objective case the               that as observed in Jaszkiewicz and Lust (2017) the number of
+best results have been obtained combining the phases of the Lin–                      Lin–Kernighan heuristic runs should grow with the size of an
+Kernighan heuristic and of PLS (Cornu et al., 2017; Jaszkiewicz &                     instance, while in our case, we used the same numbers for in-
+Lust, 2017; Liangjun et al., 2014; Lust & Jaszkiewicz, 2010; Lust &                   stances with 100 and 200 nodes in our experiment.
+Teghem, 2010), we test whether MPLS can improve the results ob-                     • The overall best results were obtained for 10 0 0, 240 0, 420 0,
+
+tained with Lin–Kernighan heuristic standalone also in the many-                      and 4800 runs of the Lin–Kernighan heuristic, for d = 3, 4, 5
+objective case. Precisely, we ask the following question: Having                      with 100 nodes and d = 5 with 200 nodes, respectively, i.e. the
+some predeﬁned CPU time, can we obtain the best result with the                       best results were obtained with 50% or less of the CPU time al-
+use of the Lin–Kernighan heuristic standalone, or by combining it                     located to MPLS. In other words, alike in the bi-objective case
+with MPLS in two phases.                                                              the best results are obtained by properly balancing the CPU
+    In the ﬁrst phase, we used 20 0 0, 40 0 0, and 60 0 0 as the max-                 time allocated to the phases of the Lin–Kernighan heuristic runs
+imum number of random weight vectors for d = 3, 4, 5, respec-                         and MLPS. Please note, that the Lin–Kernighan heuristic, and es-
+tively. For each of the weight vectors the Lin–Kernighan heuristic                    pecially its eﬃcient implementation from the Concorde project,
+was run optimizing a weighted sum of the objectives. The time                         is an advanced method for TSP, while MPLS uses the very basic
+needed for all runs of the Lin–Kernighan heuristic was then used                      2-edge exchange move.
+as the maximum running time. Then, the number of Lin–Kernighan                      • The standard PLS algorithm was able to improve the results ob-
+
+heuristic runs was reduced to 90%, ..., 10% and the remaining run-                    tained with the Lin–Kernighan heuristic standalone only in the
+ning time was allocated to MPLS. The numbers of weight vectors                        3-objective case. In the 4- and 5-objective cases, the standard
+and thus the numbers of Lin–Kernighan heuristic runs were twice                       PLS algorithm was not able to improve the results obtained
+higher than in the previous experiment (see Section 3.2). Please                      with the Lin–Kernighan heuristic standalone for any reduction
+note, however, that in the ﬁrst experiment the same CPU time as in                    of the number of runs in the ﬁrst phase. Thus, the use of this
+the ﬁrst phase was then allocated to MPLS/PLS. In the second ex-                      algorithm in these cases would not be beneﬁcial.
+                                                     A. Jaszkiewicz / European Journal of Operational Research 271 (2018) 1001–1013                               1009
+
+
+
+
+   Fig. 7. Hypervolume indicator for 3-objective MTSP instances with 100 nodes with various numbers of the Lin–Kernighan heuristic runs and constant total CPU time.
+
+
+
+
+   Fig. 8. Hypervolume indicator for 4-objective MTSP instances with 100 nodes with various numbers of the Lin–Kernighan heuristic runs and constant total CPU time.
+
+
+
+3.4. Multiobjective traveling salesperson problem with proﬁts                                     We used the symmetric costs where ck (vi , v j ) = ck (v j , vi ) for
+                                                                                               1 ≤ i, j ≤ N. For the purpose of this experiment we generated 10 in-
+    Given a set {v1 , . . . , vN } of nodes and d1 costs                                       stances with 200 nodes for each number of objectives. For d = 3,
+c1 (vi , v j ) . . . cd1 (vi , v j ) between each pair of distinct nodes {vi , v j },          we used one cost objective and two proﬁt objectives, for d = 4, we
+and d2 proﬁts pr1 (vi ) . . . prd2 (vi ) associated with each node {vi },                      used two cost objectives and two proﬁt objectives, and for d = 5,
+the multiobjective traveling salesperson problem with proﬁts                                   we used two cost objectives and three proﬁt objectives. The cost
+(MTSPWP) consists of choosing a subset of nodes SN and ﬁnding                                  objectives were generated using Euclidean distances, i.e. the costs
+an order π of these nodes, optimizing the following objectives:                                of the edges correspond to the Euclidean distance between two
+                                                                                               points in a plane, and each objective corresponds to a different
+                              |SN
+                                 |−1                                                          plane. Proﬁts were drawn at random with a uniform distribution
+   “minimize”yk (π ) =                  ck (vπ (i ) , vπ (i+1) )                               from a range [0, 20 0 0].
+                                i=1                                                               Please note, that despite of the similar names MTSPWP differs
+                              + ck (vπ (|SN|) , vπ (1) ), k = 1, . . . , d1                    substantially from MTSP. In particular:
+                              |SN|
+                              
+“maximize”yd1 +l (π ) =              prl (vπ (i ) ), l = 1, . . . , d2                          • The two problems have different solution spaces. In MTSPWP
+                               i=1                                                                the solutions are deﬁned by both a choice of the nodes, and
+                                                                                                  an order of the selected nodes. In result, MTSPWP requires a
+   In other words, d1 objectives correspond to the minimization of                                different set of the neighborhood moves described below.
+d1 costs of the routes, while d2 objectives correspond to the maxi-                             • MTSPWP exhibits a speciﬁc pattern of positive/negative corre-
+
+mization of d2 proﬁts associated with the selected nodes.                                         lations of objectives. The cost objectives are in general posi-
+1010                                            A. Jaszkiewicz / European Journal of Operational Research 271 (2018) 1001–1013
+
+
+
+
+     Fig. 9. Hypervolume indicator for 5-objective MTSP instances with 100 nodes with various numbers of the Lin–Kernighan heuristic runs and constant total CPU time.
+
+
+
+
+  Fig. 10. Hypervolume indicator for 5-objective MTSP instances with 200 nodes with various numbers of the Lin–Kernighan heuristic runs and constant total CPU time.
+
+   tively correlated because all of them improve with reducing the                           The design of the experiments was similar as in the case of
+   number of selected nodes. The proﬁt objectives also are in gen-                        MTSP. In the ﬁrst phase, instead of the Lin–Kernighan heuristic that
+   eral positively correlated because all of them improve with the                        cannot be applied in this case, we used the steepest local search
+   growing number of selected nodes. On the other hand, the two                           algorithm that was testing all moves of all types before selecting
+   groups of objectives are negatively correlated for the same rea-                       the best neighbor. In MPLS the type of the move was drawn at
+   sons.                                                                                  random, and then the speciﬁc move was drawn. The steepest local
+ • The cost and proﬁt objectives are deﬁned by heterogeneous                              search was applied to the optimization of the combined scalariz-
+   mathematical formulas.                                                                 ing functions being the weighted sums of the Chebycheff scalariz-
+                                                                                          ing function with weight 1 and the linear scalarizing function with
+   Because of the nature of MTSPWP, several types of moves were                           weight 0.5, which was found the best option in the preliminary
+used to both select appropriate subset of nodes and optimize the                          experiments. This version was found to perform better than the
+route between these nodes (Jozefowiez, Glover, & Laguna, 2008):                           weighted sum used in the case of MTSP and the Lin–Kernighan
+                                                                                          heuristic. The steepest local search was then run for each of the
+ • “2-edge exchange move” is the same move as in the case of                              randomly generated weight vectors.
+   MTSP.                                                                                     We have performed the two experiments analogous like in the
+ • “Node delete move” removes one of the nodes from the current                           case of MTSP with same numbers of local search runs like the
+   solution.                                                                              numbers of the Lin–Kernighan heuristic runs. Despite of the dif-
+ • “Node insert move” inserts one of the nodes that is not selected                       ferent nature of the two problems the results of the experiments
+   at a given position in the route.                                                      for MTSPWP are very similar to the results for MTSP. Because of
+ • “Node exchange move” exchanges one of the nodes from the                               the limited space we present only the results for the 5-objective
+   current solution for one of the nodes that is not selected.                            instances in Figs. 11 and 12.
+                                            A. Jaszkiewicz / European Journal of Operational Research 271 (2018) 1001–1013                             1011
+
+
+
+
+                                                Fig. 11. Hypervolume indicator for 5-objective MTSPWP instances.
+
+
+
+
+              Fig. 12. Hypervolume indicator for 5-objective MTSPWP instances with various numbers of local search runs and constant total CPU time.
+
+
+
+4. Related works                                                                      (Cornu et al., 2017). However, none of these proposals focuses on
+                                                                                      the many-objective optimization.
+    Pareto Local Search algorithm has been proposed by Angel et al.                       One of the main ideas of MPLS is to improve the anytime be-
+(2004), Paquete and Stutzle (2006) and Paquete et al. (2007). It                      havior of the algorithm, since obtaining the locally optimal Pareto
+has been successfully applied to the bi-objective knapsack (Lust                      archive is usually prohibitively time consuming in the many-
+& Teghem, 2012), the bi-objective traveling salesperson problem                       objective case. An anytime PLS algorithm has been proposed by
+(TSP) (Cornu et al., 2017; Jaszkiewicz & Lust, 2017; Liangjun et al.,                 Dubois-Lacoste et al. (2011, 2015). Some similar concepts have been
+2014; Lust & Jaszkiewicz, 2010; Lust & Teghem, 2010), various bi-                     analyzed by Liefooghe et al. (2012). Anytime PLS algorithm is, how-
+objective permutation ﬂowshop problems (Dubois-Lacoste et al.,                        ever, dedicated to the bi-objective case, and the authors deﬁne
+2011), the bi-objective set covering problem (Lust & Tuyttens,                        many-objective optimization as a direction for further research. At
+2014) and the risk-cost optimization for procurement planning                         a general level some mechanisms used in MPLS are motivated by
+(Mori et al., 2017). Some recent advancements in PLS involve:                         these works, but the speciﬁc techniques are very different. For ex-
+Pareto improvement of some dominated solutions, i.e. selection                        ample Dubois-Lacoste et al. use the optimistic hypervolume to se-
+of a dominating solution from the neighborhood, until such im-                        lect the promising solutions, which cannot be directly applied in
+provements are no longer possible (Inja, Kooijman, de Waard, Roi-                     the many-objective case.
+jers, & Whiteson, 2014); the use of larger perturbations of solu-                         Liangjun et al. (2014) used PLS to solve the multiobjective
+tions (Drugan & Thierens, 2012; Liangjun et al., 2014), the penal-                    knapsack problem instances with up to 4 objectives. Cornu et al.
+ization of some features exhibited by many solutions in the archive                   (2017) applied PLS to the bi- and 3-objective instances of TSP.
+(Alsheddy & Tsang, 2010), and the use of the data perturbations                       These papers do not contain, however, information whether any
+1012                                   A. Jaszkiewicz / European Journal of Operational Research 271 (2018) 1001–1013
+
+
+speciﬁc mechanisms for the many-objective case, other than the                       MPLS generates a large number of potentially Pareto-optimal
+reduction of the time allocated to PLS, were used.                               solutions. The maximum size of the Pareto archive in our exper-
+    The idea of using the scalarizing functions with the randomly                iment exceeded 5 millions of solutions. The ﬁnal goal of the deci-
+generated weight vectors has been proposed in some multiobjec-                   sion maker is to select the single solution being the best according
+tive evolutionary algorithms, e.g. by Ishibuchi and Murata (1998),               to his/her preferences. If no information about these preferences
+Jaszkiewicz (2002), Jaszkiewicz and Zielniewicz (2009). The scalar-              is available, a multiobjective metaheuristic should generate a good
+izing functions were, however, used in a very different way to se-               solution for any possible preferences. However, often some partial
+lect solutions for recombination and to optimize the scalarizing                 preference information is known in advance or may be gathered
+functions with the single objective local search.                                during the run of the method. Thus, another interesting direction
+    The multiobjective traveling salesperson problem is often used               for further research is the incorporation of some partial prefer-
+as a benchmark problem for the multiobjective metaheuristics                     ence information in order to limit the region of the Pareto front
+(Jaszkiewicz, 2002). As it was already mentioned, the state-of-the-              searched by MPLS.
+art methods for the bi-objective TSP involve the use of the Lin–
+Kernighan heuristic and Pareto Local Search (Cornu et al., 2017;                 Acknowledgment
+Jaszkiewicz & Lust, 2017; Liangjun et al., 2014; Lust & Jaszkiewicz,
+2010; Lust & Teghem, 2010).                                                         This research was funded by the Polish National Science Center,
+    The traveling salesperson problem with proﬁts is a well-known                grant no. UMO-2013/11/B/ST6/01075.
+combinatorial optimization problem, however, it is usually consid-
+                                                                                 References
+ered as a single objective problem with a single cost and a sin-
+gle proﬁt aggregated to one objective with a weighted sum ap-                    Alsheddy, A., & Tsang, E. E. P. K. (2010). Guided Pareto local search based frame-
+proach (Feillet, Dejax, & Gendreau, 2005). There are relatively few                   works for biobjective optimization. In Proceedings of the 2010 IEEE congress on
+results for the bi-objective case (Bérubé, Gendreau, & Potvin, 2009;                  evolutionary computation (pp. 1–8). doi:10.1109/CEC.2010.5585983.
+                                                                                 Angel, E., Bampis, E., & Gourvès, L. (2004). A dynasearch neighborhood for the bi-
+Jozefowiez et al., 2008; Labadie, Melechovsky, & Prins, 2014; Zhu,
+                                                                                      criteria traveling salesman problem. In X. Gandibleux, M. Sevaux, K. Sörensen,
+Suzuki, & Boonma, 2011). To our knowledge, multiobjective meta-                       & V. T’kindt (Eds.), Metaheuristics for multiobjective optimisation (pp. 153–176).
+heuristics have not been applied yet to the multiobjective version                    Berlin, Heidelberg: Springer. doi:10.1007/978- 3- 642- 17144- 4_6.
+                                                                                 Bérubé, J.-F., Gendreau, M., & Potvin, J.-Y. (2009). An exact e-constraint method for
+of the traveling salesperson problem with proﬁts with more than
+                                                                                      bi-objective combinatorial optimization problems: Application to the traveling
+one cost and/or proﬁt.                                                                salesman problem with proﬁts. European Journal of Operational Research, 194(1),
+                                                                                      39–50. doi:10.1016/j.ejor.2007.12.014.
+                                                                                 Chand, S., & Wagner, M. (2015). Evolutionary many-objective optimization: A quick-
+                                                                                      start guide. Surveys in Operations Research and Management Science, 20(2), 35–
+5. Conclusions and directions for further research                                    42. doi:10.1016/j.sorms.2015.08.001.
+                                                                                 Cornu, M., Cazenave, T., & Vanderpooten, D. (2017). Perturbed decomposition algo-
+    We have presented a new Many-Objective Pareto Local Search                        rithm applied to the multi-objective traveling salesman problem. Computers &
+                                                                                      Operations Research, 79, 314–330. doi:10.1016/j.cor.2016.04.025.
+algorithm. The algorithm has been tested on two different multi-                 Drugan, M. M., & Thierens, D. (2012). Stochastic Pareto local search: Pareto neigh-
+objective combinatorial optimization problems showing its effec-                      bourhood exploration and perturbation strategies. Journal of Heuristics, 18(5),
+tiveness. We have also shown that each of the three new mech-                         727–766. doi:10.1007/s10732- 012- 9205- 7.
+                                                                                 Dubois-Lacoste, J., López-Ibáñez, M., & Stützle, T. (2011). A hybrid TP+PLS algo-
+anisms used in MPLS signiﬁcantly contributes to its effectiveness.                    rithm for bi-objective ﬂow-shop scheduling problems. Computers & Operations
+Furthermore, the importance of the new mechanisms in relation                         Research, 38(8), 1219–1236. doi:10.1016/j.cor.2010.10.008.
+to the standard PLS grows with the growing number of objectives.                 Dubois-Lacoste, J., López-Ibáñez, M., & Stützle, T. (2015). Anytime Pareto local
+                                                                                      search. European Journal of Operational Research, 243(2), 369–385. doi:10.1016/
+In particular, in the 4- and 5-objective cases, standard PLS without                  j.ejor.2014.10.062.
+any of the new mechanisms was not able to improve the results                    Feillet, D., Dejax, P., & Gendreau, M. (2005). Traveling salesman problems with prof-
+obtained with the Lin–Kernighan heuristic (MTSP) or local search                      its. Transportation Science, 39(2), 188–205. doi:10.1287/trsc.1030.0079.
+                                                                                 Ferguson, T. (1967). Mathematical statistics, a decision theoretic approach. New-York
+(MTSPWP) standalone for any reduction of the number of runs in                        and London: Academic Press.
+the ﬁrst phase. On the other hand, MPLS was able to improve these                Inja, M., Kooijman, C., de Waard, M., Roijers, D. M., & Whiteson, S. (2014). Queued
+results in almost all cases tested in the experiment.                                 Pareto local search for multi-objective optimization. In T. Bartz-Beielstein,
+                                                                                      J. Branke, B. Filipič, & J. Smith (Eds.), Proceedings of the thirteenth international
+    Since the standard PLS algorithm proved its high effectiveness
+                                                                                      conference on parallel problem solving from nature – PPSN XIII (pp. 589–599).
+in the bi-objective case, we believe that MPLS could be a very                        Ljubljana, Slovenia: September 13–17, 2014. Cham: Springer International Pub-
+useful element in the toolbox for the general case of the mul-                        lishing. doi:10.1007/978- 3- 319- 10762- 2_58.
+tiobjective combinatorial optimization, especially when combined                 Ishibuchi, H., & Murata, T. (1998). A multi-objective genetic local search algorithm
+                                                                                      and its application to ﬂowshop scheduling. IEEE Transactions on Systems Man
+with other methods being very effective in the search towards                         and Cybernetics Part C – Applications and Reviews, 28(3), 392–403. doi:10.1109/
+the Pareto front. In fact, we expect that alike the standard PLS in                   5326.704576.
+the bi-objective case, MPLS could become a typical component of                  Jaszkiewicz, A. (2002). Genetic local search for multi-objective combinatorial opti-
+                                                                                      mization. European Journal of Operational Research, 137(1), 50–71. doi:10.1016/
+the state-of-the-art algorithms for the many-objective combinato-                     S0377-2217(01)00104-7.
+rial optimization.                                                               Jaszkiewicz, A., & Lust, T. (2017). Proper balance between search towards and along
+    The applications of MPLS to various benchmark and real-life                       Pareto front: biobjective TSP case study. Annals of Operations Research, 254, 111–
+                                                                                      130. doi:10.1007/s10479- 017- 2415- 5.
+problems, and combination with other multiobjective metaheuris-                  Jaszkiewicz, A., & Lust, T. (2018). ND-Tree-based update: A fast algorithm for the dy-
+tics is a natural direction for further research. In particular MPLS                  namic non-dominance problem. IEEE Transactions on Evolutionary Computation.
+could be combined with such concepts as the use of larger per-                        in press. doi:10.1109/TEVC.2018.2799684.
+                                                                                 Jaszkiewicz, A., & Zielniewicz, P. (2009). Pareto memetic algorithm with path re-
+turbation of solutions (Liangjun et al., 2014) or data perturbations
+                                                                                      linking for bi-objective traveling salesperson problem. European Journal of Oper-
+(Cornu et al., 2017).                                                                 ational Research, 193(3), 885–890. doi:10.1016/j.ejor.2007.10.054.
+    MPLS introduces a new parameter, i.e. the number of the neigh-               Jozefowiez, N., Glover, F., & Laguna, M. (2008). Multi-objective meta-heuristics for
+                                                                                      the traveling salesman problem with proﬁts. Journal of Mathematical Modelling
+borhood moves. At present we do not have any guidelines for set-
+                                                                                      and Algorithms, 7(2), 177–195. doi:10.1007/s10852- 008- 9080- 2.
+ting this parameter. Development of a mechanism for automatic                    Labadie, N., Melechovsky, J., & Prins, C. (2014). An evolutionary algorithm with
+adaptation of this parameter is an interesting direction for further                  path relinking for a bi-objective multiple traveling salesman problem with prof-
+research. In particular, the eﬃciency of the partial exploration of                   its. In L. Benyoucef, J. C. Hennet, & M. K. Tiwari (Eds.), Applications of multi-
+                                                                                      criteria and game theory approaches: manufacturing and logistics. In Springer se-
+the neighborhood may be problem-dependent, and for some prob-                         ries in advanced manufacturing (pp. 195–223). Berlin: Springer-Verlag. doi:10.
+lems full exploration of the neighborhood may be still necessary.                     1007/978- 1- 4471- 5295- 8_10.
+                                                  A. Jaszkiewicz / European Journal of Operational Research 271 (2018) 1001–1013                                               1013
+
+
+Liangjun, K., Qingfu, Z., & Battiti, R. (2014). Hybridization of decomposition and local    Paquete, L., Schiavinotto, T., & Stuetzle, T. (2007). On local optima in multiobjective
+    search for multiobjective optimization. IEEE Transactions on Cybernetics, 44(10),           combinatorial optimization problems. Annals of Operations Research, 156(1), 83–
+    1808–1820. doi:10.1109/TCYB.2013.2295886.                                                   97. doi:10.1007/s10479- 007- 0230- 0.
+Liefooghe, A., Humeau, J., Mesmoudi, S., Jourdan, L., & Talbi, E.-G. (2012). On             Paquete, L., & Stutzle, T. (2006). A study of stochastic local search algorithms for the
+    dominance-based multiobjective local search: Design, implementation and ex-                 biobjective QAP with correlated ﬂow matrices. European Journal of Operational
+    perimental analysis on scheduling and traveling salesman problems. Journal of               Research, 169(3), 943–959. doi:10.1016/j.ejor.2004.08.024.
+    Heuristics, 18(2), 317–352. doi:10.1007/s10732- 011- 9181- 3.                           Steuer, R. (1986). Multiple criteria optimization: Theory, computation and applications.
+Lin, S., & Kernighan, B. (1973). An effective heuristic algorithm for the travel-               New-York: John Wiley & Sons.
+    ing-salesman problem. Operations Research, 21, 498–516.                                 Talbi, E.-G., Basseur, M., Nebro, A. J., & Alba, E. (2012). Multi-objective optimization
+Lust, T., & Jaszkiewicz, A. (2010). Speed-up techniques for solving large-scale biob-           using metaheuristics: non-standard algorithms. International Transactions in Op-
+    jective TSP. Computers & Operations Research, 37(3), 521–533. doi:10.1016/j.cor.            erational Research, 19(1–2), 283–305. doi:10.1111/j.1475-3995.2011.00808.x.
+    20 09.01.0 05.                                                                          Yu, G. (2013). Industrial applications of combinatorial optimization: Vol. 16. Springer
+Lust, T., & Teghem, J. (2010). Two-phase Pareto local search for the biobjective                Science & Business Media.
+    traveling salesman problem. Journal of Heuristics, 16(3), 475–510. doi:10.1007/         Zhu, B., Suzuki, J., & Boonma, P. (2011). Evaluating the alpha-dominance operator
+    s10732- 009- 9103- 9.                                                                       in multiobjective optimization for the probabilistic traveling salesman problem
+Lust, T., & Teghem, J. (2012). The multiobjective multidimensional knapsack prob-               with proﬁts. In E. Kita (Ed.), Evolutionary algorithms (pp. 271–294). Janzeza Tr-
+    lem: A survey and a new approach. International Transactions in Operational Re-             dine99, Rijeka, 510 0 0, Croatia: INTECH Europe.
+    search, 19(4), 495–520. doi:10.1111/j.1475-3995.2011.00840.x.                           Zitzler, E., Thiele, L., Laumanns, M., Fonseca, C., & da Fonseca, V. (2003). Performance
+Lust, T., & Tuyttens, D. (2014). Variable and large neighborhood search to solve the            assessment of multiobjective optimizers: An analysis and review. IEEE Transac-
+    multiobjective set covering problem. Journal of Heuristics, 20(2), 165–188. doi:10.         tions on Evolutionary Computation, 7(2), 117–132. doi:10.1109/TEVC.2003.810758.
+    1007/s10732- 013- 9236- 8.
+Mori, M., Kobayashi, R., Samejima, M., & Komoda, N. (2017). Risk-cost optimization
+    for procurement planning in multi-tier supply chain by Pareto local search with
+    relaxed acceptance criterion. European Journal of Operational Research, 261(1),
+    88–96. doi:10.1016/j.ejor.2017.01.028.
+

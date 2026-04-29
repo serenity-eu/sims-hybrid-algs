@@ -1,16 +1,21 @@
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
+use indicatif::{ProgressBar, ProgressStyle};
+use log::info;
 use pareto::{HasObjectives, MoSolution};
 use pls::explored_solutions_data::SolutionFingerprint;
 use pyo3::prelude::*;
+use rayon::prelude::*;
 use serde_json;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::time::Duration;
 
+use crate::hypervolume::{
+    hypervolume_2d_min_generic, hypervolume_3d_min_generic, hypervolume_4d_min_generic,
+};
 use crate::solution::Solution;
-use crate::hypervolume::{hypervolume_4d_min_generic, hypervolume_2d_min_generic, hypervolume_3d_min_generic};
 
 /// Represents metadata about an optimization trace
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -36,20 +41,20 @@ pub struct DominanceInfo<const D: usize> {
 }
 
 /// Computes dominance information for a set of solutions.
-/// 
+///
 /// This function performs dominance checks efficiently in a single pass and returns both:
 /// - Filtered solutions (if filter_dominated=true, only solutions non-dominated at discovery time)
 /// - Domination indices showing eventual domination relationships
-/// 
+///
 /// When filtering (filter_dominated=true):
 /// - Keeps solutions that were non-dominated at discovery time (temporal order)
 /// - Computes eventual domination: shows if kept solutions are later dominated
 /// - Example: S0 kept (non-dominated at t=10), but dominated.bin shows dominated by S2 (at t=30)
-/// 
+///
 /// # Arguments
 /// * `solutions` - Vector of solutions (will be sorted by timestamp before processing)
 /// * `filter_dominated` - If true, filters out solutions dominated at discovery; if false, keeps all
-/// 
+///
 /// # Returns
 /// DominanceInfo containing solutions and their domination indices
 pub fn compute_dominance_info<const D: usize>(
@@ -58,15 +63,24 @@ pub fn compute_dominance_info<const D: usize>(
 ) -> DominanceInfo<D> {
     // Sort by timestamp first to ensure temporal order (discovery order)
     solutions.sort_by_key(|s| s.timestamp);
-    
+
     if filter_dominated {
         // Single-pass filtering with eventual domination tracking
         let mut filtered_solutions: Vec<SolutionFingerprint<D>> = Vec::new();
         let mut domination_indices: Vec<u32> = Vec::new();
-        
+
+        let total = solutions.len() as u64;
+        let pb = ProgressBar::new(total);
+        pb.set_style(
+            ProgressStyle::with_template(
+                "  dominance filter  [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) [{elapsed_precise} ETA {eta_precise}]"
+            ).unwrap().progress_chars("█▓░"),
+        );
+
         'next_solution: for new_solution in solutions.into_iter() {
+            pb.inc(1);
             let current_kept_idx = filtered_solutions.len() as u32;
-            
+
             // Single pass: check against all kept solutions
             for (kept_idx, kept_solution) in filtered_solutions.iter().enumerate() {
                 // Is new solution dominated by this kept solution?
@@ -74,7 +88,7 @@ pub fn compute_dominance_info<const D: usize>(
                     // Dominated at discovery → skip it
                     continue 'next_solution;
                 }
-                
+
                 // Does the new solution dominate this kept one?
                 if new_solution.dominates(kept_solution.objectives()) {
                     // Update domination index only if not already dominated
@@ -83,12 +97,18 @@ pub fn compute_dominance_info<const D: usize>(
                     }
                 }
             }
-            
+
             // Not dominated at discovery → keep it
             filtered_solutions.push(new_solution);
             domination_indices.push(u32::MAX); // Not dominated yet
         }
-        
+
+        pb.finish_with_message(format!(
+            "kept {}/{} non-dominated solutions",
+            filtered_solutions.len(),
+            total,
+        ));
+
         DominanceInfo {
             solutions: filtered_solutions,
             domination_indices,
@@ -96,8 +116,16 @@ pub fn compute_dominance_info<const D: usize>(
     } else {
         // No filtering: keep all solutions, compute domination indices
         let mut domination_indices = Vec::with_capacity(solutions.len());
-        
+
+        let pb = ProgressBar::new(solutions.len() as u64);
+        pb.set_style(
+            ProgressStyle::with_template(
+                "  dominance check   [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) [{elapsed_precise} ETA {eta_precise}]"
+            ).unwrap().progress_chars("█▓░"),
+        );
+
         for (i, solution) in solutions.iter().enumerate() {
+            pb.inc(1);
             let dominating_index = 'find_dominator: {
                 for (j, other_solution) in solutions.iter().enumerate() {
                     if i != j && solution.is_dominated_by(other_solution.objectives()) {
@@ -106,10 +134,12 @@ pub fn compute_dominance_info<const D: usize>(
                 }
                 u32::MAX
             };
-            
+
             domination_indices.push(dominating_index);
         }
-        
+
+        pb.finish_with_message("done");
+
         DominanceInfo {
             solutions,
             domination_indices,
@@ -117,20 +147,19 @@ pub fn compute_dominance_info<const D: usize>(
     }
 }
 
-
 /// Filters dominated solutions from a list of solutions.
-/// 
+///
 /// Returns only non-dominated solutions, maintaining temporal order.
 /// A solution is kept if it was non-dominated at the time of its discovery
 /// (i.e., not dominated by any previously discovered solution).
-/// 
+///
 /// # Arguments
 /// * `solutions` - Vector of solutions sorted by timestamp
-/// 
+///
 /// # Returns
 /// Filtered vector containing only non-dominated solutions
 pub fn filter_dominated_solutions<const D: usize>(
-    solutions: Vec<SolutionFingerprint<D>>
+    solutions: Vec<SolutionFingerprint<D>>,
 ) -> Vec<SolutionFingerprint<D>> {
     compute_dominance_info(solutions, true).solutions
 }
@@ -193,32 +222,86 @@ pub fn create_optimization_trace_archive<const D: usize>(
         return Err("Cannot create trace archive from empty solution list".into());
     }
 
+    // For large solution sets the per-solution 4-D hypervolume computation is
+    // O(N² × HV_cost) and can take minutes.  Skip it when there are more than
+    // 500 non-dominated trace solutions — consumers can recompute HV post-hoc
+    // from the raw objectives + dominated data with shared bounds.
+    const HV_COMPUTATION_THRESHOLD: usize = 500;
+    let skip_hv = solutions.len() > HV_COMPUTATION_THRESHOLD;
+    if skip_hv {
+        info!(
+            "Skipping in-trace HV computation for {} solutions (threshold {}); \
+             hypervolume.bin will be empty — compute post-hoc from objectives.bin + dominated.bin",
+            solutions.len(),
+            HV_COMPUTATION_THRESHOLD,
+        );
+    }
+
+    let pb = ProgressBar::new(4);
+    pb.set_style(
+        ProgressStyle::with_template(
+            "  trace archive     [{bar:40.green/black}] {pos}/{len} {msg}",
+        )
+        .unwrap()
+        .progress_chars("█▓░"),
+    );
+
     // Create binary data
+    pb.set_message("objectives.bin");
     let objectives_data = create_objectives_binary(&solutions)?;
-    let dominated_data = match precomputed_domination {
+    pb.inc(1);
+
+    pb.set_message("dominated.bin + hypervolume.bin");
+    let (dominated_bin, hypervolume_data) = match precomputed_domination {
         Some(ref indices) => {
-            // Use precomputed indices for both dominated.bin and hypervolume computation
             let dominated_bin = create_dominated_binary_from_indices(indices)?;
-            let hypervolume_data = create_hypervolume_binary_with_indices(&solutions, &objective_bounds, &reference_point, indices)?;
+            let hypervolume_data = if skip_hv {
+                Vec::new()
+            } else {
+                create_hypervolume_binary_with_indices(
+                    &solutions,
+                    &objective_bounds,
+                    &reference_point,
+                    indices,
+                )?
+            };
             (dominated_bin, hypervolume_data)
-        },
+        }
         None => {
-            // Compute domination and use for both
             let dominated_bin = create_dominated_binary(&solutions)?;
-            let hypervolume_data = create_hypervolume_binary(&solutions, &objective_bounds, &reference_point)?;
+            let hypervolume_data = if skip_hv {
+                Vec::new()
+            } else {
+                create_hypervolume_binary(&solutions, &objective_bounds, &reference_point)?
+            };
             (dominated_bin, hypervolume_data)
         }
     };
+    pb.inc(1);
+
+    pb.set_message("timestamp.bin");
     let timestamp_data = create_timestamp_binary(&solutions)?;
-    
-    let metadata_data = create_metadata_json(&solutions, objectives, total_duration_us, algorithm, None, objective_bounds, reference_point)?;
+    pb.inc(1);
+
+    pb.set_message("compressing");
+    let metadata_data = create_metadata_json(
+        &solutions,
+        objectives,
+        total_duration_us,
+        algorithm,
+        None,
+        objective_bounds,
+        reference_point,
+    )?;
+
+    let solutions_len = solutions.len();
 
     // Create tar archive in memory
     let archive_data = create_tar_archive(
         objectives_data,
-        dominated_data.0,
+        dominated_bin,
         timestamp_data,
-        dominated_data.1,
+        hypervolume_data,
         metadata_data,
     )?;
 
@@ -230,6 +313,9 @@ pub fn create_optimization_trace_archive<const D: usize>(
     let compressed_data = encoder
         .finish()
         .map_err(|e| format!("Failed to finish compression: {}", e))?;
+
+    pb.inc(1);
+    pb.finish_with_message(format!("done ({solutions_len} solutions)"));
 
     Ok(compressed_data)
 }
@@ -281,11 +367,11 @@ fn create_dominated_binary_from_indices(
     indices: &[u32],
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let mut data = Vec::with_capacity(indices.len() * 4);
-    
+
     for &index in indices {
         data.extend_from_slice(&index.to_le_bytes());
     }
-    
+
     Ok(data)
 }
 
@@ -305,7 +391,7 @@ fn create_timestamp_binary<const D: usize>(
 }
 
 /// Creates hypervolume.bin with cumulative hypervolume progression
-/// 
+///
 /// This function computes hypervolume at each point in time, considering only solutions
 /// that contributed to hypervolume changes (i.e., were non-dominated at discovery time).
 /// For indices between computed values, hypervolume is assumed constant.
@@ -315,15 +401,15 @@ fn create_hypervolume_binary<const N: usize>(
     reference_point: &[u64],
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let num_solutions = solutions.len();
-    
+
     if num_solutions == 0 {
         return Ok(Vec::new());
     }
-    
+
     // Create dominated binary to get domination information
     let dominated_data = create_dominated_binary(solutions)?;
     let mut dominated_indices = Vec::new();
-    
+
     // Parse dominated binary data (u32 LE format)
     for i in 0..num_solutions {
         let byte_offset = i * 4;
@@ -331,8 +417,13 @@ fn create_hypervolume_binary<const N: usize>(
         let dominated_idx = u32::from_le_bytes(dominated_bytes.try_into().unwrap());
         dominated_indices.push(dominated_idx);
     }
-    
-    create_hypervolume_binary_with_indices(solutions, objective_bounds, reference_point, &dominated_indices)
+
+    create_hypervolume_binary_with_indices(
+        solutions,
+        objective_bounds,
+        reference_point,
+        &dominated_indices,
+    )
 }
 
 /// Creates hypervolume.bin using pre-computed domination indices
@@ -343,40 +434,39 @@ fn create_hypervolume_binary_with_indices<const N: usize>(
     dominated_indices: &[u32],
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let num_solutions = solutions.len();
-    
+
     if num_solutions == 0 {
         return Ok(Vec::new());
     }
-    
+
     // Find indices where hypervolume actually changes
     // These are solutions that were non-dominated when discovered (dominated[i] > i or u32::MAX)
     let mut hypervolume_change_indices = Vec::new();
-    
+
     for (i, &dominated_by) in dominated_indices.iter().enumerate().take(num_solutions) {
-        
         // Solution was non-dominated at discovery if:
-        // - dominated[i] > i (dominated by future solution)  
+        // - dominated[i] > i (dominated by future solution)
         // - dominated[i] == u32::MAX (never dominated)
         if dominated_by > i as u32 || dominated_by == u32::MAX {
             hypervolume_change_indices.push(i);
         }
     }
-    
+
     // Ensure we have at least one change point
     if hypervolume_change_indices.is_empty() && num_solutions > 0 {
         hypervolume_change_indices.push(0);
     }
-    
+
     // Compute hypervolume for each change point
     let mut computed_hypervolumes = HashMap::new();
-    
+
     for &change_idx in &hypervolume_change_indices {
         // Build pareto front up to this index (inclusive) using dominated info
         let mut pareto_front = Vec::new();
-        
+
         for i in 0..=change_idx {
             let dominated_by = dominated_indices[i];
-            
+
             // Include solution in pareto front if:
             // - Never dominated (u32::MAX)
             // - Dominated by solution discovered after change_idx
@@ -389,23 +479,23 @@ fn create_hypervolume_binary_with_indices<const N: usize>(
                 pareto_front.push(point);
             }
         }
-        
+
         // Compute scaled hypervolume
         let scaled_hv = if pareto_front.is_empty() {
             0.0
         } else {
             compute_scaled_hypervolume(&pareto_front, objective_bounds, reference_point)?
         };
-        
+
         computed_hypervolumes.insert(change_idx, scaled_hv);
     }
-    
+
     // Fill in hypervolume values for all indices
     // Pre-allocate vector with correct size (8 bytes per f64)
     let mut data = vec![0u8; num_solutions * 8];
     let mut current_hv: f64 = 0.0;
     let mut change_iter = hypervolume_change_indices.iter().peekable();
-    
+
     for i in 0..num_solutions {
         // Check if this is a change point
         if let Some(&&change_idx) = change_iter.peek() {
@@ -414,12 +504,12 @@ fn create_hypervolume_binary_with_indices<const N: usize>(
                 change_iter.next();
             }
         }
-        
+
         // Write hypervolume value to the correct position using slice access
         let byte_offset = i * 8;
         data[byte_offset..byte_offset + 8].copy_from_slice(&current_hv.to_le_bytes());
     }
-    
+
     Ok(data)
 }
 
@@ -432,9 +522,9 @@ fn compute_scaled_hypervolume(
     if pareto_front.is_empty() {
         return Ok(0.0);
     }
-    
+
     let dimension = pareto_front[0].len();
-    
+
     // Scale the pareto front to [0, 1] range using reference point normalization
     let mut scaled_front = Vec::new();
     for point in pareto_front {
@@ -442,7 +532,7 @@ fn compute_scaled_hypervolume(
         for (i, &obj_value) in point.iter().enumerate() {
             let min_bound = objective_bounds[i][0] as f64;
             let ref_value = reference_point[i] as f64;
-            
+
             let scaled_value = if ref_value > min_bound {
                 (obj_value as f64 - min_bound) / (ref_value - min_bound)
             } else {
@@ -452,31 +542,45 @@ fn compute_scaled_hypervolume(
         }
         scaled_front.push(scaled_point);
     }
-    
+
     // Scale reference point (should always be 1.0 with this normalization)
     let scaled_reference = vec![1.0; reference_point.len()];
-    
+
     // Use optimized hypervolume computation functions from hypervolume.rs
     let result = match dimension {
         2 => {
             let mut mutable_front = scaled_front;
             hypervolume_2d_min_generic(&mut mutable_front, &scaled_reference)
-        },
+        }
         3 => {
             let mut mutable_front = scaled_front;
             hypervolume_3d_min_generic(&mut mutable_front, &scaled_reference)
-        },
+        }
         4 => {
             let mut mutable_front = scaled_front;
             hypervolume_4d_min_generic(&mut mutable_front, &scaled_reference)
-        },
-        _ => return Err(format!("Hypervolume computation not supported for {} dimensions", dimension).into()),
+        }
+        _ => {
+            return Err(format!(
+                "Hypervolume computation not supported for {} dimensions",
+                dimension
+            )
+            .into())
+        }
     };
-    
+
     // Assert that hypervolume is within expected bounds for scaled computation
-    assert!(result >= 0.0, "Hypervolume must be non-negative, got: {}", result);
-    assert!(result <= 1.0, "Scaled hypervolume must be <= 1.0, got: {}", result);
-    
+    assert!(
+        result >= 0.0,
+        "Hypervolume must be non-negative, got: {}",
+        result
+    );
+    assert!(
+        result <= 1.0,
+        "Scaled hypervolume must be <= 1.0, got: {}",
+        result
+    );
+
     Ok(result)
 }
 
@@ -583,7 +687,7 @@ fn create_tar_archive(
 }
 
 /// Python binding for trace generation
-/// 
+///
 /// Generates a compressed trace.tar.gz archive from a list of Solution objects.
 /// The archive contains binary files with optimization timeline data.
 ///
@@ -608,9 +712,30 @@ pub fn generate_trace(
     // Convert solutions to the format expected by trace generation
     let include_dominated = include_dominated.unwrap_or(false);
     match num_objectives {
-        2 => generate_trace_impl::<2>(solutions, objectives, algorithm, objective_bounds, reference_point, include_dominated),
-        3 => generate_trace_impl::<3>(solutions, objectives, algorithm, objective_bounds, reference_point, include_dominated),
-        4 => generate_trace_impl::<4>(solutions, objectives, algorithm, objective_bounds, reference_point, include_dominated),
+        2 => generate_trace_impl::<2>(
+            solutions,
+            objectives,
+            algorithm,
+            objective_bounds,
+            reference_point,
+            include_dominated,
+        ),
+        3 => generate_trace_impl::<3>(
+            solutions,
+            objectives,
+            algorithm,
+            objective_bounds,
+            reference_point,
+            include_dominated,
+        ),
+        4 => generate_trace_impl::<4>(
+            solutions,
+            objectives,
+            algorithm,
+            objective_bounds,
+            reference_point,
+            include_dominated,
+        ),
         _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "Unsupported number of objectives. Only 2, 3, or 4 objectives are supported.",
         )),
@@ -627,9 +752,11 @@ fn generate_trace_impl<const D: usize>(
     include_dominated: bool,
 ) -> PyResult<Vec<u8>> {
     if objectives.len() != D {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            format!("Expected {} objective names, got {}", D, objectives.len()),
-        ));
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "Expected {} objective names, got {}",
+            D,
+            objectives.len()
+        )));
     }
 
     // Convert Python Solution objects to SolutionFingerprint format
@@ -637,15 +764,18 @@ fn generate_trace_impl<const D: usize>(
     let mut total_duration = Duration::ZERO;
 
     for (index, solution) in solutions.iter().enumerate() {
-        
         let obj_values: pareto::Objectives<D> = std::array::from_fn(|i| {
             let objective_name = &objectives[i];
             match objective_name.as_str() {
                 "min_cost" => solution.cost.expect("min_cost should be set"),
                 "cloud_coverage" => solution.cloudy_area.expect("cloud_coverage should be set"),
-                "min_max_incidence_angle" => solution.max_incidence_angle.expect("min_max_incidence_angle should be set"),
-                "min_resolution" => solution.min_resolutions_sum.expect("min_resolutions_sum should be set"),
-                _ => unreachable!()
+                "min_max_incidence_angle" => solution
+                    .max_incidence_angle
+                    .expect("min_max_incidence_angle should be set"),
+                "min_resolution" => solution
+                    .min_resolutions_sum
+                    .expect("min_resolutions_sum should be set"),
+                _ => unreachable!(),
             }
         });
 
@@ -680,9 +810,11 @@ fn generate_trace_impl<const D: usize>(
         algorithm,
         objective_bounds,
         reference_point,
-        None,  // Will compute domination inside create_optimization_trace_archive
+        None, // Will compute domination inside create_optimization_trace_archive
     )
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Trace generation failed: {}", e)))?;
+    .map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Trace generation failed: {}", e))
+    })?;
 
     Ok(archive_bytes)
 }
@@ -694,7 +826,7 @@ fn generate_trace_impl<const D: usize>(
 ///
 /// # Arguments
 /// * `first_trace` - Bytes of the first trace archive (tar.gz)
-/// * `second_trace` - Bytes of the second trace archive (tar.gz)  
+/// * `second_trace` - Bytes of the second trace archive (tar.gz)
 /// * `first_phase_duration_us` - Duration of the first phase in microseconds
 /// * `combined_algorithm` - Algorithm name for the merged trace
 ///
@@ -709,47 +841,84 @@ pub fn merge_traces(
     reference_point: Vec<u64>,
 ) -> PyResult<Vec<u8>> {
     // Extract data from first trace
-    let first_data = extract_trace_data(&first_trace)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-            format!("Failed to extract first trace: {}", e)
-        ))?;
-        
+    let first_data = extract_trace_data(&first_trace).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+            "Failed to extract first trace: {}",
+            e
+        ))
+    })?;
+
     // Extract data from second trace
-    let second_data = extract_trace_data(&second_trace)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-            format!("Failed to extract second trace: {}", e)
-        ))?;
+    let second_data = extract_trace_data(&second_trace).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+            "Failed to extract second trace: {}",
+            e
+        ))
+    })?;
 
     // Verify objectives are compatible
     if first_data.metadata.objectives != second_data.metadata.objectives {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "Cannot merge traces with different objectives"
+            "Cannot merge traces with different objectives",
         ));
     }
 
     // Merge binary data
-    let merged_objectives = merge_binary_data(&first_data.objectives, &second_data.objectives);
-    let merged_dominated = merge_dominated_indices(
-        &first_data.dominated, 
-        &second_data.dominated, 
-        first_data.metadata.solution_count
-    );
-    let merged_timestamps = merge_timestamps(
-        &first_data.timestamps, 
-        &second_data.timestamps, 
-        first_data.metadata.total_duration
+    let merged_objectives_raw = merge_binary_data(&first_data.objectives, &second_data.objectives);
+    let merged_timestamps_raw = merge_timestamps(
+        &first_data.timestamps,
+        &second_data.timestamps,
+        first_data.metadata.total_duration,
     );
 
-    // Calculate total solution count
-    let total_solutions = first_data.metadata.solution_count + second_data.metadata.solution_count;
-    
+    let raw_total_solutions =
+        first_data.metadata.solution_count + second_data.metadata.solution_count;
+    let num_objectives = first_data.metadata.objectives.len();
+
+    let merged_objective_rows =
+        parse_objectives_from_binary(&merged_objectives_raw, num_objectives, raw_total_solutions);
+    let merged_timestamp_values =
+        parse_timestamps_from_binary(&merged_timestamps_raw, raw_total_solutions);
+
+    // Preserve earliest discovery time across phases:
+    // if a solution appears in both traces (e.g. exact phase and then as PLS initial
+    // population), keep a single logical discovery event at the earliest timestamp.
+    let (deduped_objective_rows, deduped_timestamp_values) =
+        deduplicate_merged_trace_by_earliest_timestamp(
+            merged_objective_rows,
+            merged_timestamp_values,
+        );
+
+    let merged_objectives =
+        create_objectives_binary_from_rows(&deduped_objective_rows).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                "Failed to rebuild merged objectives: {}",
+                e
+            ))
+        })?;
+    let merged_timestamps = create_timestamp_binary_from_values(&deduped_timestamp_values)
+        .map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                "Failed to rebuild merged timestamps: {}",
+                e
+            ))
+        })?;
+
+    let total_solutions = deduped_objective_rows.len();
+
+    // Recompute domination on the deduplicated merged trace so cross-phase duplicates
+    // do not create a second, later discovery event.
+    let merged_dominated =
+        create_dominated_binary_from_raw_data(&merged_objectives, num_objectives, total_solutions)
+            .map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                    "Failed to recalculate domination: {}",
+                    e
+                ))
+            })?;
+
     // Calculate actual total duration from last solution timestamp
-    let total_duration = if total_solutions > 0 {
-        let last_timestamp_bytes = &merged_timestamps[(total_solutions - 1) * 4..total_solutions * 4];
-        u32::from_le_bytes(last_timestamp_bytes.try_into().unwrap()) as u64
-    } else {
-        0
-    };
+    let total_duration = deduped_timestamp_values.last().copied().unwrap_or(0);
 
     // Extract ratio from algorithm name (e.g., "two-phase-20-80" -> [20, 80])
     let ratio = extract_ratio_from_algorithm(&combined_algorithm);
@@ -758,14 +927,17 @@ pub fn merge_traces(
     let merged_hypervolume = create_hypervolume_binary_from_raw_data(
         &merged_objectives,
         &merged_dominated,
-        &first_data.metadata.objectives.len(),
+        &num_objectives,
         total_solutions,
         &objective_bounds,
         &reference_point,
     )
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-        format!("Failed to recalculate hypervolume: {}", e)
-    ))?;
+    .map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+            "Failed to recalculate hypervolume: {}",
+            e
+        ))
+    })?;
 
     // Create merged metadata - change algorithm to "hybrid"
     let merged_metadata = TraceMetadata {
@@ -780,9 +952,12 @@ pub fn merge_traces(
     };
 
     let metadata_bytes = serde_json::to_string_pretty(&merged_metadata)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-            format!("Failed to serialize merged metadata: {}", e)
-        ))?
+        .map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                "Failed to serialize merged metadata: {}",
+                e
+            ))
+        })?
         .into_bytes();
 
     // Create merged archive
@@ -793,24 +968,212 @@ pub fn merge_traces(
         merged_hypervolume,
         metadata_bytes,
     )
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-        format!("Failed to create merged archive: {}", e)
-    ))?;
+    .map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+            "Failed to create merged archive: {}",
+            e
+        ))
+    })?;
 
     // Compress the merged archive
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder
-        .write_all(&archive_data)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-            format!("Failed to compress merged archive: {}", e)
-        ))?;
-    let compressed_data = encoder
-        .finish()
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-            format!("Failed to finish compression: {}", e)
-        ))?;
+    encoder.write_all(&archive_data).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+            "Failed to compress merged archive: {}",
+            e
+        ))
+    })?;
+    let compressed_data = encoder.finish().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+            "Failed to finish compression: {}",
+            e
+        ))
+    })?;
 
     Ok(compressed_data)
+}
+
+/// Compute an HV-over-time curve from a trace archive.
+///
+/// Extracts raw objectives, timestamps and domination indices from the
+/// compressed trace, maintains the Pareto front incrementally, and evaluates
+/// the (expensive) HV computation only at `num_points` evenly-spaced time
+/// instants.  Everything else — front maintenance, index bookkeeping — is
+/// O(N) amortized work done in Rust.
+///
+/// # Arguments
+/// * `trace_data` – compressed trace archive bytes (tar.gz produced by PLS)
+/// * `objective_bounds` – `[[min,max], …]` per objective, shared across runs
+///   so that curves from different configurations are comparable
+/// * `num_points` – number of evenly-spaced sample points (e.g. 200 gives one
+///   HV value every `total_duration / 200`)
+///
+/// # Returns
+/// A list of `(timestamp_seconds, hypervolume)` tuples — one per sample point.
+#[pyfunction]
+#[pyo3(signature = (trace_data, objective_bounds, num_points = 200))]
+pub fn compute_hv_curve_from_trace(
+    trace_data: Vec<u8>,
+    objective_bounds: Vec<Vec<u64>>,
+    num_points: usize,
+) -> PyResult<Vec<(f64, f64)>> {
+    if num_points == 0 {
+        return Ok(Vec::new());
+    }
+
+    let pb_extract = ProgressBar::new_spinner();
+    pb_extract.set_style(ProgressStyle::with_template("  {spinner:.cyan} {msg}").unwrap());
+    pb_extract.set_message("extracting trace archive…");
+
+    // --- 1. Extract raw binary data from the archive ----------------------
+    let td = extract_trace_data(&trace_data).map_err(|e| {
+        pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to extract trace: {e}"))
+    })?;
+
+    let num_objectives = td.metadata.objectives.len();
+    let n = td.metadata.solution_count;
+    if n == 0 {
+        pb_extract.finish_with_message("empty trace");
+        return Ok(vec![(0.0, 0.0)]);
+    }
+    pb_extract.finish_with_message(format!("extracted {n} solutions, {num_objectives}D"));
+
+    // Parse timestamps (u32 LE, microseconds)
+    let mut timestamps_us: Vec<u64> = Vec::with_capacity(n);
+    for i in 0..n {
+        let off = i * 4;
+        let val = u32::from_le_bytes(td.timestamps[off..off + 4].try_into().unwrap());
+        timestamps_us.push(val as u64);
+    }
+
+    // Parse objectives (u64 LE, row-major)
+    let mut objectives: Vec<Vec<u64>> = Vec::with_capacity(n);
+    for i in 0..n {
+        let mut row = Vec::with_capacity(num_objectives);
+        for j in 0..num_objectives {
+            let off = (i * num_objectives + j) * 8;
+            let val = u64::from_le_bytes(td.objectives[off..off + 8].try_into().unwrap());
+            row.push(val);
+        }
+        objectives.push(row);
+    }
+
+    // Parse domination indices (u32 LE)
+    let mut dominated: Vec<u32> = Vec::with_capacity(n);
+    for i in 0..n {
+        let off = i * 4;
+        let val = u32::from_le_bytes(td.dominated[off..off + 4].try_into().unwrap());
+        dominated.push(val);
+    }
+
+    // --- 2. Prepare bounds / reference point ------------------------------
+    let bounds: Vec<[u64; 2]> = objective_bounds
+        .iter()
+        .map(|b| {
+            if b.len() != 2 {
+                Err(pyo3::exceptions::PyValueError::new_err(
+                    "Each bound must have exactly 2 elements [min, max]",
+                ))
+            } else {
+                Ok([b[0], b[1]])
+            }
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+
+    let ref_point: Vec<u64> = bounds.iter().map(|b| b[1] + 1).collect();
+
+    // --- 3. Build reverse domination index --------------------------------
+    // rev_dom[k] = list of trace indices whose dominator is k
+    // (i.e. solutions evicted from the front when solution k arrives)
+    let mut rev_dom: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (i, &d) in dominated.iter().enumerate() {
+        if d != u32::MAX && (d as usize) < n {
+            rev_dom[d as usize].push(i);
+        }
+    }
+
+    // --- 4. Determine sample timestamps -----------------------------------
+    let total_duration_us = td.metadata.total_duration;
+    let interval_us = if num_points <= 1 {
+        total_duration_us
+    } else {
+        total_duration_us / (num_points - 1) as u64
+    };
+    // Sample times in microseconds
+    let sample_times_us: Vec<u64> = (0..num_points)
+        .map(|i| {
+            if i == num_points - 1 {
+                total_duration_us // last point is exactly the end
+            } else {
+                i as u64 * interval_us
+            }
+        })
+        .collect();
+
+    // --- 5. Sequential pass: snapshot the Pareto front at each sample time -
+    // The front maintenance is inherently sequential (each solution depends on
+    // previously arrived ones), but we only need to *record* the front — the
+    // expensive HV computation is deferred to a parallel pass.
+    let mut in_front: Vec<bool> = vec![false; n];
+    let mut trace_cursor: usize = 0;
+
+    // Each entry: (sample_time_s, snapshot of the front as Vec<Vec<u64>>)
+    let mut snapshots: Vec<(f64, Vec<Vec<u64>>)> = Vec::with_capacity(num_points);
+
+    let pb_snap = ProgressBar::new(num_points as u64);
+    pb_snap.set_style(
+        ProgressStyle::with_template(
+            "  front snapshots   [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) [{elapsed_precise} ETA {eta_precise}]"
+        ).unwrap().progress_chars("█▓░"),
+    );
+
+    for &sample_us in &sample_times_us {
+        // Advance cursor: process all solutions with timestamp <= sample_us
+        while trace_cursor < n && timestamps_us[trace_cursor] <= sample_us {
+            let idx = trace_cursor;
+            in_front[idx] = true;
+            for &victim in &rev_dom[idx] {
+                in_front[victim] = false;
+            }
+            trace_cursor += 1;
+        }
+
+        let front: Vec<Vec<u64>> = (0..trace_cursor)
+            .filter(|&i| in_front[i])
+            .map(|i| objectives[i].clone())
+            .collect();
+
+        snapshots.push((sample_us as f64 / 1_000_000.0, front));
+        pb_snap.inc(1);
+    }
+    pb_snap.finish_with_message("done");
+
+    // --- 6. Parallel pass: compute HV for every snapshot with rayon -------
+    let pb_hv = ProgressBar::new(num_points as u64);
+    pb_hv.set_style(
+        ProgressStyle::with_template(
+            "  HV (parallel)     [{bar:40.yellow/black}] {pos}/{len} ({percent}%) [{elapsed_precise} ETA {eta_precise}]"
+        ).unwrap().progress_chars("█▓░"),
+    );
+
+    let mut curve: Vec<(f64, f64)> = snapshots
+        .into_par_iter()
+        .map(|(t, front)| {
+            let hv = if front.is_empty() {
+                0.0
+            } else {
+                compute_scaled_hypervolume(&front, &bounds, &ref_point).unwrap_or(0.0)
+            };
+            pb_hv.inc(1);
+            (t, hv)
+        })
+        .collect();
+
+    curve.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    pb_hv.finish_with_message("done");
+
+    Ok(curve)
 }
 
 /// Structure to hold extracted trace data
@@ -880,15 +1243,15 @@ fn merge_binary_data(first: &[u8], second: &[u8]) -> Vec<u8> {
 
 /// Merges dominated indices with proper offset for the second trace
 fn merge_dominated_indices(
-    first: &[u8], 
-    second: &[u8], 
-    first_trace_solution_count: usize
+    first: &[u8],
+    second: &[u8],
+    first_trace_solution_count: usize,
 ) -> Vec<u8> {
     let mut result = Vec::with_capacity(first.len() + second.len());
-    
+
     // Add first trace dominated indices as-is
     result.extend_from_slice(first);
-    
+
     // Add second trace dominated indices with offset
     // Each dominated index is u32 LE (4 bytes)
     let dominated_count = second.len() / 4;
@@ -896,7 +1259,7 @@ fn merge_dominated_indices(
         let start_idx = i * 4;
         let dominated_bytes = &second[start_idx..start_idx + 4];
         let original_dominated = u32::from_le_bytes(dominated_bytes.try_into().unwrap());
-        
+
         // Adjust dominated index to account for first trace solutions
         let adjusted_dominated = if original_dominated == u32::MAX {
             // Never dominated - keep as u32::MAX
@@ -905,24 +1268,72 @@ fn merge_dominated_indices(
             // Add offset to point to correct solution in merged trace
             original_dominated + first_trace_solution_count as u32
         };
-        
+
         result.extend_from_slice(&adjusted_dominated.to_le_bytes());
     }
-    
+
     result
 }
 
+fn parse_objectives_from_binary(
+    objectives_data: &[u8],
+    num_objectives: usize,
+    num_solutions: usize,
+) -> Vec<Vec<u64>> {
+    let mut all_solutions = Vec::with_capacity(num_solutions);
+    for i in 0..num_solutions {
+        let mut obj_values = Vec::with_capacity(num_objectives);
+        for j in 0..num_objectives {
+            let offset = (i * num_objectives + j) * 8;
+            let obj_bytes = &objectives_data[offset..offset + 8];
+            let obj_value = u64::from_le_bytes(obj_bytes.try_into().unwrap());
+            obj_values.push(obj_value);
+        }
+        all_solutions.push(obj_values);
+    }
+    all_solutions
+}
+
+fn parse_timestamps_from_binary(timestamps_data: &[u8], num_solutions: usize) -> Vec<u64> {
+    let mut timestamps = Vec::with_capacity(num_solutions);
+    for i in 0..num_solutions {
+        let start_idx = i * 4;
+        let timestamp_bytes = &timestamps_data[start_idx..start_idx + 4];
+        let timestamp = u32::from_le_bytes(timestamp_bytes.try_into().unwrap()) as u64;
+        timestamps.push(timestamp);
+    }
+    timestamps
+}
+
+fn create_objectives_binary_from_rows(
+    objectives: &[Vec<u64>],
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let mut data = Vec::new();
+    for row in objectives {
+        for &objective_value in row {
+            data.extend_from_slice(&objective_value.to_le_bytes());
+        }
+    }
+    Ok(data)
+}
+
+fn create_timestamp_binary_from_values(
+    timestamps_us: &[u64],
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let mut data = Vec::with_capacity(timestamps_us.len() * 4);
+    for &timestamp_us in timestamps_us {
+        data.extend_from_slice(&(timestamp_us as u32).to_le_bytes());
+    }
+    Ok(data)
+}
+
 /// Merges timestamp data with offset for the second trace
-fn merge_timestamps(
-    first: &[u8], 
-    second: &[u8], 
-    offset_us: u64
-) -> Vec<u8> {
+fn merge_timestamps(first: &[u8], second: &[u8], offset_us: u64) -> Vec<u8> {
     let mut result = Vec::with_capacity(first.len() + second.len());
-    
+
     // Add first trace timestamps as-is
     result.extend_from_slice(first);
-    
+
     // Add second trace timestamps with offset
     // Each timestamp is u32 LE (4 bytes)
     let timestamp_count = second.len() / 4;
@@ -933,8 +1344,81 @@ fn merge_timestamps(
         let adjusted_timestamp = (original_timestamp + offset_us) as u32;
         result.extend_from_slice(&adjusted_timestamp.to_le_bytes());
     }
-    
+
     result
+}
+
+fn deduplicate_merged_trace_by_earliest_timestamp(
+    objectives: Vec<Vec<u64>>,
+    timestamps_us: Vec<u64>,
+) -> (Vec<Vec<u64>>, Vec<u64>) {
+    use std::collections::HashMap;
+
+    let mut earliest_by_objectives: HashMap<Vec<u64>, u64> = HashMap::new();
+
+    for (row, &timestamp_us) in objectives.iter().zip(timestamps_us.iter()) {
+        earliest_by_objectives
+            .entry(row.clone())
+            .and_modify(|existing| {
+                if timestamp_us < *existing {
+                    *existing = timestamp_us;
+                }
+            })
+            .or_insert(timestamp_us);
+    }
+
+    let mut deduped: Vec<(u64, Vec<u64>)> = earliest_by_objectives
+        .into_iter()
+        .map(|(row, ts)| (ts, row))
+        .collect();
+
+    deduped.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+
+    let deduped_timestamps = deduped.iter().map(|(ts, _)| *ts).collect();
+    let deduped_objectives = deduped.into_iter().map(|(_, row)| row).collect();
+
+    (deduped_objectives, deduped_timestamps)
+}
+
+/// Creates dominated.bin from raw objectives data
+fn create_dominated_binary_from_raw_data(
+    objectives_data: &[u8],
+    num_objectives: usize,
+    num_solutions: usize,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    if num_solutions == 0 {
+        return Ok(Vec::new());
+    }
+
+    let all_solutions =
+        parse_objectives_from_binary(objectives_data, num_objectives, num_solutions);
+
+    let mut data = Vec::with_capacity(num_solutions * 4);
+
+    for (i, solution_i) in all_solutions.iter().enumerate() {
+        let mut dominating_index = u32::MAX;
+
+        for (j, solution_j) in all_solutions.iter().enumerate() {
+            if i == j {
+                continue;
+            }
+
+            let dominates = solution_j
+                .iter()
+                .zip(solution_i.iter())
+                .all(|(a, b)| a <= b)
+                && solution_j.iter().zip(solution_i.iter()).any(|(a, b)| a < b);
+
+            if dominates {
+                dominating_index = j as u32;
+                break;
+            }
+        }
+
+        data.extend_from_slice(&dominating_index.to_le_bytes());
+    }
+
+    Ok(data)
 }
 
 /// Unified hypervolume binary creation from raw data (used for merging traces)
@@ -948,24 +1432,14 @@ fn create_hypervolume_binary_from_raw_data(
     reference_point: &[u64],
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let num_obj = *num_objectives;
-    
+
     if num_solutions == 0 {
         return Ok(Vec::new());
     }
-    
+
     // Parse objectives from binary data
-    let mut all_solutions = Vec::new();
-    for i in 0..num_solutions {
-        let mut obj_values = Vec::new();
-        for j in 0..num_obj {
-            let offset = (i * num_obj + j) * 8;
-            let obj_bytes = &objectives_data[offset..offset + 8];
-            let obj_value = u64::from_le_bytes(obj_bytes.try_into().unwrap());
-            obj_values.push(obj_value);
-        }
-        all_solutions.push(obj_values);
-    }
-    
+    let all_solutions = parse_objectives_from_binary(objectives_data, num_obj, num_solutions);
+
     // Parse dominated indices from binary data (u32 LE format)
     let mut dominated_indices = Vec::new();
     for i in 0..num_solutions {
@@ -974,36 +1448,35 @@ fn create_hypervolume_binary_from_raw_data(
         let dominated_idx = u32::from_le_bytes(dominated_bytes.try_into().unwrap());
         dominated_indices.push(dominated_idx);
     }
-    
+
     // Find indices where hypervolume actually changes
     // These are solutions that were non-dominated when discovered (dominated[i] > i or u32::MAX)
     let mut hypervolume_change_indices = Vec::new();
-    
+
     for (i, &dominated_by) in dominated_indices.iter().enumerate().take(num_solutions) {
-        
         // Solution was non-dominated at discovery if:
-        // - dominated[i] > i (dominated by future solution)  
+        // - dominated[i] > i (dominated by future solution)
         // - dominated[i] == u32::MAX (never dominated)
         if dominated_by > i as u32 || dominated_by == u32::MAX {
             hypervolume_change_indices.push(i);
         }
     }
-    
+
     // Ensure we have at least one change point
     if hypervolume_change_indices.is_empty() && num_solutions > 0 {
         hypervolume_change_indices.push(0);
     }
-    
+
     // Compute hypervolume for each change point
     let mut computed_hypervolumes = HashMap::new();
-    
+
     for &change_idx in &hypervolume_change_indices {
         // Build pareto front up to this index (inclusive) using dominated info
         let mut pareto_front = Vec::new();
-        
+
         for i in 0..=change_idx {
             let dominated_by = dominated_indices[i];
-            
+
             // Include solution in pareto front if:
             // - Never dominated (u32::MAX)
             // - Dominated by solution discovered after change_idx
@@ -1011,28 +1484,34 @@ fn create_hypervolume_binary_from_raw_data(
                 pareto_front.push(all_solutions[i].clone());
             }
         }
-        
+
         // Compute scaled hypervolume
         let scaled_hv = if pareto_front.is_empty() {
             0.0
         } else {
             match num_obj {
-                2 => compute_scaled_hypervolume_2d(&pareto_front, objective_bounds, reference_point),
-                3 => compute_scaled_hypervolume_3d(&pareto_front, objective_bounds, reference_point),
-                4 => compute_scaled_hypervolume_4d(&pareto_front, objective_bounds, reference_point),
+                2 => {
+                    compute_scaled_hypervolume_2d(&pareto_front, objective_bounds, reference_point)
+                }
+                3 => {
+                    compute_scaled_hypervolume_3d(&pareto_front, objective_bounds, reference_point)
+                }
+                4 => {
+                    compute_scaled_hypervolume_4d(&pareto_front, objective_bounds, reference_point)
+                }
                 _ => return Err(format!("Unsupported number of objectives: {}", num_obj).into()),
             }?
         };
-        
+
         computed_hypervolumes.insert(change_idx, scaled_hv);
     }
-    
+
     // Fill in hypervolume values for all indices
     // Pre-allocate vector with correct size (8 bytes per f64)
     let mut data = vec![0u8; num_solutions * 8];
     let mut current_hv: f64 = 0.0;
     let mut change_iter = hypervolume_change_indices.iter().peekable();
-    
+
     for i in 0..num_solutions {
         // Check if this is a change point
         if let Some(&&change_idx) = change_iter.peek() {
@@ -1041,99 +1520,117 @@ fn create_hypervolume_binary_from_raw_data(
                 change_iter.next();
             }
         }
-        
+
         // Ensure hypervolume is within bounds
         let bounded_hv = current_hv.clamp(0.0, 1.0);
-        assert!((0.0..=1.0).contains(&bounded_hv),
-            "Hypervolume value {} is out of bounds [0.0, 1.0]", bounded_hv);
-        
+        assert!(
+            (0.0..=1.0).contains(&bounded_hv),
+            "Hypervolume value {} is out of bounds [0.0, 1.0]",
+            bounded_hv
+        );
+
         // Write hypervolume value to the correct position using slice access
         let byte_offset = i * 8;
         data[byte_offset..byte_offset + 8].copy_from_slice(&bounded_hv.to_le_bytes());
     }
-    
+
     Ok(data)
 }
 
 /// Helper functions for hypervolume calculation by dimension
 fn compute_scaled_hypervolume_2d(
-    solutions: &[Vec<u64>], 
-    objective_bounds: &[[u64; 2]], 
-    reference_point: &[u64]
+    solutions: &[Vec<u64>],
+    objective_bounds: &[[u64; 2]],
+    reference_point: &[u64],
 ) -> Result<f64, Box<dyn std::error::Error>> {
     // Create normalization bounds using reference point as upper bound
     let norm_bounds_0 = [objective_bounds[0][0], reference_point[0]];
     let norm_bounds_1 = [objective_bounds[1][0], reference_point[1]];
-    
-    let mut normalized_solutions: Vec<Vec<f64>> = solutions.iter()
-        .map(|sol| vec![
-            normalize_objective(sol[0], norm_bounds_0),
-            normalize_objective(sol[1], norm_bounds_1),
-        ])
+
+    let mut normalized_solutions: Vec<Vec<f64>> = solutions
+        .iter()
+        .map(|sol| {
+            vec![
+                normalize_objective(sol[0], norm_bounds_0),
+                normalize_objective(sol[1], norm_bounds_1),
+            ]
+        })
         .collect();
-    
+
     let normalized_ref = vec![
-        normalize_objective(reference_point[0], norm_bounds_0),  // This will be 1.0
-        normalize_objective(reference_point[1], norm_bounds_1),  // This will be 1.0
+        normalize_objective(reference_point[0], norm_bounds_0), // This will be 1.0
+        normalize_objective(reference_point[1], norm_bounds_1), // This will be 1.0
     ];
-    
-    Ok(hypervolume_2d_min_generic(&mut normalized_solutions, &normalized_ref))
+
+    Ok(hypervolume_2d_min_generic(
+        &mut normalized_solutions,
+        &normalized_ref,
+    ))
 }
 
 fn compute_scaled_hypervolume_3d(
-    solutions: &[Vec<u64>], 
-    objective_bounds: &[[u64; 2]], 
-    reference_point: &[u64]
+    solutions: &[Vec<u64>],
+    objective_bounds: &[[u64; 2]],
+    reference_point: &[u64],
 ) -> Result<f64, Box<dyn std::error::Error>> {
     // Create normalization bounds using reference point as upper bound
     let norm_bounds_0 = [objective_bounds[0][0], reference_point[0]];
     let norm_bounds_1 = [objective_bounds[1][0], reference_point[1]];
     let norm_bounds_2 = [objective_bounds[2][0], reference_point[2]];
-    
-    let mut normalized_solutions: Vec<Vec<f64>> = solutions.iter()
-        .map(|sol| vec![
-            normalize_objective(sol[0], norm_bounds_0),
-            normalize_objective(sol[1], norm_bounds_1),
-            normalize_objective(sol[2], norm_bounds_2),
-        ])
+
+    let mut normalized_solutions: Vec<Vec<f64>> = solutions
+        .iter()
+        .map(|sol| {
+            vec![
+                normalize_objective(sol[0], norm_bounds_0),
+                normalize_objective(sol[1], norm_bounds_1),
+                normalize_objective(sol[2], norm_bounds_2),
+            ]
+        })
         .collect();
-    
+
     let normalized_ref = vec![
-        normalize_objective(reference_point[0], norm_bounds_0),  // This will be 1.0
-        normalize_objective(reference_point[1], norm_bounds_1),  // This will be 1.0
-        normalize_objective(reference_point[2], norm_bounds_2),  // This will be 1.0
+        normalize_objective(reference_point[0], norm_bounds_0), // This will be 1.0
+        normalize_objective(reference_point[1], norm_bounds_1), // This will be 1.0
+        normalize_objective(reference_point[2], norm_bounds_2), // This will be 1.0
     ];
-    
-    Ok(hypervolume_3d_min_generic(&mut normalized_solutions, &normalized_ref))
+
+    Ok(hypervolume_3d_min_generic(
+        &mut normalized_solutions,
+        &normalized_ref,
+    ))
 }
 
 fn compute_scaled_hypervolume_4d(
-    solutions: &[Vec<u64>], 
-    objective_bounds: &[[u64; 2]], 
-    reference_point: &[u64]
+    solutions: &[Vec<u64>],
+    objective_bounds: &[[u64; 2]],
+    reference_point: &[u64],
 ) -> Result<f64, Box<dyn std::error::Error>> {
     // Create normalization bounds using reference point as upper bound
     let norm_bounds_0 = [objective_bounds[0][0], reference_point[0]];
     let norm_bounds_1 = [objective_bounds[1][0], reference_point[1]];
     let norm_bounds_2 = [objective_bounds[2][0], reference_point[2]];
     let norm_bounds_3 = [objective_bounds[3][0], reference_point[3]];
-    
-    let mut normalized_solutions: Vec<Vec<f64>> = solutions.iter()
-        .map(|sol| vec![
-            normalize_objective(sol[0], norm_bounds_0),
-            normalize_objective(sol[1], norm_bounds_1),
-            normalize_objective(sol[2], norm_bounds_2),
-            normalize_objective(sol[3], norm_bounds_3),
-        ])
+
+    let mut normalized_solutions: Vec<Vec<f64>> = solutions
+        .iter()
+        .map(|sol| {
+            vec![
+                normalize_objective(sol[0], norm_bounds_0),
+                normalize_objective(sol[1], norm_bounds_1),
+                normalize_objective(sol[2], norm_bounds_2),
+                normalize_objective(sol[3], norm_bounds_3),
+            ]
+        })
         .collect();
-    
+
     let normalized_ref = vec![
-        normalize_objective(reference_point[0], norm_bounds_0),  // This will be 1.0
-        normalize_objective(reference_point[1], norm_bounds_1),  // This will be 1.0
-        normalize_objective(reference_point[2], norm_bounds_2),  // This will be 1.0
-        normalize_objective(reference_point[3], norm_bounds_3),  // This will be 1.0
+        normalize_objective(reference_point[0], norm_bounds_0), // This will be 1.0
+        normalize_objective(reference_point[1], norm_bounds_1), // This will be 1.0
+        normalize_objective(reference_point[2], norm_bounds_2), // This will be 1.0
+        normalize_objective(reference_point[3], norm_bounds_3), // This will be 1.0
     ];
-    
+
     Ok(hypervolume_4d_min_generic(&mut normalized_solutions, &normalized_ref) as f64)
 }
 
@@ -1167,12 +1664,12 @@ type ObjectiveBoundsAndRefPoint = (Vec<[u64; 2]>, Vec<u64>);
 /// Calculates objective bounds and reference point from merged objective data
 #[allow(dead_code, reason = "Helper function for potential future use")]
 fn calculate_objective_bounds_and_ref_point(
-    merged_objectives: &[u8], 
-    num_objectives: usize
+    merged_objectives: &[u8],
+    num_objectives: usize,
 ) -> PyResult<(Vec<[u64; 2]>, Vec<u64>)> {
     if !merged_objectives.len().is_multiple_of(num_objectives * 8) {
         return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-            "Invalid objective data length"
+            "Invalid objective data length",
         ));
     }
 
@@ -1186,7 +1683,7 @@ fn calculate_objective_bounds_and_ref_point(
             let byte_offset = (sol_idx * num_objectives + obj_idx) * 8;
             let obj_bytes = &merged_objectives[byte_offset..byte_offset + 8];
             let obj_value = u64::from_le_bytes(obj_bytes.try_into().unwrap());
-            
+
             min_values[obj_idx] = min_values[obj_idx].min(obj_value);
             max_values[obj_idx] = max_values[obj_idx].max(obj_value);
         }
@@ -1205,7 +1702,7 @@ fn calculate_objective_bounds_and_ref_point(
 
 /// Calculates objective bounds and reference point from solution fingerprints
 pub fn calculate_objective_bounds_from_solutions<const N: usize>(
-    solutions: &[SolutionFingerprint<N>]
+    solutions: &[SolutionFingerprint<N>],
 ) -> Result<ObjectiveBoundsAndRefPoint, Box<dyn std::error::Error>> {
     if solutions.is_empty() {
         return Err("Cannot calculate objective bounds from empty solution list".into());

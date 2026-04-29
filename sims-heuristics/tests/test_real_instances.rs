@@ -2,6 +2,7 @@ use std::{fs, path::Path, time::Duration};
 
 use pareto::ParetoFront;
 use pls::{
+    PlsOptimizations,
     objectives::ObjectiveType, pareto_local_search::ParetoLocalSearch,
     problem_bitset::ProblemBitset, solution::bitset_encoded_solution::BitsetEncodedSolution,
     solution_set_impl::{NdTreeSolutionSet, VecSolutionSet},
@@ -164,7 +165,7 @@ fn test_4d_small_instances() {
         let is_deterministic = true;
 
         let mut pareto_local_search =
-            ParetoLocalSearch::new(&problem, &initial_population, 1..=5, is_deterministic);
+            ParetoLocalSearch::new(&problem, &initial_population, 1..=5, is_deterministic, PlsOptimizations::default());
 
         let solutions = pareto_local_search.run(MAX_ITERATIONS, MAX_DURATION);
         assert!(
@@ -185,7 +186,7 @@ fn profile_lagos_100() {
         NdTreeSolutionSet::new("test_population");
     initial_population.try_insert(&BitsetEncodedSolution::random(&problem));
     let mut pareto_local_search =
-        ParetoLocalSearch::new(&problem, &initial_population, 1..=5, false);
+        ParetoLocalSearch::new(&problem, &initial_population, 1..=5, false, PlsOptimizations::default());
     let solutions = pareto_local_search.run(MAX_ITERATIONS, MAX_DURATION);
     assert!(!solutions.is_empty(), "expected at least one solution");
 }
@@ -201,7 +202,7 @@ fn profile_lagos_100_vec() {
         VecSolutionSet::new("test_population");
     initial_population.try_insert(&BitsetEncodedSolution::random(&problem));
     let mut pareto_local_search =
-        ParetoLocalSearch::new(&problem, &initial_population, 1..=5, false);
+        ParetoLocalSearch::new(&problem, &initial_population, 1..=5, false, PlsOptimizations::default());
     let solutions = pareto_local_search.run(MAX_ITERATIONS, MAX_DURATION);
     assert!(!solutions.is_empty(), "expected at least one solution");
 }
@@ -220,7 +221,7 @@ fn test_4d_medium_instances() {
         let is_deterministic = true;
 
         let mut pareto_local_search =
-            ParetoLocalSearch::new(&problem, &initial_population, 1..=5, is_deterministic);
+            ParetoLocalSearch::new(&problem, &initial_population, 1..=5, is_deterministic, PlsOptimizations::default());
 
         let solutions = pareto_local_search.run(MAX_ITERATIONS, MAX_DURATION);
         assert!(
@@ -244,7 +245,7 @@ fn test_4d_large_instances() {
         let is_deterministic = true;
 
         let mut pareto_local_search =
-            ParetoLocalSearch::new(&problem, &initial_population, 1..=5, is_deterministic);
+            ParetoLocalSearch::new(&problem, &initial_population, 1..=5, is_deterministic, PlsOptimizations::default());
 
         let solutions = pareto_local_search.run(MAX_ITERATIONS, MAX_DURATION);
         assert!(
@@ -316,7 +317,7 @@ fn test_two_phase_4d_small_instances() {
 
                 let is_deterministic = true;
                 let mut pareto_local_search =
-                    ParetoLocalSearch::new(&problem, &initial_population, 1..=5, is_deterministic);
+                    ParetoLocalSearch::new(&problem, &initial_population, 1..=5, is_deterministic, PlsOptimizations::default());
 
                 let pls_duration = Duration::from_secs_f64(pls_time);
                 let max_pls_iterations = 100_000; // Much higher limit for PLS
@@ -384,7 +385,7 @@ fn test_two_phase_4d_medium_instances() {
             if pls_pct > 0 {
                 let is_deterministic = true;
                 let mut pareto_local_search =
-                    ParetoLocalSearch::new(&problem, &initial_population, 1..=5, is_deterministic);
+                    ParetoLocalSearch::new(&problem, &initial_population, 1..=5, is_deterministic, PlsOptimizations::default());
 
                 let pls_duration = Duration::from_secs_f64(pls_time);
                 let solutions = pareto_local_search.run(MAX_ITERATIONS, pls_duration);
@@ -445,7 +446,7 @@ fn test_two_phase_4d_large_instances() {
             if pls_pct > 0 {
                 let is_deterministic = true;
                 let mut pareto_local_search =
-                    ParetoLocalSearch::new(&problem, &initial_population, 1..=5, is_deterministic);
+                    ParetoLocalSearch::new(&problem, &initial_population, 1..=5, is_deterministic, PlsOptimizations::default());
 
                 let pls_duration = Duration::from_secs_f64(pls_time);
                 let solutions = pareto_local_search.run(MAX_ITERATIONS, pls_duration);

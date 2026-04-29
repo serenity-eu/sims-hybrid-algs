@@ -1,0 +1,711 @@
+1004                                                              IEEE TRANSACTIONS ON EVOLUTIONARY COMPUTATION, VOL. 26, NO. 5, OCTOBER 2022
+
+
+
+
+          Space-Partitioned ND-Trees for the Dynamic
+                    Nondominance Problem
+                                                                     Bruno Lang
+
+
+
+   Abstract—We present techniques for improving the efficiency                  Pareto front, that is, the nondominated y w.r.t. to all feasible
+of ND-trees in the solution of the dynamic nondominance                         x. In practice, one has to approximate it by a finite set.
+problem, i.e., for building and maintaining a Pareto archive.                      When referring to “points” p in the remainder of this work
+We propose algorithms for (re)building a tree from a set of
+nondominated points, either as a space-partitioned ND-tree or                   we will always identify p ≡ y, because for the following
+by a clustering approach. Numerical experiments confirm that                    discussions, the design variables x can be ignored. In practice,
+rebuilding the tree at intervals, combined with modified strate-                however, the design variables are the ones of true interest, and
+gies for updating the lower and upper bounds in each node and                   the objectives are mainly used for determining dominance;
+for computing the distances of points to subtrees in between                    then one would store both y and x in p.
+the rebuilds, can lead to significant speedups over using plain
+ND-tree-based updates throughout, in particular for higher                         The nondominated points are also called the maxima of the
+dimensions.                                                                     point set; if we replace “≤” with “≥” in (1) then they will be
+                                                                                the minima of the set.
+  Index Terms—Dynamic nondominance problem, multiobjective
+optimization.                                                                      Dominated points may be removed either a posteriori, when
+                                                                                all potential “candidate points” pi are known, or during their
+                                                                                generation, leading to the following two problems.
+                          I. I NTRODUCTION                                         The static nondominance problem consists of determining,
+                                                                                for a given set P = {p1 , . . . , pn }, its nondominated points
+   N MULTIOBJECTIVE optimization, one tries to maximize                                                                            
+I  (or minimize) D objective functions fk (x), k = 1, . . . , D,
+subject to constraints gj (x) ≤ 0 (or = 0), j = 1, . . . , m, with
+                                                                                             P N = p ∈ P : pj ∈ P : p ≺ pj .
+                                                                                The dynamic nondominance problem addresses maintaining a
+m ≥ 0 and x ∈ Rq . Typically, the objectives are conflicting,                   Pareto archive when adding points, i.e., determining
+such that there is no single design x∗ optimizing all objectives.                                                             
+Then, one resorts to the concept of Pareto optimality.                                     PiN = p ∈ Pi : pj ∈ Pi : p ≺ pj
+   Consider a set Y of objective (or outcome) vectors, Y =                      for i = 1, 2, . . . , where Pi = {p1 , . . . , pi }. Since PiN reflects
+{y = f(x) ≡ (f1 (x), . . . , fD (x)) : x ∈ X }, corresponding to a              only dominance among the first i points, a point in PiN may be
+set X ⊆ Rq of feasible designs, i.e., gj (x) ≤ 0 for all x ∈ X                  dominated by a later pj and then be removed from the archive.
+and j = 1, . . . , m. Then, y ∈ Y is said to be weakly dominated                   The dynamic nondominance problem arises naturally in
+by y ∈ Y, y     y, if                                                        multiobjective evolutionary algorithms (MOEAs) [1]. These
+               y(k) ≤ 
+                      y(k)       for all k = 1, . . . , D                (1)    algorithms approximate the Pareto front with a finite set. They
+                                                                                propagate a population of designs over time, obtaining the
+where y(k) ∈ R is the kth component of y. y is (strictly)                       next generation from the previous one via rules inspired by
+dominated by   y, y ≺    y, if in addition y =  y, i.e., strict              biological systems, such as selection, crossover, and mutation.
+inequality holds in at least one component. If all vectors in Y                 In addition to the current population, they often rely on an
+are mutually nondominated (y ≺      y for all y = 
+                                                   y) then none                 archive, either to just save “good” points from being forgotten
+of the objective values can be increased without decreasing                     or to also have a larger pool for selection. Dominated points
+another one. Note that different designs x may lead to the                      can be removed from this archive, making it a Pareto archive.
+same nondominated y.                                                               There are many variants of the general evolutionary
+   Once a set of points with nondominated objectives has been                   approach; cf. [2]–[7] for just a few of them. The contribu-
+determined, one or more of them can be selected according                       tion of this work is not in advancing MOEA methodology as
+to additional criteria. Ideally one would like to know the full                 such, but in making the maintenance of a Pareto archive more
+                                                                                efficient. Algorithm 1 summarizes the basic procedure for this
+   Manuscript received 28 May 2021; revised 21 October 2021 and                 task.
+5 January 2022; accepted 14 January 2022. Date of publication                      The obvious approach for lines 3 and 4 would compare pi
+25 January 2022; date of current version 3 October 2022.
+   The author is with the IMACM and Scientific Computing, Bergische             to all pj ∈ P N . This linear search is indeed used in some
+Universität Wuppertal, 42097 Wuppertal, Germany (e-mail: lang@math.uni-         MOEA variants, and it is efficient if the archive is kept small
+wuppertal.de).                                                                  by also removing selected nondominated points. This, how-
+   Color versions of one or more figures in this article are available at
+https://doi.org/10.1109/TEVC.2022.3145631.                                      ever, can impair the quality of the attainable approximation to
+   Digital Object Identifier 10.1109/TEVC.2022.3145631                          the overall Pareto front; cf. [8].
+                      1089-778X c 2022 IEEE. Personal use is permitted, but republication/redistribution requires IEEE permission.
+                                    See https://www.ieee.org/publications/rights/index.html for more information.
+         Authorized licensed use limited to: Politechnika Poznanska. Downloaded on May 28,2025 at 09:58:57 UTC from IEEE Xplore. Restrictions apply.
+LANG: SPACE-PARTITIONED ND-TREES FOR DYNAMIC NONDOMINANCE PROBLEM                                                                                    1005
+
+
+
+ Algorithm 1: Maintaining a Pareto Archive                                       2) Each node ν represents a set Sν of points. For a leaf
+  Input : Points p1 , . . . , pn                                                       node, Sν comprises just the points stored in the node,
+  Output: Pareto archive P1N , . . . , PnN for i = 1, . . . , n                        and for a nonleaf node, Sν contains all points represented
+1 P =∅
+    N                                                                                  by the children. That is, Sν represents all points that are
+2 for i = 1, . . . , n                                                                 stored somewhere in the subtree rooted at ν.
+3     if pi is not dominated by any point in P N then                            3) In each node ν, a lower bound lb and an upper bound
+4         remove all points pj from P N that are dominated                             ub for its set Sν is stored.
+            by pi                                                                Here, lb ∈ RD is a lower bound for a (finite) set S =
+5         insert pi into P N                                                  {p1 , . . . , pm } if lb  pj for all j = 1, . . . , m. The infimum of S,
+                                                                              inf(S), is its greatest lower bound. Upper bounds ub and the
+      // now P N is PiN                                                       supremum sup(S) are defined accordingly. Note that inf(S)
+                                                                              and sup(S) are easily obtained with O(Dm) operations by
+                                                                              taking the smallest and largest value pj (k) in each component
+                                                                              k. Thus, they describe the set’s bounding box [18] BB(S) =
+   For unconstrained archives, several data structures have
+                                                                              {y ∈ RD : inf(S)  y  sup(S)}. The supremum (or an
+been proposed over the last decades to avoid linear search
+                                                                              upper bound) is also known as (approximate) ideal point, and
+by making better use of the points’ positions, including
+                                                                              the infimum (or a lower bound) is also called (approximate)
+Pareto-Optimal Trees [9], Quad-trees [10], [11], Dominance
+                                                                              nadir [15].
+Decision Trees [12], Dominated and Nondominated Trees [8],
+                                                                                 The efficiency of ND-tree-based updates Pi−1           N → P N with
+                                                                                                                                                i
+M-front [13], Binary Space Partitioning Trees [14], and
+                                                                              a new point pi is based on the following observations. If, in
+ND-trees [15], to name just a few. In benchmarks, ND-
+                                                                              some node ν in the tree, pi ≺ lb(Sν ) then pi is dominated
+trees have proved a particularly efficient tool [15], [16]. In
+                                                                              by all points in Sν and, therefore, pi is discarded (case 1).
+this work, we propose techniques for further improving their
+                                                                              Otherwise, if ub(Sν ) ≺ pi , then pi dominates all points in
+performance.
+                                                                              Sν and the whole subtree ν is removed (case 2). Otherwise,
+   The remainder of this article is organized as follows. To
+                                                                              if pi  ub(Sν ) and lb(Sν )  pi (case 3) then there is at
+ease the ensuing discussion, we first briefly review ND-trees
+                                                                              least one component k such that pi (k) > ub(Sν )(k) and thus
+and their algorithms in Section II. In Section III, we introduce
+                                                                              pi (k) > pj (k) for all pj ∈ Sν , and there is a component k
+space-partitioned ND-trees, which are particular ND-trees that
+                                                                              such that lb(Sν )(k ) > pi (k ) and thus pj (k ) > pi (k ) for
+can be built efficiently from a set of nondominated points and
+                                                                              all pj ∈ Sν , which implies that no point in Sν can domi-
+can make ND-tree-based nondominance checks more effective.
+                                                                              nate pi and pi dominates none of these points. Therefore, we
+An alternative way for building an ND-tree from nondomi-
+                                                                              do not need to consider the subtree ν further. If none of the
+nated points is presented in Section IV; it is closer to the
+                                                                              above applies, we are in case 4, and we either compare pi to
+strategy for adding points to an ND-tree in [15]. In Section V,
+                                                                              all points stored in ν (if ν is a leaf) or recursively process
+we discuss how the ability to efficiently (re)build an ND-
+                                                                              ν’s children. This procedure is summarized in Algorithm 2
+tree can be used and combined with other modifications to
+                                                                              (essentially Algorithm UpdateNode from [15], except that
+the original ND-tree algorithms to improve overall efficiency.
+                                                                              we require strict instead of weak dominance for cases 1 and
+The numerical experiments reported in Section VI show that
+                                                                              2 to allow for multiple points).
+rebuilding the tree from time to time can significantly reduce
+                                                                                 Calling NonDomPrune with the root of Pi−1             N covers lines 3
+the overall time for maintaining a large Pareto archive. We
+                                                                              and 4 of Algorithm 1. If this call returns TRUE then pi must
+summarize our findings in Section VII.
+                                                                              be inserted into the (pruned) tree, which is done by calling the
+                                                                              function Insert shown in Algorithm 3 (also from [15]).
+                          II. ND- TREES                                          In general, the nondominance check and pruning will by
+   The description in this section mainly follows [15]. Recall                far dominate the ensuing Insert in terms of operations and
+that a tree consists of nodes, each of which is connected to                  time because many nodes will be visited due to the recursive
+one parent node (except for one node, the root, which has no                  calls in case 4 of NonDomPrune. We may hope to keep the
+parent) and to (up to some fixed number of) child nodes. Since                number of these calls low if the boxes [lb, ub] of the children
+many operations with trees are recursive, progressing from the                in each node are small and do not overlap very much, i.e.,
+current node to its children, their description is simplified by              the assignment of the points to the subtrees reflects geometric
+distinguishing leaf nodes (those having no children) and non-                 locality. This clustering drives the decision where new points
+leaf nodes (at least one child); cf. [17] for a deeper treatment              are placed in Insert and how overflowing leaves are split.
+of trees. An ND-tree stores the (nondominated) points of PiN                     We do not repeat the functions for splitting an overflowing
+as follows.                                                                   leaf node and for widening the bounds, but only summarize
+   1) The points are stored only in the leaf nodes, with                      their workings.
+      up to P points per leaf. Nonleaf nodes have up to                          SplitLeaf changes an overflowing leaf node into a nonleaf
+      C children. P and C can be chosen freely such that                      node with C new leaf nodes as children and distributes the
+      C ≤ P+1; Jaszkiewicz and Lust [15] considered dimen-                    P + 1 points to these. It first selects C seed points from Sν ,
+      sions D ≤ 10 and found C = D + 1 and P = 20 to yield                    each of which is placed in a different child. The first seed point
+      adequate performance.                                                   is chosen to have the largest average distance to all other points
+
+       Authorized licensed use limited to: Politechnika Poznanska. Downloaded on May 28,2025 at 09:58:57 UTC from IEEE Xplore. Restrictions apply.
+1006                                                               IEEE TRANSACTIONS ON EVOLUTIONARY COMPUTATION, VOL. 26, NO. 5, OCTOBER 2022
+
+
+
+ Algorithm 2: NonDomPrune(ν, pi )—Nondominance                                   (lb(γ ) + ub(γ ))/2, and this box includes all points inserted
+ Check and Pruning                                                               in that subtree so far.
+  Input : Tree with root node ν, additional point pi                                Updating the bounds is done with WidenBounds, which
+  Output: FALSE if pi is dominated by any point in the                           adjusts lb and ub to also cover the additional point pi and, if
+            subtree ν, and TRUE otherwise;                                       one of the bounds has changed, also forces the update of the
+            in addition, all points that are dominated                           parent’s bounds. This recursion may progress up to the root
+            by pi are removed from the tree ν                                    of the whole tree P N .
+1 if pi ≺ lb(Sν ) then                           // Case 1                          This way of updating is successful in maintaining the tree
+2     return FALSE                                                               reasonably well balanced in many cases, but it has already
+                                                                                 been pointed out in [15] that in extreme cases, a completely
+3    else if ub(Sν ) ≺ pi then                             // Case 2
+                                                                                 unbalanced tree may be built. In practice, two effects may reduce
+4        delete subtree ν and return TRUE
+                                                                                 the effectiveness of the nondominance tests over time. First,
+5 else if pi  ub(Sν ) or lb(Sν )  pi then                  //Case 4            in order to minimize “effort per node,” the bounds lb and ub
+6     if ν is a leaf node then                                                   are not tightened if points or subtrees are deleted. Second, the
+7         for all pj stored in ν                                                 balancing tends to deteriorate slightly over time (e.g., nonleaf
+8             if pi ≺ pj then                                                    nodes may lose some of their C children due to pruning).
+9                  return FALSE                                                     To counteract the latter effect, we have tried different
+10               else if pj ≺ pi then                                            approaches for maintaining balance during the updates. From
+11                   delete pj from ν                                            our experience, local rebalancing cannot be recommended
+                                                                                 because it can interfere too much with the beneficial geometri-
+12       else                                                                    cal clustering and does not improve performance consistently.
+13           for all children γ of ν                                             To give an example, consider the situation where a nonleaf
+14               if NonDomPrune(γ , pi ) = FALSE then                            node loses one or several children during NonDomPrune
+15                   return FALSE                                                because they became empty. The full number of C children
+                                                                                 can be restored by (repeatedly) “lifting” the grandchild η with
+16               else if γ became empty then
+                                                                                 the largest Sη . While this strategy was able to reduce the time
+17                   remove γ
+                                                                                 for building a Pareto archive from 64 Ki = 65 536 C UBE-
+18           if only one child γ of ν remained then                              distributed 10-D points from 4.34 to 4.17 s, for a second
+19               replace ν with γ                                                set with identically distributed (but different) points the time
+                                                                                 increased from 3.78 to 4.08 s. (More details on the test sets
+20       return TRUE                                                             will be given in Section VI.)
+21   else                                                  // Case 3                Instead, we propose to enforce a suitable structure by com-
+22       return TRUE                                                             pletely rebuilding the tree after some number of steps, as
+                                                                                 pointed out in the following section.
+
+
+ Algorithm 3: Insert(ν, pi )—Insert a Point Into a Tree                                         III. S PACE -PARTITIONED ND- TREES
+  Input : Tree with root node ν,                                                    Our technique is based on the observations that:
+             additional point pi                                                    1) the ND-tree-update with NonDomPrune and Insert can
+  Output: Tree including the point pi                                                   be done whenever lower and upper bounds are available
+1 if ν is a leaf then                                                                   in each node of the tree, no matter how this tree had
+2     add pi to Sν (i.e., store the point in this node)                                 been built;
+3     WidenBounds(ν, pi )                                                           2) if the points are already known to be mutually nondomi-
+4     if ν overflows (P + 1 points in Sν ) then                                         nated then nondominance checks are not necessary when
+5         SplitLeaf(ν)                                                                  building the tree;
+                                                                                    3) building a tree with almost perfect balancing (w.r.t.
+6    else                                                                               both height and number of points) and no (geometrical)
+7        Insert(γ , pi ), where γ is the child of ν that is closest                     overlap of the children is simple.
+          to pi                                                                  The approach is similar to the well-known multidimensional
+                                                                                 binary search tree [19], [20], except that we do not assume
+                                                                                 a binary tree and store the points exclusively at the leaves,
+                                                                                 keeping only the lb and ub bounds in nonleaf nodes.
+in Sν , and the remaining seed points are chosen successively to                    Fig. 1 shows how n = 17 points would be assigned to
+maximize the average distance to all prior seed points. Finally,                 C = 4 (left picture) or C = 3 (right) children of a node (note
+each of the remaining P + 1 − C nonseed points is assigned                       that since we assume the points to be mutually nondominated,
+to the closest child. Here, as well as in line 7 of Algorithm 3,                 this must be a 2-D projection of higher-dimensional points),
+the distance of a point p to a child γ (i.e., a whole subtree) is                Algorithms 4 and 5 give the details. The whole tree is built
+taken to be the distance of p to the center of the subtree’s box,                by calling SPNDBuild(p1 , . . . , pn , 1).
+
+          Authorized licensed use limited to: Politechnika Poznanska. Downloaded on May 28,2025 at 09:58:57 UTC from IEEE Xplore. Restrictions apply.
+LANG: SPACE-PARTITIONED ND-TREES FOR DYNAMIC NONDOMINANCE PROBLEM                                                                                      1007
+
+
+
+                                                                                points to these. This call makes two groups {γ1 , γ2 } and
+                                                                                {γ3 , γ4 } from the children and assigns 8 and 9 points to
+                                                                                these (this is done in the recursive calls). The points1 = 8
+                                                                                points for the first group are chosen to be the largest ones
+                                                                                w.r.t. the (k = 1)st direction. To this end, we determine a
+                                                                                point with points1-largest value p(k) among the pi and rear-
+                                                                                range the sequence such that this point is placed at position
+                                                                                ppoints1 and all points preceding it (following it) have the kth
+                                                                                coordinate larger or equal (smaller or equal) to this value.
+Fig. 1. SPND partitioning of 17 points for C = 4 (left) and C = 3 (right).      Therefore, the first points1 points of the rearranged sequence
+(2-D projections of higher-dimensional points.)
+                                                                                are assigned to the first group. It is well known [17] that, for
+                                                                                any j ∈ {1, . . . , m}, the j-largest entry (such as the median)
+ Algorithm       4:     SPNDBuild(p1 , . . . , pm , k)—Build                    can be determined and the sequence be reordered with O(m)
+ SPND-tree                                                                      comparisons, without sorting, and our PartitionAtPosition
+  Input : Nondominated points p1 , . . . , pm ,                                 implements an efficient variant of this approach.
+           direction k ∈ {1, . . . , D}                                            The two recursive calls further subdivide the groups and
+  Output: Space-partitioned ND-tree ν containing these                          assign points to the subgroups, slicing along the second coor-
+           points                                                               dinate. The resulting four recursive calls are with a single
+1 generate a new node ν                                                         child each and therefore a new tree is built with the points
+2 if m ≤ P then                                                                 assigned to it by calling SPNDBuild, slicing along the third
+      // all points fit into one node                                           dimension. (The dimensions are used cyclically, i.e., D + 1 is
+3     make ν a leaf node and insert all pi into its Sν                          replaced with 1.)
+4 else                                                                             For C = 3, the first call to DistributePoints will generate
+5     make ν a non-leaf node with C children γ1 , . . . , γC                    two groups {γ1 } and {γ2 , γ3 } and assign one third (two thirds)
+6     DistributePoints(p1 , . . . , pm , γ1 , . . . , γC , k)                   of the points to these, and again the points of both groups
+                                                                                will be further subdivided along the second dimension. (For
+7   ComputeBounds(ν)                                                            the second group, this is done within the current node via
+                                                                                another level of DistributePoints calls, for the first group, it
+                                                                                is done in a new node via SPNDBuild.)
+ Algorithm 5: DistributePoints(p1 , . . . , pm , γﬁrst , . . .,                    We call the trees generated this way space-partitioned ND-
+ γlast , k)— Distribute the Points p1 , . . . , pm to the Children              trees or SPND-trees, due to the way, the points were assigned
+ γﬁrst , . . . , γlast and Start by Slicing Along Direction k                   to the subtrees, and because the trees contain valid (even tight)
+  Input : Nondominated points p1 , . . . , pm ,                                 bounds lb and ub allowing to use them for ND-tree-based
+                 range of children γﬁrst , . . . , γlast ,                      updates. They also have the property that the children’s boxes
+                 direction k ∈ {1, . . . , D}                                   may touch one another, but do not overlap.
+1 if ﬁrst = last then                                                              One might wonder why we do not separate the slicing direc-
+        // generate subtree for this child                                      tions, with 1-D slicing in each node (same direction in all
+2       γﬁrst = SPNDBuild(p1 , . . . pm , k)                                    nodes at the same depth in the tree). To give an example, the
+3 else                                                                          partitioning in the left picture of Fig. 1 might also correspond
+      // at least two children:                                                 to two children (left and right half of the points) and four
+      // make two groups                                                        grandchildren (lower and upper halves of these). However,
+      // size of first group:                                                   this increases the number of nodes in the tree, and in our
+4     children1 = (last − ﬁrst + 1)/2                                         experiments, it also led to higher numbers of visited nodes in
+      // last child in first group:                                             NonDomPrune, and since almost all of these lead to case 3
+5     last1 = ﬁrst + children1 − 1                                              or case 4 requiring four dominance tests, overall time went up
+      // points for first group:                                                as well.
+6     points1 = (m · children1)/(last − ﬁrst + 1)
+7     PartitionAtPosition(p1 , . . . , pm , points1, k)
+8     DistributePoints(p1 , . . . , ppoints1 ,                                                 IV. C LUSTERING -BASED B UILDING
+                       γﬁrst , . . . , γlast1 , k + 1)                             Another way of building an ND-tree from a set of nondomi-
+9     DistributePoints(ppoints1+1 , . . . , pm ,                                nated points is by clustering them w.r.t. geometrical proximity,
+                       γlast1+1 , . . . , γlast , k + 1)                        similar to the Insert and SplitLeaf procedures for updating the
+                                                                                tree; cf. Section II. This approach is detailed in Algorithm 6.
+                                                                                   If the number of points is small enough then all of them
+                                                                                are assigned to a new leaf node, and we are done. Otherwise,
+  For n = 17 and C = 4, this initial call first                                 we generate a new nonleaf node with C children, and these
+generates a nonleaf node with four children and calls                           are obtained by grouping the points (w.r.t. distance) into C
+DistributePoints(p1 , . . . , p17 , γ1 , . . . , γ4 , 1) to distribute the      clusters and recursively building trees from these. We first
+
+         Authorized licensed use limited to: Politechnika Poznanska. Downloaded on May 28,2025 at 09:58:57 UTC from IEEE Xplore. Restrictions apply.
+1008                                                             IEEE TRANSACTIONS ON EVOLUTIONARY COMPUTATION, VOL. 26, NO. 5, OCTOBER 2022
+
+
+
+ Algorithm 6: ClusteredNDBuild(p1 , . . . pm )—Build
+ ND-Tree From Nondominated Points
+  Input : Set P = {p1 , . . . , pm } of nondominated points
+  Output: ND-tree ν containing these points
+1 if m ≤ P then
+2     ν = new leaf node containing all points
+3 else
+      // find seed points sγ for
+      // C clusters                                                            Fig. 2. Clustered ND partitioning of 17 points for C = 4 (left) and C = 3
+4     s2 = p1                                                                  (right). Filled circles denote the seed points of the clusters.
+5     for iter = 1, . . . , 3
+6         (s1 , s2 ) =
+                   (s2 , point with largest distance from s2 )                    1) While trees built this way tend to be better balanced
+7     for γ = 3, . . . , C                                                           than those resulting from just adding the points sequen-
+8         sγ = point with largest                                                    tially, the clusters generated at one node may still differ
+                      (minimum) distance to s1 , . . . , sγ −1                       significantly in size. Therefore, before the clusters are
+       // assign the points to the                                                   processed further we check if one of them dominates
+       // clusters; try to keep these                                                the others, i.e., the largest cluster is more than twice as
+       // reasonably balanced                                                        large as the smallest cluster and contains more than half
+9      for i = 1, . . . , m                                                          of the overall points (line 12). If this holds true then
+10         add pi to cluster γ , where sγ is the seed point                          we break up the largest cluster. This is done by doing
+             closest to pi                                                           lines 4–11 a second time, but now only points from the
+                                                                                     largest cluster are considered for choosing s1 and s2 in
+11     determine sizemin and sizemax , the sizes of the
+                                                                                     lines 4–6, whereas the remaining seed points are again
+         smallest and largest clusters
+                                                                                     chosen from all pi . If the new seed points in fact can
+12     if sizemax > 2 · sizemin & sizemax > m/2 then
+                                                                                     reduce sizemax − sizemin then we proceed with these;
+13         do a second pass for determining the seed points
+                                                                                     otherwise, we switch back to the original ones.
+             (see 1) in main text)
+                                                                                  2) In the presence of multiple points (e.g., with the T RICKY
+14     bucket sort the points into subsequences P(γ ) for                            data set described in Section VI), it can happen that
+         each cluster                                                                fewer than C of the points pi are distinct. Then, this also
+       // post-process sequences to avoid                                            holds for the seed points and, therefore, some clusters γ
+       // empty children                                                             remain empty. This is addressed by splitting the longest
+15     while one of the P(γ ) is empty do                                            subsequence Pold (γ ) into two subsequences Pnew (γ ) ∪
+16         split longest P(γ ) (see 2) in main text)                                 Pnew (γ ) until all C subsequences are nonempty.
+     // work at this level almost done;                                           To improve efficiency, we use one additional size-m real
+     // generate child nodes                                                   array minDist and two size-m integer arrays nearestSeed
+17   ν = new node with children                                                and perm. After the iter loop in line 5, the distance of each
+        ClusteredNDBuild(P(γ )), γ = 1, . . . , C                              point pi from s1 will be available in minDist(i), and similarly,
+18 ComputeBounds(ν)                                                            by just comparing with the distance to the most recent seed
+                                                                               point sγ −1 , minDist(i) can be updated to contain the distance
+                                                                               of pi to the nearest of s1 , . . . , sγ −1 (and nearestSeed(i) to
+                                                                               contain the number of that seed point) after the γ th iteration
+determine one seed point sγ for each cluster, γ = 1, . . . , C.                of the loop in line 7. Thus, the loop in line 9 requires just
+For s1 and s2 , we select two of the pi having “large distance.”               one more distance computation (to sC ) per point. Therefore,
+This is done similarly to determining pseudo-peripheral points                 at most (3 + 1 + (C − 2) + 1) · m distance computations are
+in the context of Cuthill–McKey reordering for sparse matri-                   required per pass. (Note that in the second pass, the distances
+ces [21], [22]. Note that finding the maximum distance (i.e.,                  of all pi from s1 must be computed after the iter loop.) For
+the diameter of the point set) would require (m log m) oper-                  fixed C, the overall complexity of ClusterNDBuild is O(m)
+ations (cf. [23], also for a fast algorithm); our approach                     for the current node (plus recursive calls); perm enables an
+abandons optimality for speed. Then, the remaining seed                        O(m) in-place bucket sort.
+points s3 , . . . , sC are chosen such that sγ is “far away” from
+the previous seed points in the sense that it maximizes the
+distance to the nearest of the points s1 , . . . , sγ −1 . Now, we
+assign each point pi to the cluster γ whose seed point sγ is                                    V. E FFICIENCY C ONSIDERATIONS
+closest to pi , and finally we recursively process the clusters.                 In this section, we discuss several aspects that have an
+See Fig. 2 for partitionings obtained with this approach (same                 impact on overall efficiency, including how often (and when)
+points as in Fig. 1).                                                          we should rebuild the tree, as well as improving the “ND-tree-
+   Two points in the algorithm deserve further explanation.                    mode” updates between the rebuilds.
+
+        Authorized licensed use limited to: Politechnika Poznanska. Downloaded on May 28,2025 at 09:58:57 UTC from IEEE Xplore. Restrictions apply.
+LANG: SPACE-PARTITIONED ND-TREES FOR DYNAMIC NONDOMINANCE PROBLEM                                                                                     1009
+
+
+
+ Algorithm 7: Maintaining a Pareto Archive Based on                            from UPDATE_NONE, to UPDATE_STATS (for statisti-
+ ND-trees and Rebuild                                                          cal information, such as the number of points associated
+  Input : Set P = {p1 , . . . , pn }                                           with a node), to UPDATE_ALL (also recompute bounds).
+  Output: Tree t containing the nondominated of these                          Initialized to UPDATE_NONE, updateLevel is changed to
+            points                                                             UPDATE_ALL after deleting the subtree in case 2 (line 4
+1 t =∅                                                                         in Algorithm 2), after deleting a point in a leaf in line 11,
+2 for i = 1, . . . , C                                                         or after removing an empty child in line 17. (Note that
+3     if NonDomPrune(t, pi ) then                                              updateLevel can also be increased by the recursive calls in
+4         Insert(t, pi )                                                       line 14.) To actually update the information in the current
+5     if condition for rebuilding is met then                                  node, a function UpdateBounds is called if we reach the end
+6         P N = all points in t                                                of the “leaf” or “nonleaf” case (before line 12 or 20) with
+7         Delete(t)                                                            updateLevel = UPDATE_NONE. This function computes
+          // release nodes to a free list                                      the required information (statistics only, or bounds as well)
+8         build new tree t from P N                                            and may reduce updateLevel to UPDATE_STATS if lb and
+          // SPND or clustered                                                 ub have not changed.
+                                                                                  With corresponding minor changes to Insert and SplitLeaf,
+                                                                               this keeps the bounds tight throughout.
+
+                                                                               C. Volume-Based Distance
+A. Rebuilding Strategies                                                          One of the properties contributing to the effectiveness of
+     Algorithm 7 summarizes the overall procedure for building                 SPND-trees is that the boxes of a node’s children are nonover-
+a Pareto archive in an ND-tree with intermediate rebuilds.                     lapping. In order to not lose this property too quickly after a
+     There are different ways to define the “condition for                     rebuild, we try to insert a new point into a child such that the
+rebuilding” in line 5.                                                         overlap is not increased, or at least not by much.
+     The simplest strategy is to rebuild on a regular basis, i.e.,                More precisely, the distance of pi to a subtree γ is deter-
+when iterrebuild iterations of the i loop have been done since the             mined as follows. Wefirst compute the current volume of
+previous rebuild. To avoid too frequent rebuilds of large trees,               γ ’s box, volcurrent = D   k=1 (ub(γ )(k) − lb(γ )(k)), as well as
+iterrebuild is increased with each rebuild. In our experiments,                volnew , the volume of the box that would result from inserting
+we started with iterrebuild = 512 and increased it by a factor                 pi into γ , and let dist(pi , γ ) = volnew − volcurrent ≥ 0. This
+of 1.5 with each rebuild. Thus, for n = 1 Mi = 1 048 576,                      distance is zero whenever pi is contained in γ ’s box.
+the tree is rebuilt 17 times, after i = 512; 1280; 2432; 4160;                    However, after several ND-tree-based insertions, the boxes
+. . . ; 671 567; 1 007 861. It turned out that the overall time for            may overlap and, thus, the above dist(pi , γ ) may be zero for
+Algorithm 7 is not overly sensitive to the choice of the factor.               more than one child. To break ties, for dist = 0, this value is
+     A more sophisticated strategy would take into account how                 replaced by −1/(pi − c2 + ), where c = (lb(γ ) + ub(γ ))/2
+much the tree has changed since the previous rebuild. To                       is the center of the child’s box and  is a small number to avoid
+this end, we schedule the next rebuild to take place after                     division by zero if pi = c. Thus, dist may return a negative
+ϕ · numPoints changes, where numPoints is the number of                        value, which is the larger, the closer we are to the center of
+points in the tree during the current rebuild (i.e., |Sν | for its             the box.
+root node ν) and ϕ is an adjustable parameter. Again, the over-                   Overall, we insert pi into the child with smallest dist(pi , γ ).
+all time is not overly sensitive to the value of ϕ; we chose                   This will not increase the overlap if dist ≤ 0 and tries to at
+ϕ = 0.5. To count “changes,” we keep track of the num-                         least keep the boxes small otherwise.
+ber of points that are inserted via Insert or deleted during
+NonDomPrune.                                                                                     VI. N UMERICAL E XPERIMENTS
+                                                                                  In this section, we want to assess the benefits of rebuilding
+                                                                               for different dimensions, D, overall numbers of points, n, and
+B. Maintaining Tight Bounds                                                    geometric distributions of these. These properties are easiest
+   Our rebuild routines generate trees with tight bounds in each               controlled with synthetic data sets. For each n and each D,
+node, i.e., lb(Sν ) = inf(Sν ) and ub(Sν ) = sup(Sν ) for all                  test sets with different characteristics have been generated.
+ν. Since tighter bounds increase the probability of avoiding                      CUBE: All coordinates pi (k) are random numbers ri,k dis-
+the costly case 4 in NonDomPrune, we want to preserve                          tributed uniformly in [0, 1]. The resulting points are therefore
+this property during the “ND-tree-mode” updates between the                    distributed uniformly in the unit cube.
+rebuilds.                                                                         SPHERE: Starting with the C UBE points, these are projected
+   The bounds of a node can change only if a point is added                    onto the unit sphere y2 = 1 by replacing each pi with ρi ·pi ,
+or removed (if ν is a leaf) or if one of the children’s bounds                 where ρi = 1/pi 2 .
+changes. To implement this, another parameter updateLevel                         BALL: Here, the C UBE points are mapped into the unit ball
+                                                                                                                    √
+is added to NonDomPrune. On return, it indicates how much                      y2 ≤ 1 by scaling pi with ρi = D ri /pi 2 , where the ri are
+of the parent’s information should be recomputed, ranging                      distributed uniformly in [0, 1].
+
+        Authorized licensed use limited to: Politechnika Poznanska. Downloaded on May 28,2025 at 09:58:57 UTC from IEEE Xplore. Restrictions apply.
+1010                                                              IEEE TRANSACTIONS ON EVOLUTIONARY COMPUTATION, VOL. 26, NO. 5, OCTOBER 2022
+
+
+
+
+Fig. 3. Number of nondominated points in test sets with the distributions C UBE, BALL, S HELL, and S PHERE, different dimensions D, and up to n = 1 Mi =
+220 = 1 048 576 points. For each combination (distribution, n, D), five test sets were generated, and the resulting minimum, median, and maximum number
+of nondominated points are represented by the error bars.
+
+
+   SHELL: The C UBE points are mapped into a shell of thick-                    the origin. Note that for BALL a truly homogeneous distribu-
+ness t insidethe unit sphere, 1 − t ≤ y2 ≤ 1, by scaling pi                  tion might be achieved by generating sufficiently many points
+with ρi = D (1 − ri )(1 − t)D + ri /pi 2 . Choosing t = 0 or                  according to C UBE and dropping those lying outside the unit
+                                                                                                                          D
+t = 1 reduces the S HELL distribution to S PHERE and BALL,                      ball. But then the “acceptance rate” (π 2 / (D/2+1))/2D , i.e.,
+respectively. In our experiments, we chose t = 0.1.                             the volume of the unit ball in relation to that of the enclosing
+   The C UBE sets put moderate demands on the algorithms                        cube [−1, +1]D , would be very low for larger D [24] and,
+because, in particular for small dimensions, the number of                      therefore, our approach is much more efficient. The resulting
+nondominated points grows slowly with n; cf. Fig. 3. The                        data sets are “harder” than homogeneous ones in the sense that
+S PHERE sets are very hard because all n points are nondomi-                    they require more NonDomPrune calls, even if the Pareto
+nated. (In finite precision, this does not hold for D = 1 because               archives may be slightly smaller.
+not all pi are exactly 1 after normalizing. However, this case                     For exploring extreme situations and checking correctness,
+is particularly challenging for ND-tree-based methods because                   we also used a fifth test set.
+all remaining points are identical and, therefore, all nodes and                   T RICKY : The points are taken cyclically from a discrete
+points in the tree must be inspected to verify that the next                    lattice with sD points, pi ∈ {0, 1/s, . . . , s − 1/s}D . (The
+point is again nondominated.) The number of nondominated                        last lattice point, (s − 1/2, . . . , s − 1/s), is replaced with
+points in BALL is somewhere between C UBE and S PHERE,                          (0, . . . , 0) to avoid having one point dominate all others.) In
+and S HELL is between BALL and S PHERE. For n large and D                       our experiments, we chose s = 4.
+not too small, BALL can already been quite challenging.                            If n > D then exactly D different points are nondominating
+   The S HELL points imitate situations where the points under                  (such points must have one component pi (k) = s − 2/s and
+consideration are already close to the final Pareto set, e.g., in               all other components pi (k) = s − 1/s), and if n  sD then
+MOEAs [1].                                                                      these points occur with high multiplicity.
+   The distribution of the points in S PHERE, BALL, and S HELL                     The numerical experiments were made on a single core of
+is slightly inhomogeneous w.r.t. the √   direction: the density is              an Intel Core i7-4610M CPU running at 3.00 GHz in a laptop
+lowest along the axes and highest ( D times higher) along                       with 16-GiB main memory. The machine was not dedicated
+the diagonal y(1) = · · · = y(D). In contrast, (for BALL and                    to these tests, so some fluctuations may be caused by the
+S HELL), the density does not depend on the distance from                       concurrent load. All timings include the sampling of diverse
+
+
+         Authorized licensed use limited to: Politechnika Poznanska. Downloaded on May 28,2025 at 09:58:57 UTC from IEEE Xplore. Restrictions apply.
+LANG: SPACE-PARTITIONED ND-TREES FOR DYNAMIC NONDOMINANCE PROBLEM                                                                                      1011
+
+
+                                                                    TABLE I
+  T IMINGS ( IN S ECONDS ) FOR T WO RUNS W ITH n = 1 M I = 1 048 576 AND D = 9 BALL T EST S ETS (714 305 AND 713 902 N ONDOMINATED P OINTS ,
+     R ESP.) W ITH D IFFERENT S ETTINGS FOR THE T REE PARAMETERS , C AND P, R EBUILDING M ETHODS (N O R EBUILD , C LUSTERING -BASED , OR
+      S PACE -PARTITIONED ), U PDATING B OUNDS ACCORDING TO [15] OR T IGHTLY, AND C ENTER - OR VOLUME -BASED D ISTANCE TO S UBTREES
+
+
+
+
+Fig. 4. Overall time (in seconds) for building the Pareto archives with SPND-trees (C = 4, P = 12, tight bounds, and volume-based distance) for the test
+sets from Fig. 3. For each combination (n, D), the error bar shows the minimum, median, and maximum values over five test sets.
+
+
+
+performance statistics, such as the number of dominance tests,                  rebuilding, the situation changes. Clustering-based rebuilding
+etc. Without these, the timings would be roughly 5%–10%                         with the steps-based strategy described in Section V-A tends to
+lower.                                                                          give noticeable speedup for higher dimensions, in particular,
+   In Table I, we present detailed data for runs with two dif-                  if combined with the volume-based distance for the updates
+ferent BALL sets of size n = 220 and dimension D = 9.                           between the rebuilds. For higher dimensions, by far, the largest
+They exhibit some typical features observed also in other                       improvement can be obtained with space-partitioned rebuilds,
+tests. With a “traditional” ND-tree according to [15], the tree                 which again should be complemented with the volume-based
+parameters proposed by the authors (C = D + 1, P = 20)                          distance. For this approach, C = 4 and P = 12 performed
+performed well, though not always optimally, over the whole                     well in most cases (independently from D), so we use these
+range of tests. Therefore, we use these settings (boldface in                   settings (boldface in the table, last row) for the following tim-
+the table, first row) as the base line in later comparisons.                    ings and comparisons. (Note that our implementation requires
+Without rebuilding, maintaining tight bounds may or may not                     tight bounds for both types of rebuilds).
+reduce the overall time (the benefits tend to be larger for harder                 In Fig. 4, we summarize the runs with SPND-trees for the
+problems leading to larger trees), whereas the volume-based                     four types of test sets (five runs for each type, size, and dimen-
+distance to subtrees almost always increased overall time. With                 sion), and Fig. 5 demonstrates that, for larger dimensions,
+
+         Authorized licensed use limited to: Politechnika Poznanska. Downloaded on May 28,2025 at 09:58:57 UTC from IEEE Xplore. Restrictions apply.
+1012                                                              IEEE TRANSACTIONS ON EVOLUTIONARY COMPUTATION, VOL. 26, NO. 5, OCTOBER 2022
+
+
+
+
+Fig. 5. Speedup by building the Pareto archives with SPND-trees (C = 4, P = 12, tight bounds, and volume-based distance), as compared to ND-trees
+(C = D + 1, P = 20, standard bounds, and center-based distance) for the test sets from Fig. 3. For each combination (n, D), the error bar shows the minimum,
+median, and maximum of the ratios tND /tSPND over five test sets.
+
+
+
+
+Fig. 6. Overall time (in seconds) for building the Pareto archives with ND-trees (left; solid lines: C = D + 1, P = 20; crosses: C = 11, P = 20) and
+SPND-trees (right; C = 4, P = 12) for S PHERE data.
+
+
+
+significant speedup may be obtained, as compared to work-                          In Fig. 6, the effect of dimensionality is exposed more
+ing with “traditional” ND-trees throughout. Note that the                       clearly (recall that, with S PHERE data, all points are nondom-
+presentation is slightly different in Fig. 5; to ease distinguish-              inated, independently from the dimension). In contrast to the
+ing the error bars, the tests with the same n and different                     preceding plots, each data point represents just one run. The
+D have been spread horizontally, between two vertical dotted                    default setting for ND-trees, C = D + 1 and P = 20, was fea-
+lines.                                                                          sible only for D ≤ 20, due to the constraint C ≤ P + 1; these
+   We want to mention that, for D = 2 and D = 3, superior                       runs are marked with solid lines. Therefore, we also used the
+methods with O(n log n) overall complexity are known [20]; the                  fixed setting C = 11 and P = 20; these runs are marked with
+timings for these dimensions are only shown for completeness.                   crosses and performed almost as well for D ≥ 7. As the curves
+
+
+
+         Authorized licensed use limited to: Politechnika Poznanska. Downloaded on May 28,2025 at 09:58:57 UTC from IEEE Xplore. Restrictions apply.
+LANG: SPACE-PARTITIONED ND-TREES FOR DYNAMIC NONDOMINANCE PROBLEM                                                                                     1013
+
+
+                              TABLE II                                                                                                 D−3
+N UMBER OF D OMINANCE T ESTS (≺, , , ) AND R EAL C OMPARISONS               directions [27]; the population size was set to D+11
+                                                                                                                                  D−1 /2     ,
+     (<, ≤, >, ≥, =, =) IN B ILLIONS FOR B UILDING THE PARETO                  one 2D−3 th of the population size that would result from using
+             A RCHIVE F ROM n = 512 K I S PHERE P OINTS
+                                                                               reference directions according to Das and Dennis [28] with
+                                                                               p = 12 subdivisions. Using SPND-trees for building archives
+                                                                               from these data sets gave speedups of more than two, as
+                                                                               compared to standard ND-trees.
+                                                                                  If one prefers to work with larger populations, one may
+                                                                               use the Das/Dennis directions; then SPND-trees may even
+                                                                               be beneficial for checking nondominance within the current
+                                                                               population; see the right part of Table III (p = 10). For
+for SPND-trees with D = 31, 32, 33, 63, 64, 65 almost coin-                    n=      = 286, no speedup can be expected because the first
+cide up to n = 4 Mi, dimensions exceeding a certain threshold                  rebuild would take place only after step 512 (so actually we
+seem to have a very limited impact on the overall time. This                   use a standard ND-tree), but providing for rebuilds requires
+is not overly surprising because, even with n = 4 Mi = 222 ,                   keeping lb and ub tight, which typically does not pay with
+only the first 22 directions are considered at all during rebuilds             ND-trees.
+and, thus, the resulting tree depends only on these. It also does
+not make a significant difference whether D is a power of two
+(which leads to a “homogeneous” structure of the rebuilt trees)                                           VII. C ONCLUSION
+or close by (in this case, the lowest-level slicings within a node
+                                                                                  ND-trees are a proven tool for efficiently building and
+may be in different directions). The behavior may be slightly
+                                                                               updating Pareto archives, but their effectiveness may suf-
+different with other distributions, but for larger D, the number
+                                                                               fer if insertions and deletions lead to unbalanced trees or
+of nondominated points typically is very close to n anyway.
+                                                                               high overlap in the children’s boxes, and maintaining “good
+   Overall, the data suggest that with SPND-trees large Pareto
+                                                                               quality” of the tree over many operations may be impos-
+archives can be handled even for high dimensions. Indeed,
+                                                                               sible. We have proposed to instead restore this property
+extrapolating the timings to n = 8 Mi and n = 16 Mi
+                                                                               from time to time by cheaply rebuilding the tree, either as
+we estimate that adding a point to a Pareto archive of
+                                                                               an SPND-tree or with a clustering-based approach, making
+size ≈ 107 and dimension D = 65 would take about
+                                                                               use of the fact that nondominance checks are superflu-
+1 ms on average, including the amortized cost for the
+                                                                               ous because the points are already known to be mutually
+rebuilds.
+                                                                               nondominated.
+   Considering the number of dominance tests and the
+                                                                                  Numerical experiments have shown that in particular using
+number of (real) comparisons reveal that SPND-trees require
+                                                                               SPND-trees, together with suitable strategies for updating the
+fewer dominance tests than ND-trees, but the decisions are
+                                                                               bounds lb and ub in each node (keep them tight) and for
+slightly more expensive, taking roughly four versus three real
+                                                                               computing the distance of a new point to a subtree (volume-
+comparisons per dominance test on average for D = 16; cf.
+                                                                               based) can lead to significant speedups, as compared to relying
+Table II. (Note that in our C implementation of ND-trees
+                                                                               only on ND-tree-based updates. The benefits increase with the
+and SPND-trees the dominance tests always return TRUE or
+                                                                               dimension, that is, the number of objectives in multiobjective
+FALSE, allowing for earlier return. In contrast, in [15], there
+                                                                               optimization.
+is a single test returning the full information about domi-
+                                                                                  SPND-trees in a way combine the properties of higher-
+nance of both points w.r.t. the other, and therefore at most
+                                                                               dimensional binary search trees (median-based bisection
+two dominance tests are required in NonDomPrune.
+                                                                               along one direction, cyclically), Quad-trees (condense
+Thus, our counts for dominance tests are twice
+                                                                               multiple slicing directions into one node), and ND-
+as high.)
+                                                                               trees (lb and ub for efficient nondominance checks); cf.
+   To assess the potential benefits for multiobjective evo-
+                                                                               Table IV. Building the trees by dimensional slicing ensures
+lutionary algorithms, we also used test sets obtained
+                                                                               optimal balancing and nonoverlapping children’s boxes.
+by running MOEA/D [5] (Python implementation from
+                                                                               Thereafter, the trees are used as plain ND-trees, relying on
+https://pymoo.org [25]) on the benchmark problem
+                                                                               lb and ub.
+DTLZ1 [26] with D = 4, 6, 8 objectives, q = 3D design
+                                                                                  Future investigations will reveal whether the performance
+variables, and default parameter settings. The focus of these
+                                                                               can be improved further by more sophisticated strategies
+experiments was on the time for building the archive, not on
+                                                                               for scheduling rebuilds, based on changes in the tree, and
+its percentage of overall optimization time, which would also
+                                                                               how much additional speedup may be obtained by exploiting
+depend on many details of the implementation, such as the pro-
+                                                                               parallelism.
+gramming language. Therefore, the (objective) points of each
+MOEA/D generation were dumped to file and then fed into
+our C implementation of ND/SPND-trees (with the standard
+settings indicated before).                                                                              ACKNOWLEDGMENT
+   The left part of Table III reports results for building an                     The author wants to thank Julius Bauß, Kathrin Klamroth,
+archive from the points of the first 500 generations. To avoid                 and Michael Stiglmayr from the Optimization Group for many
+very large population sizes we used energy-based reference                     fruitful discussions.
+
+        Authorized licensed use limited to: Politechnika Poznanska. Downloaded on May 28,2025 at 09:58:57 UTC from IEEE Xplore. Restrictions apply.
+1014                                                               IEEE TRANSACTIONS ON EVOLUTIONARY COMPUTATION, VOL. 26, NO. 5, OCTOBER 2022
+
+
+                                                                TABLE III
+  P OPULATION S IZE ( ), OVERALL N UMBER OF P OINTS (n), N UMBER OF N ONDOMINATED P OINTS (|PnN |), T IME TAKEN W ITH ND- TREES (TND , IN
+          S ECONDS ) AND SPND- TREES (TSPND ), AND S PEEDUP (S = TND /TSPND ) FOR P OINTS FROM RUNNING MOEA/D ON THE DTLZ1
+                               B ENCHMARK P ROBLEM (T IMINGS AND S PEEDUPS ROUNDED TO T HREE D IGITS )
+
+
+
+
+                               TABLE IV
+    P ROPERTIES OF (M ULTIDIMENSIONAL ) B INARY S EARCH T REES ,                [13] M. Drozdík, Y. Akimoto, H. Aguirre, and K. Tanaka, “Computational
+Q UAD -T REES , ND-T REES , AND SPND-T REES : S TORAGE L OCATION FOR                 cost reduction of nondominated sorting using the M-front,” IEEE Trans.
+THE P OINTS , N UMBER OF C HILDREN P ER N ONLEAF N ODE , H OW M ANY                  Evol. Comput., vol. 19, no. 5, pp. 659–678, Oct. 2015.
+ O RTHOGONAL S LICINGS A RE D ONE P ER N ODE ?, AND W HAT D RIVES               [14] T. Glasmachers, “A fast incremental BSP tree archive for non-dominated
+             THE R ECURSION IN N ONDOMINANCE C HECKS ?                               points,” in Proc. 9th Int. Conf. Evol. Multi-Criterion Optim. (EMO),
+                                                                                     Münster, Germany, 2017, pp. 252–266.
+                                                                                [15] A. Jaszkiewicz and T. Lust, “ND-tree-based update: A fast algorithm
+                                                                                     for the dynamic nondominance problem,” IEEE Trans. Evol. Comput.,
+                                                                                     vol. 22, no. 5, pp. 778–791, Oct. 2018.
+                                                                                [16] J. E. Fieldsend, “Data structures for non-dominated sets:
+                                                                                     Implementations and empirical assessment of two decades of advances,”
+                                                                                     in Proc. Genet. Evol. Comput. Conf. (GECCO), New York, NY, USA,
+                                                                                     2020, pp. 489–497.
+                                                                                [17] T. H. Cormen, C. E. Leiserson, R. L. Rivest, and C. Stein, Introduction
+                                                                                     to Algorithms, 3rd ed. Cambridge, MA, USA: MIT Press, 2009.
+                                                                                [18] J. O’Rourke, Computational Geometry in C, 2nd ed. Cambridge, U.K.:
+                             R EFERENCES                                             Cambridge Univ. Press, 1998.
+ [1] C. A. C. Coello, S. G. Brambila, J. F. Gamboa, M. G. C. Tapia, and         [19] J. L. Bentley, “Multidimensional binary search trees used for associative
+     R. H. Gómez, “Evolutionary multiobjective optimization: Open research           searching,” Commun. ACM, vol. 18, no. 9, pp. 509–517, Sep. 1975.
+     areas and some challenges lying ahead,” Complex Intell. Syst., vol. 6,     [20] F. P. Preparata and M. I. Shamos, Computational Geometry—An
+     no. 1, pp. 221–236, 2020.                                                       Introduction. New York, NY, USA: Springer, 1985.
+                                                                                [21] E. H. Cuthill and J. McKee, “Reducing the bandwidth of sparse sym-
+ [2] K. Deb, A. Pratap, S. Agarwal, and T. Meyarivan, “A fast and elitist            metric matrices,” in Proc. 24th Nat. Conf. Assoc. Comput. Mach., 1969,
+     multiobjective genetic algorithm: NSGA-II,” IEEE Trans. Evol. Comput.,          pp. 157–172.
+     vol. 6, no. 2, pp. 182–197, Apr. 2002.                                     [22] N. E. Gibbs, W. G. Poole, Jr., and P. K. Stockmeyer, “An algorithm for
+ [3] E. Zitzler, M. Laumanns, and L. Thiele, “SPEA2: Improving the                   reducing the bandwidth and profile of a sparse matrix,” SIAM J. Numer.
+     strength Pareto evolutionary algorithm,” Eidgenössische Technische              Anal., vol. 13, no. 2, pp. 236–250, Apr. 1976.
+     Hochschule Zürich (ETH), Institut für Technische Informatik und            [23] G. Malandain and J.-D. Boissonnat, “Computing the diameter of a point
+     Kommunikationsnetze (TIK), Zürich, Switzerland, TIK-Rep. 103, 2001.             set,” in Discrete Geometry for Computer Imagery, (Lecture Notes in
+ [4] D. W. Corne, N. R. Jerram, J. D. Knowles, and M. J. Oates, “PESA-II:            Computer Science 2301), A. Braquelaire, J.-O. Lachaud, and A. Vialard,
+     Region-based selection in evolutionary multiobjective optimization,”            Eds. Berlin, Germany: Springer, 2002, pp. 197–208.
+     in Proc. 3rd Annu. Conf. Genet. Evol. Comput. (GECCO), 2001,               [24] H. R. Parks, “The volume of the unit n-ball,” Math. Mag., vol. 86, no. 4,
+     pp. 283–290.                                                                    pp. 270–274, Oct. 2013.
+ [5] Q. Zhang and H. Li, “MOEA/D: A multiobjective evolutionary algorithm       [25] J. Blank and K. Deb, “Pymoo: Multi-objective optimization in Python,”
+     based on decomposition,” IEEE Trans. Evol. Comput., vol. 11, no. 6,             IEEE Access, vol. 8, pp. 89497–89509, 2020.
+     pp. 712–731, Dec. 2007.                                                    [26] K. Deb, L. Thiele, M. Laumanns, and E. Zitzler, “Scalable test prob-
+ [6] K. Deb and H. Jain, “An evolutionary many-objective optimization algo-          lems for evolutionary multiobjective optimization,” in Evolutionary
+     rithm using reference-point-based nondominated sorting approach, part           Multiobjective Optimization (Theoretical Advances and Applications),
+     I: Solving problems with box constraints,” IEEE Trans. Evol. Comput.,           A. Abraham, L. Jain, and R. Goldberg, Eds. London, U.K.: Springer,
+     vol. 18, no. 4, pp. 577–601, Aug. 2014.                                         2005, pp. 105–145.
+ [7] H. Jain and K. Deb, “An evolutionary many-objective optimization algo-     [27] J. Blank, K. Deb, Y. Dhebar, S. Bandaru, and H. Seada, “Generating
+     rithm using reference-point based nondominated sorting approach, part           well-spaced points on a unit simplex for evolutionary many-objective
+     II: Handling constraints and extending to an adaptive approach,” IEEE           optimization,” IEEE Trans. Evol. Comput., vol. 25, no. 1, pp. 48–60,
+     Trans. Evol. Comput., vol. 18, no. 4, pp. 602–622, Aug. 2014.                   Feb. 2021.
+                                                                                [28] I. Das and J. E. Dennis, “Normal-boundary intersection: A new method
+ [8] J. E. Fieldsend, R. M. Everson, and S. Singh, “Using unconstrained elite
+                                                                                     for generating the Pareto surface in nonlinear multicriteria optimization
+     archives for multiobjective optimization,” IEEE Trans. Evol. Comput.,
+                                                                                     problems,” SIAM J. Optim., vol. 8, no. 3, pp. 631–657, Jul. 1998.
+     vol. 7, no. 3, pp. 305–323, Jun. 2003.
+ [9] X. Chen, “Pareto tree searching genetic algorithm: Approaching Pareto
+     optimal front by searching Pareto optimal tree,” Dept. Comput. Sci.,
+     Nankai Univ., Tianjin, China, Rep. NK-CS-2001–002, 2001.
+[10] S. Mostaghim, J. Teich, and A. Tyagi, “Comparison of data structures for
+     storing Pareto-sets in MOEAs,” in Proc. Congr. Evol. Comput. (CEC),
+     vol. 1. Honolulu, HI, USA, 2002, pp. 843–848.
+[11] S. Mostaghim and J. Teich, “Quad-trees: A data structure for storing
+     Pareto sets in multiobjective evolutionary algorithms with elitism,” in
+     Evolutionary Multiobjective Optimization (Theoretical Advances and
+     Applications), A. Abraham, L. Jain, and R. Goldberg, Eds. London,          Bruno Lang received the Diploma degrees in mathematics and computer
+     U.K.: Springer, 2005, pp. 81–104.                                          science and the Ph.D. degree from the University of Karlsruhe, Karlsruhe,
+[12] O. Schütze, “A new data structure for the nondominance problem             Germany, in 1989, 1990, and 1991, respectively.
+     in multi-objective optimization,” in Evolutionary Multi-Criterion             He is currently a Professor of Computer Science with the School of
+     Optimization, (Lecture Notes in Computer Science 2632), C. M.              Mathematics and Natural Sciences, University of Wuppertal, Wuppertal,
+     Fonseca, P. J. Fleming, E. Zitzler, K. Deb, and L. Thiele, Eds. Berlin,    Germany. His research interests include efficient and parallel algorithms for
+     Germany: Springer, 2003, pp. 509–518.                                      problems in numerical linear algebra and optimization.
+
+         Authorized licensed use limited to: Politechnika Poznanska. Downloaded on May 28,2025 at 09:58:57 UTC from IEEE Xplore. Restrictions apply.
+

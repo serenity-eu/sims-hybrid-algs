@@ -139,9 +139,13 @@ macro_rules! unchecked_ptr_write {
 
 pub(crate) use unchecked_get;
 pub(crate) use unchecked_get_mut;
-pub(crate) use unchecked_slice;
 pub(crate) use unchecked_ptr_read;
 pub(crate) use unchecked_ptr_write;
+pub(crate) use unchecked_slice;
+#[cfg(feature = "parallel")]
+pub mod concurrent_pls;
+pub mod diverse_probe_iter;
+pub mod evolutionary;
 pub mod explored_solutions_data;
 pub mod objective_tracker;
 pub mod objective_tracker_impl;
@@ -149,18 +153,19 @@ pub mod objectives;
 pub mod pareto_local_search;
 #[cfg(feature = "plotting")]
 pub mod plotting;
+pub mod pls_config;
 pub mod problem;
 pub mod problem_bitset;
 pub mod residual_problem;
 pub mod residual_solution;
+pub mod scalarization;
 pub mod solution;
 pub mod solution_impl;
 pub mod solution_set_impl;
 pub mod timer;
 pub mod util;
-#[cfg(feature = "parallel")]
-pub mod concurrent_pls;
 pub use problem_bitset::ProblemBitset;
 
 // Re-export key traits
+pub use pls_config::PlsOptimizations;
 pub use problem::SetCoverProblem;

@@ -205,6 +205,13 @@ pub struct ProvenSafeTotalCostState {
     image_costs: Arc<Vec<u64>>,
 }
 
+impl ProvenSafeTotalCostState {
+    #[inline(always)]
+    fn reset_to_empty(&mut self) {
+        self.current_cost = 0;
+    }
+}
+
 impl<const D: usize> ObjectiveTracker<D> for ProvenSafeTotalCostState {
     #[inline(always)]
     fn peek_removal_delta(
@@ -264,6 +271,8 @@ pub struct ProvenSafeCloudyAreaState {
     counts: Vec<u16>,
     /// Current total cloudy area.
     current_area: u64,
+    /// Total area when no images are selected (used to reset without recomputing).
+    initial_area: u64,
     /// Area contribution per element (shared, length >= num_elements).
     element_areas: Arc<Vec<u64>>,
     /// Flattened clear elements for each image (shared). All values < counts.len().
@@ -282,6 +291,12 @@ impl ProvenSafeCloudyAreaState {
         let start = self.clear_elements_offsets[image_index];
         let end = self.clear_elements_offsets[image_index + 1];
         &self.clear_elements[start..end]
+    }
+
+    #[inline(always)]
+    fn reset_to_empty(&mut self) {
+        self.counts.fill(0);
+        self.current_area = self.initial_area;
     }
 }
 
@@ -438,6 +453,19 @@ impl ProvenSafeMinResolutionState {
         &self.image_elements[start..end]
     }
 
+    #[inline(always)]
+    fn reset_to_empty(&mut self) {
+        if self.two_level {
+            self.packed_counts_2l.fill(0);
+        } else if self.small_level {
+            self.packed_small.fill(0);
+        } else {
+            self.level_counts_general.fill(0);
+            self.level_masks_general.fill(0);
+            self.element_min_level.fill(u8::MAX);
+        }
+        self.current_sum = 0;
+    }
     // =========================================================================
     // Two-level specialization
     // =========================================================================
@@ -616,7 +644,13 @@ impl ProvenSafeMinResolutionState {
         let packed = &self.packed_small[..self.bound];
         let shift = img_level * 8;
         let mask_lower = (1u64 << shift) - 1;
-        let mask_higher = !((1u64 << (shift + 8)) - 1);
+        // When shift + 8 >= 64 (i.e. img_level == 7), there are no higher
+        // bits to mask — mask_higher is 0.
+        let mask_higher = if shift + 8 >= 64 {
+            0u64
+        } else {
+            !((1u64 << (shift + 8)) - 1)
+        };
         let mut delta = 0i64;
 
         for &e in elements {
@@ -1035,6 +1069,15 @@ pub struct ProvenSafeMaxIncidenceAngleState {
     current_max: u64,
 }
 
+impl ProvenSafeMaxIncidenceAngleState {
+    #[inline(always)]
+    fn reset_to_empty(&mut self) {
+        self.level_counts.fill(0);
+        self.current_max_level = u8::MAX;
+        self.current_max = 0;
+    }
+}
+
 impl<const D: usize> ObjectiveTracker<D> for ProvenSafeMaxIncidenceAngleState {
     fn peek_removal_delta(
         &self,
@@ -1141,6 +1184,18 @@ pub enum ProvenSafeTracker {
     CloudyArea(ProvenSafeCloudyAreaState),
     MinResolution(ProvenSafeMinResolutionState),
     MaxIncidenceAngle(ProvenSafeMaxIncidenceAngleState),
+}
+
+impl ProvenSafeTracker {
+    #[inline(always)]
+    fn reset_to_empty(&mut self) {
+        match self {
+            Self::TotalCost(t) => t.reset_to_empty(),
+            Self::CloudyArea(t) => t.reset_to_empty(),
+            Self::MinResolution(t) => t.reset_to_empty(),
+            Self::MaxIncidenceAngle(t) => t.reset_to_empty(),
+        }
+    }
 }
 
 impl<const D: usize> ObjectiveTracker<D> for ProvenSafeTracker {
@@ -1265,6 +1320,7 @@ impl<const D: usize> TrackerCollection<D> for ProvenSafeTrackerArray<D> {
                 ProvenSafeTracker::CloudyArea(ProvenSafeCloudyAreaState {
                     counts: vec![0; num_elements],
                     current_area: total_area,
+                    initial_area: total_area,
                     element_areas: Arc::clone(&shared.element_areas),
                     clear_elements: Arc::clone(&shared.clear_elements),
                     clear_elements_offsets: Arc::clone(&shared.clear_elements_offsets),
@@ -1383,9 +1439,62 @@ impl<const D: usize> TrackerCollection<D> for ProvenSafeTrackerArray<D> {
     }
 
     fn initialize_from(&mut self, solution: &impl ImageSet<D>, problem: &impl SetCoverProblem<D>) {
-        *self = Self::new(problem);
+        // Reset solution-dependent mutable state without rebuilding shared Arc data or
+        // reallocating Vecs. The problem never changes between PLS steps, so the shared
+        // CSR structures, interval arrays, and level mappings remain valid.
+        for tracker in &mut self.trackers {
+            tracker.reset_to_empty();
+        }
         for img in solution.selected_images() {
             self.track_image_addition(img, problem);
+        }
+    }
+}
+
+impl<const D: usize> ProvenSafeTrackerArray<D> {
+    /// Copy only the mutable (solution-dependent) state from `self` into `dst`,
+    /// reusing `dst`'s existing Vec allocations. Immutable Arc-shared data is not
+    /// touched because both instances share the same problem.
+    ///
+    /// This is used for fast checkpoint/restore in the neighborhood iterator:
+    /// save state after removal, restore after each merge instead of undoing
+    /// individual add operations.
+    pub fn snapshot_mutable_state_into(&self, dst: &mut Self) {
+        // for each pair of trackers, copy mutable state
+        for (src, dst) in self.trackers.iter().zip(dst.trackers.iter_mut()) {
+            match (src, dst) {
+                (ProvenSafeTracker::TotalCost(s), ProvenSafeTracker::TotalCost(d)) => {
+                    d.current_cost = s.current_cost;
+                }
+                (ProvenSafeTracker::CloudyArea(s), ProvenSafeTracker::CloudyArea(d)) => {
+                    d.counts.copy_from_slice(&s.counts);
+                    d.current_area = s.current_area;
+                    // initial_area and Arc fields are immutable, skip
+                }
+                (ProvenSafeTracker::MinResolution(s), ProvenSafeTracker::MinResolution(d)) => {
+                    // Copy whichever packed representation is in use
+                    if s.two_level {
+                        d.packed_counts_2l.copy_from_slice(&s.packed_counts_2l);
+                    } else if s.small_level {
+                        d.packed_small.copy_from_slice(&s.packed_small);
+                    } else {
+                        d.level_counts_general.copy_from_slice(&s.level_counts_general);
+                        d.level_masks_general.copy_from_slice(&s.level_masks_general);
+                        d.element_min_level.copy_from_slice(&s.element_min_level);
+                    }
+                    d.current_sum = s.current_sum;
+                    // two_level, small_level, bound, diff, etc. are structural/immutable
+                }
+                (ProvenSafeTracker::MaxIncidenceAngle(s), ProvenSafeTracker::MaxIncidenceAngle(d)) => {
+                    d.level_counts.copy_from_slice(&s.level_counts);
+                    d.current_max_level = s.current_max_level;
+                    d.current_max = s.current_max;
+                }
+                _ => {
+                    // Mismatched tracker types — should never happen with well-formed instances.
+                    panic!("snapshot_mutable_state_into: tracker type mismatch");
+                }
+            }
         }
     }
 }

@@ -19,6 +19,7 @@ use crate::{
         },
     },
     pareto_local_search::ParetoLocalSearch,
+    pls_config::PlsOptimizations,
     problem::SetCoverProblem,
     solution::{EncodedSolution, ImageSet},
     solution_set_impl::NdTreeSolutionSet,
@@ -124,6 +125,7 @@ where
                 initial_population,
                 self.config.neighborhood_size_range.clone(),
                 self.config.is_deterministic,
+                PlsOptimizations::default(),
             );
             warmed_pop = pls.run(usize::MAX, warmup_duration);
             info!(

@@ -1,6 +1,6 @@
 use arrayvec::ArrayVec;
 use slotmap::{DefaultKey, SlotMap};
-use std::{array, marker::PhantomData, vec};
+use std::{array, cmp::Ordering, marker::PhantomData, vec};
 
 use pareto::{Dominance, HasObjectives, MoSolution, Objectives};
 use tracing::trace;
@@ -82,6 +82,22 @@ where
             Self::Internal { children, .. } => children.is_empty(),
         }
     }
+}
+
+/// Result of a branch-and-bound scalarized query.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScalarizedQueryStats {
+    pub visited_nodes: usize,
+    pub pruned_nodes: usize,
+    pub evaluated_solutions: usize,
+}
+
+/// Borrowed result of a scalarized query.
+#[derive(Debug, Clone, Copy)]
+pub struct ScalarizedQueryResult<'a, T> {
+    pub solution: &'a T,
+    pub score: f64,
+    pub stats: ScalarizedQueryStats,
 }
 
 /// The whole tree, storing nodes in an arena Vec and pointing to root by index.
@@ -297,6 +313,123 @@ where
         dominance_relation
     }
 
+    fn scalarized_query_node<'a, Accept, NodeLowerBound, SolutionScore>(
+        &'a self,
+        node_key: DefaultKey,
+        accept: &mut Accept,
+        node_lower_bound: &NodeLowerBound,
+        solution_score: &SolutionScore,
+        best_solution: &mut Option<&'a T>,
+        best_score: &mut f64,
+        stats: &mut ScalarizedQueryStats,
+    ) where
+        Accept: FnMut(&T) -> bool,
+        NodeLowerBound: Fn(&Objectives<D>) -> f64,
+        SolutionScore: Fn(&T) -> f64,
+    {
+        stats.visited_nodes += 1;
+
+        match &self.arena[node_key] {
+            Node::Leaf {
+                solutions, ideal, ..
+            } => {
+                let lower_bound = node_lower_bound(ideal);
+                if lower_bound >= *best_score {
+                    stats.pruned_nodes += 1;
+                    return;
+                }
+
+                for solution in solutions {
+                    if !accept(solution) {
+                        continue;
+                    }
+
+                    stats.evaluated_solutions += 1;
+                    let score = solution_score(solution);
+                    if score < *best_score {
+                        *best_score = score;
+                        *best_solution = Some(solution);
+                    }
+                }
+            }
+            Node::Internal { children, .. } => {
+                let mut child_bounds: ArrayVec<(DefaultKey, f64), C> = ArrayVec::new();
+
+                for &child_key in children {
+                    let child_ideal = match &self.arena[child_key] {
+                        Node::Leaf { ideal, .. } | Node::Internal { ideal, .. } => ideal,
+                    };
+                    let lower_bound = node_lower_bound(child_ideal);
+                    child_bounds.push((child_key, lower_bound));
+                }
+
+                child_bounds
+                    .sort_by(|(_, lhs), (_, rhs)| lhs.partial_cmp(rhs).unwrap_or(Ordering::Equal));
+
+                for (child_key, lower_bound) in child_bounds {
+                    if lower_bound >= *best_score {
+                        stats.pruned_nodes += 1;
+                        continue;
+                    }
+
+                    self.scalarized_query_node(
+                        child_key,
+                        accept,
+                        node_lower_bound,
+                        solution_score,
+                        best_solution,
+                        best_score,
+                        stats,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Find the best acceptable solution under a scalarized objective using
+    /// branch-and-bound pruning over subtree ideal points.
+    ///
+    /// `node_lower_bound` must be a valid lower bound when evaluated on a
+    /// subtree's component-wise ideal point. `solution_score` must return the
+    /// exact scalarized score for a concrete solution. Lower scores are better.
+    #[must_use]
+    pub fn find_best_with_pruning<Accept, NodeLowerBound, SolutionScore>(
+        &self,
+        mut accept: Accept,
+        node_lower_bound: NodeLowerBound,
+        solution_score: SolutionScore,
+    ) -> Option<ScalarizedQueryResult<'_, T>>
+    where
+        Accept: FnMut(&T) -> bool,
+        NodeLowerBound: Fn(&Objectives<D>) -> f64,
+        SolutionScore: Fn(&T) -> f64,
+    {
+        let root_key = self.root?;
+        let mut best_solution = None;
+        let mut best_score = f64::INFINITY;
+        let mut stats = ScalarizedQueryStats {
+            visited_nodes: 0,
+            pruned_nodes: 0,
+            evaluated_solutions: 0,
+        };
+
+        self.scalarized_query_node(
+            root_key,
+            &mut accept,
+            &node_lower_bound,
+            &solution_score,
+            &mut best_solution,
+            &mut best_score,
+            &mut stats,
+        );
+
+        best_solution.map(|solution| ScalarizedQueryResult {
+            solution,
+            score: best_score,
+            stats,
+        })
+    }
+
     fn insert_into(&mut self, node_key: DefaultKey, new_solution: T) {
         self.arena[node_key].update_bounds(&new_solution);
 
@@ -424,8 +557,11 @@ where
 
     #[must_use]
     pub fn contains(&self, solution: &T) -> bool {
-        trace!("contains() called for solution: {:?}", solution.objectives());
-        
+        trace!(
+            "contains() called for solution: {:?}",
+            solution.objectives()
+        );
+
         let Some(root_key) = self.root else {
             trace!("  No root, returning false");
             return false;
@@ -459,13 +595,15 @@ where
             // Note: We cannot use covers/is_covered_by here because they check dominance relations,
             // not coordinate-wise bounds. A solution at [10,30] with ideal=[10,10] and nadir=[30,30]
             // is within bounds coordinate-wise, but doesn't dominate ideal.
-            let within_bounds = solution.objectives().iter()
+            let within_bounds = solution
+                .objectives()
+                .iter()
                 .zip(ideal.iter().zip(nadir.iter()))
                 .all(|(sol_obj, (ideal_obj, nadir_obj))| {
                     // For minimization: ideal <= solution <= nadir
                     sol_obj >= ideal_obj && sol_obj <= nadir_obj
                 });
-            
+
             trace!(
                 "    within_bounds={} (checking if {:?} is in [{:?}, {:?}])",
                 within_bounds,
@@ -486,7 +624,7 @@ where
                     for (i, sol) in solutions.iter().enumerate() {
                         trace!("      Solution[{}]: {:?}", i, sol.objectives());
                     }
-                    
+
                     // Check if the solution exists in this leaf
                     if solutions.contains(solution) {
                         trace!(
