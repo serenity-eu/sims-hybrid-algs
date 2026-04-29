@@ -68,6 +68,32 @@ pub trait Random {
     fn random_with_seed(seed: u64) -> Self;
 }
 
+/// Optional archive capability: efficiently query the best solution under a
+/// scalarized objective with subtree pruning.
+///
+/// The scalarization is represented by two callbacks:
+/// - `node_lower_bound`: a monotone lower bound evaluated on a subtree's
+///   component-wise ideal point
+/// - `solution_score`: the exact score for a concrete solution
+///
+/// `accept` can be used to filter out temporarily ineligible solutions
+/// (e.g. already-explored archive members). Implementations may ignore this
+/// trait if they do not support accelerated scalarized queries.
+pub trait ScalarizedArchiveQuery<T, const D: usize> {
+    /// Return the best acceptable solution and its score, or `None` if no
+    /// acceptable solution exists.
+    fn find_best_with_pruning<Accept, NodeLowerBound, SolutionScore>(
+        &self,
+        accept: Accept,
+        node_lower_bound: NodeLowerBound,
+        solution_score: SolutionScore,
+    ) -> Option<(&T, f64)>
+    where
+        Accept: FnMut(&T) -> bool,
+        NodeLowerBound: Fn(&Objectives<D>) -> f64,
+        SolutionScore: Fn(&T) -> f64;
+}
+
 pub trait RandomCollection<T: Random>: FromIterator<T> {
     #[must_use]
     fn random(size: usize) -> Self {

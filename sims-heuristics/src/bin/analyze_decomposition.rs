@@ -18,6 +18,7 @@ use clap::Parser;
 use pareto::{HasObjectives, ParetoFront};
 use pls::{
     SetCoverProblem,
+    PlsOptimizations,
     concurrent_pls::decomposition::{
         belongs_to_region, build_regions, das_dennis_weight_vectors,
         auto_select_h,
@@ -129,6 +130,7 @@ fn main() {
             &initial_pop,
             NEIGHBORHOOD,
             false,
+            PlsOptimizations::default(),
         );
         let result_archive: Archive = pls.run(usize::MAX, args.timeout);
         let front_size = result_archive.len();

@@ -4,6 +4,7 @@ use std::hash::Hash;
 
 use crate::{
     objective_tracker::TrackerCollection,
+    pls_config::PlsOptimizations,
     problem::{ScaledObjectiveDeltas, SetCoverProblem},
     residual_problem::ResidualProblem,
     residual_solution::ResidualSolution,
@@ -62,6 +63,13 @@ where
             self.objectives_mut()[i] = self.calculate_objective(i, problem);
         }
     }
+
+    /// Construct greedy initial solutions targeting different regions of the
+    /// objective space. Returns an empty Vec by default; solution types that
+    /// support greedy construction should override this.
+    fn greedy_initial_solutions(_problem: &P) -> Vec<Self> {
+        Vec::new()
+    }
 }
 
 /// Trait for solutions that support modification operations (not applicable to `ResidualSolution`)
@@ -111,15 +119,19 @@ where
         problem: &'a P,
         timer: &'a crate::timer::Timer,
         is_deterministic: bool,
+        optimizations: &'a PlsOptimizations,
     ) -> Box<dyn Iterator<Item = Self> + 'a>
     where
         Self: 'a,
     {
         // Default implementation: collect from neighborhood() for backward compatibility
-        Box::new(
-            self.neighborhood(k, problem, timer, is_deterministic, trackers)
-                .into_iter(),
-        )
+        let iter = self.neighborhood(k, problem, timer, is_deterministic, trackers)
+            .into_iter();
+        if let Some(budget) = optimizations.neighborhood_budget {
+            Box::new(iter.take(budget))
+        } else {
+            Box::new(iter)
+        }
     }
 
     /// Validate that the solution covers all elements

@@ -8,7 +8,7 @@
 //!
 //! The solver implements several algorithmic enhancements:
 //! - **Classic AUGMECON**: Basic augmented ε-constraint method
-//! - **AUGMECON2**: Enhanced with bypass coefficient optimization  
+//! - **AUGMECON2**: Enhanced with bypass coefficient optimization
 //! - **AUGMECON-R**: Advanced with flag array optimization
 //! - **Early Exit**: Smart termination strategies for efficiency
 //!
@@ -58,7 +58,7 @@
 //! ### AUGMECON-R (Flag Array)
 //!
 //! Advanced version with memory optimization:
-//! - Flag array to track explored regions  
+//! - Flag array to track explored regions
 //! - Elimination of redundant computations
 //! - Significant speedup for large grid sizes
 //!
@@ -71,7 +71,7 @@
 //!
 //! ### Scalability Guidelines
 //! - **2 Objectives**: Can handle 100-500 grid points efficiently
-//! - **3 Objectives**: Recommend 10-50 grid points  
+//! - **3 Objectives**: Recommend 10-50 grid points
 //! - **4+ Objectives**: Requires careful grid point selection (5-20 points)
 //!
 //! ## Error Handling
@@ -914,7 +914,7 @@ impl Augmecon {
 
     /// Get the number of solutions found so far
     #[must_use]
-    pub const fn get_solutions_found(&self) -> usize {
+    pub fn get_solutions_found(&self) -> usize {
         self.pareto_front.len()
     }
 

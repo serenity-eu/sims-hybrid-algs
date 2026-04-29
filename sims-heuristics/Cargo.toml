@@ -45,6 +45,20 @@ bench = false
 required-features = ["parallel"]
 
 [[bin]]
+name = "algorithm-benchmark"
+path = "src/bin/algorithm_benchmark.rs"
+test = false
+bench = false
+required-features = ["external_solvers"]
+
+[[bin]]
+name = "hybrid-algorithm-benchmark"
+path = "src/bin/hybrid_algorithm_benchmark.rs"
+test = false
+bench = false
+required-features = ["parallel", "probabilistic_probing"]
+
+[[bin]]
 name = "analyze-decomposition"
 path = "src/bin/analyze_decomposition.rs"
 test = false
@@ -93,6 +107,9 @@ arrayvec = "0.7.6"
 crossbeam-channel = { version = "0.5", optional = true }
 arc-swap = { version = "1.7", optional = true }
 num_cpus = { version = "1.16", optional = true }
+moors = { version = "0.2.9", optional = true }
+optirustic = { version = "1.2.2", default-features = false, optional = true }
+ndarray = { version = "0.16.1", optional = true }
 
 [features]
 default = ["bitmaps", "plotting", "bounds_check"]
@@ -101,6 +118,9 @@ bitmaps = ["fixedbitset"]
 additional_trackers = []
 bounds_check = []
 parallel = ["crossbeam-channel", "arc-swap", "num_cpus", "bitmaps"]
+external_solvers = ["moors", "optirustic", "ndarray", "bitmaps"]
+probabilistic_probing = ["bitmaps"]
+scalarized_selection = ["nd-tree/scalarized_query"]
 
 [profile.release]
 debug = true
@@ -115,4 +135,3 @@ pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
 # Keep existing overrides with higher priority
 needless_return = "allow"
-

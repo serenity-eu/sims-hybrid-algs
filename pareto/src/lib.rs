@@ -2,5 +2,6 @@
 mod pareto_front;
 
 pub use pareto_front::{
-    Dominance, HasObjectives, MoSolution, Objectives, ParetoFront, Random, RandomCollection, Sense,
+    Dominance, HasObjectives, MoSolution, Objectives, ParetoFront, Random, RandomCollection,
+    ScalarizedArchiveQuery, Sense,
 };

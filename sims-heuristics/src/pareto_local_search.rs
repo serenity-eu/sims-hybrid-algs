@@ -4,21 +4,33 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(feature = "scalarized_selection")]
+use std::collections::HashSet;
+
 use log::{debug, info};
-use rand::prelude::*;
+use pareto::{ParetoFront, ScalarizedArchiveQuery};
 use rand::SeedableRng;
-use pareto::ParetoFront;
+use rand::prelude::*;
 use tracing::{debug_span, info_span, instrument};
 
 use crate::{
+    diverse_probe_iter::diverse_probe_iter,
     explored_solutions_data::{ExploredSolutionsData, SolutionFingerprint},
     objective_tracker::TrackerCollection,
+    pls_config::{PlsOptimizations, SolutionSelectionMode},
     problem::SetCoverProblem,
     solution::{EncodedSolution, ImageSet},
     timer::Timer,
 };
 
-
+#[cfg(feature = "scalarized_selection")]
+use crate::{
+    pls_config::ScalarizedSelectionSource,
+    scalarization::{
+        WeightedChebycheffCoeffs, bounds_from_ideal_nadir, compute_ideal_from_objectives,
+        compute_nadir_from_objectives, sample_weight_vectors,
+    },
+};
 
 /// Statistics tracking during a single step of the algorithm.
 /// Exposed as `pub(crate)` so concurrent workers can aggregate per-step metrics.
@@ -82,6 +94,7 @@ where
     pub explored_solutions: ExploredSolutionsData<D>,
     /// Spare tracker for neighborhood exploration (reused to avoid allocations)
     spare_tracker: T::Trackers,
+    pub optimizations: PlsOptimizations,
     _phantom: std::marker::PhantomData<T>,
 }
 
@@ -111,7 +124,11 @@ pub enum SAPlsStatus {
 impl<'a, T, S, P, const D: usize> ParetoLocalSearch<'a, T, S, P, D>
 where
     T: ImageSet<D> + EncodedSolution<P, D>,
-    S: ParetoFront<'a, T> + Clone + FromIterator<T> + IntoIterator<Item = T>,
+    S: ParetoFront<'a, T>
+        + Clone
+        + FromIterator<T>
+        + IntoIterator<Item = T>
+        + ScalarizedArchiveQuery<T, D>,
     P: SetCoverProblem<D>,
 {
     #[expect(
@@ -209,20 +226,45 @@ where
         initial_population: &S,
         neighborhood_size_range: RangeInclusive<u32>,
         is_deterministic: bool,
+        optimizations: PlsOptimizations,
     ) -> Self {
         let mut population = S::new("population");
         // Initialize ExploredSolutionsData with the problem's max objectives array
         let mut explored_solutions = ExploredSolutionsData::<D>::new(problem.max_objectives());
+        let mut initial_timestamp_us: u64 = 1;
         initial_population.iter().for_each(|solution| {
             if population.try_insert(solution) {
                 explored_solutions.register(
                     0,
                     solution,
-                    Duration::from_secs(0),
+                    Duration::from_micros(initial_timestamp_us),
                     solution.selected_images().collect(),
                 );
+                initial_timestamp_us += 1;
             }
         });
+
+        // Add greedy-constructed solutions targeting each objective individually.
+        if optimizations.use_greedy_initial_population {
+            let greedy_solutions = T::greedy_initial_solutions(problem);
+            info!(
+                "Generated {} greedy initial solutions",
+                greedy_solutions.len()
+            );
+            for solution in &greedy_solutions {
+                if population.try_insert(solution) {
+                    explored_solutions.register(
+                        0,
+                        solution,
+                        Duration::from_micros(initial_timestamp_us),
+                        solution.selected_images().collect(),
+                    );
+                    initial_timestamp_us += 1;
+                    debug!("Greedy solution added to population: {solution:?}");
+                }
+            }
+        }
+
         for (i, solution) in population.iter().enumerate() {
             debug!("Initial solution {i}: {solution:?}");
         }
@@ -238,6 +280,7 @@ where
             explored_solutions,
             is_deterministic,
             spare_tracker,
+            optimizations,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -284,7 +327,10 @@ where
         self.log_pareto_front();
 
         let status = self.determine_next_step(auxiliary_population);
-        StepResult { status, stats: step_stats }
+        StepResult {
+            status,
+            stats: step_stats,
+        }
     }
 
     #[instrument(level = "debug", skip(self, population, timer, step_stats, auxiliary_population), fields(
@@ -309,18 +355,32 @@ where
         let problem = self.problem;
         let neighborhood_structure = self.neigborhood_structure;
         let is_deterministic = self.is_deterministic;
+        let optimizations = &self.optimizations;
 
-        // Shuffle population to vary exploration order each iteration
-        let mut population_vec: Vec<_> = population.into_iter().collect();
-        if is_deterministic {
-            // Seeded RNG for reproducible but varied order per iteration
-            let mut rng = SmallRng::seed_from_u64(iteration as u64);
-            population_vec.shuffle(&mut rng);
-        } else {
-            population_vec.shuffle(&mut rand::rng());
+        // Configure probabilistic probing if requested
+        #[cfg(feature = "probabilistic_probing")]
+        {
+            use crate::residual_problem::set_runtime_probing_budget;
+            if let Some(budget) = self.optimizations.probing_budget {
+                set_runtime_probing_budget(budget);
+            } else {
+                // Exhaustive mode
+                set_runtime_probing_budget(crate::residual_problem::PROBING_BUDGET_EXHAUSTIVE);
+            }
         }
 
-        'population: for (index, solution) in population_vec.into_iter().enumerate() {
+        let population_vec: Vec<_> = population.into_iter().collect();
+        let selected_parents = Self::select_parents_for_exploration(
+            &population_vec,
+            approximated_pareto_set,
+            explored_solutions,
+            neighborhood_structure,
+            optimizations,
+            iteration as u64,
+            is_deterministic,
+        );
+
+        'population: for (index, solution) in selected_parents.into_iter().enumerate() {
             let solution_span = debug_span!(
                 "explore_solution",
                 solution_index = index,
@@ -343,6 +403,7 @@ where
                 problem,
                 timer,
                 is_deterministic,
+                optimizations,
             );
 
             for (neighbor_index, neighbor) in neighborhood_iter.by_ref().enumerate() {
@@ -373,6 +434,283 @@ where
         );
     }
 
+    fn select_parents_for_exploration(
+        population_vec: &[T],
+        approximated_pareto_set: &S,
+        explored_solutions: &mut ExploredSolutionsData<D>,
+        neighborhood_structure: u32,
+        optimizations: &PlsOptimizations,
+        iteration_seed: u64,
+        is_deterministic: bool,
+    ) -> Vec<T> {
+        let effective_mode = if optimizations.use_diverse_probing {
+            SolutionSelectionMode::DiverseProbe
+        } else {
+            optimizations.solution_selection_mode
+        };
+
+        match effective_mode {
+            SolutionSelectionMode::RandomShuffle => {
+                let mut v = population_vec.to_vec();
+                if is_deterministic {
+                    let mut rng = SmallRng::seed_from_u64(iteration_seed);
+                    v.shuffle(&mut rng);
+                } else {
+                    v.shuffle(&mut rand::rng());
+                }
+                v
+            }
+            SolutionSelectionMode::DiverseProbe => {
+                if population_vec.len() > 1 {
+                    tracing::info!(
+                        population_size = population_vec.len(),
+                        budget = ?optimizations.diverse_probe_budget,
+                        "Using diverse probing for population exploration"
+                    );
+                    diverse_probe_iter::<T, D>(
+                        population_vec.to_vec(),
+                        optimizations.diverse_probe_budget,
+                        iteration_seed,
+                    )
+                    .collect()
+                } else {
+                    population_vec.to_vec()
+                }
+            }
+            #[cfg(feature = "scalarized_selection")]
+            SolutionSelectionMode::ScalarizedChebycheff => Self::select_scalarized_parents(
+                population_vec,
+                approximated_pareto_set,
+                explored_solutions,
+                neighborhood_structure,
+                optimizations,
+                iteration_seed,
+            ),
+            #[cfg(feature = "scalarized_selection")]
+            SolutionSelectionMode::DiverseThenScalarizedChebycheff => {
+                let prefiltered: Vec<T> = if population_vec.len() > 1 {
+                    diverse_probe_iter::<T, D>(
+                        population_vec.to_vec(),
+                        optimizations.diverse_probe_budget,
+                        iteration_seed,
+                    )
+                    .collect()
+                } else {
+                    population_vec.to_vec()
+                };
+
+                Self::select_scalarized_parents(
+                    &prefiltered,
+                    approximated_pareto_set,
+                    explored_solutions,
+                    neighborhood_structure,
+                    optimizations,
+                    iteration_seed,
+                )
+            }
+        }
+    }
+
+    #[cfg(feature = "scalarized_selection")]
+    fn select_scalarized_parents(
+        population_vec: &[T],
+        approximated_pareto_set: &S,
+        explored_solutions: &mut ExploredSolutionsData<D>,
+        neighborhood_structure: u32,
+        optimizations: &PlsOptimizations,
+        iteration_seed: u64,
+    ) -> Vec<T> {
+        let weight_samples = optimizations.scalarized_weight_samples.max(1);
+        let weights = sample_weight_vectors::<D>(weight_samples, iteration_seed);
+
+        match optimizations.scalarized_selection_source {
+            ScalarizedSelectionSource::Population => {
+                let candidate_pool: Vec<T> = population_vec
+                    .iter()
+                    .filter(|solution| {
+                        explored_solutions.explored_neighborhood_size(solution)
+                            < neighborhood_structure
+                    })
+                    .cloned()
+                    .collect();
+
+                if candidate_pool.is_empty() {
+                    return Vec::new();
+                }
+
+                let ideal =
+                    compute_ideal_from_objectives(candidate_pool.iter().map(|s| *s.objectives()));
+                let nadir =
+                    compute_nadir_from_objectives(candidate_pool.iter().map(|s| *s.objectives()));
+                let bounds = bounds_from_ideal_nadir(&ideal, &nadir);
+
+                let mut selected_indices = Vec::new();
+                let mut seen = HashSet::new();
+
+                for weight in &weights {
+                    let coeffs = WeightedChebycheffCoeffs::new(
+                        weight,
+                        &bounds,
+                        optimizations.scalarized_rho,
+                    );
+
+                    let best = candidate_pool
+                        .iter()
+                        .enumerate()
+                        .min_by(|(_, a), (_, b)| {
+                            let score_a = coeffs.score(a.objectives(), &ideal);
+                            let score_b = coeffs.score(b.objectives(), &ideal);
+                            score_a
+                                .partial_cmp(&score_b)
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                        .map(|(idx, _)| idx);
+
+                    if let Some(idx) = best
+                        && seen.insert(idx)
+                    {
+                        selected_indices.push(idx);
+                    }
+                }
+
+                if selected_indices.is_empty() {
+                    selected_indices.push(0);
+                }
+
+                let mut selected: Vec<T> = selected_indices
+                    .into_iter()
+                    .map(|idx| candidate_pool[idx].clone())
+                    .collect();
+
+                if let Some(parent_budget) = optimizations.scalarized_parent_budget {
+                    selected.truncate(parent_budget);
+                }
+
+                tracing::info!(
+                    candidate_pool_size = candidate_pool.len(),
+                    selected_parent_count = selected.len(),
+                    weight_samples = weight_samples,
+                    source = ?optimizations.scalarized_selection_source,
+                    accelerated_archive_query = false,
+                    "Using scalarized parent selection for population exploration"
+                );
+
+                selected
+            }
+            ScalarizedSelectionSource::Archive => {
+                let eligible_archive: Vec<&T> = approximated_pareto_set
+                    .iter()
+                    .filter(|solution| {
+                        explored_solutions.explored_neighborhood_size(solution)
+                            < neighborhood_structure
+                    })
+                    .collect();
+
+                if eligible_archive.is_empty() {
+                    return Vec::new();
+                }
+
+                let ideal =
+                    compute_ideal_from_objectives(eligible_archive.iter().map(|s| *s.objectives()));
+                let nadir =
+                    compute_nadir_from_objectives(eligible_archive.iter().map(|s| *s.objectives()));
+                let bounds = bounds_from_ideal_nadir(&ideal, &nadir);
+
+                let mut selected: Vec<T> = Vec::new();
+                let mut seen_objectives: HashSet<[u64; D]> = HashSet::new();
+
+                let accelerated = optimizations.use_nd_tree_scalarized_query;
+
+                if accelerated {
+                    for weight in &weights {
+                        let coeffs = WeightedChebycheffCoeffs::new(
+                            weight,
+                            &bounds,
+                            optimizations.scalarized_rho,
+                        );
+
+                        if let Some((best, _score)) = approximated_pareto_set
+                            .find_best_with_pruning(
+                                |solution: &T| {
+                                    explored_solutions.explored_neighborhood_size(solution)
+                                        < neighborhood_structure
+                                        && !seen_objectives.contains(solution.objectives())
+                                },
+                                |node_ideal| coeffs.score(node_ideal, &ideal),
+                                |solution: &T| coeffs.score(solution.objectives(), &ideal),
+                            )
+                        {
+                            if seen_objectives.insert(*best.objectives()) {
+                                selected.push(best.clone());
+                            }
+                        }
+
+                        if let Some(parent_budget) = optimizations.scalarized_parent_budget
+                            && selected.len() >= parent_budget
+                        {
+                            break;
+                        }
+                    }
+                }
+
+                if selected.is_empty() {
+                    for weight in &weights {
+                        let coeffs = WeightedChebycheffCoeffs::new(
+                            weight,
+                            &bounds,
+                            optimizations.scalarized_rho,
+                        );
+
+                        let best = eligible_archive
+                            .iter()
+                            .copied()
+                            .filter(|solution| !seen_objectives.contains(solution.objectives()))
+                            .min_by(|a, b| {
+                                let score_a = coeffs.score(a.objectives(), &ideal);
+                                let score_b = coeffs.score(b.objectives(), &ideal);
+                                score_a
+                                    .partial_cmp(&score_b)
+                                    .unwrap_or(std::cmp::Ordering::Equal)
+                            });
+
+                        if let Some(best) = best
+                            && seen_objectives.insert(*best.objectives())
+                        {
+                            selected.push(best.clone());
+                        }
+
+                        if let Some(parent_budget) = optimizations.scalarized_parent_budget
+                            && selected.len() >= parent_budget
+                        {
+                            break;
+                        }
+                    }
+                }
+
+                if selected.is_empty()
+                    && let Some(first) = eligible_archive.first()
+                {
+                    selected.push((**first).clone());
+                }
+
+                if let Some(parent_budget) = optimizations.scalarized_parent_budget {
+                    selected.truncate(parent_budget);
+                }
+
+                tracing::info!(
+                    candidate_pool_size = eligible_archive.len(),
+                    selected_parent_count = selected.len(),
+                    weight_samples = weight_samples,
+                    source = ?optimizations.scalarized_selection_source,
+                    accelerated_archive_query = accelerated,
+                    "Using scalarized parent selection for archive exploration"
+                );
+
+                selected
+            }
+        }
+    }
+
     #[instrument(level = "debug", skip(self, step_time, step_stats), fields(
         iteration,
         pareto_set_size = self.approximated_pareto_set.len()
@@ -397,7 +735,12 @@ where
             "Iteration completed"
         );
 
-        Self::log_metrics(iteration, &iteration_metrics, step_stats, self.approximated_pareto_set.len());
+        Self::log_metrics(
+            iteration,
+            &iteration_metrics,
+            step_stats,
+            self.approximated_pareto_set.len(),
+        );
     }
 
     fn calculate_iteration_metrics(
@@ -426,7 +769,12 @@ where
         }
     }
 
-    fn log_metrics(iteration: usize, metrics: &IterationMetrics, step_stats: &StepStats, pareto_final_size: usize) {
+    fn log_metrics(
+        iteration: usize,
+        metrics: &IterationMetrics,
+        step_stats: &StepStats,
+        pareto_final_size: usize,
+    ) {
         info!(
             "Iteration {iteration} [{:.3} s, {} us/sol], neighbors: size: {}, explored: {}, duplicated: {} ({} %), auxiliary: +{}-{}={}, pareto: +{}-{}={}",
             metrics.duration_us as f64 / 1_000_000.0,
@@ -470,6 +818,24 @@ where
             return StepStatus::NewPopulation;
         }
 
+        // Perturbation restart: inject perturbed archive solutions before
+        // resorting to expensive higher-k neighborhoods.
+        if self.optimizations.use_perturbation_restart {
+            let injected = self.inject_perturbed_archive_solutions(2);
+            if injected > 0 {
+                info!(
+                    "Perturbation restart: injected {injected} perturbed solutions, restarting with k={}",
+                    self.neighborhood_size_range.start()
+                );
+                tracing::info!(
+                    injected_count = injected,
+                    "Perturbation restart: restarting with smallest neighborhood structure"
+                );
+                self.neigborhood_structure = *self.neighborhood_size_range.start();
+                return StepStatus::NewPopulation;
+            }
+        }
+
         if self.can_increase_neighborhood_structure() {
             info!("Increasing neighborhood structure.");
             tracing::info!(
@@ -485,6 +851,126 @@ where
             tracing::debug!("Maximum neighborhood structure reached, algorithm will terminate");
             StepStatus::AllNeighborhoodStructuresExplored
         }
+    }
+
+    /// Inject perturbed copies of archive solutions into the current population.
+    ///
+    /// For each archive solution, creates `num_perturbations` random perturbations
+    /// by removing one randomly selected image and greedily adding unselected
+    /// images to restore full element coverage. Only solutions that form a valid
+    /// set cover and are non-dominated by the archive are injected.
+    ///
+    /// Returns the number of solutions successfully injected.
+    fn inject_perturbed_archive_solutions(&mut self, num_perturbations: usize) -> usize {
+        let mut rng = if self.is_deterministic {
+            SmallRng::seed_from_u64(
+                (self.explored_solutions.num_iterations as u64).wrapping_mul(31337),
+            )
+        } else {
+            SmallRng::from_rng(&mut rand::rng())
+        };
+
+        let num_images = self.problem.num_images();
+        let num_elements = self.problem.num_elements();
+
+        // Snapshot archive solutions so we can mutate self freely.
+        let archive_solutions: Vec<T> = self.approximated_pareto_set.iter().cloned().collect();
+        let mut injected_count: usize = 0;
+
+        for solution in &archive_solutions {
+            let selected: Vec<usize> = solution.selected_images().collect();
+            if selected.is_empty() {
+                continue;
+            }
+
+            for _ in 0..num_perturbations {
+                // 1. Pick a random selected image to remove.
+                let remove_idx = selected[rng.random_range(0..selected.len())];
+
+                // 2. Clone and remove the chosen image.
+                let mut perturbed = solution.clone();
+                perturbed.set_image(remove_idx, false);
+
+                // 3. Determine which elements are now uncovered.
+                let mut uncovered = vec![false; num_elements];
+                let mut num_uncovered: usize = 0;
+                for elem in self.problem.uncovered_elements(perturbed.selected_images()) {
+                    uncovered[elem] = true;
+                    num_uncovered += 1;
+                }
+
+                // 4. Greedily add unselected images until coverage is restored.
+                //    Each step picks the image covering the most uncovered elements.
+                while num_uncovered > 0 {
+                    let mut best_image: Option<usize> = None;
+                    let mut best_coverage: usize = 0;
+
+                    for img in 0..num_images {
+                        if perturbed.is_image_selected(img) {
+                            continue;
+                        }
+                        let coverage = self
+                            .problem
+                            .image_elements(img)
+                            .filter(|&elem| uncovered[elem])
+                            .count();
+                        if coverage > best_coverage {
+                            best_coverage = coverage;
+                            best_image = Some(img);
+                        }
+                    }
+
+                    if let Some(img) = best_image {
+                        perturbed.set_image(img, true);
+                        for elem in self.problem.image_elements(img) {
+                            if uncovered[elem] {
+                                uncovered[elem] = false;
+                                num_uncovered -= 1;
+                            }
+                        }
+                    } else {
+                        // No image can cover remaining elements (should not happen
+                        // with valid problem instances).
+                        break;
+                    }
+                }
+
+                // 5. Recompute objective values from scratch.
+                perturbed.recalculate_objectives(self.problem);
+
+                // 6. Skip invalid solutions (coverage gap).
+                if !self.problem.is_set_cover(&perturbed) {
+                    continue;
+                }
+
+                // 7. Skip solutions that were already explored.
+                if self.explored_solutions.is_registered(&perturbed) {
+                    continue;
+                }
+
+                // 8. Register in explored solutions so it won't be re-explored.
+                self.explored_solutions.register(
+                    self.explored_solutions.num_iterations,
+                    &perturbed,
+                    Duration::from_secs(0),
+                    perturbed.selected_images().collect(),
+                );
+
+                // 9. Only inject if non-dominated by the current archive.
+                if self.approximated_pareto_set.try_insert(&perturbed) {
+                    self.population.insert_unchecked(&perturbed);
+                    injected_count += 1;
+                }
+            }
+        }
+
+        tracing::debug!(
+            archive_size = archive_solutions.len(),
+            num_perturbations,
+            injected_count,
+            "Perturbation restart completed"
+        );
+        injected_count
     }
 
     #[instrument(level = "debug", skip(self, auxiliary_population), fields(
@@ -605,7 +1091,9 @@ where
         population_vec.sort_by(|a, b| {
             let score_a = coeffs.score(a.objectives(), local_ideal);
             let score_b = coeffs.score(b.objectives(), local_ideal);
-            score_a.partial_cmp(&score_b).unwrap_or(std::cmp::Ordering::Equal)
+            score_a
+                .partial_cmp(&score_b)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         // Scalarized auxiliary candidates (independent from archive -- section 16.6)
@@ -617,6 +1105,7 @@ where
         let problem = self.problem;
         let neighborhood_structure = self.neigborhood_structure;
         let is_deterministic = self.is_deterministic;
+        let optimizations = &self.optimizations;
 
         'population: for (_index, solution) in population_vec.iter().enumerate() {
             let parent_score = coeffs.score(solution.objectives(), local_ideal);
@@ -627,6 +1116,7 @@ where
                 problem,
                 timer,
                 is_deterministic,
+                optimizations,
             );
 
             for (_neighbor_index, neighbor) in neighborhood_iter.by_ref().enumerate() {
@@ -639,7 +1129,9 @@ where
                 }
 
                 explored_solutions.register_without_selected_images(
-                    iteration, &neighbor, timer.elapsed(),
+                    iteration,
+                    &neighbor,
+                    timer.elapsed(),
                 );
 
                 // Gate 3: update local ideal for every explored neighbor (section 16.4)

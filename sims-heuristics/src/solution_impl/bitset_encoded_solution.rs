@@ -15,6 +15,7 @@ use crate::objective_tracker_impl::proven_safe_trackers::ProvenSafeTrackerArray;
 use crate::problem::{ComparableImage, ImageObjectiveDeltas, ScaledObjectiveDeltas};
 use crate::residual_problem::ResidualProblem;
 use crate::residual_solution::ResidualSolution;
+use crate::pls_config::PlsOptimizations;
 use crate::solution::{ImageSet, MergeableWithResidual, SIMSCore, SIMSModifiable, SIMSSolution};
 use crate::solution_set_impl::NdTreeSolutionSet;
 use crate::timer::Timer;
@@ -129,6 +130,51 @@ where
 
     fn objectives_mut(&mut self) -> &mut pareto::Objectives<D> {
         &mut self.objectives
+    }
+
+    fn greedy_initial_solutions(problem: &P) -> Vec<Self> {
+        use tracing::debug;
+
+        // Generate weight vectors for diverse initial solutions:
+        //   D   single-objective vectors  (weight 1.0 on one objective)
+        // + D*(D-1)/2 pairwise vectors    (weight 0.5 on each of two objectives)
+        // + 1   balanced vector            (equal weight on all objectives)
+        // For D=4 this gives 4 + 6 + 1 = 11 solutions instead of 5.
+        let num_pairs = D * (D.saturating_sub(1)) / 2;
+        let mut weight_vectors: Vec<[f64; D]> = Vec::with_capacity(D + num_pairs + 1);
+
+        // Single-objective weight vectors
+        for obj_idx in 0..D {
+            let mut weights = [0.0f64; D];
+            weights[obj_idx] = 1.0;
+            weight_vectors.push(weights);
+        }
+
+        // Pairwise weight vectors: for each pair (i, j), weight 0.5 each
+        for i in 0..D {
+            for j in (i + 1)..D {
+                let mut weights = [0.0f64; D];
+                weights[i] = 0.5;
+                weights[j] = 0.5;
+                weight_vectors.push(weights);
+            }
+        }
+
+        // Balanced weight vector
+        let balanced = [1.0 / D as f64; D];
+        weight_vectors.push(balanced);
+
+        let mut solutions = Vec::with_capacity(weight_vectors.len());
+        for (i, weights) in weight_vectors.iter().enumerate() {
+            let solution = Self::greedy_construction(problem, *weights);
+            debug!(
+                "Greedy solution {i} (weights={weights:?}): objectives={:?}, images={}",
+                solution.objectives,
+                solution.num_selected_images()
+            );
+            solutions.push(solution);
+        }
+        solutions
     }
 }
 
@@ -352,11 +398,12 @@ where
         problem: &'a P,
         timer: &'a crate::timer::Timer,
         is_deterministic: bool,
+        optimizations: &'a PlsOptimizations,
     ) -> Box<dyn Iterator<Item = Self> + 'a>
     where
         Self: 'a,
     {
-        Box::new(self.neighborhood_iter_impl(trackers, k, problem, timer, is_deterministic))
+        Box::new(self.neighborhood_iter_impl(trackers, k, problem, timer, is_deterministic, optimizations))
     }
 
     fn is_valid(&self, problem: &P) -> bool {
@@ -466,6 +513,109 @@ where
     #[must_use]
     pub fn random(problem: &P) -> Self {
         Self::random_with_seed(problem, rand::random())
+    }
+
+    /// Construct a solution using a greedy set cover heuristic that scores
+    /// unselected images based on weighted scalarization of per-image metrics.
+    /// Different weight vectors target different regions of the objective space.
+    ///
+    /// The `weights` parameter controls which objective to prioritize.
+    /// All objectives are treated as minimization targets, so images with
+    /// lower weighted scores are preferred.
+    #[must_use]
+    pub fn greedy_construction(problem: &P, weights: [f64; D]) -> Self {
+        use crate::objectives::ObjectiveState;
+
+        let num_images = problem.num_images();
+        let num_elements = problem.num_elements();
+
+        // Pre-compute per-image objective proxy values for scoring.
+        // Each value represents the "cost" an image contributes towards
+        // the corresponding objective (lower is better).
+        let image_values: Vec<[f64; D]> = (0..num_images)
+            .map(|img| {
+                let mut values = [0.0f64; D];
+                for obj_idx in 0..D {
+                    values[obj_idx] = match problem.objective(obj_idx) {
+                        ObjectiveState::TotalCost { costs, .. } => costs[img] as f64,
+                        ObjectiveState::CloudyArea { clear_images, .. } => {
+                            // Proxy: count of elements this image covers but does NOT
+                            // clear. Fewer cloudy elements → lower score → preferred.
+                            let total_elems = problem.image_elements(img).count();
+                            let clear_elems = clear_images[img].count_ones(..);
+                            (total_elems.saturating_sub(clear_elems)) as f64
+                        }
+                        ObjectiveState::MinResolution { resolutions, .. } => {
+                            resolutions[img] as f64
+                        }
+                        ObjectiveState::MaxIncidenceAngle {
+                            incidence_angles, ..
+                        } => incidence_angles[img] as f64,
+                    };
+                }
+                values
+            })
+            .collect();
+
+        let mut selected = FixedBitSet::with_capacity(num_images);
+        let mut covered = FixedBitSet::with_capacity(num_elements);
+        let mut num_covered: usize = 0;
+
+        while num_covered < num_elements {
+            let mut best_image: Option<usize> = None;
+            let mut best_score = f64::MAX;
+
+            for img in 0..num_images {
+                if selected[img] {
+                    continue;
+                }
+
+                // Count newly covered elements
+                let newly_covered: usize = problem
+                    .image_elements(img)
+                    .filter(|&elem| !covered[elem])
+                    .count();
+
+                if newly_covered == 0 {
+                    continue;
+                }
+
+                // Compute weighted score per newly covered element
+                let weighted_value: f64 = (0..D)
+                    .map(|obj_idx| weights[obj_idx] * image_values[img][obj_idx])
+                    .sum();
+
+                let score = weighted_value / newly_covered as f64;
+
+                if score < best_score {
+                    best_score = score;
+                    best_image = Some(img);
+                }
+            }
+
+            if let Some(img) = best_image {
+                selected.set(img, true);
+                for elem in problem.image_elements(img) {
+                    if !covered[elem] {
+                        covered.set(elem, true);
+                        num_covered += 1;
+                    }
+                }
+            } else {
+                // No image can cover any more elements — should not happen
+                // with a valid problem instance, but break to avoid infinite loop.
+                #[cfg(feature = "bounds_check")]
+                debug_assert!(
+                    num_covered >= num_elements,
+                    "greedy_construction: stuck with {} uncovered elements",
+                    num_elements - num_covered
+                );
+                break;
+            }
+        }
+
+        let selected_vec: Vec<usize> = selected.ones().collect();
+        Self::from_selected_images(&selected_vec, problem)
     }
 
     /// Scalarizing function using weighted sum, for solution quality comparison
@@ -608,13 +758,6 @@ where
         problem: &P,
         is_deterministic: bool,
     ) -> Option<Vec<usize>> {
-        let unselected_images: Vec<usize> = partial_selected_images.zeroes().collect();
-
-        // If there is no unselected images, return
-        if unselected_images.is_empty() {
-            return None;
-        }
-
         let weights: [f32; D] = if is_deterministic {
             // For deterministic mode, use equal weights
             let equal_weight = 1.0 / D as f32;
@@ -623,105 +766,112 @@ where
             objectives::generate_weights::<D>()
         };
 
-        // Calculate scaled deltas for unselected images
-        let unselected_images_scaled_deltas: Vec<ScaledObjectiveDeltas<D>> = {
-            let raw_comparable_images: Vec<ImageObjectiveDeltas<D>> = unselected_images
-                .iter()
-                .map(|&image_index| {
-                    // Use trackers to peek at delta for adding image
-                    let deltas = partial_trackers.peek_addition_delta(
+        // Use global objective bounds for normalization.
+        // Computed once here (outside the image loop) since it only depends on the problem,
+        // not on which images are unselected.
+        let normalization_ranges: Vec<f32> = problem.objective_bounds().as_ref().map_or_else(
+            || {
+                problem
+                    .max_objectives()
+                    .iter()
+                    .map(|&max_val| if max_val > 0 { max_val as f32 } else { 1.0 })
+                    .collect()
+            },
+            |bounds| {
+                bounds
+                    .iter()
+                    .map(|bound| {
+                        let range = bound[1] as f32 - bound[0] as f32;
+                        if range > 0.0 { range } else { 1.0 }
+                    })
+                    .collect()
+            },
+        );
+
+        let image_set_view = ImageSetView { selected_images: partial_selected_images };
+
+        // Compute peek_addition_delta only for images that cover at least one uncovered element.
+        //
+        // When uncovered_elements is non-empty, build the candidate set via the inverse index
+        // (element → images) instead of iterating all unselected images and doing a per-image
+        // element scan:
+        //   Old: O(n_unselected × avg_elements_per_image) ≈ O(80 × 200) = 16 000 ops
+        //   New: O(n_uncovered × avg_images_per_element) ≈ O(15 × 10)  = 150  ops
+        let mut comparable_unselected_images: Vec<ComparableImage> = if uncovered_elements
+            .is_empty()
+        {
+            // No coverage filter — all unselected images are candidates.
+            partial_selected_images
+                .zeroes()
+                .map(|image_index| {
+                    let raw_deltas = partial_trackers.peek_addition_delta(
                         image_index,
                         problem,
-                        &ImageSetView {
-                            selected_images: partial_selected_images,
-                        },
+                        &image_set_view,
                     );
-                    ImageObjectiveDeltas {
-                        image_index,
-                        deltas,
-                    }
-                })
-                .collect();
-
-            // Use global objective bounds for normalization
-            let normalization_ranges: Vec<f32> = problem.objective_bounds().as_ref().map_or_else(
-                || {
-                    problem
-                        .max_objectives()
-                        .iter()
-                        .map(|&max_val| if max_val > 0 { max_val as f32 } else { 1.0 })
-                        .collect()
-                },
-                |bounds| {
-                    bounds
-                        .iter()
-                        .map(|bound| {
-                            let range = bound[1] as f32 - bound[0] as f32;
-                            if range > 0.0 { range } else { 1.0 }
-                        })
-                        .collect()
-                },
-            );
-
-            raw_comparable_images
-                .iter()
-                .map(|objective_deltas| {
                     let mut scaled_deltas = [0.0f32; D];
-                    let raw_deltas = objective_deltas.deltas;
-
                     for i in 0..D {
                         scaled_deltas[i] = raw_deltas[i].abs() as f32 / normalization_ranges[i];
                     }
-
-                    ScaledObjectiveDeltas {
-                        image_index: objective_deltas.image_index,
-                        raw_deltas,
-                        scaled_deltas,
+                    let key = objectives::weighted_sum_f32(&scaled_deltas, &weights);
+                    ComparableImage {
+                        index: image_index,
+                        key: (1_000_000.0 * key) as usize,
+                    }
+                })
+                .collect()
+        } else {
+            // Pre-filter: use the inverse (element→images) index to build a bitset of
+            // unselected images that cover at least one uncovered element.
+            let n_images = partial_selected_images.len();
+            let mut candidate_unselected = FixedBitSet::with_capacity(n_images);
+            for &elem in uncovered_elements {
+                for img in problem.element_images(elem) {
+                    // Bounds-check: partial_selected_images may have capacity < total images
+                    // (when created from a selected-images vec, FixedBitSet capacity = max_idx+1).
+                    // Images at indices >= n_images are implicitly unselected but excluded from
+                    // zeroes() in the original code — preserve that behavior here.
+                    if img < n_images && !partial_selected_images.contains(img) {
+                        candidate_unselected.insert(img);
+                    }
+                }
+            }
+            candidate_unselected
+                .ones()
+                .map(|image_index| {
+                    let raw_deltas = partial_trackers.peek_addition_delta(
+                        image_index,
+                        problem,
+                        &image_set_view,
+                    );
+                    let mut scaled_deltas = [0.0f32; D];
+                    for i in 0..D {
+                        scaled_deltas[i] = raw_deltas[i].abs() as f32 / normalization_ranges[i];
+                    }
+                    let key = objectives::weighted_sum_f32(&scaled_deltas, &weights);
+                    ComparableImage {
+                        index: image_index,
+                        key: (1_000_000.0 * key) as usize,
                     }
                 })
                 .collect()
         };
 
-        let mut comparable_unselected_images = unselected_images_scaled_deltas
-            .into_iter()
-            .filter_map(|scaled_objective_deltas| {
-                // If there are no uncovered_elements, added images can stil bring value by adding clear parts
-                if !uncovered_elements.is_empty() {
-                    let covered_elements_count = problem
-                        .image_elements(scaled_objective_deltas.image_index)
-                        .filter(|elem| uncovered_elements.contains(elem))
-                        .count();
-
-                    // If image does not cover any uncovered elements, skip it
-                    if covered_elements_count == 0 {
-                        return None;
-                    }
-                }
-
-                let comparision_heur_key =
-                    objectives::weighted_sum_f32(&scaled_objective_deltas.scaled_deltas, &weights);
-
-                Some(ComparableImage {
-                    index: scaled_objective_deltas.image_index,
-                    key: (1_000_000.0 * comparision_heur_key) as usize,
-                })
-            })
-            .collect::<Vec<ComparableImage>>();
-
         if comparable_unselected_images.is_empty() {
             return None;
         }
+
         let best_unselected_images = if comparable_unselected_images.len() > 9 {
             comparable_unselected_images
-                .select_nth_unstable_by_key(9, |comparable_image| comparable_image.key)
+                .select_nth_unstable_by_key(9, |ci| ci.key)
                 .0
                 .iter()
-                .map(|comparable_image| comparable_image.index)
+                .map(|ci| ci.index)
                 .collect::<Vec<usize>>()
         } else {
             comparable_unselected_images
                 .into_iter()
-                .map(|comparable_image| comparable_image.index)
+                .map(|ci| ci.index)
                 .collect::<Vec<usize>>()
         };
         Some(best_unselected_images)
@@ -752,6 +902,21 @@ where
         is_deterministic: bool,
         trackers: &ProvenSafeTrackerArray<D>,
     ) -> Vec<usize> {
+        self.worst_selected_images_n(problem, is_deterministic, trackers, 9)
+    }
+
+    /// Return up to `limit` selected images ranked by "worst first" heuristic.
+    ///
+    /// Images that contribute least value per covered element are returned first.
+    /// This is the generalised version of [`worst_selected_images`] (which defaults
+    /// to `limit = 9`).
+    pub fn worst_selected_images_n(
+        &self,
+        problem: &P,
+        is_deterministic: bool,
+        trackers: &ProvenSafeTrackerArray<D>,
+        limit: usize,
+    ) -> Vec<usize> {
         let weights: [f32; D] = if is_deterministic {
             // For deterministic mode, use equal weights
             let equal_weight = 1.0 / D as f32;
@@ -780,7 +945,7 @@ where
 
         let worst_selected_images = comparable_selected_images
             .iter()
-            .take(9)
+            .take(limit)
             .map(|comparable_image| comparable_image.index)
             .collect::<Vec<usize>>();
         return worst_selected_images;
@@ -997,6 +1162,58 @@ impl<P, const D: usize> BitsetEncodedSolution<P, D>
 where
     P: SetCoverProblem<D> + Clone + Send + Sync,
 {
+    /// Like [`MergeableWithResidual::merge_residual_solution`] but does NOT restore
+    /// tracker state after the merge. The caller is responsible for restoring the
+    /// trackers (e.g. via [`ProvenSafeTrackerArray::snapshot_mutable_state_into`]).
+    ///
+    /// This avoids O(k) individual `track_image_removal` calls per merged neighbor,
+    /// replacing them with a single bulk checkpoint restore in the iterator.
+    pub fn merge_residual_no_tracker_restore(
+        &mut self,
+        residual_solution: &ResidualSolution<D>,
+        residual_problem: &ResidualProblem<Self, P, D>,
+        problem: &P,
+        trackers: &mut <Self as SIMSModifiable<P, D>>::Trackers,
+    ) {
+        // Steps 1-3 are identical to merge_residual_solution.
+
+        // Step 1: Remove original removed images from the solution (bitset only, no tracker update)
+        let num_removal_candidates = residual_problem
+            .condensed_original_removed_images
+            .count_ones(..);
+        for i in 0..num_removal_candidates {
+            let original_img_idx = residual_problem.image_map_condensed_to_original[i];
+            debug_assert!(
+                original_img_idx < problem.num_images(),
+                "merge_residual_no_tracker_restore: invalid image index {original_img_idx} from map"
+            );
+            if self.is_image_selected(original_img_idx) {
+                self.selected_images.set(original_img_idx, false);
+            }
+        }
+
+        // Step 2: Map condensed indices to original indices
+        let original_indices: Vec<usize> = residual_solution
+            .selected_images
+            .iter()
+            .map(|&condensed_idx| residual_problem.image_map_condensed_to_original[condensed_idx])
+            .collect();
+
+        // Step 3: Add residual solution images (updates objectives AND trackers)
+        for &image_index in &original_indices {
+            self.add_image(image_index, problem, trackers);
+        }
+
+        // Step 4 is OMITTED: caller restores trackers via checkpoint
+
+        self.timestamp = residual_solution.timestamp;
+    }
+}
+
+impl<P, const D: usize> BitsetEncodedSolution<P, D>
+where
+    P: SetCoverProblem<D> + Clone + Send + Sync,
+{
     pub fn neighborhood_iter_impl<'a>(
         &'a self,
         trackers: &'a mut ProvenSafeTrackerArray<D>,
@@ -1004,6 +1221,7 @@ where
         problem: &'a P,
         timer: &'a Timer,
         is_deterministic: bool,
+        optimizations: &'a PlsOptimizations,
     ) -> BitsetNeighborhoodIter<'a, P, D> {
         use tracing::debug_span;
 
@@ -1014,12 +1232,32 @@ where
         let _guard = candidates_span.enter();
 
         let removal_candidates_iter: Box<dyn Iterator<Item = Vec<usize>> + 'a> = if k == 1 {
-            // Lazy iteration for k=1
-            Box::new(
-                self.selected_images()
-                    .filter(|&selected_image| self.is_replaceable(selected_image, problem))
-                    .map(|selected_image| vec![selected_image]),
-            )
+            if optimizations.use_ranked_candidates {
+                // Ranked iteration for k=1: use worst_selected_images-style scoring
+                // to prioritise the most promising removal candidates and limit their
+                // count, avoiding exhaustive exploration on large instances.
+                let ranked = self.worst_selected_images_n(
+                    problem,
+                    is_deterministic,
+                    trackers,
+                    optimizations.max_k1_candidates,
+                );
+                Box::new(
+                    ranked
+                        .into_iter()
+                        .filter(|&img| self.is_replaceable(img, problem))
+                        .map(|img| vec![img]),
+                )
+            } else {
+                // Exhaustive iteration for k=1: try every replaceable selected image
+                let all_selected: Vec<usize> = self.selected_images().collect();
+                Box::new(
+                    all_selected
+                        .into_iter()
+                        .filter(|&img| self.is_replaceable(img, problem))
+                        .map(|img| vec![img]),
+                )
+            }
         } else {
             // Lazy iteration for k>1 using combinations
             // For k > 1, we still compute worst_images upfront as it depends on sorting
@@ -1027,6 +1265,14 @@ where
             // But we use the iterator from combinations() instead of collecting
             Box::new(worst_images.into_iter().combinations(k as usize))
         };
+
+        // Save S_base state before any removal candidates are processed.
+        // Used to bulk-restore when transitioning between removal combinations.
+        let base_checkpoint = trackers.clone();
+
+        // Pre-allocate checkpoint tracker (same shape as trackers, reused across
+        // removal combinations to avoid per-combination allocation).
+        let checkpoint = trackers.clone();
 
         BitsetNeighborhoodIter {
             original_solution: self.clone(),
@@ -1038,6 +1284,11 @@ where
             current_removal_candidates: Vec::new(),
             filtered_residual_iter: None,
             is_deterministic,
+            base_checkpoint,
+            checkpoint,
+            use_checkpoint: optimizations.use_checkpoint,
+            neighborhood_budget: optimizations.neighborhood_budget,
+            neighbors_yielded: 0,
         }
     }
 }
@@ -1064,6 +1315,27 @@ where
     filtered_residual_iter: Option<NDTreeSolutionIntoIterator<ResidualSolution<D>, 32, D, 4>>,
 
     is_deterministic: bool,
+
+    /// Checkpoint of the S_base tracker state (before any removals).
+    /// Used to bulk-restore when transitioning between removal combinations.
+    base_checkpoint: ProvenSafeTrackerArray<D>,
+
+    /// Pre-allocated checkpoint of the tracker state saved after image removals
+    /// (the "S_removed" state). Used to bulk-restore trackers after each merge
+    /// instead of undoing individual `track_image_removal` calls.
+    checkpoint: ProvenSafeTrackerArray<D>,
+
+    /// Whether to use bulk checkpoint/restore for tracker state after each merge.
+    /// When false, falls back to per-image undo operations.
+    use_checkpoint: bool,
+
+    /// Optional cap on the total number of neighbors yielded per solution.
+    /// When exhausted the iterator terminates early, focusing exploration time
+    /// on other solutions in the population.
+    neighborhood_budget: Option<usize>,
+
+    /// Counter of neighbors yielded so far (compared against `neighborhood_budget`).
+    neighbors_yielded: usize,
 }
 
 impl<P, const D: usize> Iterator for BitsetNeighborhoodIter<'_, P, D>
@@ -1082,6 +1354,13 @@ where
                 return None;
             }
 
+            // Check neighborhood budget
+            if let Some(budget) = self.neighborhood_budget {
+                if self.neighbors_yielded >= budget {
+                    return None;
+                }
+            }
+
             // 1. If we have a non-exhausted iterator of non-dominated residual solutions, yield from it
             if let Some(residual_solution) = self.filtered_residual_iter.as_mut().and_then(|it| it.next()) {
                 let residual_problem = self
@@ -1089,12 +1368,31 @@ where
                     .as_ref()
                     .expect("residual problem must exist while iterator is active");
                 let mut neighbor = residual_problem.unmodified_solution.clone();
-                neighbor.merge_residual_solution(
-                    &residual_solution,
-                    residual_problem,
-                    self.problem,
-                    self.trackers,
-                );
+
+                if self.use_checkpoint {
+                    // Use the no-restore variant: add images to compute objectives
+                    // but skip per-image tracker undo. Bulk-restore from checkpoint below.
+                    neighbor.merge_residual_no_tracker_restore(
+                        &residual_solution,
+                        residual_problem,
+                        self.problem,
+                        self.trackers,
+                    );
+
+                    // Bulk-restore trackers to the S_removed state via checkpoint memcpy,
+                    // replacing O(k) individual track_image_removal calls.
+                    self.checkpoint.snapshot_mutable_state_into(self.trackers);
+                } else {
+                    // Per-image undo path: merge then undo each added image individually
+                    neighbor.merge_residual_solution(
+                        &residual_solution,
+                        residual_problem,
+                        self.problem,
+                        self.trackers,
+                    );
+                }
+
+                self.neighbors_yielded += 1;
                 return Some(neighbor);
             }
 
@@ -1102,10 +1400,14 @@ where
             if self.current_residual_problem.is_some() {
                 self.current_residual_problem = None;
                 self.filtered_residual_iter = None;
-                // Restore trackers to original solution state
-                for &removal_candidate in &self.current_removal_candidates {
-                    self.trackers
-                        .track_image_addition(removal_candidate, self.problem);
+                // Restore trackers to original solution state (S_base).
+                if self.use_checkpoint {
+                    self.base_checkpoint.snapshot_mutable_state_into(self.trackers);
+                } else {
+                    for &removal_candidate in &self.current_removal_candidates {
+                        self.trackers
+                            .track_image_addition(removal_candidate, self.problem);
+                    }
                 }
             }
 
@@ -1113,7 +1415,7 @@ where
             loop {
                 let removal_candidates = self.removal_candidates_iter.next()?;
 
-                // Create residual problem (this will modify trackers)
+                // Create residual problem (this will modify trackers — applies removals)
                 if let Some(mut residual_problem) =
                     self.original_solution.create_residual_problem(
                         removal_candidates.clone(),
@@ -1123,6 +1425,11 @@ where
                     )
                 {
                     self.current_removal_candidates = removal_candidates;
+
+                    // Save checkpoint of the S_removed tracker state. All residual
+                    // solutions for this removal combination will restore to this
+                    // state after merge via snapshot_mutable_state_into.
+                    self.trackers.snapshot_mutable_state_into(&mut self.checkpoint);
 
                     // 4. Enumerate ALL valid residual solutions, fix non-additive objectives,
                     //    and filter through Pareto front.
@@ -1164,13 +1471,128 @@ where
                     break;
                 }
 
-                // Restore trackers to original solution state
-                for &removal_candidate in &removal_candidates {
-                    self.trackers
-                        .track_image_addition(removal_candidate, self.problem);
+                // Restore trackers to original solution state (S_base)
+                if self.use_checkpoint {
+                    self.base_checkpoint.snapshot_mutable_state_into(self.trackers);
+                } else {
+                    for &removal_candidate in &removal_candidates {
+                        self.trackers
+                            .track_image_addition(removal_candidate, self.problem);
+                    }
                 }
             }
             // Loop back to yield from the freshly-filled iterator
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::objectives::ObjectiveType;
+    use crate::problem_bitset::ProblemBitset;
+    use crate::solution::SIMSModifiable;
+    use std::path::PathBuf;
+
+    const NUM_OBJECTIVES: usize = 4;
+    const OBJECTIVE_TYPES: [ObjectiveType; NUM_OBJECTIVES] = [
+        ObjectiveType::TotalCost,
+        ObjectiveType::CloudyArea,
+        ObjectiveType::MinResolution,
+        ObjectiveType::MaxIncidenceAngle,
+    ];
+
+    fn make_test_problem() -> ProblemBitset<NUM_OBJECTIVES> {
+        ProblemBitset::from_minizinc_datafile(
+            "tests/data/lagos_nigeria_30.dzn",
+            OBJECTIVE_TYPES,
+        )
+        .expect("failed to load tests/data/lagos_nigeria_30.dzn")
+    }
+
+    #[test]
+    fn test_greedy_initial_solutions_are_valid() {
+        let problem = make_test_problem();
+
+        let solutions = BitsetEncodedSolution::<ProblemBitset<NUM_OBJECTIVES>, NUM_OBJECTIVES>::greedy_initial_solutions(&problem);
+
+        assert!(
+            !solutions.is_empty(),
+            "greedy_initial_solutions should produce at least one solution"
+        );
+
+        for (i, solution) in solutions.iter().enumerate() {
+            assert!(
+                problem.is_set_cover(solution),
+                "Greedy solution {i} is not a valid set cover: objectives={:?}",
+                solution.objectives()
+            );
+            assert!(
+                solution.is_valid(&problem),
+                "Greedy solution {i} failed full validity check: objectives={:?}",
+                solution.objectives()
+            );
+            assert!(
+                solution.are_objectives_valid(&problem),
+                "Greedy solution {i} has inconsistent objective values: objectives={:?}",
+                solution.objectives()
+            );
+        }
+    }
+
+    #[test]
+    fn test_greedy_initial_solutions_do_not_dominate_pseudo_solver_solutions() {
+        let problem = make_test_problem();
+
+        let greedy_solutions =
+            BitsetEncodedSolution::<ProblemBitset<NUM_OBJECTIVES>, NUM_OBJECTIVES>::greedy_initial_solutions(&problem);
+
+        let pseudo_path = PathBuf::from("../sims-core/tests/data/pseudo_solver_solutions/lagos_nigeria_30.json");
+        let pseudo_json = std::fs::read_to_string(&pseudo_path)
+            .expect("failed to read ../sims-core/tests/data/pseudo_solver_solutions/lagos_nigeria_30.json");
+        let pseudo_data: serde_json::Value =
+            serde_json::from_str(&pseudo_json).expect("failed to parse pseudo solver json");
+        let pseudo_solutions = pseudo_data["solutions"]
+            .as_array()
+            .expect("pseudo solver json missing 'solutions' array");
+
+        let pseudo_objectives: Vec<[u64; NUM_OBJECTIVES]> = pseudo_solutions
+            .iter()
+            .map(|sol| {
+                [
+                    sol["cost"].as_u64().expect("pseudo solution missing cost"),
+                    sol["cloudy_area"]
+                        .as_u64()
+                        .expect("pseudo solution missing cloudy_area"),
+                    sol["min_resolutions_sum"]
+                        .as_u64()
+                        .expect("pseudo solution missing min_resolutions_sum"),
+                    sol["max_incidence_angle"]
+                        .as_u64()
+                        .expect("pseudo solution missing max_incidence_angle"),
+                ]
+            })
+            .collect();
+
+        for (g_idx, greedy) in greedy_solutions.iter().enumerate() {
+            for (p_idx, pseudo_obj) in pseudo_objectives.iter().enumerate() {
+                let dominates = greedy.objectives()[0] <= pseudo_obj[0]
+                    && greedy.objectives()[1] <= pseudo_obj[1]
+                    && greedy.objectives()[2] <= pseudo_obj[2]
+                    && greedy.objectives()[3] <= pseudo_obj[3]
+                    && (greedy.objectives()[0] < pseudo_obj[0]
+                        || greedy.objectives()[1] < pseudo_obj[1]
+                        || greedy.objectives()[2] < pseudo_obj[2]
+                        || greedy.objectives()[3] < pseudo_obj[3]);
+
+                assert!(
+                    !dominates,
+                    "Greedy solution {g_idx} with objectives {:?} dominates pseudo-solver solution {p_idx} with objectives {:?}",
+                    greedy.objectives(),
+                    pseudo_obj,
+                );
+            }
+        }
+    }
+
 }

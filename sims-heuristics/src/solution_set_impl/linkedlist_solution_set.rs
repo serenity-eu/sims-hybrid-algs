@@ -5,7 +5,9 @@
 
 use std::collections::LinkedList;
 
-use pareto::{MoSolution, ParetoFront, Random, RandomCollection};
+use pareto::{
+    MoSolution, Objectives, ParetoFront, Random, RandomCollection, ScalarizedArchiveQuery,
+};
 use tracing::{trace, warn};
 
 #[derive(Clone)]
@@ -118,6 +120,40 @@ where
         if !self.contains(solution) {
             self.solutions.push_back(solution.clone());
         }
+    }
+}
+
+impl<T, const D: usize> ScalarizedArchiveQuery<T, D> for LinkedListSolutionSet<T, D>
+where
+    T: MoSolution<D> + PartialEq + Sized + Clone,
+{
+    fn find_best_with_pruning<Accept, NodeLowerBound, SolutionScore>(
+        &self,
+        mut accept: Accept,
+        _node_lower_bound: NodeLowerBound,
+        solution_score: SolutionScore,
+    ) -> Option<(&T, f64)>
+    where
+        Accept: FnMut(&T) -> bool,
+        NodeLowerBound: Fn(&Objectives<D>) -> f64,
+        SolutionScore: Fn(&T) -> f64,
+    {
+        let mut best_solution: Option<&T> = None;
+        let mut best_score = f64::INFINITY;
+
+        for solution in &self.solutions {
+            if !accept(solution) {
+                continue;
+            }
+
+            let score = solution_score(solution);
+            if score < best_score {
+                best_score = score;
+                best_solution = Some(solution);
+            }
+        }
+
+        best_solution.map(|solution| (solution, best_score))
     }
 }
 

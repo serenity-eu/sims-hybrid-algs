@@ -1,6 +1,6 @@
 mod file_io;
 
-use clap::{ArgAction, Parser};
+use clap::{ArgAction, Parser, ValueEnum};
 
 use log::debug;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -13,7 +13,12 @@ use std::{
 
 use pareto::{ParetoFront, RandomCollection};
 use pls::solution_set_impl::BTreeSolutionSet;
-use pls::{objectives::ObjectiveType, pareto_local_search::ParetoLocalSearch};
+use pls::{
+    PlsOptimizations,
+    objectives::ObjectiveType,
+    pareto_local_search::ParetoLocalSearch,
+    pls_config::{ScalarizedSelectionSource, SolutionSelectionMode},
+};
 use pls::{
     problem_bitset::ProblemBitset, solution_impl::bitset_encoded_solution::BitsetEncodedSolution,
 };
@@ -24,6 +29,48 @@ const MAX_DURATION: &str = "240s";
 const NEIGHBORHOOD_SIZE_RANGE: RangeInclusive<u32> = 1..=6;
 const TEST_SEED: u64 = 1_234_567_890;
 const NUM_OBJECTIVES: usize = 2;
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum CliSolutionSelectionMode {
+    RandomShuffle,
+    DiverseProbe,
+    #[cfg(feature = "scalarized_selection")]
+    ScalarizedChebycheff,
+    #[cfg(feature = "scalarized_selection")]
+    DiverseThenScalarizedChebycheff,
+}
+
+impl CliSolutionSelectionMode {
+    const fn to_runtime(self) -> SolutionSelectionMode {
+        match self {
+            Self::RandomShuffle => SolutionSelectionMode::RandomShuffle,
+            Self::DiverseProbe => SolutionSelectionMode::DiverseProbe,
+            #[cfg(feature = "scalarized_selection")]
+            Self::ScalarizedChebycheff => SolutionSelectionMode::ScalarizedChebycheff,
+            #[cfg(feature = "scalarized_selection")]
+            Self::DiverseThenScalarizedChebycheff => {
+                SolutionSelectionMode::DiverseThenScalarizedChebycheff
+            }
+        }
+    }
+}
+
+#[cfg(feature = "scalarized_selection")]
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum CliScalarizedSelectionSource {
+    Population,
+    Archive,
+}
+
+#[cfg(feature = "scalarized_selection")]
+impl CliScalarizedSelectionSource {
+    const fn to_runtime(self) -> ScalarizedSelectionSource {
+        match self {
+            Self::Population => ScalarizedSelectionSource::Population,
+            Self::Archive => ScalarizedSelectionSource::Archive,
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(about = "Pareto Local Search solver for the Satellite Image Selection Problem", long_about = None)]
@@ -78,6 +125,61 @@ struct Cli {
         help = "Path to output Chrome trace file for viewing in chrome://tracing"
     )]
     chrome_trace: Option<PathBuf>,
+
+    #[arg(
+        long = "solution-selection",
+        value_enum,
+        default_value = "random-shuffle",
+        help = "Parent-solution selection policy for neighborhood exploration"
+    )]
+    solution_selection: CliSolutionSelectionMode,
+
+    #[arg(
+        long = "diverse-probe-budget",
+        help = "Number of parent solutions to probe when using diverse probing"
+    )]
+    diverse_probe_budget: Option<usize>,
+
+    #[cfg(feature = "scalarized_selection")]
+    #[arg(
+        long = "use-nd-tree-scalarized-query",
+        action = ArgAction::Set,
+        default_value_t = true,
+        help = "Use ND-tree accelerated branch-and-bound queries for scalarized archive selection"
+    )]
+    use_nd_tree_scalarized_query: bool,
+
+    #[cfg(feature = "scalarized_selection")]
+    #[arg(
+        long = "scalarized-selection-source",
+        value_enum,
+        default_value = "population",
+        help = "Source pool used by scalarized parent selection"
+    )]
+    scalarized_selection_source: CliScalarizedSelectionSource,
+
+    #[cfg(feature = "scalarized_selection")]
+    #[arg(
+        long = "scalarized-parent-budget",
+        help = "Maximum number of parent solutions selected per step by scalarized selection"
+    )]
+    scalarized_parent_budget: Option<usize>,
+
+    #[cfg(feature = "scalarized_selection")]
+    #[arg(
+        long = "scalarized-weight-samples",
+        default_value_t = 1,
+        help = "Number of random weight vectors sampled per step for scalarized selection"
+    )]
+    scalarized_weight_samples: usize,
+
+    #[cfg(feature = "scalarized_selection")]
+    #[arg(
+        long = "scalarized-rho",
+        default_value_t = 1e-3,
+        help = "Augmentation coefficient for weighted Chebycheff scalarization"
+    )]
+    scalarized_rho: f64,
 }
 
 #[allow(clippy::too_many_lines)]
@@ -193,11 +295,28 @@ fn main() {
         debug!("Initial solution: {solution:?}");
     }
 
+    let mut optimizations = PlsOptimizations::default();
+    optimizations.solution_selection_mode = args.solution_selection.to_runtime();
+    optimizations.use_diverse_probing = matches!(
+        args.solution_selection,
+        CliSolutionSelectionMode::DiverseProbe
+    );
+    optimizations.diverse_probe_budget = args.diverse_probe_budget;
+    #[cfg(feature = "scalarized_selection")]
+    {
+        optimizations.use_nd_tree_scalarized_query = args.use_nd_tree_scalarized_query;
+        optimizations.scalarized_selection_source = args.scalarized_selection_source.to_runtime();
+        optimizations.scalarized_parent_budget = args.scalarized_parent_budget;
+        optimizations.scalarized_weight_samples = args.scalarized_weight_samples;
+        optimizations.scalarized_rho = args.scalarized_rho;
+    }
+
     let mut pareto_local_search = ParetoLocalSearch::new(
         &sims_problem_instance,
         &initial_solution_set,
         NEIGHBORHOOD_SIZE_RANGE,
         args.is_deterministic,
+        optimizations,
     );
     let final_solution_set = pareto_local_search.run(args.max_iterations, args.timeout);
 

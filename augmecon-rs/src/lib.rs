@@ -155,12 +155,9 @@
 //! // GPBA-A: Coverage-focused representation (minimizes maximum gaps)
 //! let mut config = GpbaConfig {
 //!     primary_objective: 0,
-//!     target_points_per_objective: {
-//!         let mut points = HashMap::new();
-//!         points.insert(1, 25); // 25 points for second objective
-//!         points
-//!     },
 //!     manual_bounds: None,
+//!     target_solutions: None,        // No early-termination target
+//!     per_solve_timeout: None,        // Use global timeout only
 //! };
 //!
 //! let mut gpba_a = GpbaA::new(config.clone());
@@ -191,7 +188,7 @@
 //! ## 📈 Performance Characteristics
 //!
 //! - **Memory Efficient**: Optimized data structures and minimal allocations
-//! - **Scalable**: Handles problems with hundreds of variables and constraints  
+//! - **Scalable**: Handles problems with hundreds of variables and constraints
 //! - **Fast**: 5-15x speedup over equivalent Python implementations
 //! - **Parallel Ready**: Multi-core support for large problems
 //!
@@ -200,7 +197,7 @@
 //! The library is organized into several key modules:
 //!
 //! - [`model`]: Problem definition, variables, constraints, and objectives
-//! - [`solver`]: Core AUGMECON algorithm implementation  
+//! - [`solver`]: Core AUGMECON algorithm implementation
 //! - [`options`]: Configuration and solver customization
 //! - [`solution`]: Results representation and Pareto front analysis
 //! - [`error`]: Comprehensive error handling and validation

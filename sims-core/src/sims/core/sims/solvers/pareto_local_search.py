@@ -33,10 +33,17 @@ def solve(
     is_deterministic: bool = True,
     parallel: bool = False,
     num_parallel_threads: int = 0,
+    neighborhood_budget: int | None = None,
+    use_checkpoint: bool = True,
+    use_ranked_candidates: bool = True,
+    max_k1_candidates: int = 15,
+    probing_budget: int | None = None,
+    use_greedy_initial_population: bool = True,
+    use_perturbation_restart: bool = True,
 ) -> SolverResult:
     """
     Solve the SIMS problem using Pareto Local Search via sims_problem.solve_with_pls.
-    
+
     Args:
         problem_instance: The SIMS problem instance to solve
         problem_path: Path to the problem file (not used in new implementation)
@@ -56,14 +63,14 @@ def solve(
         is_deterministic: Whether to use deterministic mode (default: True)
         parallel: Whether to use ConcurrentPLS (multi-threaded) instead of sequential PLS (default: False)
         num_parallel_threads: Number of threads for ConcurrentPLS; 0 = auto-detect CPU count (default: 0)
-    
+
     Returns:
         SolverResult: The solving result with Pareto front solutions
     """
-    
+
     # Convert timeout to timedelta
     timeout = timedelta(seconds=timeout_s)
-    
+
     # Convert sims-core SimsDiscreteProblem to sims-problem SimsDiscreteProblem
     sims_problem_instance = sims_problem.SimsDiscreteProblem(
         num_images=problem_instance.problem.num_images,
@@ -92,10 +99,10 @@ def solve(
         ]
     else:
         initial_population_sims = None
-    
-    
+
+
     log.debug(f"Solving with sims_problem.solve_with_pls, timeout: {timeout_s}s, objectives: {objectives}")
-    
+
     try:
         # Call the Rust-based PLS solver
         solving_result = sims_problem.solve_with_pls(
@@ -116,13 +123,20 @@ def solve(
             include_dominated=include_dominated,
             pareto_archive=pareto_archive,
             parallel=parallel,
-            num_parallel_threads=num_parallel_threads
+            num_parallel_threads=num_parallel_threads,
+            neighborhood_budget=neighborhood_budget,
+            use_checkpoint=use_checkpoint,
+            use_ranked_candidates=use_ranked_candidates,
+            max_k1_candidates=max_k1_candidates,
+            probing_budget=probing_budget,
+            use_greedy_initial_population=use_greedy_initial_population,
+            use_perturbation_restart=use_perturbation_restart,
         )
 
     except Exception as e:
         log.error(f"Error calling sims_problem.solve_with_pls: {e}")
         raise e
-    
+
     # Convert sims_problem.Solution to sims-core Solution
     def convert_solution(sims_problem_solution) -> Solution:
         return Solution(
@@ -133,20 +147,20 @@ def solve(
             max_incidence_angle=sims_problem_solution.max_incidence_angle,
             min_resolutions_sum=sims_problem_solution.min_resolutions_sum
         )
-    
+
     # Convert solutions
     pareto_front = [convert_solution(sol) for sol in solving_result.final_solutions]
-    
+
     log.debug(f"Found {len(pareto_front)} Pareto-optimal solutions")
-    
+
     # Calculate execution time from solutions if available
     execution_time_sec = 0.0
     if pareto_front:
         # Use the maximum timestamp as an approximation of execution time
         execution_time_sec = max(sol.timestamp_s.total_seconds() for sol in pareto_front)
-    
+
     from ..solver_config import SolverType
-    
+
     return SolverResult(
         pareto_front=pareto_front,
         timeout_sec=timeout_s,

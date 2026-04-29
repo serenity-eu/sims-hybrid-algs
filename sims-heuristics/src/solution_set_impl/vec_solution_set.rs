@@ -1,5 +1,7 @@
 use log::trace;
-use pareto::{MoSolution, ParetoFront, Random, RandomCollection};
+use pareto::{
+    MoSolution, Objectives, ParetoFront, Random, RandomCollection, ScalarizedArchiveQuery,
+};
 
 #[derive(Clone)]
 pub struct VecSolutionSet<T, const D: usize>
@@ -207,6 +209,40 @@ where
 
     fn into_iter(self) -> Self::IntoIter {
         self.vec_set.into_iter()
+    }
+}
+
+impl<T, const D: usize> ScalarizedArchiveQuery<T, D> for VecSolutionSet<T, D>
+where
+    T: MoSolution<D> + PartialEq + Sized + Clone,
+{
+    fn find_best_with_pruning<Accept, NodeLowerBound, SolutionScore>(
+        &self,
+        mut accept: Accept,
+        _node_lower_bound: NodeLowerBound,
+        solution_score: SolutionScore,
+    ) -> Option<(&T, f64)>
+    where
+        Accept: FnMut(&T) -> bool,
+        NodeLowerBound: Fn(&Objectives<D>) -> f64,
+        SolutionScore: Fn(&T) -> f64,
+    {
+        let mut best_solution: Option<&T> = None;
+        let mut best_score = f64::INFINITY;
+
+        for solution in &self.vec_set {
+            if !accept(solution) {
+                continue;
+            }
+
+            let score = solution_score(solution);
+            if score < best_score {
+                best_score = score;
+                best_solution = Some(solution);
+            }
+        }
+
+        best_solution.map(|solution| (solution, best_score))
     }
 }
 

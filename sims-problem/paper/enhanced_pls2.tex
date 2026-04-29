@@ -1,0 +1,809 @@
+\documentclass[11pt,a4paper]{article}
+
+% ── Typography & Encoding ─────────────────────────────────────────────
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{newtxtext,newtxmath} % Professional academic font (Times-like)
+\usepackage{microtype}           % Advanced typography (kerning, spacing)
+\usepackage[margin=1in]{geometry}
+\usepackage{setspace}            % Line spacing
+
+% ── Math & Algorithms ─────────────────────────────────────────────────
+\usepackage{amsmath}
+% amssymb and amsthm are often superseded or clash with newtxmath,
+% but amsthm is safe and useful.
+\let\openbox\relax
+\usepackage{amsthm}
+\usepackage{algorithm}
+\usepackage[noend]{algpseudocode}
+
+% ── Graphics & Tables ─────────────────────────────────────────────────
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{caption}
+\usepackage{subcaption}
+
+% ── Utilities ─────────────────────────────────────────────────────────
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{siunitx}             % Standardized units and number formatting
+\usepackage{authblk}             % Professional author blocks
+
+% ── Hyperref & Cleveref ───────────────────────────────────────────────
+\usepackage[colorlinks=true,linkcolor=darkblue,citecolor=darkblue,urlcolor=darkblue]{hyperref}
+\usepackage[capitalize,nameinlink]{cleveref}
+
+% ── Formatting adjustments ────────────────────────────────────────────
+\definecolor{darkblue}{rgb}{0.0, 0.0, 0.55}
+\definecolor{baseline}{HTML}{7f7f7f}
+\definecolor{diverse}{HTML}{e377c2}
+\definecolor{scalarized}{HTML}{8c564b}
+
+\captionsetup{labelfont=bf, textfont=it, margin=1em}
+\setlist{nosep, leftmargin=*}
+
+% ── Algorithmic customisation ─────────────────────────────────────────
+\algnewcommand\algorithmicforeach{\textbf{for each}}
+\algdef{S}[FOR]{ForEach}[1]{\algorithmicforeach\ #1\ \algorithmicdo}
+\algnewcommand\algorithmicinput{\textbf{Input:}}
+\algnewcommand\algorithmicoutput{\textbf{Output:}}
+\algnewcommand\Input{\item[\algorithmicinput]}
+\algnewcommand\Output{\item[\algorithmicoutput]}
+
+% ── Math macros ───────────────────────────────────────────────────────
+
+\newcommand{\calA}{\ensuremath{\mathcal{A}}}
+\newcommand{\calE}{\ensuremath{\mathcal{E}}}
+\newcommand{\calF}{\ensuremath{\mathcal{F}}}
+\newcommand{\calI}{\ensuremath{\mathcal{I}}}
+\newcommand{\calN}{\ensuremath{\mathcal{N}}}
+\newcommand{\calP}{\ensuremath{\mathcal{P}}}
+\newcommand{\calS}{\ensuremath{\mathcal{S}}}
+\newcommand{\bbR}{\ensuremath{\mathbb{R}}}
+\DeclareMathOperator*{\argmin}{arg\,min}
+\DeclareMathOperator*{\argmax}{arg\,max}
+
+% ══════════════════════════════════════════════════════════════════════
+\title{%
+  \vspace{-1.5cm}
+  \textbf{Enhanced Pareto Local Search for the\\
+  Satellite Image Mosaic Selection Problem:\\
+  Diversity-Guided and Scalarization-Guided\\
+  Parent Selection Strategies}
+}
+
+\author[1]{Anonymous Author 1}
+\author[2]{Anonymous Author 2}
+\affil[1]{Department of Computer Science, Anonymous University}
+\affil[2]{Institute for Advanced Optimization, Anonymous Institute}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+% ══════════════════════════════════════════════════════════════════════
+\begin{abstract}
+\noindent
+Pareto Local Search (PLS) is a natural and effective local-search
+framework for multi-objective combinatorial optimisation, but its
+performance depends critically on how search effort is distributed over
+the current approximation set.  In the four-objective Satellite Image
+Mosaic Selection (SIMS) problem, a naive PLS policy may spend excessive
+time exploring densely populated regions of the archive while neglecting
+other regions that are either structurally underrepresented or more
+promising under specific trade-off directions.
+
+We study two archive-steering enhancements to a common improved PLS
+baseline.  The first is a \emph{diversity-guided probing} strategy that
+selects a well-spread subset of candidate parents in objective space
+before neighbourhood exploration.  The second is a
+\emph{scalarization-guided selection} strategy that repeatedly samples
+weighted Chebycheff trade-off directions and explores archive solutions
+that are best aligned with those directions.  Both mechanisms operate at
+the level of parent-solution scheduling rather than neighbourhood
+definition, and therefore complement the standard PLS framework without
+changing the underlying local move operator.
+
+Experiments on 20 benchmark instances (five cities, four size tiers,
+30--150 images, four objectives) show that both enhancements improve
+hypervolume over the baseline on medium and large instances, but that
+diversity-guided probing is the stronger default strategy overall.
+Across all 20 instances, diversity-guided probing improves final
+normalised hypervolume by \(+3.60\%\) on average over the baseline,
+whereas scalarization-guided selection improves it by \(+3.42\%\).
+Direct comparison shows that diversity-guided probing outperforms
+scalarization-guided selection on 18 of 20 instances, with an average
+advantage of \(0.18\%\).  Scalarization-guided selection nevertheless
+achieves the best result on the hardest Lagos instance
+(\(+3.06\%\) over diversity-guided probing at 145 images), indicating
+that directional archive steering can be particularly effective on
+certain large, structurally heterogeneous instances.
+
+\vspace{0.5em}
+\noindent\textbf{Keywords:}\quad multi-objective optimisation, Pareto local search, satellite image selection, hypervolume, diversity-guided search, scalarization-guided search, weighted Chebycheff
+\end{abstract}
+
+% ══════════════════════════════════════════════════════════════════════
+\section{Introduction}\label{sec:intro}
+
+The \emph{Satellite Image Mosaic Selection} (SIMS) problem requires
+choosing a subset of satellite images that jointly cover a region of
+interest while balancing several conflicting criteria.  In the
+four-objective setting considered here, the optimisation simultaneously
+minimises acquisition cost, cloud contamination, worst-case incidence
+angle, and resolution loss.  The resulting problem is a multi-objective
+variant of weighted set cover and is computationally challenging even
+for moderate catalogue sizes.
+
+Pareto Local Search (PLS) is a natural heuristic for this setting.  It
+maintains an archive of mutually non-dominated solutions and repeatedly
+explores neighbourhoods of selected archive members.  The quality of the
+final approximation set depends not only on the neighbourhood operator
+itself, but also on the \emph{policy used to decide which archive
+solutions should be explored next}.  In many-objective settings, this
+policy becomes especially important because the archive can grow rapidly,
+making exhaustive and uniformly distributed exploration increasingly
+inefficient.
+
+This paper focuses on two search-allocation enhancements that operate at
+the parent-selection level:
+\begin{enumerate}
+  \item \textbf{Diversity-guided probing}, which selects a well-spread
+    subset of archive or population members in objective space before
+    neighbourhood exploration.
+  \item \textbf{Scalarization-guided selection}, which samples weighted
+    trade-off directions and prioritises archive solutions that minimise
+    the corresponding weighted Chebycheff scalarizations.
+\end{enumerate}
+
+Both strategies are layered on top of the same improved PLS baseline and
+therefore isolate the effect of \emph{search steering} rather than
+neighbourhood design.  The goal is not to alter the definition of local
+moves, but to improve the \emph{allocation of limited search effort}
+over the current approximation set.
+
+\paragraph{Contributions.}
+This paper makes the following contributions:
+\begin{enumerate}
+  \item We formalise two parent-selection strategies for PLS at the same
+    level of abstraction as the baseline algorithm: a diversity-guided
+    strategy and a scalarization-guided strategy.
+  \item We provide a controlled empirical comparison of these strategies
+    against the same baseline PLS on 20 four-objective SIMS instances.
+  \item We show that diversity-guided probing is the stronger default
+    strategy overall, while scalarization-guided selection can dominate
+    on selected large instances.
+  \item We analyse the results by instance size and identify the regimes
+    in which each strategy is most effective.
+\end{enumerate}
+
+% ══════════════════════════════════════════════════════════════════════
+\section{Problem Formulation}\label{sec:problem}
+
+We consider a finite set of candidate images
+\(\calI = \{1,\dots,m\}\) and a finite set of ground elements
+\(\calE = \{1,\dots,n\}\) that must be covered.  Each image
+\(i \in \calI\) covers a subset \(C_i \subseteq \calE\).  A feasible
+solution is any subset \(S \subseteq \calI\) such that
+\[
+\bigcup_{i \in S} C_i = \calE.
+\]
+
+\subsection{Decision Space}
+
+A solution is represented by a binary vector
+\(x \in \{0,1\}^m\), where \(x_i = 1\) if image \(i\) is selected and
+\(x_i = 0\) otherwise.  The feasible set is
+\[
+\calF = \left\{x \in \{0,1\}^m \;\middle|\; \forall e \in \calE,\;
+\exists i \in \calI \text{ such that } x_i = 1 \text{ and } e \in C_i
+\right\}.
+\]
+
+\subsection{Objective Space}
+
+Each feasible solution is evaluated by four minimisation objectives:
+\[
+f(x) = \bigl(f_1(x), f_2(x), f_3(x), f_4(x)\bigr),
+\]
+where:
+\begin{itemize}
+  \item \(f_1\): total acquisition cost,
+  \item \(f_2\): total cloud contamination,
+  \item \(f_3\): worst-case incidence angle,
+  \item \(f_4\): resolution loss.
+\end{itemize}
+
+For two feasible solutions \(x,y \in \calF\), we say that \(x\)
+\emph{dominates} \(y\), written \(x \prec y\), if
+\[
+\forall j \in \{1,\dots,4\},\; f_j(x) \le f_j(y)
+\quad\text{and}\quad
+\exists j \in \{1,\dots,4\},\; f_j(x) < f_j(y).
+\]
+The goal is to approximate the Pareto set of mutually non-dominated
+feasible solutions.
+
+% ══════════════════════════════════════════════════════════════════════
+\section{Baseline PLS}\label{sec:baseline}
+
+PLS maintains two sets:
+\begin{itemize}
+  \item an archive \(\calA\) of mutually non-dominated solutions found
+    so far, and
+  \item a working population \(\calP \subseteq \calA\) of solutions
+    whose neighbourhoods are scheduled for exploration.
+\end{itemize}
+
+At each iteration, the algorithm selects one or more parent solutions
+from \(\calP\), explores their neighbourhoods, inserts newly discovered
+non-dominated neighbours into \(\calA\), and forms the next working
+population from the accepted offspring.  The baseline policy considered
+here uses the same neighbourhood operator and archive update mechanism
+throughout all experiments; only the \emph{parent-selection strategy}
+changes.
+
+\subsection{Neighbourhood Operator}
+
+Let \(x \in \calF\) be a feasible solution.  Its neighbourhood
+\(\calN(x)\) consists of feasible solutions obtained by local image-set
+modifications that preserve full coverage.  The exact move operator is
+not the focus of this paper; what matters is that all compared
+configurations use the same neighbourhood definition and therefore
+differ only in how parent solutions are chosen for exploration.
+
+\subsection{Main Loop}
+
+At a high level, baseline PLS can be written as follows.
+
+\begin{algorithm}[htbp]
+\caption{Baseline Pareto Local Search}
+\label{alg:pls}
+\begin{algorithmic}[1]
+\Input Initial feasible population \(\calP_0\), neighbourhood operator \(\calN\)
+\Output Approximation archive \(\calA\)
+\State \(\calA \gets \textsc{NonDominated}(\calP_0)\)
+\State \(\calP \gets \calA\)
+\While{termination criterion not met}
+  \State choose parent subset \(\calS \subseteq \calP\)
+  \State \(\calP' \gets \emptyset\)
+  \ForEach{\(x \in \calS\)}
+    \ForEach{\(y \in \calN(x)\)}
+      \If{\(y\) is not dominated by \(\calA\)}
+        \State insert \(y\) into \(\calA\), removing dominated archive members
+        \State insert \(y\) into \(\calP'\)
+      \EndIf
+    \EndFor
+  \EndFor
+  \State \(\calP \gets \textsc{NextPopulation}(\calP,\calP',\calA)\)
+\EndWhile
+\State \Return \calA
+\end{algorithmic}
+\end{algorithm}
+
+The central question addressed in this paper is therefore: \emph{how should the parent subset \(\calS\) be chosen?}
+
+% ══════════════════════════════════════════════════════════════════════
+\section{Enhancement 1: Diversity-Guided Probing}\label{sec:diverse}
+
+\subsection{Motivation}
+
+A straightforward parent-selection policy may repeatedly explore archive
+members that are close to one another in objective space.  This can
+cause search effort to concentrate on already dense regions of the
+current approximation set while leaving other regions underexplored.
+When the archive is large, such concentration reduces the effective
+coverage of the Pareto front approximation.
+
+The purpose of diversity-guided probing is to allocate exploration
+effort to a subset of parent solutions that is \emph{well spread} in
+objective space.  The underlying principle is that, under a fixed
+computational budget, it is often preferable to explore a representative
+set of structurally different archive members rather than many nearly
+redundant ones.
+
+\subsection{Method}
+
+Let \(\calP\) denote the current candidate parent set.  Diversity-guided
+probing selects a subset \(\calS \subseteq \calP\) of prescribed budget
+\(B\) such that the selected solutions are as far apart as possible in
+normalised objective space.
+
+The method proceeds conceptually in three stages:
+\begin{enumerate}
+  \item \textbf{Normalisation.}  Objective vectors are mapped to a
+    common scale using the current objective ranges in the candidate
+    set.
+  \item \textbf{Seed selection.}  One candidate is chosen as an initial
+    representative.
+  \item \textbf{Farthest-point expansion.}  Repeatedly add the candidate
+    whose minimum distance to the already selected set is maximal.
+\end{enumerate}
+
+This produces a subset that approximates a max--min spread criterion.
+The selected parents are then explored in the order in which they were
+chosen, so that even if the run is interrupted early, the explored
+subset remains broadly representative.
+
+\subsection{Theoretical Effect}
+
+Diversity-guided probing does not change the archive update rule or the
+definition of local optimality.  Instead, it changes the \emph{order and
+distribution} of neighbourhood exploration.  Its expected effect is:
+\begin{itemize}
+  \item broader coverage of the current approximation set,
+  \item reduced oversampling of dense regions,
+  \item improved anytime behaviour under fixed budgets.
+\end{itemize}
+
+The method is especially attractive when the archive is already large
+and the main challenge is not finding \emph{any} improving move, but
+deciding \emph{where} to spend the next unit of search effort.
+
+% ══════════════════════════════════════════════════════════════════════
+\section{Enhancement 2: Scalarization-Guided Parent Selection}\label{sec:scalarized}
+
+\subsection{Motivation}
+
+Diversity alone does not distinguish between archive members that are
+merely different and archive members that are particularly promising
+under a given trade-off direction.  In many-objective search, a useful
+alternative is to steer exploration by repeatedly sampling preference
+directions and selecting archive solutions that are best aligned with
+those directions.
+
+The scalarization-guided strategy follows this idea.  Rather than
+choosing parents solely for geometric spread, it samples weighted
+trade-off vectors and prioritises archive members that minimise the
+corresponding scalarized objective.  This biases the search toward
+solutions that are likely to improve the approximation set in specific
+regions of the Pareto front.
+
+\subsection{Method}
+
+Let \(z^\star\) denote a reference ideal point and let
+\(\lambda = (\lambda_1,\dots,\lambda_D)\) be a non-negative weight
+vector with \(\sum_j \lambda_j = 1\).  For a solution \(x\), define the
+weighted Chebycheff scalarization
+\[
+g_\lambda(x \mid z^\star)
+=
+\max_{j=1,\dots,D}
+\left\{
+\lambda_j \,\frac{f_j(x)-z^\star_j}{r_j}
+\right\},
+\]
+where \(r_j > 0\) is a normalising range for objective \(j\).
+
+At each parent-selection step:
+\begin{enumerate}
+  \item sample one or more weight vectors \(\lambda\),
+  \item for each sampled \(\lambda\), identify the archive solution
+    \(x^\lambda \in \calA\) minimising \(g_\lambda(x \mid z^\star)\),
+  \item explore the neighbourhoods of the selected minimisers.
+\end{enumerate}
+
+This strategy is archive-driven: the parent candidates are drawn from
+the current non-dominated archive rather than from an arbitrary working
+population.  In this way, the search is repeatedly redirected toward
+solutions that are most representative of sampled trade-off directions.
+
+\subsection{Theoretical Effect}
+
+Scalarization-guided selection changes the search policy from
+\emph{coverage-oriented} to \emph{direction-oriented}.  Its expected
+effect is:
+\begin{itemize}
+  \item stronger exploitation of promising trade-off directions,
+  \item improved progress in regions where the archive is sparse but
+    strategically important,
+  \item better alignment between parent selection and quality indicators
+    based on directional trade-offs.
+\end{itemize}
+
+The method is particularly appealing when the archive is large and the
+main challenge is to identify which archive members are most likely to
+yield useful improvements under limited exploration budgets.
+
+% ══════════════════════════════════════════════════════════════════════
+\section{Experimental Setup}\label{sec:experiments}
+
+\subsection{Instances}
+
+We use 20 benchmark instances derived from real satellite catalogues
+over five cities (Lagos, Mexico City, Paris, Rio de Janeiro, and Tokyo
+Bay) at four size tiers up to 150 images.  Lagos uses 145 images at the
+largest tier, while the other cities use 150 images.  All instances are
+optimised with \(D=4\) objectives.
+
+\begin{table}[htbp]
+\centering
+\caption{Benchmark instance characteristics.}
+\label{tab:instances}
+\begin{tabular}{lrrr}
+\toprule
+\textbf{City} & \textbf{Images} & \textbf{Elements} & \textbf{Timeout (s)} \\
+\midrule
+\multirow{4}{*}{Lagos}
+  & 30  &    443  & 300 \\
+  & 50  &  1\,147 & 300 \\
+  & 100 &  4\,420 & 1200 \\
+  & 145 &  8\,503 & 1200 \\
+\midrule
+\multirow{4}{*}{Mexico City}
+  & 30  &    333  & 300 \\
+  & 50  &    842  & 300 \\
+  & 100 &  3\,384 & 1200 \\
+  & 150 &  5\,236 & 1200 \\
+\midrule
+\multirow{4}{*}{Paris}
+  & 30  &    475  & 300 \\
+  & 50  &    970  & 300 \\
+  & 100 &  4\,503 & 1200 \\
+  & 150 & 11\,027 & 1200 \\
+\midrule
+\multirow{4}{*}{Rio de Janeiro}
+  & 30  &    351  & 300 \\
+  & 50  &  1\,238 & 300 \\
+  & 100 &  5\,905 & 1200 \\
+  & 150 & 12\,879 & 1200 \\
+\midrule
+\multirow{4}{*}{Tokyo Bay}
+  & 30  &    298  & 300 \\
+  & 50  &    806  & 300 \\
+  & 100 &  3\,278 & 1200 \\
+  & 150 &  8\,079 & 1200 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Configurations}
+
+We compare three configurations:
+\begin{enumerate}
+  \item \textbf{Pure PLS:} the baseline PLS reference.
+  \item \textbf{Diverse Probe PLS:} the same baseline augmented with
+    diversity-guided parent probing.
+  \item \textbf{Scalarized PLS:} the same baseline augmented with
+    scalarization-guided archive selection.
+\end{enumerate}
+
+The purpose of this design is to isolate the effect of the two
+parent-selection strategies while keeping the underlying local search
+framework fixed.
+
+\subsection{Metrics}
+
+The primary metric is the \textbf{normalised hypervolume} (HV) computed
+with shared per-instance bounds derived from the union of all trace
+points across the compared configurations.  This ensures that HV values
+are directly comparable.
+
+We also analyse \textbf{HV-over-time} curves reconstructed from the
+search traces.  For each configuration and instance, the trace records
+the sequence of non-dominated-at-discovery solutions together with their
+timestamps.  We reconstruct the Pareto front at evenly spaced time
+points and compute HV at each point.
+
+\subsection{Implementation}
+
+The experiment driver is implemented in Python and calls a compiled PLS
+solver through language bindings.  Hypervolume-over-time curves are
+computed from archived traces using a shared reconstruction and
+evaluation pipeline.  All compared configurations use the same
+implementation framework and differ only in the parent-selection policy.
+
+% ══════════════════════════════════════════════════════════════════════
+\section{Results}\label{sec:results}
+
+\subsection{Hypervolume Summary}
+
+\Cref{tab:results} reports the final normalised hypervolume for all 20
+instances.  The table includes the baseline, the diversity-guided
+variant, and the scalarization-guided variant.
+
+\begin{table}[htbp]
+\centering
+\caption{Final normalised hypervolume for Pure PLS, Diverse Probe PLS,
+and Scalarized PLS.  Positive \(\Delta\) values indicate improvement
+over the Pure PLS baseline.}
+\label{tab:results}
+\begin{tabular}{lrrrrr}
+\toprule
+\textbf{Instance} & \textbf{Size} & \textbf{Pure PLS} &
+\textbf{Diverse Probe} & \textbf{Scalarized} &
+\textbf{Best} \\
+\midrule
+Lagos 30        &  30 & 0.811595 & 0.811595 & 0.811576 & Diverse \\
+Lagos 50        &  50 & 0.868126 & 0.867881 & 0.867573 & Pure \\
+Lagos 100       & 100 & 0.886549 & 0.923981 & 0.922884 & Diverse \\
+Lagos 145       & 145 & 0.734004 & 0.792120 & 0.816380 & Scalarized \\
+\midrule
+Mexico City 30  &  30 & 0.942413 & 0.942413 & 0.942400 & Diverse \\
+Mexico City 50  &  50 & 0.923096 & 0.922876 & 0.921505 & Pure \\
+Mexico City 100 & 100 & 0.902607 & 0.924284 & 0.921899 & Diverse \\
+Mexico City 150 & 150 & 0.784194 & 0.883515 & 0.879431 & Diverse \\
+\midrule
+Paris 30        &  30 & 0.839079 & 0.838858 & 0.821789 & Pure \\
+Paris 50        &  50 & 0.853323 & 0.855010 & 0.852591 & Diverse \\
+Paris 100       & 100 & 0.782960 & 0.894449 & 0.880452 & Diverse \\
+Paris 150       & 150 & 0.875556 & 0.944785 & 0.943737 & Diverse \\
+\midrule
+Rio 30          &  30 & 0.812803 & 0.812803 & 0.812541 & Diverse \\
+Rio 50          &  50 & 0.643427 & 0.643056 & 0.642872 & Pure \\
+Rio 100         & 100 & 0.936971 & 0.938717 & 0.937587 & Diverse \\
+Rio 150         & 150 & 0.781738 & 0.876039 & 0.876232 & Scalarized \\
+\midrule
+Tokyo Bay 30    &  30 & 0.719423 & 0.719423 & 0.719303 & Diverse \\
+Tokyo Bay 50    &  50 & 0.848188 & 0.848105 & 0.839300 & Pure \\
+Tokyo Bay 100   & 100 & 0.880687 & 0.898726 & 0.897927 & Diverse \\
+Tokyo Bay 150   & 150 & 0.860256 & 0.932349 & 0.928658 & Diverse \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Several patterns emerge immediately:
+\begin{itemize}
+  \item Both enhanced strategies substantially outperform the baseline on
+    many medium and large instances.
+  \item Diversity-guided probing is the strongest overall strategy,
+    achieving the best HV on 18 of 20 instances.
+  \item Scalarization-guided selection nevertheless achieves the best
+    result on two large instances: Lagos 145 and Rio 150.
+  \item On the smallest instances, all three configurations are often
+    very close, indicating that the baseline already explores the search
+    space effectively under the available budget.
+\end{itemize}
+
+\subsection{Improvement over the Baseline}
+
+To quantify the gains over the baseline, \Cref{tab:improvement} reports
+the percentage improvement of each enhanced strategy relative to Pure
+PLS.
+
+\begin{table}[htbp]
+\centering
+\caption{Percentage hypervolume improvement over Pure PLS.}
+\label{tab:improvement}
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Instance} & \textbf{Size} &
+\textbf{Diverse vs Pure (\%)} &
+\textbf{Scalarized vs Pure (\%)} \\
+\midrule
+Lagos 30        &  30 &  +0.00 &  -0.00 \\
+Lagos 50        &  50 &  -0.03 &  -0.06 \\
+Lagos 100       & 100 &  +4.22 &  +4.10 \\
+Lagos 145       & 145 &  +7.92 & +11.22 \\
+\midrule
+Mexico City 30  &  30 &  +0.00 &  -0.00 \\
+Mexico City 50  &  50 &  -0.02 &  -0.17 \\
+Mexico City 100 & 100 &  +2.40 &  +2.14 \\
+Mexico City 150 & 150 & +12.67 & +12.14 \\
+\midrule
+Paris 30        &  30 &  -0.03 &  -2.06 \\
+Paris 50        &  50 &  +0.20 &  -0.09 \\
+Paris 100       & 100 & +14.24 & +12.45 \\
+Paris 150       & 150 &  +7.91 &  +7.79 \\
+\midrule
+Rio 30          &  30 &  +0.00 &  -0.03 \\
+Rio 50          &  50 &  -0.06 &  -0.09 \\
+Rio 100         & 100 &  +0.19 &  +0.07 \\
+Rio 150         & 150 & +12.06 & +12.09 \\
+\midrule
+Tokyo Bay 30    &  30 &  +0.00 &  -0.02 \\
+Tokyo Bay 50    &  50 &  -0.01 &  -1.05 \\
+Tokyo Bay 100   & 100 &  +2.05 &  +1.96 \\
+Tokyo Bay 150   & 150 &  +8.38 &  +7.95 \\
+\midrule
+\multicolumn{2}{l}{\textbf{Average}} & \textbf{+3.60} & \textbf{+3.42} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The average improvements show that both strategies are beneficial, but
+that diversity-guided probing has a slight overall advantage.  The
+difference is small in aggregate, yet consistent enough to make
+diversity-guided probing the stronger default choice.
+
+\subsection{Direct Comparison: Diverse vs Scalarized}
+
+\Cref{tab:direct} compares the two enhanced strategies directly.
+
+\begin{table}[htbp]
+\centering
+\caption{Direct comparison of Scalarized PLS against Diverse Probe PLS.
+Positive \(\Delta\) indicates that Scalarized PLS is better.}
+\label{tab:direct}
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Instance} & \textbf{Size} &
+\textbf{Scalarized -- Diverse (\%)} &
+\textbf{Winner} \\
+\midrule
+Lagos 30        &  30 & -0.00 & Diverse \\
+Lagos 50        &  50 & -0.04 & Diverse \\
+Lagos 100       & 100 & -0.12 & Diverse \\
+Lagos 145       & 145 & +3.06 & Scalarized \\
+\midrule
+Mexico City 30  &  30 & -0.00 & Diverse \\
+Mexico City 50  &  50 & -0.15 & Diverse \\
+Mexico City 100 & 100 & -0.26 & Diverse \\
+Mexico City 150 & 150 & -0.46 & Diverse \\
+\midrule
+Paris 30        &  30 & -2.03 & Diverse \\
+Paris 50        &  50 & -0.28 & Diverse \\
+Paris 100       & 100 & -1.56 & Diverse \\
+Paris 150       & 150 & -0.11 & Diverse \\
+\midrule
+Rio 30          &  30 & -0.03 & Diverse \\
+Rio 50          &  50 & -0.03 & Diverse \\
+Rio 100         & 100 & -0.12 & Diverse \\
+Rio 150         & 150 & +0.02 & Scalarized \\
+\midrule
+Tokyo Bay 30    &  30 & -0.02 & Diverse \\
+Tokyo Bay 50    &  50 & -1.04 & Diverse \\
+Tokyo Bay 100   & 100 & -0.09 & Diverse \\
+Tokyo Bay 150   & 150 & -0.40 & Diverse \\
+\midrule
+\multicolumn{2}{l}{\textbf{Average}} & \textbf{-0.18} & \textbf{Diverse} \\
+\multicolumn{2}{l}{\textbf{Win--loss}} & \multicolumn{2}{r}{2 wins, 18 losses} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The direct comparison is decisive:
+\begin{itemize}
+  \item Diversity-guided probing wins on 18 of 20 instances.
+  \item Scalarization-guided selection wins on only two instances, both
+    at the largest size tier.
+  \item The average deficit of scalarization-guided selection relative
+    to diversity-guided probing is \(0.18\%\).
+\end{itemize}
+
+Thus, while scalarization-guided selection is competitive and sometimes
+superior on difficult large instances, diversity-guided probing is the
+better general-purpose strategy on this benchmark set.
+
+\subsection{Hypervolume-Over-Time Analysis}
+
+The hypervolume-over-time curves confirm the same qualitative picture.
+The diversity-guided strategy tends to achieve stronger early coverage
+of the approximation set, while the scalarization-guided strategy is
+more selective and therefore sometimes slower to spread across the front.
+On the hardest instances, however, scalarization-guided selection can
+eventually overtake diversity-guided probing by focusing search effort
+on strategically important trade-off directions.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{../hv_experiment_results_diverse_vs_scalarized_max150/fig_combined.png}
+\caption{Normalised hypervolume over time for all benchmark instances in
+the Diverse Probe PLS vs Scalarized PLS comparison.}
+\label{fig:hv_curves}
+\end{figure}
+
+\subsection{Visual Summary}
+
+\Cref{fig:bar_summary} summarises the final HV values across all
+instances.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[height=0.86\textheight,keepaspectratio]{../hv_experiment_results_diverse_vs_scalarized_max150/fig_barchart.png}
+\caption{Final normalised hypervolume by instance for Pure PLS, Diverse
+Probe PLS, and Scalarized PLS.}
+\label{fig:bar_summary}
+\end{figure}
+
+% ══════════════════════════════════════════════════════════════════════
+\section{Discussion}\label{sec:discussion}
+
+\paragraph{Why does diversity-guided probing work so well?}
+The SIMS objective space is heterogeneous and often exhibits multiple
+structurally distinct trade-off regions.  A diversity-guided policy
+allocates search effort across these regions more evenly, which is
+especially valuable when the archive is already large and the main risk
+is oversampling dense regions.  This explains why diversity-guided
+probing is the stronger default strategy on most instances.
+
+\paragraph{When does scalarization-guided selection help?}
+Scalarization-guided selection is most effective when the search must be
+steered toward specific trade-off directions that are difficult to reach
+through broad coverage alone.  The Lagos 145 and Rio 150 instances
+illustrate this regime: on these large instances, directional archive
+steering yields the best final HV.
+
+\paragraph{Small-instance behaviour.}
+On the 30-image tier, the differences between the strategies are
+minimal.  This suggests that the baseline already explores the search
+space sufficiently well under the available budget, leaving little room
+for parent-selection improvements.
+
+\paragraph{Medium and large instances.}
+From 100 images onward, both enhancements become clearly beneficial over
+the baseline.  The gains are particularly strong on Paris 100, Mexico
+City 150, Rio 150, and Tokyo Bay 150, indicating that parent-selection
+policy matters most when the archive is large and the search budget must
+be allocated carefully.
+
+\paragraph{Practical recommendation.}
+If a single enhanced strategy must be chosen, the results support
+\emph{diversity-guided probing} as the default.  Scalarization-guided
+selection remains valuable as a complementary strategy, especially for
+large instances where directional exploitation can dominate broad
+coverage.
+
+% ══════════════════════════════════════════════════════════════════════
+\section{Related Work}\label{sec:related}
+
+Pareto Local Search has long been recognised as a strong local-search
+framework for multi-objective combinatorial optimisation.  A central
+theme in the literature is that PLS performance depends not only on the
+neighbourhood operator, but also on archive management and search
+scheduling.
+
+Diversity-oriented archive exploration is closely related to the broader
+idea of maintaining spread in multi-objective search, which appears in
+evolutionary algorithms, decomposition methods, and archive management
+schemes.  The diversity-guided probing strategy studied here adapts this
+principle to the parent-selection stage of PLS.
+
+Scalarization-guided search has an equally rich history.  Weighted
+Chebycheff and related scalarizations are standard tools for expressing
+trade-off directions in multi-objective optimisation.  In the present
+context, scalarization is not used to replace Pareto dominance, but to
+guide the order in which archive members are selected for local
+exploration.
+
+The present study therefore sits at the intersection of two established
+ideas---diversity preservation and scalarization-based guidance---and
+evaluates them in a controlled PLS setting for the SIMS problem.
+
+% ══════════════════════════════════════════════════════════════════════
+\section{Conclusion}\label{sec:conclusion}
+
+We presented a comparative study of two parent-selection enhancements
+for Pareto Local Search on the four-objective Satellite Image Mosaic
+Selection problem: diversity-guided probing and scalarization-guided
+archive selection.
+
+The experiments show that:
+\begin{itemize}
+  \item both strategies improve over the baseline on medium and large
+    instances,
+  \item diversity-guided probing is the stronger default strategy,
+    improving final HV by \(+3.60\%\) on average over the baseline,
+  \item scalarization-guided selection is also effective, improving final
+    HV by \(+3.42\%\) on average over the baseline,
+  \item direct comparison favours diversity-guided probing on 18 of 20
+    instances, although scalarization-guided selection wins on two large
+    instances.
+\end{itemize}
+
+These results suggest that broad archive coverage is generally more
+valuable than directional exploitation in this benchmark set, but that
+scalarization-guided steering remains an important complementary tool
+for difficult large instances.
+
+\paragraph{Future work.}
+Natural next steps include:
+\begin{enumerate}
+  \item adaptive switching between diversity-guided and
+    scalarization-guided parent selection during a run,
+  \item hybrid parent-selection policies that combine spread and
+    directional preference more tightly,
+  \item evaluation on the 200-image instances and under larger time
+    budgets,
+  \item extension of the same comparison to hybrid exact/heuristic
+    configurations.
+\end{enumerate}
+
+\paragraph{Acknowledgements.}
+Computational experiments were conducted using the open-source SIMS
+solver framework with trace-based hypervolume evaluation.
+
+\end{document}

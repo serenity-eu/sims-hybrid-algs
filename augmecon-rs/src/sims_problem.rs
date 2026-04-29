@@ -142,34 +142,39 @@ impl SimsInstance {
     /// This matches Python's `get_nadir_bound_estimation()` method
     #[must_use]
     pub fn calculate_nadir_heuristic(&self, objectives: &[SimsObjective]) -> Vec<f64> {
-        objectives.iter().map(|obj| {
-            match obj {
-                SimsObjective::MinCost => {
-                    // Worst case: all images selected
-                    self.costs.iter().sum()
-                }
-                SimsObjective::CloudCoverage => {
-                    // Worst case: all cloud areas covered
-                    self.areas.iter().sum()
-                }
-                SimsObjective::MinResolution => {
-                    // Worst case: sum of max resolution per universe point
-                    let mut resolution_parts_max = vec![0.0; self.universe_size];
-                    for (idx, image) in self.images.iter().enumerate() {
-                        for &u in image {
-                            if resolution_parts_max[u] < self.resolution[idx] {
-                                resolution_parts_max[u] = self.resolution[idx];
+        objectives
+            .iter()
+            .map(|obj| {
+                match obj {
+                    SimsObjective::MinCost => {
+                        // Worst case: all images selected
+                        self.costs.iter().sum()
+                    }
+                    SimsObjective::CloudCoverage => {
+                        // Worst case: all cloud areas covered
+                        self.areas.iter().sum()
+                    }
+                    SimsObjective::MinResolution => {
+                        // Worst case: sum of max resolution per universe point
+                        let mut resolution_parts_max = vec![0.0; self.universe_size];
+                        for (idx, image) in self.images.iter().enumerate() {
+                            for &u in image {
+                                if resolution_parts_max[u] < self.resolution[idx] {
+                                    resolution_parts_max[u] = self.resolution[idx];
+                                }
                             }
                         }
+                        resolution_parts_max.iter().sum()
                     }
-                    resolution_parts_max.iter().sum()
+                    SimsObjective::MaxIncidenceAngle => {
+                        // Worst case: maximum incidence angle
+                        self.incidence_angle
+                            .iter()
+                            .fold(0.0_f64, |acc, &x| acc.max(x))
+                    }
                 }
-                SimsObjective::MaxIncidenceAngle => {
-                    // Worst case: maximum incidence angle
-                    self.incidence_angle.iter().fold(0.0_f64, |acc, &x| acc.max(x))
-                }
-            }
-        }).collect()
+            })
+            .collect()
     }
 
     /// Get the set of images that contain each universe point (`L_k` in the MILP model)
@@ -187,7 +192,25 @@ impl SimsInstance {
         point_images
     }
 
-    fn create_variables(&self, problem: &mut MultiObjectiveProblem) -> Vec<HashSet<usize>> {
+    /// Create decision variables for the MILP model.
+    ///
+    /// When `objectives` is `Some`, only the auxiliary variables required by those
+    /// objectives are created:
+    /// - `r_k` and `z_{k,j}` are created only when [`SimsObjective::MinResolution`] is present
+    /// - `maxf` is created only when [`SimsObjective::MaxIncidenceAngle`] is present
+    /// - `x_i` (image selection) and `y_c` (cloud coverage) are always created
+    ///
+    /// When `objectives` is `None` all variables are created (backwards-compatible).
+    fn create_variables(
+        &self,
+        problem: &mut MultiObjectiveProblem,
+        objectives: Option<&HashSet<SimsObjective>>,
+    ) -> Vec<HashSet<usize>> {
+        let needs_resolution =
+            objectives.is_none_or(|set| set.contains(&SimsObjective::MinResolution));
+        let needs_incidence_angle =
+            objectives.is_none_or(|set| set.contains(&SimsObjective::MaxIncidenceAngle));
+
         // x_i: binary variables for each image (equation 8)
         for i in 0..self.num_images {
             let var_name = format!("x_{i}");
@@ -201,37 +224,81 @@ impl SimsInstance {
             problem.add_variable(var_name, VariableType::Binary);
         }
 
-        // r_k: auxiliary variables for minimum resolution of each universe point (equations 11-12)
-        // Upper bound is set to max resolution to prevent unbounded maximization during nadir calculation
-        let max_resolution = self.resolution.iter().fold(0.0_f64, |acc, &x| acc.max(x));
-        for k in 0..self.universe_size {
-            let var_name = format!("r_{k}");
-            problem.add_variable(
-                var_name,
-                VariableType::Continuous {
-                    min: Some(0.0),
-                    max: Some(max_resolution),
-                },
+        // Pre-compute point-to-image mapping (needed for resolution variables and returned)
+        let point_images = self.get_universe_point_images();
+
+        // r_k and z_{kj}: only needed for MinResolution objective
+        if needs_resolution {
+            // r_k: auxiliary variables for minimum resolution of each universe point (equations 11-12)
+            let max_resolution = self.resolution.iter().fold(0.0_f64, |acc, &x| acc.max(x));
+            for k in 0..self.universe_size {
+                let var_name = format!("r_{k}");
+                problem.add_variable(
+                    var_name,
+                    VariableType::Continuous {
+                        min: Some(0.0),
+                        max: Some(max_resolution),
+                    },
+                );
+            }
+
+            // z_{kj}: auxiliary binary variables for resolution constraints (equation 10)
+            for (k, image_set) in point_images.iter().enumerate() {
+                for &j in image_set {
+                    let var_name = format!("z_{k}_{j}");
+                    problem.add_variable(var_name, VariableType::Binary);
+                }
+            }
+
+            log::debug!(
+                "Created resolution variables: {} r_k + {} z_{{k,j}}",
+                self.universe_size,
+                point_images.iter().map(HashSet::len).sum::<usize>()
+            );
+        } else {
+            log::info!(
+                "Skipping resolution variables (r_k, z_{{k,j}}): MinResolution not in objectives — \
+                 saving {} continuous + {} binary variables",
+                self.universe_size,
+                point_images.iter().map(HashSet::len).sum::<usize>()
             );
         }
 
-        // z_{kj}: auxiliary binary variables for resolution constraints (equation 10)
-        let point_images = self.get_universe_point_images();
-        for (k, image_set) in point_images.iter().enumerate() {
-            for &j in image_set {
-                let var_name = format!("z_{k}_{j}");
-                problem.add_variable(var_name, VariableType::Binary);
-            }
+        // maxf: only needed for MaxIncidenceAngle objective
+        if needs_incidence_angle {
+            let max_incidence = self
+                .incidence_angle
+                .iter()
+                .fold(0.0_f64, |acc, &x| acc.max(x));
+            problem.add_variable(
+                "maxf".to_string(),
+                VariableType::Continuous {
+                    min: Some(0.0),
+                    max: Some(max_incidence),
+                },
+            );
+        } else {
+            log::info!("Skipping maxf variable: MaxIncidenceAngle not in objectives");
         }
 
-        // maxf: auxiliary variable for maximum incidence angle (equation 13)
-        // Upper bound is set to max incidence angle to prevent unbounded maximization during nadir calculation
-        let max_incidence = self.incidence_angle.iter().fold(0.0_f64, |acc, &x| acc.max(x));
-        problem.add_variable(
-            "maxf".to_string(),
-            VariableType::Continuous {
-                min: Some(0.0),
-                max: Some(max_incidence),
+        log::info!(
+            "Model variables: {} total ({} x_i, {} y_c{}{})",
+            problem.var_map.len(),
+            self.num_images,
+            self.cloud_ids.len(),
+            if needs_resolution {
+                format!(
+                    ", {} r_k, {} z_{{k,j}}",
+                    self.universe_size,
+                    point_images.iter().map(HashSet::len).sum::<usize>()
+                )
+            } else {
+                String::new()
+            },
+            if needs_incidence_angle {
+                ", 1 maxf"
+            } else {
+                ""
             },
         );
 
@@ -280,7 +347,10 @@ impl SimsInstance {
                     problem.add_constraint(constraint!(cloud_coverage_expr.clone() >= y_var));
                     // Upper bound: Sum of covering images <= y_c * num_images
                     // This forces y_c = 1 if any covering image is selected
-                    #[allow(clippy::cast_precision_loss, reason = "Number of images is always much less than 2^53, so f64 conversion is safe")]
+                    #[allow(
+                        clippy::cast_precision_loss,
+                        reason = "Number of images is always much less than 2^53, so f64 conversion is safe"
+                    )]
                     let upper_bound_expr = y_var * (self.num_images as f64);
                     problem.add_constraint(constraint!(cloud_coverage_expr <= upper_bound_expr));
                 } else {
@@ -291,12 +361,17 @@ impl SimsInstance {
         }
     }
 
-    /// Add resolution-related constraints
+    /// Add resolution-related constraints (equations 10-12).
+    ///
+    /// Only call this when `MinResolution` is among the active objectives, since
+    /// the `r_k` and `z_{k,j}` variables must already exist in `problem`.
     fn add_resolution_constraints(
         &self,
         problem: &mut MultiObjectiveProblem,
         point_images: &[HashSet<usize>],
     ) {
+        let mut num_constraints: usize = 0;
+
         // Constraint 3: Resolution auxiliary variables constraints (equation 10)
         // Sum_{j in L_k} z_{kj} = |L_k| - 1, for each k
         for (k, image_set) in point_images.iter().enumerate() {
@@ -313,6 +388,7 @@ impl SimsInstance {
                 )]
                 let target = (image_set.len() - 1) as f64;
                 problem.add_constraint(constraint!(z_sum == target));
+                num_constraints += 1;
             }
         }
 
@@ -333,26 +409,42 @@ impl SimsInstance {
                         problem.add_constraint(constraint!(
                             r_var >= coeff * x_var + big_b - 2.0 * big_b * z_var
                         ));
+                        num_constraints += 1;
                     }
                 }
             }
         }
 
+        log::debug!("Added {num_constraints} resolution constraints");
+    }
+
+    /// Add incidence-angle constraints (equation 13).
+    ///
+    /// Only call this when `MaxIncidenceAngle` is among the active objectives,
+    /// since the `maxf` variable must already exist in `problem`.
+    fn add_incidence_angle_constraints(&self, problem: &mut MultiObjectiveProblem) {
         // Constraint 5: Maximum incidence angle constraints (equation 13)
         // maxf >= x_i * F_i, for all i
         if let Some(&maxf_var) = problem.var_map.get("maxf") {
+            let mut num_constraints: usize = 0;
             for i in 0..self.num_images {
                 if let Some(&x_var) = problem.var_map.get(&format!("x_{i}")) {
                     problem
                         .add_constraint(constraint!(maxf_var >= self.incidence_angle[i] * x_var));
+                    num_constraints += 1;
                 }
             }
+            log::debug!("Added {num_constraints} incidence angle constraints");
         }
     }
 
     /// Add objective functions
     /// If objectives is None, adds all objectives. Otherwise, only adds the specified objectives.
-    fn add_objectives(&self, problem: &mut MultiObjectiveProblem, objectives: Option<&HashSet<SimsObjective>>) {
+    fn add_objectives(
+        &self,
+        problem: &mut MultiObjectiveProblem,
+        objectives: Option<&HashSet<SimsObjective>>,
+    ) {
         // Helper to check if objective should be added
         let should_add = |obj: SimsObjective| objectives.is_none_or(|set| set.contains(&obj));
 
@@ -405,7 +497,7 @@ impl SimsInstance {
 }
 
 /// Create a SIMS multi-objective optimization problem following the MILP model
-/// 
+///
 /// # Arguments
 /// * `config` - The SIMS instance configuration
 /// * `objectives` - Optional set of objectives to include. If None, all objectives are added.
@@ -415,20 +507,53 @@ pub fn create_sims_problem(config: &SimsInstance) -> MultiObjectiveProblem {
 }
 
 /// Create a SIMS problem with specific objectives
+///
+/// When `objectives` is `Some`, only the variables, constraints, and objective
+/// functions required by those objectives are created.  This can dramatically
+/// reduce model size — for example, omitting [`SimsObjective::MinResolution`]
+/// avoids creating O(universe_size * num_images) auxiliary binary variables
+/// (`z_{k,j}`) and their Big-M constraints.
 #[must_use]
-#[allow(clippy::implicit_hasher, reason = "Public API uses standard HashSet for simplicity - users can convert if needed")]
+#[allow(
+    clippy::implicit_hasher,
+    reason = "Public API uses standard HashSet for simplicity - users can convert if needed"
+)]
 pub fn create_sims_problem_with_objectives(
     config: &SimsInstance,
     objectives: Option<&HashSet<SimsObjective>>,
 ) -> MultiObjectiveProblem {
+    let needs_resolution = objectives.is_none_or(|set| set.contains(&SimsObjective::MinResolution));
+    let needs_incidence_angle =
+        objectives.is_none_or(|set| set.contains(&SimsObjective::MaxIncidenceAngle));
+
     let mut problem = MultiObjectiveProblem::new();
 
-    // Create all variables and get point-image mapping
-    let point_images = config.create_variables(&mut problem);
+    // Create variables (conditionally based on objectives)
+    let point_images = config.create_variables(&mut problem, objectives);
 
-    // Add all constraints
+    // Always add set-covering and cloud-coverage constraints
     config.add_coverage_constraints(&mut problem);
-    config.add_resolution_constraints(&mut problem, &point_images);
+
+    // Add resolution constraints only when MinResolution is active
+    if needs_resolution {
+        config.add_resolution_constraints(&mut problem, &point_images);
+    } else {
+        log::info!("Skipping resolution constraints: MinResolution not in objectives");
+    }
+
+    // Add incidence angle constraints only when MaxIncidenceAngle is active
+    if needs_incidence_angle {
+        config.add_incidence_angle_constraints(&mut problem);
+    } else {
+        log::info!("Skipping incidence angle constraints: MaxIncidenceAngle not in objectives");
+    }
+
+    log::info!(
+        "SIMS MILP model: {} variables, {} constraints, {} objectives",
+        problem.var_map.len(),
+        problem.constraints.len(),
+        objectives.map_or(4, HashSet::len),
+    );
 
     // Add objectives (all or subset)
     config.add_objectives(&mut problem, objectives);
@@ -535,5 +660,187 @@ mod tests {
 
         // Should have constraints
         assert!(!problem.constraints.is_empty());
+    }
+
+    /// Helper to build the sample config used by several tests below.
+    fn sample_config() -> SimsInstance {
+        let mut config = SimsInstance::new(5, 4, 3, 100);
+
+        config.set_image_coverage(0, [0, 1].iter().copied().collect());
+        config.set_image_coverage(1, [1, 2].iter().copied().collect());
+        config.set_image_coverage(2, [2, 3].iter().copied().collect());
+        config.set_image_coverage(3, [0, 3].iter().copied().collect());
+        config.set_image_coverage(4, [0, 1, 2, 3].iter().copied().collect());
+
+        config.set_cloud_coverage(0, std::iter::once(0).collect());
+        config.set_cloud_coverage(1, std::iter::once(1).collect());
+        config.set_cloud_coverage(2, [1, 2].iter().copied().collect());
+        config.set_cloud_coverage(3, [0, 2].iter().copied().collect());
+        config.set_cloud_coverage(4, [0, 1, 2].iter().copied().collect());
+
+        config.cloud_ids = vec![0, 1, 2];
+
+        for (i, cost) in [10.0, 15.0, 20.0, 12.0, 25.0].iter().enumerate() {
+            config.set_cost(i, *cost);
+        }
+        for (k, area) in [5.0, 3.0, 4.0, 6.0].iter().enumerate() {
+            config.set_area(k, *area);
+        }
+        for (c, area) in [(0, 2.0), (1, 1.5), (2, 3.0)] {
+            config.set_cloud_area(c, area);
+        }
+        for (i, res) in [1.0, 2.0, 3.0, 1.5, 2.5].iter().enumerate() {
+            config.set_resolution(i, *res);
+        }
+        for (i, angle) in [10.0, 20.0, 15.0, 25.0, 30.0].iter().enumerate() {
+            config.set_incidence_angle(i, *angle);
+        }
+
+        config
+    }
+
+    #[test]
+    fn test_conditional_variables_all_objectives() {
+        // With all objectives: model should contain r_k, z_{k,j}, and maxf
+        let config = sample_config();
+        let problem = create_sims_problem(&config);
+
+        // r_k variables (4 universe points)
+        for k in 0..config.universe_size {
+            assert!(
+                problem.var_map.contains_key(&format!("r_{k}")),
+                "r_{k} should exist when all objectives are active"
+            );
+        }
+        // maxf variable
+        assert!(
+            problem.var_map.contains_key("maxf"),
+            "maxf should exist when all objectives are active"
+        );
+        // z_{k,j} at least some should exist
+        assert!(
+            problem.var_map.contains_key("z_0_0") || problem.var_map.contains_key("z_0_4"),
+            "z_{{k,j}} variables should exist when all objectives are active"
+        );
+        assert_eq!(problem.objectives.len(), 4);
+    }
+
+    #[test]
+    fn test_conditional_variables_cost_and_cloud_only() {
+        // With only cost + cloud_coverage: no r_k, no z_{k,j}, no maxf
+        let config = sample_config();
+        let objectives: HashSet<SimsObjective> =
+            [SimsObjective::MinCost, SimsObjective::CloudCoverage]
+                .into_iter()
+                .collect();
+        let problem = create_sims_problem_with_objectives(&config, Some(&objectives));
+
+        // r_k must NOT exist
+        for k in 0..config.universe_size {
+            assert!(
+                !problem.var_map.contains_key(&format!("r_{k}")),
+                "r_{k} should NOT exist when MinResolution is not requested"
+            );
+        }
+        // maxf must NOT exist
+        assert!(
+            !problem.var_map.contains_key("maxf"),
+            "maxf should NOT exist when MaxIncidenceAngle is not requested"
+        );
+        // x_i must still exist
+        for i in 0..config.num_images {
+            assert!(
+                problem.var_map.contains_key(&format!("x_{i}")),
+                "x_{i} must always exist"
+            );
+        }
+        // y_c must still exist
+        for &c in &config.cloud_ids {
+            assert!(
+                problem.var_map.contains_key(&format!("y_{c}")),
+                "y_{c} must always exist"
+            );
+        }
+        assert_eq!(problem.objectives.len(), 2);
+    }
+
+    #[test]
+    fn test_conditional_variables_with_resolution() {
+        // With cost + resolution: r_k and z_{k,j} should exist, maxf should NOT
+        let config = sample_config();
+        let objectives: HashSet<SimsObjective> =
+            [SimsObjective::MinCost, SimsObjective::MinResolution]
+                .into_iter()
+                .collect();
+        let problem = create_sims_problem_with_objectives(&config, Some(&objectives));
+
+        for k in 0..config.universe_size {
+            assert!(
+                problem.var_map.contains_key(&format!("r_{k}")),
+                "r_{k} should exist when MinResolution is requested"
+            );
+        }
+        assert!(
+            !problem.var_map.contains_key("maxf"),
+            "maxf should NOT exist when MaxIncidenceAngle is not requested"
+        );
+        assert_eq!(problem.objectives.len(), 2);
+    }
+
+    #[test]
+    fn test_conditional_variables_with_incidence_angle() {
+        // With cost + incidence angle: maxf should exist, r_k/z_{k,j} should NOT
+        let config = sample_config();
+        let objectives: HashSet<SimsObjective> =
+            [SimsObjective::MinCost, SimsObjective::MaxIncidenceAngle]
+                .into_iter()
+                .collect();
+        let problem = create_sims_problem_with_objectives(&config, Some(&objectives));
+
+        assert!(
+            problem.var_map.contains_key("maxf"),
+            "maxf should exist when MaxIncidenceAngle is requested"
+        );
+        for k in 0..config.universe_size {
+            assert!(
+                !problem.var_map.contains_key(&format!("r_{k}")),
+                "r_{k} should NOT exist when MinResolution is not requested"
+            );
+        }
+        assert_eq!(problem.objectives.len(), 2);
+    }
+
+    #[test]
+    fn test_model_size_reduction() {
+        // Verify that omitting resolution dramatically reduces variable count
+        let config = sample_config();
+
+        let full_problem = create_sims_problem(&config);
+        let full_var_count = full_problem.var_map.len();
+        let full_constraint_count = full_problem.constraints.len();
+
+        let objectives: HashSet<SimsObjective> =
+            [SimsObjective::MinCost, SimsObjective::CloudCoverage]
+                .into_iter()
+                .collect();
+        let reduced_problem = create_sims_problem_with_objectives(&config, Some(&objectives));
+        let reduced_var_count = reduced_problem.var_map.len();
+        let reduced_constraint_count = reduced_problem.constraints.len();
+
+        println!("Full model:    {full_var_count} vars, {full_constraint_count} constraints");
+        println!("Reduced model: {reduced_var_count} vars, {reduced_constraint_count} constraints");
+
+        // Reduced model should have strictly fewer variables (no r_k, z_{kj}, maxf)
+        assert!(
+            reduced_var_count < full_var_count,
+            "Reduced model ({reduced_var_count} vars) should have fewer variables \
+             than full model ({full_var_count} vars)"
+        );
+        // Reduced model should have strictly fewer constraints
+        assert!(
+            reduced_constraint_count < full_constraint_count,
+            "Reduced model ({reduced_constraint_count} constraints) should have fewer \
+             constraints than full model ({full_constraint_count} constraints)"
+        );
     }
 }

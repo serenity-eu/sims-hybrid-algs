@@ -1,6 +1,7 @@
 use pareto::ParetoFront;
 use pls::{
     objectives::ObjectiveType, pareto_local_search::ParetoLocalSearch,
+    pls_config::PlsOptimizations,
     problem_bitset::ProblemBitset, solution::{SIMSModifiable, bitset_encoded_solution::BitsetEncodedSolution},
     solution_set_impl::NdTreeSolutionSet,
 };
@@ -61,7 +62,7 @@ fn main() {
     // Run PLS
     let is_deterministic = true;
     let mut pareto_local_search =
-        ParetoLocalSearch::new(&problem, &initial_population, 1..=5, is_deterministic);
+        ParetoLocalSearch::new(&problem, &initial_population, 1..=5, is_deterministic, PlsOptimizations::default());
 
     let max_iterations = usize::MAX;
     let timeout = Duration::from_secs(1800); // 30 minutes for larger instance

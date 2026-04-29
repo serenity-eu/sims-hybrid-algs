@@ -13,6 +13,7 @@ use crate::{
         snapshot::{fingerprint, GlobalFrontSlot, ObjectiveSnapshot, SnapshotSlot},
     },
     pareto_local_search::{ParetoLocalSearch, SAPlsStatus, StepStatus},
+    pls_config::PlsOptimizations,
     problem::SetCoverProblem,
     solution::{EncodedSolution, ImageSet},
     solution_set_impl::NdTreeSolutionSet,
@@ -133,6 +134,7 @@ where
             &initial_pop,
             config.neighborhood_size_range.clone(),
             config.is_deterministic,
+            PlsOptimizations::default(),
         );
         Self {
             region,

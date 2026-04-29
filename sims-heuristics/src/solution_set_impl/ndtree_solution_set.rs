@@ -1,6 +1,10 @@
 use nd_tree::nd_tree::{NDTree, NDTreeSolutionIterator};
-use pareto::{MoSolution, ParetoFront, Random, RandomCollection};
+use pareto::{
+    MoSolution, Objectives, ParetoFront, Random, RandomCollection, ScalarizedArchiveQuery,
+};
 use std::fmt::Debug;
+
+use crate::scalarization::WeightedChebycheffCoeffs;
 
 use crate::solution::ImageSet;
 #[cfg(debug_assertions)]
@@ -99,6 +103,53 @@ where
     /// Remove all solutions dominated by `dominator` without inserting it.
     pub fn remove_dominated(&mut self, dominator: &T) {
         self.nd_tree.remove_dominated(dominator);
+    }
+
+    /// Find the best acceptable archive solution under augmented weighted
+    /// Chebycheff scalarization using ND-tree branch-and-bound pruning.
+    ///
+    /// The query is evaluated against the provided global `ideal` point and
+    /// precomputed scalarization `coeffs`. The `accept` predicate can exclude
+    /// temporarily ineligible archive members (for example, solutions whose
+    /// neighborhood at the current structure has already been explored).
+    ///
+    /// Returns the best acceptable solution together with its exact score, or
+    /// `None` if no acceptable solution exists.
+    pub fn find_best_weighted_chebycheff<Accept>(
+        &self,
+        ideal: &Objectives<D>,
+        coeffs: &WeightedChebycheffCoeffs<D>,
+        accept: Accept,
+    ) -> Option<(&T, f64)>
+    where
+        Accept: FnMut(&T) -> bool,
+    {
+        self.find_best_with_pruning(
+            accept,
+            |node_ideal| coeffs.score(node_ideal, ideal),
+            |solution| coeffs.score(solution.objectives(), ideal),
+        )
+    }
+}
+
+impl<T, const D: usize> ScalarizedArchiveQuery<T, D> for NdTreeSolutionSet<T, D>
+where
+    T: ImageSet<D> + MoSolution<D> + PartialEq + Sized + Clone,
+{
+    fn find_best_with_pruning<Accept, NodeLowerBound, SolutionScore>(
+        &self,
+        accept: Accept,
+        node_lower_bound: NodeLowerBound,
+        solution_score: SolutionScore,
+    ) -> Option<(&T, f64)>
+    where
+        Accept: FnMut(&T) -> bool,
+        NodeLowerBound: Fn(&Objectives<D>) -> f64,
+        SolutionScore: Fn(&T) -> f64,
+    {
+        self.nd_tree
+            .find_best_with_pruning(accept, node_lower_bound, solution_score)
+            .map(|result| (result.solution, result.score))
     }
 }
 

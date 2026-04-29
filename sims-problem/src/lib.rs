@@ -32,15 +32,20 @@ fn sims_problem(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(solver::solve_with_milp, m)?)?;
     #[cfg(feature = "milp")]
     m.add_function(wrap_pyfunction!(solver::solve_with_hybrid, m)?)?;
+    m.add_function(wrap_pyfunction!(solver::solve_with_nsga2, m)?)?;
+    m.add_function(wrap_pyfunction!(solver::solve_with_moead, m)?)?;
 
     // Add hypervolume function
     m.add_function(wrap_pyfunction!(hypervolume::compute_hypervolume, m)?)?;
 
     // Add trace generation function
     m.add_function(wrap_pyfunction!(trace::generate_trace, m)?)?;
-    
+
     // Add trace merging function
     m.add_function(wrap_pyfunction!(trace::merge_traces, m)?)?;
+
+    // Add HV-over-time curve computation from trace
+    m.add_function(wrap_pyfunction!(trace::compute_hv_curve_from_trace, m)?)?;
 
     // Add classes
     m.add_class::<SimsDiscreteProblem>()?;
