@@ -1,0 +1,43 @@
+{
+  "instance_name": "paris_200",
+  "test_type": "4d",
+  "objectives": [
+    "min_cost",
+    "cloud_coverage",
+    "min_max_incidence_angle",
+    "min_resolution"
+  ],
+  "num_solutions": 1,
+  "solutions": [
+    {
+      "selected_images": [
+        2,
+        11,
+        152,
+        154,
+        161,
+        163,
+        38,
+        53,
+        183,
+        57,
+        67,
+        68,
+        71,
+        199,
+        81,
+        92,
+        98,
+        126,
+        127
+      ],
+      "cost": 5341684,
+      "cloudy_area": 3257762,
+      "max_incidence_angle": 441,
+      "min_resolutions_sum": 674662,
+      "timestamp_s": 162.221663,
+      "phase": "exact",
+      "index": 0
+    }
+  ]
+}

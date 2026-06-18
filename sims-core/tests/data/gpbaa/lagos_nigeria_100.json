@@ -1,0 +1,13 @@
+{
+  "instance_name": "lagos_nigeria_100",
+  "test_type": "4d",
+  "objectives": [
+    "min_cost",
+    "cloud_coverage",
+    "min_max_incidence_angle",
+    "min_resolution"
+  ],
+  "num_solutions": 0,
+  "pareto_front_complete": false,
+  "solutions": []
+}

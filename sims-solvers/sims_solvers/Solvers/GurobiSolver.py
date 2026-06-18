@@ -164,6 +164,34 @@ class GurobiSolver(Solver):
         new_constraint = self.model.solver_model.addConstr(constraint >= rhs)
         return new_constraint
 
+    def add_objective_nogood(self, obj_values):
+        """
+        Exclude one exact objective vector via indicator constraints + at-least-one binary sum.
+        Returns a list of all added Gurobi constraints and variables; pass to remove_constraint.
+        """
+        m = self.model.solver_model
+        count = getattr(self, '_nogood_count', 0)
+        self._nogood_count = count + 1
+        to_remove = []
+        y_all = []
+        for j, v_j in enumerate(obj_values):
+            v_j = int(v_j)
+            y_lt = m.addVar(vtype=gp.GRB.BINARY, name=f"ng_lt_{count}_{j}")
+            y_gt = m.addVar(vtype=gp.GRB.BINARY, name=f"ng_gt_{count}_{j}")
+            to_remove.extend([y_lt, y_gt])
+            y_all.extend([y_lt, y_gt])
+            to_remove.append(m.addGenConstrIndicator(
+                y_lt, True, self.model.objectives[j] <= v_j - 1,
+                name=f"ng_lt_ct_{count}_{j}",
+            ))
+            to_remove.append(m.addGenConstrIndicator(
+                y_gt, True, self.model.objectives[j] >= v_j + 1,
+                name=f"ng_gt_ct_{count}_{j}",
+            ))
+        to_remove.append(m.addConstr(gp.quicksum(y_all) >= 1, name=f"ng_sum_{count}"))
+        m.update()
+        return to_remove
+
     def remove_constraint(self, constraint):
         self.model.solver_model.remove(constraint)
 

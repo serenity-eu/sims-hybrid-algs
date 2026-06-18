@@ -41,6 +41,12 @@ pub(crate) struct StepStats {
     pub(crate) auxiliary_len: usize,
     pub(crate) pareto_added_count: usize,
     pub(crate) pareto_initial_count: usize,
+    /// Number of parents selected for exploration this step. Under scalarized
+    /// selection this is typically much smaller than the population/archive
+    /// size (e.g. `scalarized_parent_budget`), so an empty auxiliary
+    /// population does *not* imply the current neighborhood structure is
+    /// exhausted -- there may be other eligible candidates still untried.
+    pub(crate) selected_parent_count: usize,
 }
 
 impl StepStats {
@@ -52,6 +58,7 @@ impl StepStats {
             auxiliary_len: 0,
             pareto_added_count: 0,
             pareto_initial_count,
+            selected_parent_count: 0,
         }
     }
 }
@@ -106,6 +113,32 @@ pub enum StepStatus {
     IncreasedNeighborhoodStructure,
     /// All neighborhood structures were explored
     AllNeighborhoodStructuresExplored,
+    /// Scalarized selection only tried a subset of eligible candidates this
+    /// step (e.g. `scalarized_parent_budget` parents) and found no
+    /// improvement, but other eligible candidates remain untried at the
+    /// current neighborhood structure. Unlike `AllNeighborhoodStructuresExplored`,
+    /// this does not mean the search is exhausted -- the time budget should
+    /// keep driving further iterations that draw fresh random weights/parents
+    /// (per Jaszkiewicz 2018's MPLS Algorithm 3, which loops purely on wall
+    /// time rather than declaring per-k exhaustion).
+    ScalarizedCandidatesRemaining,
+}
+
+/// True for selection modes that only sample a subset of eligible candidates
+/// per step (so an empty auxiliary population does not imply exhaustion of
+/// the current neighborhood structure).
+#[cfg(feature = "scalarized_selection")]
+fn is_scalarized_selection_mode(mode: SolutionSelectionMode) -> bool {
+    matches!(
+        mode,
+        SolutionSelectionMode::ScalarizedChebycheff
+            | SolutionSelectionMode::DiverseThenScalarizedChebycheff
+    )
+}
+
+#[cfg(not(feature = "scalarized_selection"))]
+fn is_scalarized_selection_mode(_mode: SolutionSelectionMode) -> bool {
+    false
 }
 
 /// SA-PLS step outcome. Maps to the design doc's section 16.7 termination semantics.
@@ -326,7 +359,8 @@ where
         Self::log_auxiliary_population(&auxiliary_population);
         self.log_pareto_front();
 
-        let status = self.determine_next_step(auxiliary_population);
+        let status =
+            self.determine_next_step(auxiliary_population, step_stats.selected_parent_count);
         StepResult {
             status,
             stats: step_stats,
@@ -379,6 +413,7 @@ where
             iteration as u64,
             is_deterministic,
         );
+        step_stats.selected_parent_count = selected_parents.len();
 
         'population: for (index, solution) in selected_parents.into_iter().enumerate() {
             let solution_span = debug_span!(
@@ -808,14 +843,37 @@ where
 
     #[instrument(level = "debug", skip(self, auxiliary_population), fields(
         auxiliary_size = auxiliary_population.len(),
+        selected_parent_count,
         current_neighborhood_structure = self.neigborhood_structure,
         max_neighborhood_structure = self.neighborhood_size_range.end()
     ))]
-    fn determine_next_step(&mut self, auxiliary_population: S) -> StepStatus {
+    fn determine_next_step(
+        &mut self,
+        auxiliary_population: S,
+        selected_parent_count: usize,
+    ) -> StepStatus {
         if !auxiliary_population.is_empty() {
             tracing::debug!("New population found, replacing current population");
             self.replace_population_with_auxiliary(auxiliary_population);
             return StepStatus::NewPopulation;
+        }
+
+        // Scalarized selection only samples `scalarized_parent_budget` parents
+        // per step, so an empty auxiliary does not mean the current
+        // neighborhood structure is exhausted -- it just means the sampled
+        // parent(s) found nothing this time. Per Jaszkiewicz (2018) MPLS
+        // Algorithm 3, the search should keep drawing fresh random
+        // weights/parents until the time budget runs out rather than
+        // escalating/terminating based on a single parent's outcome.
+        if selected_parent_count > 0
+            && is_scalarized_selection_mode(self.optimizations.solution_selection_mode)
+        {
+            tracing::debug!(
+                "Scalarized selection found no improvement from sampled parent(s), but other \
+                 eligible candidates remain at this neighborhood structure -- continuing"
+            );
+            self.add_eligible_pareto_solutions();
+            return StepStatus::ScalarizedCandidatesRemaining;
         }
 
         // Perturbation restart: inject perturbed archive solutions before

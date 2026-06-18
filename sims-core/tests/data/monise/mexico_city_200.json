@@ -1,0 +1,58 @@
+{
+  "instance_name": "mexico_city_200",
+  "test_type": "4d",
+  "objectives": [
+    "min_cost",
+    "cloud_coverage",
+    "min_max_incidence_angle",
+    "min_resolution"
+  ],
+  "num_solutions": 2,
+  "pareto_front_complete": true,
+  "solutions": [
+    {
+      "selected_images": [
+        12
+      ],
+      "cost": 623375,
+      "cloudy_area": 737152,
+      "max_incidence_angle": 216,
+      "min_resolutions_sum": 1404900,
+      "timestamp_s": 52.968475,
+      "phase": "monise",
+      "index": 0
+    },
+    {
+      "selected_images": [
+        5,
+        6,
+        7,
+        11,
+        12,
+        16,
+        26,
+        28,
+        31,
+        33,
+        35,
+        43,
+        57,
+        65,
+        68,
+        72,
+        99,
+        124,
+        173,
+        181,
+        196
+      ],
+      "cost": 7040314,
+      "cloudy_area": 0,
+      "max_incidence_angle": 295,
+      "min_resolutions_sum": 281274,
+      "timestamp_s": 369.662184,
+      "phase": "monise",
+      "index": 1
+    }
+  ]
+}

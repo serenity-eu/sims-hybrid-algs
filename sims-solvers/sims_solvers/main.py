@@ -14,6 +14,8 @@ from sims_solvers.Config import Config
 from sims_solvers.FrontGenerators.AnejaNair import AnejaNair
 from sims_solvers.FrontGenerators.CoverageGridPoint import CoverageGridPoint
 from sims_solvers.FrontGenerators.Gavanelli import Gavanelli
+from sims_solvers.FrontGenerators.MONISE import MONISE, MONISEWithCoopt
+from sims_solvers.FrontGenerators.RecursiveFacetDecomposition import RecursiveFacetDecomposition
 from sims_solvers.FrontGenerators.Saugmecon import Saugmecon
 from sims_solvers.Instances.InstanceGeneric import InstanceGeneric
 from sims_solvers.Instances.InstanceMinizinc import InstanceMinizinc
@@ -130,10 +132,7 @@ def build_instance_minizinc_data(config: Config) -> InstanceGeneric:
     # here we build the instance, it could from minizinc or from other format
     model = Model(config.input_mzn)
     model.add_file(config.input_dzn, parse_data=True)
-    if config.solver_name == "ortools-py":
-        mzn_solver = Solver.lookup("gurobi")
-    else:
-        mzn_solver = Solver.lookup(config.solver_name)
+    mzn_solver = Solver.lookup(config.solver_name)
     config.initialize_cores(mzn_solver)
     minizinc_instance = Instance(mzn_solver, model)
     problem_name = config.problem_name
@@ -400,6 +399,12 @@ def set_front_strategy(config, solver):
         return CoverageGridPoint(solver, Timer(config.solver_timeout_sec))
     elif config.front_strategy == "aneja-nair":
         return AnejaNair(solver, Timer(config.solver_timeout_sec))
+    elif config.front_strategy == "recursive-facet":
+        return RecursiveFacetDecomposition(solver, Timer(config.solver_timeout_sec))
+    elif config.front_strategy == "monise":
+        return MONISE(solver, Timer(config.solver_timeout_sec))
+    elif config.front_strategy == "monise-with-coopt":
+        return MONISEWithCoopt(solver, Timer(config.solver_timeout_sec))
     else:
         raise ValueError("Unknown front strategy: " + config.front_strategy)
 

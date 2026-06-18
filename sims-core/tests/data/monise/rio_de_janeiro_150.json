@@ -1,0 +1,146 @@
+{
+  "instance_name": "rio_de_janeiro_150",
+  "test_type": "4d",
+  "objectives": [
+    "min_cost",
+    "cloud_coverage",
+    "min_max_incidence_angle",
+    "min_resolution"
+  ],
+  "num_solutions": 6,
+  "pareto_front_complete": false,
+  "solutions": [
+    {
+      "selected_images": [
+        5,
+        21,
+        35,
+        72,
+        135
+      ],
+      "cost": 2086330,
+      "cloudy_area": 399474,
+      "max_incidence_angle": 191,
+      "min_resolutions_sum": 643950,
+      "timestamp_s": 34.779383,
+      "phase": "monise",
+      "index": 0
+    },
+    {
+      "selected_images": [
+        3,
+        4,
+        5,
+        9,
+        10,
+        16,
+        18,
+        21,
+        25,
+        29,
+        32,
+        35,
+        39,
+        42,
+        69,
+        79,
+        93,
+        99,
+        112,
+        113
+      ],
+      "cost": 9179590,
+      "cloudy_area": 43,
+      "max_incidence_angle": 290,
+      "min_resolutions_sum": 386658,
+      "timestamp_s": 156.477343,
+      "phase": "monise",
+      "index": 1
+    },
+    {
+      "selected_images": [
+        4,
+        10,
+        32,
+        42,
+        69,
+        79,
+        93,
+        99,
+        113
+      ],
+      "cost": 5294160,
+      "cloudy_area": 433845,
+      "max_incidence_angle": 290,
+      "min_resolutions_sum": 386658,
+      "timestamp_s": 199.64000099999998,
+      "phase": "monise",
+      "index": 2
+    },
+    {
+      "selected_images": [
+        1,
+        5,
+        11,
+        12,
+        21,
+        63,
+        68,
+        74,
+        112
+      ],
+      "cost": 2951160,
+      "cloudy_area": 450948,
+      "max_incidence_angle": 145,
+      "min_resolutions_sum": 549370,
+      "timestamp_s": 236.530782,
+      "phase": "monise",
+      "index": 3
+    },
+    {
+      "selected_images": [
+        2,
+        5,
+        12,
+        18,
+        19,
+        21,
+        40,
+        46,
+        68,
+        99,
+        112
+      ],
+      "cost": 3051598,
+      "cloudy_area": 5038,
+      "max_incidence_angle": 314,
+      "min_resolutions_sum": 640690,
+      "timestamp_s": 439.510121,
+      "phase": "monise",
+      "index": 4
+    },
+    {
+      "selected_images": [
+        2,
+        5,
+        12,
+        18,
+        19,
+        21,
+        39,
+        40,
+        46,
+        68,
+        99,
+        112
+      ],
+      "cost": 512,
+      "cloudy_area": 32,
+      "max_incidence_angle": 595699079192008,
+      "min_resolutions_sum": 9380208574470,
+      "timestamp_s": 447.39160000000004,
+      "phase": "monise",
+      "index": 5
+    }
+  ]
+}

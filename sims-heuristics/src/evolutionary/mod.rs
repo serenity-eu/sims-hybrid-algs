@@ -38,6 +38,7 @@
 pub mod memetic;
 pub mod moead;
 pub mod nsga2;
+pub mod nsga3;
 pub mod operators;
 
 #[cfg(feature = "external_solvers")]
@@ -47,10 +48,12 @@ pub mod optirustic_adapter;
 
 // Re-export main algorithm entry points
 pub use memetic::{
-    EaBackend, MemeticAlgorithm, MemeticConfig, MemeticResult, run_memetic_moead, run_memetic_nsga2,
+    EaBackend, MemeticAlgorithm, MemeticConfig, MemeticResult, run_memetic_moead,
+    run_memetic_nsga2, run_memetic_nsga3,
 };
 pub use moead::Moead;
 pub use nsga2::Nsga2;
+pub use nsga3::{Nsga3, Nsga3Config};
 
 // Re-export external adapter entry points when the feature is enabled
 #[cfg(feature = "external_solvers")]

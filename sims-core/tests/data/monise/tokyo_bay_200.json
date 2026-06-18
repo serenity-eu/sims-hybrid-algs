@@ -1,0 +1,121 @@
+{
+  "instance_name": "tokyo_bay_200",
+  "test_type": "4d",
+  "objectives": [
+    "min_cost",
+    "cloud_coverage",
+    "min_max_incidence_angle",
+    "min_resolution"
+  ],
+  "num_solutions": 5,
+  "pareto_front_complete": false,
+  "solutions": [
+    {
+      "selected_images": [
+        13,
+        153,
+        186
+      ],
+      "cost": 2128810,
+      "cloudy_area": 13745,
+      "max_incidence_angle": 166,
+      "min_resolutions_sum": 742750,
+      "timestamp_s": 58.526575,
+      "phase": "monise",
+      "index": 0
+    },
+    {
+      "selected_images": [
+        13,
+        23,
+        30,
+        31,
+        48,
+        55,
+        62,
+        64,
+        65,
+        94,
+        98,
+        128,
+        132,
+        154,
+        162,
+        175,
+        179,
+        180
+      ],
+      "cost": 9241208,
+      "cloudy_area": 0,
+      "max_incidence_angle": 455,
+      "min_resolutions_sum": 445650,
+      "timestamp_s": 224.54712600000002,
+      "phase": "monise",
+      "index": 1
+    },
+    {
+      "selected_images": [
+        4,
+        8,
+        25,
+        26,
+        32,
+        40,
+        42,
+        52,
+        64,
+        70,
+        87,
+        91,
+        102,
+        108,
+        116,
+        123,
+        132,
+        162,
+        180
+      ],
+      "cost": 7586442,
+      "cloudy_area": 18928,
+      "max_incidence_angle": 294,
+      "min_resolutions_sum": 445650,
+      "timestamp_s": 250.01889200000002,
+      "phase": "monise",
+      "index": 2
+    },
+    {
+      "selected_images": [
+        11,
+        13,
+        40,
+        48,
+        111,
+        153
+      ],
+      "cost": 3242436,
+      "cloudy_area": 18655,
+      "max_incidence_angle": 166,
+      "min_resolutions_sum": 589150,
+      "timestamp_s": 277.87829100000005,
+      "phase": "monise",
+      "index": 3
+    },
+    {
+      "selected_images": [
+        13,
+        99,
+        119,
+        132,
+        144,
+        153
+      ],
+      "cost": 3023920,
+      "cloudy_area": 183463,
+      "max_incidence_angle": 294,
+      "min_resolutions_sum": 482890,
+      "timestamp_s": 601.263326,
+      "phase": "monise",
+      "index": 4
+    }
+  ]
+}

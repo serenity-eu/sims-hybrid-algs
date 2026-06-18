@@ -1,0 +1,160 @@
+{
+  "instance_name": "mexico_city_100",
+  "test_type": "4d",
+  "objectives": [
+    "min_cost",
+    "cloud_coverage",
+    "min_max_incidence_angle",
+    "min_resolution"
+  ],
+  "num_solutions": 6,
+  "pareto_front_complete": false,
+  "solutions": [
+    {
+      "selected_images": [
+        1,
+        9,
+        17,
+        32,
+        47,
+        65,
+        70,
+        98
+      ],
+      "cost": 2119860,
+      "cloudy_area": 36598,
+      "max_incidence_angle": 198,
+      "min_resolutions_sum": 169200,
+      "timestamp_s": 3.613447,
+      "phase": "monise",
+      "index": 0
+    },
+    {
+      "selected_images": [
+        0,
+        1,
+        5,
+        6,
+        8,
+        9,
+        10,
+        11,
+        13,
+        16,
+        18,
+        25,
+        38,
+        39,
+        48,
+        53,
+        59,
+        64,
+        68,
+        70,
+        73,
+        74,
+        81,
+        87,
+        93,
+        97
+      ],
+      "cost": 8969044,
+      "cloudy_area": 0,
+      "max_incidence_angle": 271,
+      "min_resolutions_sum": 102817,
+      "timestamp_s": 18.146145,
+      "phase": "monise",
+      "index": 1
+    },
+    {
+      "selected_images": [
+        2,
+        3,
+        6,
+        16,
+        26,
+        33,
+        48,
+        53,
+        74,
+        81,
+        83
+      ],
+      "cost": 4296168,
+      "cloudy_area": 204194,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 101590,
+      "timestamp_s": 20.706671,
+      "phase": "monise",
+      "index": 2
+    },
+    {
+      "selected_images": [
+        1,
+        7,
+        29,
+        30,
+        32,
+        70,
+        82,
+        88,
+        92,
+        99
+      ],
+      "cost": 3571392,
+      "cloudy_area": 73979,
+      "max_incidence_angle": 143,
+      "min_resolutions_sum": 121540,
+      "timestamp_s": 24.641793,
+      "phase": "monise",
+      "index": 3
+    },
+    {
+      "selected_images": [
+        17,
+        20,
+        33,
+        34,
+        50,
+        55,
+        70,
+        92,
+        98
+      ],
+      "cost": 3278008,
+      "cloudy_area": 250093,
+      "max_incidence_angle": 198,
+      "min_resolutions_sum": 106290,
+      "timestamp_s": 47.324327,
+      "phase": "monise",
+      "index": 4
+    },
+    {
+      "selected_images": [
+        17,
+        25,
+        34,
+        36,
+        39,
+        42,
+        44,
+        48,
+        49,
+        50,
+        51,
+        64,
+        80,
+        82,
+        91,
+        98
+      ],
+      "cost": 4095010,
+      "cloudy_area": 2237,
+      "max_incidence_angle": 312,
+      "min_resolutions_sum": 105734,
+      "timestamp_s": 281.329069,
+      "phase": "monise",
+      "index": 5
+    }
+  ]
+}

@@ -37,7 +37,6 @@ class FrontGeneratorStrategy(ABC):
         pass
 
     def get_solver_solution_for_timeout(self, optimize_not_satisfy, verbose=False):
-        print("Start the solver...")
         timeout = float(self.timer.time_budget_sec)
         # check if the timeout is already reached, sometimes the solver doesn't stop in the exact time that
         # the timeout is reached. For example, if the timeout is 10 seconds, the solver can stop in 10.0001 seconds.
@@ -49,7 +48,6 @@ class FrontGeneratorStrategy(ABC):
         solution_sec = self.timer.pause()
         if self.solver.status_time_limit():
             self.deal_with_timeout(solution_sec)
-        print("Got a result from the solver...")
         return solution_sec
 
     def deal_with_timeout(self, solution_sec):
@@ -94,12 +92,10 @@ class FrontGeneratorStrategy(ABC):
 
     def optimize_single_objectives(self, sense, id_objective):
         objective = self.solver.model.objectives[id_objective]
-        print("Start the solver to get the min of objective " + str(id_objective))
         self.solver.set_single_objective(objective)
         self.solver.set_optimization_sense(sense)
         try:
             solution_sec = self.get_solver_solution_for_timeout(optimize_not_satisfy=True)
-            print("The solver found min of objective " + str(id_objective) + " in " + str(solution_sec) + " seconds")
             formatted_solution = self.process_feasible_solution(solution_sec)
             objective_val = formatted_solution['objs'][id_objective]
         except TimeoutError:

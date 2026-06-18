@@ -51,6 +51,7 @@ use crate::solution_set_impl::NdTreeSolutionSet;
 
 use super::moead::{Moead, MoeadConfig};
 use super::nsga2::{Nsga2, Nsga2Config};
+use super::nsga3::{Nsga3, Nsga3Config};
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -61,6 +62,8 @@ use super::nsga2::{Nsga2, Nsga2Config};
 pub enum EaBackend {
     /// NSGA-II with coverage-aware operators and contribution-distance selection.
     Nsga2,
+    /// NSGA-III with reference-point niching (Deb & Jain 2014).
+    Nsga3,
     /// MOEA/D with Tchebycheff scalarization and adaptive weight vectors.
     Moead,
 }
@@ -69,6 +72,7 @@ impl std::fmt::Display for EaBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Nsga2 => write!(f, "NSGA-II"),
+            Self::Nsga3 => write!(f, "NSGA-III"),
             Self::Moead => write!(f, "MOEA/D"),
         }
     }
@@ -94,6 +98,9 @@ pub struct MemeticConfig {
 
     /// NSGA-II configuration (used when `ea_backend == EaBackend::Nsga2`).
     pub nsga2_config: Nsga2Config,
+
+    /// NSGA-III configuration (used when `ea_backend == EaBackend::Nsga3`).
+    pub nsga3_config: Nsga3Config,
 
     /// MOEA/D configuration (used when `ea_backend == EaBackend::Moead`).
     pub moead_config: MoeadConfig,
@@ -126,6 +133,7 @@ impl Default for MemeticConfig {
             pls_time_fraction: 0.3,
             ea_backend: EaBackend::Nsga2,
             nsga2_config: Nsga2Config::default(),
+            nsga3_config: Nsga3Config::default(),
             moead_config: MoeadConfig {
                 num_divisions: 12,
                 auto_divisions: false,
@@ -350,6 +358,13 @@ impl MemeticAlgorithm {
                 budget,
                 config.seed,
             ),
+            EaBackend::Nsga3 => Self::run_nsga3_phase(
+                problem,
+                &config.nsga3_config,
+                seed_population,
+                budget,
+                config.seed,
+            ),
             EaBackend::Moead => Self::run_moead_phase(
                 problem,
                 &config.moead_config,
@@ -388,6 +403,34 @@ impl MemeticAlgorithm {
         let archive = nsga2.run(usize::MAX, budget);
         let explored = std::mem::replace(
             &mut nsga2.explored_solutions,
+            ExploredSolutionsData::new(problem.max_objectives()),
+        );
+
+        (archive, explored)
+    }
+
+    fn run_nsga3_phase<P, const D: usize>(
+        problem: &P,
+        nsga3_config: &Nsga3Config,
+        seed_population: Vec<BitsetEncodedSolution<P, D>>,
+        budget: Duration,
+        seed: u64,
+    ) -> (Vec<BitsetEncodedSolution<P, D>>, ExploredSolutionsData<D>)
+    where
+        P: SetCoverProblem<D> + Clone + Send + Sync,
+    {
+        let initial_pop = if seed_population.is_empty() {
+            None
+        } else {
+            Some(seed_population)
+        };
+
+        let mut nsga3 =
+            Nsga3::<P, D>::new(problem, nsga3_config.clone(), initial_pop, seed.wrapping_add(10_000));
+
+        let archive = nsga3.run(usize::MAX, budget);
+        let explored = std::mem::replace(
+            &mut nsga3.explored_solutions,
             ExploredSolutionsData::new(problem.max_objectives()),
         );
 
@@ -629,6 +672,27 @@ where
             population_size: pop_size,
             ..Nsga2Config::default()
         },
+        seed,
+        ..MemeticConfig::default()
+    };
+
+    MemeticAlgorithm::run(problem, config, timeout)
+}
+
+/// Run the memetic hybrid with NSGA-III backend using default configuration.
+pub fn run_memetic_nsga3<P, const D: usize>(
+    problem: &P,
+    timeout: Duration,
+    pls_time_fraction: f64,
+    seed: u64,
+) -> MemeticResult<P, D>
+where
+    P: SetCoverProblem<D> + Clone + Send + Sync,
+{
+    let config = MemeticConfig {
+        pls_time_fraction,
+        ea_backend: EaBackend::Nsga3,
+        nsga3_config: Nsga3Config::default(),
         seed,
         ..MemeticConfig::default()
     };

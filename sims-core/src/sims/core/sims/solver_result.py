@@ -303,6 +303,7 @@ class SolverResult:
     pareto_front_snapshots: list[ParetoFrontSnapshot] = field(default_factory=list)
     trace_data: Optional[bytes] = None  # trace data for debugging/analysis (raw bytes)
     profiling_trace_data: Optional[bytes] = None  # Chrome profiling trace data in JSON format
+    pareto_front_complete: bool = False  # True when solver exhausted search space before timeout
 
     def to_dict(self, full=False) -> dict:
         result_dict = {
@@ -450,6 +451,8 @@ class SolverResult:
                 )
 
         # Return the experiment object
+        exhaustive_raw = summary_dict.get("exhaustive", "False")
+        pareto_front_complete = str(exhaustive_raw).strip().lower() in ("true", "1")
         return SolverResult(
             problem_instance=problem_instance,
             pareto_front=pareto_front,
@@ -460,6 +463,7 @@ class SolverResult:
             front_strategy=FrontStrategy.from_str(summary_dict["front_strategy"]),
             pareto_front_snapshots=pareto_front_snapshots or [],
             trace_data=trace_data,
+            pareto_front_complete=pareto_front_complete,
         )
 
     def validate(self) -> bool:

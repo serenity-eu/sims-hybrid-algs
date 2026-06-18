@@ -1,0 +1,2068 @@
+{
+  "instance_name": "mexico_city_50",
+  "test_type": "4d",
+  "objectives": [
+    "min_cost",
+    "cloud_coverage",
+    "min_max_incidence_angle",
+    "min_resolution"
+  ],
+  "num_solutions": 103,
+  "pareto_front_complete": false,
+  "solutions": [
+    {
+      "selected_images": [
+        9,
+        14,
+        19,
+        22,
+        24,
+        29,
+        38,
+        42
+      ],
+      "cost": 2636720,
+      "cloudy_area": 172110,
+      "max_incidence_angle": 472,
+      "min_resolutions_sum": 38340,
+      "timestamp_s": 0.251932,
+      "phase": "exact",
+      "index": 0
+    },
+    {
+      "selected_images": [
+        7,
+        9,
+        11,
+        12,
+        18,
+        19,
+        20,
+        22,
+        24,
+        25,
+        29,
+        30,
+        32,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        49
+      ],
+      "cost": 8378830,
+      "cloudy_area": 0,
+      "max_incidence_angle": 472,
+      "min_resolutions_sum": 25565,
+      "timestamp_s": 0.898412,
+      "phase": "exact",
+      "index": 1
+    },
+    {
+      "selected_images": [
+        0,
+        5,
+        17,
+        23,
+        25,
+        26,
+        37,
+        39,
+        42,
+        43,
+        48
+      ],
+      "cost": 4756982,
+      "cloudy_area": 40680,
+      "max_incidence_angle": 189,
+      "min_resolutions_sum": 26086,
+      "timestamp_s": 1.11505,
+      "phase": "exact",
+      "index": 2
+    },
+    {
+      "selected_images": [
+        0,
+        2,
+        3,
+        4,
+        5,
+        9,
+        11,
+        12,
+        14,
+        19,
+        20,
+        22,
+        23,
+        24,
+        25,
+        28,
+        40
+      ],
+      "cost": 7389610,
+      "cloudy_area": 25694,
+      "max_incidence_angle": 472,
+      "min_resolutions_sum": 25282,
+      "timestamp_s": 1.375051,
+      "phase": "exact",
+      "index": 3
+    },
+    {
+      "selected_images": [
+        0,
+        4,
+        11,
+        20,
+        23,
+        25,
+        35,
+        40,
+        42,
+        47
+      ],
+      "cost": 4445694,
+      "cloudy_area": 223128,
+      "max_incidence_angle": 330,
+      "min_resolutions_sum": 25282,
+      "timestamp_s": 2.515614,
+      "phase": "exact",
+      "index": 4
+    },
+    {
+      "selected_images": [
+        19,
+        20,
+        22,
+        23,
+        28,
+        29,
+        38,
+        42
+      ],
+      "cost": 3096612,
+      "cloudy_area": 99360,
+      "max_incidence_angle": 198,
+      "min_resolutions_sum": 31760,
+      "timestamp_s": 2.73162,
+      "phase": "exact",
+      "index": 5
+    },
+    {
+      "selected_images": [
+        2,
+        5,
+        9,
+        14,
+        19,
+        22,
+        24,
+        29,
+        38
+      ],
+      "cost": 2899322,
+      "cloudy_area": 148592,
+      "max_incidence_angle": 472,
+      "min_resolutions_sum": 34920,
+      "timestamp_s": 3.043144,
+      "phase": "exact",
+      "index": 6
+    },
+    {
+      "selected_images": [
+        17,
+        22,
+        29,
+        37,
+        38,
+        42,
+        44
+      ],
+      "cost": 3129128,
+      "cloudy_area": 267085,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 28289,
+      "timestamp_s": 5.527272,
+      "phase": "exact",
+      "index": 7
+    },
+    {
+      "selected_images": [
+        2,
+        9,
+        14,
+        19,
+        20,
+        22,
+        24,
+        29,
+        38
+      ],
+      "cost": 2771522,
+      "cloudy_area": 148472,
+      "max_incidence_angle": 472,
+      "min_resolutions_sum": 36480,
+      "timestamp_s": 5.740129,
+      "phase": "exact",
+      "index": 8
+    },
+    {
+      "selected_images": [
+        19,
+        22,
+        23,
+        28,
+        29,
+        38,
+        42
+      ],
+      "cost": 2974212,
+      "cloudy_area": 99773,
+      "max_incidence_angle": 198,
+      "min_resolutions_sum": 33300,
+      "timestamp_s": 10.942925,
+      "phase": "exact",
+      "index": 9
+    },
+    {
+      "selected_images": [
+        17,
+        20,
+        22,
+        23,
+        29,
+        36,
+        40,
+        42
+      ],
+      "cost": 3320758,
+      "cloudy_area": 112088,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 26763,
+      "timestamp_s": 14.484471,
+      "phase": "exact",
+      "index": 10
+    },
+    {
+      "selected_images": [
+        9,
+        14,
+        19,
+        20,
+        22,
+        24,
+        29,
+        38,
+        42
+      ],
+      "cost": 2759120,
+      "cloudy_area": 171697,
+      "max_incidence_angle": 472,
+      "min_resolutions_sum": 36800,
+      "timestamp_s": 19.285681,
+      "phase": "exact",
+      "index": 11
+    },
+    {
+      "selected_images": [
+        19,
+        20,
+        22,
+        28,
+        29,
+        40,
+        42,
+        44
+      ],
+      "cost": 3126242,
+      "cloudy_area": 239350,
+      "max_incidence_angle": 198,
+      "min_resolutions_sum": 30880,
+      "timestamp_s": 23.14201,
+      "phase": "exact",
+      "index": 12
+    },
+    {
+      "selected_images": [
+        2,
+        9,
+        14,
+        19,
+        22,
+        24,
+        29,
+        38,
+        39
+      ],
+      "cost": 2917322,
+      "cloudy_area": 148592,
+      "max_incidence_angle": 472,
+      "min_resolutions_sum": 33860,
+      "timestamp_s": 27.757824,
+      "phase": "exact",
+      "index": 13
+    },
+    {
+      "selected_images": [
+        17,
+        20,
+        22,
+        23,
+        29,
+        36,
+        38,
+        42
+      ],
+      "cost": 3283928,
+      "cloudy_area": 104600,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 27498,
+      "timestamp_s": 32.477386,
+      "phase": "exact",
+      "index": 14
+    },
+    {
+      "selected_images": [
+        19,
+        20,
+        22,
+        29,
+        37,
+        38,
+        42,
+        44
+      ],
+      "cost": 3088800,
+      "cloudy_area": 291497,
+      "max_incidence_angle": 198,
+      "min_resolutions_sum": 32240,
+      "timestamp_s": 36.378494,
+      "phase": "exact",
+      "index": 15
+    },
+    {
+      "selected_images": [
+        0,
+        11,
+        23,
+        25,
+        35,
+        38,
+        39,
+        42
+      ],
+      "cost": 3548464,
+      "cloudy_area": 235606,
+      "max_incidence_angle": 190,
+      "min_resolutions_sum": 25998,
+      "timestamp_s": 41.586695,
+      "phase": "exact",
+      "index": 16
+    },
+    {
+      "selected_images": [
+        2,
+        9,
+        14,
+        19,
+        20,
+        22,
+        24,
+        29,
+        40
+      ],
+      "cost": 2808352,
+      "cloudy_area": 148930,
+      "max_incidence_angle": 472,
+      "min_resolutions_sum": 35460,
+      "timestamp_s": 46.058986,
+      "phase": "exact",
+      "index": 17
+    },
+    {
+      "selected_images": [
+        19,
+        20,
+        22,
+        23,
+        29,
+        36,
+        38,
+        42
+      ],
+      "cost": 3121200,
+      "cloudy_area": 146904,
+      "max_incidence_angle": 198,
+      "min_resolutions_sum": 31260,
+      "timestamp_s": 50.435435,
+      "phase": "exact",
+      "index": 18
+    },
+    {
+      "selected_images": [
+        9,
+        14,
+        19,
+        22,
+        24,
+        29,
+        38,
+        39,
+        42
+      ],
+      "cost": 2904920,
+      "cloudy_area": 171817,
+      "max_incidence_angle": 472,
+      "min_resolutions_sum": 34180,
+      "timestamp_s": 55.477256,
+      "phase": "exact",
+      "index": 19
+    },
+    {
+      "selected_images": [
+        17,
+        20,
+        22,
+        29,
+        37,
+        38,
+        42,
+        44
+      ],
+      "cost": 3251528,
+      "cloudy_area": 266857,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 27775,
+      "timestamp_s": 59.057216,
+      "phase": "exact",
+      "index": 20
+    },
+    {
+      "selected_images": [
+        19,
+        22,
+        29,
+        36,
+        38,
+        42,
+        44
+      ],
+      "cost": 2991600,
+      "cloudy_area": 256504,
+      "max_incidence_angle": 198,
+      "min_resolutions_sum": 32920,
+      "timestamp_s": 62.746911,
+      "phase": "exact",
+      "index": 21
+    },
+    {
+      "selected_images": [
+        11,
+        22,
+        23,
+        25,
+        37,
+        38,
+        39,
+        42
+      ],
+      "cost": 3480980,
+      "cloudy_area": 237952,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 26320,
+      "timestamp_s": 68.167622,
+      "phase": "exact",
+      "index": 22
+    },
+    {
+      "selected_images": [
+        11,
+        20,
+        22,
+        23,
+        25,
+        36,
+        40,
+        42,
+        47
+      ],
+      "cost": 3634810,
+      "cloudy_area": 290482,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 25620,
+      "timestamp_s": 72.204592,
+      "phase": "exact",
+      "index": 23
+    },
+    {
+      "selected_images": [
+        17,
+        20,
+        22,
+        29,
+        37,
+        40,
+        42,
+        44
+      ],
+      "cost": 3288358,
+      "cloudy_area": 274345,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 27040,
+      "timestamp_s": 76.804136,
+      "phase": "exact",
+      "index": 24
+    },
+    {
+      "selected_images": [
+        9,
+        14,
+        19,
+        20,
+        22,
+        24,
+        29,
+        40,
+        42
+      ],
+      "cost": 2795950,
+      "cloudy_area": 172155,
+      "max_incidence_angle": 472,
+      "min_resolutions_sum": 35780,
+      "timestamp_s": 81.46676,
+      "phase": "exact",
+      "index": 25
+    },
+    {
+      "selected_images": [
+        19,
+        22,
+        28,
+        29,
+        38,
+        42,
+        44
+      ],
+      "cost": 2967012,
+      "cloudy_area": 239305,
+      "max_incidence_angle": 198,
+      "min_resolutions_sum": 33440,
+      "timestamp_s": 85.545774,
+      "phase": "exact",
+      "index": 26
+    },
+    {
+      "selected_images": [
+        19,
+        20,
+        22,
+        28,
+        29,
+        38,
+        42,
+        44
+      ],
+      "cost": 3089412,
+      "cloudy_area": 238892,
+      "max_incidence_angle": 198,
+      "min_resolutions_sum": 31900,
+      "timestamp_s": 87.489229,
+      "phase": "exact",
+      "index": 27
+    },
+    {
+      "selected_images": [
+        2,
+        9,
+        14,
+        19,
+        22,
+        24,
+        29,
+        38
+      ],
+      "cost": 2649122,
+      "cloudy_area": 148885,
+      "max_incidence_angle": 472,
+      "min_resolutions_sum": 38020,
+      "timestamp_s": 91.667759,
+      "phase": "exact",
+      "index": 28
+    },
+    {
+      "selected_images": [
+        19,
+        20,
+        22,
+        29,
+        36,
+        38,
+        42,
+        44
+      ],
+      "cost": 3114000,
+      "cloudy_area": 256091,
+      "max_incidence_angle": 198,
+      "min_resolutions_sum": 31380,
+      "timestamp_s": 95.668402,
+      "phase": "exact",
+      "index": 29
+    },
+    {
+      "selected_images": [
+        5,
+        9,
+        14,
+        19,
+        22,
+        24,
+        29,
+        38,
+        42
+      ],
+      "cost": 2886920,
+      "cloudy_area": 171817,
+      "max_incidence_angle": 472,
+      "min_resolutions_sum": 35240,
+      "timestamp_s": 100.311499,
+      "phase": "exact",
+      "index": 30
+    },
+    {
+      "selected_images": [
+        17,
+        22,
+        23,
+        29,
+        36,
+        38,
+        42
+      ],
+      "cost": 3161528,
+      "cloudy_area": 104828,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 28012,
+      "timestamp_s": 105.413138,
+      "phase": "exact",
+      "index": 31
+    },
+    {
+      "selected_images": [
+        11,
+        22,
+        25,
+        37,
+        38,
+        39,
+        42,
+        44
+      ],
+      "cost": 3473780,
+      "cloudy_area": 419807,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 26480,
+      "timestamp_s": 108.503121,
+      "phase": "exact",
+      "index": 32
+    },
+    {
+      "selected_images": [
+        2,
+        9,
+        14,
+        19,
+        20,
+        22,
+        24,
+        29,
+        39,
+        40
+      ],
+      "cost": 3076552,
+      "cloudy_area": 148843,
+      "max_incidence_angle": 472,
+      "min_resolutions_sum": 32640,
+      "timestamp_s": 113.601383,
+      "phase": "exact",
+      "index": 33
+    },
+    {
+      "selected_images": [
+        11,
+        20,
+        22,
+        23,
+        25,
+        37,
+        40,
+        42,
+        47
+      ],
+      "cost": 3609610,
+      "cloudy_area": 289865,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 25720,
+      "timestamp_s": 116.998965,
+      "phase": "exact",
+      "index": 34
+    },
+    {
+      "selected_images": [
+        0,
+        11,
+        20,
+        25,
+        35,
+        40,
+        42,
+        44,
+        47
+      ],
+      "cost": 3669894,
+      "cloudy_area": 436501,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 25434,
+      "timestamp_s": 122.251457,
+      "phase": "exact",
+      "index": 35
+    },
+    {
+      "selected_images": [
+        0,
+        11,
+        25,
+        35,
+        38,
+        39,
+        42,
+        44
+      ],
+      "cost": 3541264,
+      "cloudy_area": 396651,
+      "max_incidence_angle": 190,
+      "min_resolutions_sum": 26034,
+      "timestamp_s": 126.548692,
+      "phase": "exact",
+      "index": 36
+    },
+    {
+      "selected_images": [
+        17,
+        20,
+        22,
+        23,
+        29,
+        37,
+        40,
+        42
+      ],
+      "cost": 3295558,
+      "cloudy_area": 92490,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 26880,
+      "timestamp_s": 131.752662,
+      "phase": "exact",
+      "index": 37
+    },
+    {
+      "selected_images": [
+        17,
+        20,
+        22,
+        23,
+        29,
+        37,
+        38,
+        42
+      ],
+      "cost": 3258728,
+      "cloudy_area": 85002,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 27615,
+      "timestamp_s": 134.015348,
+      "phase": "exact",
+      "index": 38
+    },
+    {
+      "selected_images": [
+        17,
+        22,
+        23,
+        29,
+        37,
+        38,
+        42
+      ],
+      "cost": 3136328,
+      "cloudy_area": 85230,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 28129,
+      "timestamp_s": 134.837151,
+      "phase": "exact",
+      "index": 39
+    },
+    {
+      "selected_images": [
+        19,
+        22,
+        23,
+        29,
+        36,
+        38,
+        42
+      ],
+      "cost": 2998800,
+      "cloudy_area": 147317,
+      "max_incidence_angle": 198,
+      "min_resolutions_sum": 32800,
+      "timestamp_s": 138.490957,
+      "phase": "exact",
+      "index": 40
+    },
+    {
+      "selected_images": [
+        11,
+        20,
+        22,
+        25,
+        37,
+        40,
+        42,
+        44,
+        47
+      ],
+      "cost": 3602410,
+      "cloudy_area": 471720,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 25880,
+      "timestamp_s": 142.859203,
+      "phase": "exact",
+      "index": 41
+    },
+    {
+      "selected_images": [
+        0,
+        11,
+        20,
+        25,
+        30,
+        35,
+        40,
+        42,
+        44,
+        47
+      ],
+      "cost": 3959694,
+      "cloudy_area": 435644,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 25358,
+      "timestamp_s": 147.01399,
+      "phase": "exact",
+      "index": 42
+    },
+    {
+      "selected_images": [
+        11,
+        22,
+        23,
+        25,
+        36,
+        38,
+        39,
+        42
+      ],
+      "cost": 3506180,
+      "cloudy_area": 263333,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 26220,
+      "timestamp_s": 151.3493,
+      "phase": "exact",
+      "index": 43
+    },
+    {
+      "selected_images": [
+        19,
+        22,
+        29,
+        37,
+        38,
+        42,
+        44
+      ],
+      "cost": 2966400,
+      "cloudy_area": 291910,
+      "max_incidence_angle": 198,
+      "min_resolutions_sum": 33780,
+      "timestamp_s": 156.172559,
+      "phase": "exact",
+      "index": 44
+    },
+    {
+      "selected_images": [
+        5,
+        11,
+        22,
+        23,
+        25,
+        28,
+        38,
+        42
+      ],
+      "cost": 3463592,
+      "cloudy_area": 155892,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 26700,
+      "timestamp_s": 159.839388,
+      "phase": "exact",
+      "index": 45
+    },
+    {
+      "selected_images": [
+        19,
+        20,
+        22,
+        29,
+        37,
+        40,
+        42,
+        44
+      ],
+      "cost": 3125630,
+      "cloudy_area": 291955,
+      "max_incidence_angle": 198,
+      "min_resolutions_sum": 31220,
+      "timestamp_s": 160.275315,
+      "phase": "exact",
+      "index": 46
+    },
+    {
+      "selected_images": [
+        0,
+        11,
+        20,
+        25,
+        28,
+        40,
+        42,
+        44,
+        47
+      ],
+      "cost": 3976506,
+      "cloudy_area": 346580,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 25318,
+      "timestamp_s": 164.614762,
+      "phase": "exact",
+      "index": 47
+    },
+    {
+      "selected_images": [
+        0,
+        8,
+        11,
+        20,
+        23,
+        25,
+        35,
+        40,
+        42,
+        47
+      ],
+      "cost": 3948894,
+      "cloudy_area": 268535,
+      "max_incidence_angle": 198,
+      "min_resolutions_sum": 25394,
+      "timestamp_s": 169.196212,
+      "phase": "exact",
+      "index": 48
+    },
+    {
+      "selected_images": [
+        2,
+        8,
+        9,
+        14,
+        19,
+        20,
+        22,
+        29,
+        35,
+        40
+      ],
+      "cost": 2961352,
+      "cloudy_area": 158346,
+      "max_incidence_angle": 198,
+      "min_resolutions_sum": 33800,
+      "timestamp_s": 173.915111,
+      "phase": "exact",
+      "index": 49
+    },
+    {
+      "selected_images": [
+        11,
+        20,
+        22,
+        25,
+        28,
+        40,
+        42,
+        44,
+        47
+      ],
+      "cost": 3603022,
+      "cloudy_area": 370101,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 25840,
+      "timestamp_s": 179.466876,
+      "phase": "exact",
+      "index": 50
+    },
+    {
+      "selected_images": [
+        5,
+        11,
+        22,
+        23,
+        25,
+        37,
+        38,
+        42
+      ],
+      "cost": 3462980,
+      "cloudy_area": 206823,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 26720,
+      "timestamp_s": 180.073841,
+      "phase": "exact",
+      "index": 51
+    },
+    {
+      "selected_images": [
+        11,
+        20,
+        22,
+        23,
+        25,
+        36,
+        38,
+        42,
+        47
+      ],
+      "cost": 3597980,
+      "cloudy_area": 251001,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 25960,
+      "timestamp_s": 180.706215,
+      "phase": "exact",
+      "index": 52
+    },
+    {
+      "selected_images": [
+        11,
+        22,
+        25,
+        28,
+        38,
+        39,
+        42,
+        44
+      ],
+      "cost": 3474392,
+      "cloudy_area": 342839,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 26440,
+      "timestamp_s": 185.712199,
+      "phase": "exact",
+      "index": 53
+    },
+    {
+      "selected_images": [
+        11,
+        20,
+        22,
+        23,
+        25,
+        28,
+        40,
+        42,
+        47
+      ],
+      "cost": 3610222,
+      "cloudy_area": 230569,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 25700,
+      "timestamp_s": 188.97822,
+      "phase": "exact",
+      "index": 54
+    },
+    {
+      "selected_images": [
+        0,
+        11,
+        20,
+        23,
+        25,
+        30,
+        35,
+        40,
+        42,
+        47
+      ],
+      "cost": 3966894,
+      "cloudy_area": 274599,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 25322,
+      "timestamp_s": 193.690736,
+      "phase": "exact",
+      "index": 55
+    },
+    {
+      "selected_images": [
+        11,
+        22,
+        23,
+        25,
+        28,
+        38,
+        39,
+        42
+      ],
+      "cost": 3481592,
+      "cloudy_area": 203307,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 26300,
+      "timestamp_s": 197.197264,
+      "phase": "exact",
+      "index": 56
+    },
+    {
+      "selected_images": [
+        0,
+        11,
+        20,
+        23,
+        25,
+        35,
+        40,
+        42,
+        47
+      ],
+      "cost": 3677094,
+      "cloudy_area": 275456,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 25398,
+      "timestamp_s": 201.09832,
+      "phase": "exact",
+      "index": 57
+    },
+    {
+      "selected_images": [
+        0,
+        11,
+        20,
+        23,
+        25,
+        36,
+        40,
+        42,
+        47
+      ],
+      "cost": 4008294,
+      "cloudy_area": 296565,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 25296,
+      "timestamp_s": 203.264663,
+      "phase": "exact",
+      "index": 58
+    },
+    {
+      "selected_images": [
+        17,
+        20,
+        22,
+        28,
+        29,
+        40,
+        42,
+        44
+      ],
+      "cost": 3288970,
+      "cloudy_area": 187001,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 27023,
+      "timestamp_s": 203.68657,
+      "phase": "exact",
+      "index": 59
+    },
+    {
+      "selected_images": [
+        17,
+        20,
+        22,
+        28,
+        29,
+        38,
+        42,
+        44
+      ],
+      "cost": 3252140,
+      "cloudy_area": 179513,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 27758,
+      "timestamp_s": 207.844176,
+      "phase": "exact",
+      "index": 60
+    },
+    {
+      "selected_images": [
+        17,
+        22,
+        28,
+        29,
+        38,
+        42,
+        44
+      ],
+      "cost": 3129740,
+      "cloudy_area": 179741,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 28272,
+      "timestamp_s": 208.395228,
+      "phase": "exact",
+      "index": 61
+    },
+    {
+      "selected_images": [
+        2,
+        9,
+        14,
+        15,
+        19,
+        22,
+        24,
+        29,
+        38
+      ],
+      "cost": 2892122,
+      "cloudy_area": 148678,
+      "max_incidence_angle": 472,
+      "min_resolutions_sum": 35220,
+      "timestamp_s": 208.699819,
+      "phase": "exact",
+      "index": 62
+    },
+    {
+      "selected_images": [
+        0,
+        11,
+        20,
+        23,
+        25,
+        37,
+        40,
+        42,
+        47
+      ],
+      "cost": 3983094,
+      "cloudy_area": 282574,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 25306,
+      "timestamp_s": 212.967864,
+      "phase": "exact",
+      "index": 63
+    },
+    {
+      "selected_images": [
+        0,
+        4,
+        11,
+        20,
+        25,
+        35,
+        40,
+        42,
+        44,
+        47
+      ],
+      "cost": 4438494,
+      "cloudy_area": 341693,
+      "max_incidence_angle": 330,
+      "min_resolutions_sum": 25288,
+      "timestamp_s": 217.939071,
+      "phase": "exact",
+      "index": 64
+    },
+    {
+      "selected_images": [
+        3,
+        9,
+        14,
+        19,
+        22,
+        24,
+        29,
+        38,
+        39
+      ],
+      "cost": 2954906,
+      "cloudy_area": 133444,
+      "max_incidence_angle": 472,
+      "min_resolutions_sum": 33856,
+      "timestamp_s": 222.601757,
+      "phase": "exact",
+      "index": 65
+    },
+    {
+      "selected_images": [
+        0,
+        11,
+        20,
+        23,
+        25,
+        28,
+        30,
+        40,
+        42,
+        47
+      ],
+      "cost": 4273506,
+      "cloudy_area": 233934,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 25292,
+      "timestamp_s": 226.645125,
+      "phase": "exact",
+      "index": 66
+    },
+    {
+      "selected_images": [
+        3,
+        9,
+        14,
+        19,
+        20,
+        22,
+        24,
+        29,
+        40
+      ],
+      "cost": 2845936,
+      "cloudy_area": 133782,
+      "max_incidence_angle": 472,
+      "min_resolutions_sum": 35456,
+      "timestamp_s": 227.081941,
+      "phase": "exact",
+      "index": 67
+    },
+    {
+      "selected_images": [
+        3,
+        9,
+        14,
+        19,
+        22,
+        24,
+        29,
+        38
+      ],
+      "cost": 2686706,
+      "cloudy_area": 133737,
+      "max_incidence_angle": 472,
+      "min_resolutions_sum": 38016,
+      "timestamp_s": 227.262779,
+      "phase": "exact",
+      "index": 68
+    },
+    {
+      "selected_images": [
+        0,
+        11,
+        20,
+        23,
+        25,
+        30,
+        37,
+        40,
+        42,
+        47
+      ],
+      "cost": 4272894,
+      "cloudy_area": 281717,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 25294,
+      "timestamp_s": 231.854948,
+      "phase": "exact",
+      "index": 69
+    },
+    {
+      "selected_images": [
+        0,
+        11,
+        20,
+        23,
+        25,
+        28,
+        40,
+        42,
+        47
+      ],
+      "cost": 3983706,
+      "cloudy_area": 234791,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 25304,
+      "timestamp_s": 232.12185,
+      "phase": "exact",
+      "index": 70
+    },
+    {
+      "selected_images": [
+        0,
+        11,
+        20,
+        23,
+        25,
+        30,
+        36,
+        40,
+        42,
+        47
+      ],
+      "cost": 4298094,
+      "cloudy_area": 295708,
+      "max_incidence_angle": 194,
+      "min_resolutions_sum": 25290,
+      "timestamp_s": 235.999987,
+      "phase": "exact",
+      "index": 71
+    },
+    {
+      "selected_images": [
+        0,
+        25,
+        29,
+        35,
+        38,
+        42,
+        44,
+        47
+      ],
+      "cost": 3526264,
+      "cloudy_area": 325679,
+      "max_incidence_angle": 189,
+      "min_resolutions_sum": 26894,
+      "timestamp_s": 239.124745,
+      "phase": "exact",
+      "index": 72
+    },
+    {
+      "selected_images": [
+        0,
+        5,
+        23,
+        25,
+        29,
+        35,
+        38,
+        40,
+        42
+      ],
+      "cost": 3727864,
+      "cloudy_area": 119891,
+      "max_incidence_angle": 189,
+      "min_resolutions_sum": 26058,
+      "timestamp_s": 239.403396,
+      "phase": "exact",
+      "index": 73
+    },
+    {
+      "selected_images": [
+        0,
+        25,
+        29,
+        35,
+        38,
+        39,
+        42,
+        44
+      ],
+      "cost": 3556864,
+      "cloudy_area": 322672,
+      "max_incidence_angle": 189,
+      "min_resolutions_sum": 26214,
+      "timestamp_s": 239.797722,
+      "phase": "exact",
+      "index": 74
+    },
+    {
+      "selected_images": [
+        0,
+        25,
+        29,
+        30,
+        35,
+        38,
+        39,
+        40,
+        42,
+        44
+      ],
+      "cost": 4028464,
+      "cloudy_area": 321008,
+      "max_incidence_angle": 189,
+      "min_resolutions_sum": 25658,
+      "timestamp_s": 240.031899,
+      "phase": "exact",
+      "index": 75
+    },
+    {
+      "selected_images": [
+        0,
+        5,
+        25,
+        29,
+        35,
+        38,
+        42,
+        44
+      ],
+      "cost": 3538864,
+      "cloudy_area": 280959,
+      "max_incidence_angle": 189,
+      "min_resolutions_sum": 26614,
+      "timestamp_s": 240.332543,
+      "phase": "exact",
+      "index": 76
+    },
+    {
+      "selected_images": [
+        0,
+        25,
+        29,
+        35,
+        38,
+        39,
+        40,
+        42,
+        44
+      ],
+      "cost": 3738664,
+      "cloudy_area": 321865,
+      "max_incidence_angle": 189,
+      "min_resolutions_sum": 25734,
+      "timestamp_s": 240.675884,
+      "phase": "exact",
+      "index": 77
+    },
+    {
+      "selected_images": [
+        0,
+        15,
+        25,
+        29,
+        35,
+        38,
+        42,
+        44
+      ],
+      "cost": 3531664,
+      "cloudy_area": 353503,
+      "max_incidence_angle": 189,
+      "min_resolutions_sum": 26754,
+      "timestamp_s": 241.087829,
+      "phase": "exact",
+      "index": 78
+    },
+    {
+      "selected_images": [
+        0,
+        5,
+        25,
+        29,
+        35,
+        38,
+        40,
+        42,
+        44
+      ],
+      "cost": 3720664,
+      "cloudy_area": 280936,
+      "max_incidence_angle": 189,
+      "min_resolutions_sum": 26094,
+      "timestamp_s": 241.273077,
+      "phase": "exact",
+      "index": 79
+    },
+    {
+      "selected_images": [
+        0,
+        23,
+        25,
+        29,
+        37,
+        38,
+        39,
+        40,
+        42
+      ],
+      "cost": 4051864,
+      "cloudy_area": 156626,
+      "max_incidence_angle": 189,
+      "min_resolutions_sum": 25606,
+      "timestamp_s": 241.624744,
+      "phase": "exact",
+      "index": 80
+    },
+    {
+      "selected_images": [
+        0,
+        23,
+        25,
+        29,
+        35,
+        38,
+        39,
+        40,
+        42
+      ],
+      "cost": 3745864,
+      "cloudy_area": 160820,
+      "max_incidence_angle": 189,
+      "min_resolutions_sum": 25698,
+      "timestamp_s": 241.939994,
+      "phase": "exact",
+      "index": 81
+    },
+    {
+      "selected_images": [
+        0,
+        23,
+        25,
+        29,
+        35,
+        38,
+        39,
+        42
+      ],
+      "cost": 3564064,
+      "cloudy_area": 161627,
+      "max_incidence_angle": 189,
+      "min_resolutions_sum": 26178,
+      "timestamp_s": 242.277927,
+      "phase": "exact",
+      "index": 82
+    },
+    {
+      "selected_images": [
+        0,
+        15,
+        23,
+        25,
+        29,
+        35,
+        38,
+        42
+      ],
+      "cost": 3538864,
+      "cloudy_area": 192458,
+      "max_incidence_angle": 189,
+      "min_resolutions_sum": 26718,
+      "timestamp_s": 242.64008,
+      "phase": "exact",
+      "index": 83
+    },
+    {
+      "selected_images": [
+        0,
+        5,
+        23,
+        25,
+        29,
+        35,
+        38,
+        42
+      ],
+      "cost": 3546064,
+      "cloudy_area": 119914,
+      "max_incidence_angle": 189,
+      "min_resolutions_sum": 26578,
+      "timestamp_s": 242.828708,
+      "phase": "exact",
+      "index": 84
+    },
+    {
+      "selected_images": [
+        0,
+        23,
+        25,
+        29,
+        30,
+        35,
+        38,
+        39,
+        40,
+        42
+      ],
+      "cost": 4035664,
+      "cloudy_area": 159963,
+      "max_incidence_angle": 189,
+      "min_resolutions_sum": 25622,
+      "timestamp_s": 243.025559,
+      "phase": "exact",
+      "index": 85
+    },
+    {
+      "selected_images": [
+        0,
+        23,
+        25,
+        29,
+        30,
+        37,
+        38,
+        39,
+        40,
+        42
+      ],
+      "cost": 4341664,
+      "cloudy_area": 155769,
+      "max_incidence_angle": 189,
+      "min_resolutions_sum": 25594,
+      "timestamp_s": 243.388271,
+      "phase": "exact",
+      "index": 86
+    },
+    {
+      "selected_images": [
+        0,
+        23,
+        25,
+        29,
+        36,
+        38,
+        39,
+        40,
+        42
+      ],
+      "cost": 4077064,
+      "cloudy_area": 195014,
+      "max_incidence_angle": 189,
+      "min_resolutions_sum": 25596,
+      "timestamp_s": 243.837121,
+      "phase": "exact",
+      "index": 87
+    },
+    {
+      "selected_images": [
+        0,
+        25,
+        28,
+        29,
+        38,
+        39,
+        40,
+        42,
+        44
+      ],
+      "cost": 4045276,
+      "cloudy_area": 245283,
+      "max_incidence_angle": 189,
+      "min_resolutions_sum": 25618,
+      "timestamp_s": 244.270719,
+      "phase": "exact",
+      "index": 88
+    },
+    {
+      "selected_images": [
+        0,
+        23,
+        25,
+        29,
+        30,
+        36,
+        38,
+        39,
+        40,
+        42
+      ],
+      "cost": 4366864,
+      "cloudy_area": 194157,
+      "max_incidence_angle": 189,
+      "min_resolutions_sum": 25590,
+      "timestamp_s": 244.469859,
+      "phase": "exact",
+      "index": 89
+    },
+    {
+      "selected_images": [
+        0,
+        23,
+        25,
+        28,
+        29,
+        30,
+        38,
+        39,
+        40,
+        42
+      ],
+      "cost": 4342276,
+      "cloudy_area": 132637,
+      "max_incidence_angle": 189,
+      "min_resolutions_sum": 25592,
+      "timestamp_s": 244.608047,
+      "phase": "exact",
+      "index": 90
+    },
+    {
+      "selected_images": [
+        0,
+        23,
+        25,
+        28,
+        29,
+        38,
+        39,
+        40,
+        42
+      ],
+      "cost": 4052476,
+      "cloudy_area": 133494,
+      "max_incidence_angle": 189,
+      "min_resolutions_sum": 25604,
+      "timestamp_s": 244.754275,
+      "phase": "exact",
+      "index": 91
+    },
+    {
+      "selected_images": [
+        9,
+        14,
+        19,
+        22,
+        29,
+        34,
+        35,
+        38,
+        42
+      ],
+      "cost": 2759120,
+      "cloudy_area": 237351,
+      "max_incidence_angle": 198,
+      "min_resolutions_sum": 37260,
+      "timestamp_s": 244.956432,
+      "phase": "exact",
+      "index": 92
+    },
+    {
+      "selected_images": [
+        8,
+        9,
+        14,
+        19,
+        20,
+        22,
+        29,
+        35,
+        40,
+        42
+      ],
+      "cost": 2948950,
+      "cloudy_area": 176220,
+      "max_incidence_angle": 198,
+      "min_resolutions_sum": 34000,
+      "timestamp_s": 245.051803,
+      "phase": "exact",
+      "index": 93
+    },
+    {
+      "selected_images": [
+        9,
+        14,
+        19,
+        20,
+        22,
+        29,
+        34,
+        35,
+        38,
+        42
+      ],
+      "cost": 2881520,
+      "cloudy_area": 236938,
+      "max_incidence_angle": 198,
+      "min_resolutions_sum": 35720,
+      "timestamp_s": 245.172459,
+      "phase": "exact",
+      "index": 94
+    },
+    {
+      "selected_images": [
+        2,
+        8,
+        9,
+        14,
+        19,
+        22,
+        29,
+        35,
+        38
+      ],
+      "cost": 2802122,
+      "cloudy_area": 158301,
+      "max_incidence_angle": 198,
+      "min_resolutions_sum": 36360,
+      "timestamp_s": 245.318519,
+      "phase": "exact",
+      "index": 95
+    },
+    {
+      "selected_images": [
+        9,
+        14,
+        19,
+        20,
+        22,
+        29,
+        34,
+        35,
+        40,
+        42
+      ],
+      "cost": 2918350,
+      "cloudy_area": 237396,
+      "max_incidence_angle": 198,
+      "min_resolutions_sum": 34700,
+      "timestamp_s": 248.419038,
+      "phase": "exact",
+      "index": 96
+    },
+    {
+      "selected_images": [
+        8,
+        9,
+        14,
+        19,
+        22,
+        29,
+        35,
+        38,
+        42
+      ],
+      "cost": 2789720,
+      "cloudy_area": 176175,
+      "max_incidence_angle": 198,
+      "min_resolutions_sum": 36560,
+      "timestamp_s": 252.047413,
+      "phase": "exact",
+      "index": 97
+    },
+    {
+      "selected_images": [
+        8,
+        9,
+        14,
+        19,
+        20,
+        22,
+        29,
+        35,
+        38,
+        42
+      ],
+      "cost": 2912120,
+      "cloudy_area": 175762,
+      "max_incidence_angle": 198,
+      "min_resolutions_sum": 35020,
+      "timestamp_s": 255.746901,
+      "phase": "exact",
+      "index": 98
+    },
+    {
+      "selected_images": [
+        2,
+        9,
+        14,
+        19,
+        20,
+        22,
+        29,
+        34,
+        35,
+        40
+      ],
+      "cost": 2930752,
+      "cloudy_area": 218644,
+      "max_incidence_angle": 198,
+      "min_resolutions_sum": 34420,
+      "timestamp_s": 259.362514,
+      "phase": "exact",
+      "index": 99
+    },
+    {
+      "selected_images": [
+        2,
+        9,
+        14,
+        19,
+        22,
+        29,
+        34,
+        35,
+        38
+      ],
+      "cost": 2771522,
+      "cloudy_area": 218599,
+      "max_incidence_angle": 198,
+      "min_resolutions_sum": 36980,
+      "timestamp_s": 263.081919,
+      "phase": "exact",
+      "index": 100
+    },
+    {
+      "selected_images": [
+        2,
+        9,
+        14,
+        19,
+        20,
+        22,
+        29,
+        34,
+        35,
+        38
+      ],
+      "cost": 2893922,
+      "cloudy_area": 218186,
+      "max_incidence_angle": 198,
+      "min_resolutions_sum": 35440,
+      "timestamp_s": 266.656634,
+      "phase": "exact",
+      "index": 101
+    },
+    {
+      "selected_images": [
+        3,
+        8,
+        9,
+        14,
+        19,
+        22,
+        29,
+        35,
+        38
+      ],
+      "cost": 2839706,
+      "cloudy_area": 143153,
+      "max_incidence_angle": 198,
+      "min_resolutions_sum": 36358,
+      "timestamp_s": 269.803582,
+      "phase": "exact",
+      "index": 102
+    }
+  ]
+}

@@ -1,0 +1,134 @@
+{
+  "instance_name": "tokyo_bay_150",
+  "test_type": "4d",
+  "objectives": [
+    "min_cost",
+    "cloud_coverage",
+    "min_max_incidence_angle",
+    "min_resolution"
+  ],
+  "num_solutions": 5,
+  "pareto_front_complete": false,
+  "solutions": [
+    {
+      "selected_images": [
+        11,
+        25,
+        70,
+        82,
+        125
+      ],
+      "cost": 2735510,
+      "cloudy_area": 2370273,
+      "max_incidence_angle": 261,
+      "min_resolutions_sum": 397190,
+      "timestamp_s": 21.308417,
+      "phase": "monise",
+      "index": 0
+    },
+    {
+      "selected_images": [
+        3,
+        5,
+        8,
+        13,
+        19,
+        26,
+        30,
+        40,
+        45,
+        49,
+        60,
+        66,
+        69,
+        72,
+        73,
+        74,
+        79,
+        82,
+        84,
+        97,
+        98,
+        101,
+        103,
+        106,
+        110,
+        117,
+        122,
+        137,
+        140,
+        141,
+        142,
+        145,
+        148
+      ],
+      "cost": 15550226,
+      "cloudy_area": 0,
+      "max_incidence_angle": 483,
+      "min_resolutions_sum": 242410,
+      "timestamp_s": 228.783379,
+      "phase": "monise",
+      "index": 1
+    },
+    {
+      "selected_images": [
+        8,
+        23,
+        66,
+        79,
+        82,
+        96,
+        97,
+        106,
+        110,
+        117,
+        122,
+        145
+      ],
+      "cost": 8766234,
+      "cloudy_area": 129757,
+      "max_incidence_angle": 483,
+      "min_resolutions_sum": 242406,
+      "timestamp_s": 249.820046,
+      "phase": "monise",
+      "index": 2
+    },
+    {
+      "selected_images": [
+        1,
+        2,
+        25,
+        54,
+        74,
+        93,
+        117,
+        125,
+        145
+      ],
+      "cost": 3848774,
+      "cloudy_area": 1143288,
+      "max_incidence_angle": 179,
+      "min_resolutions_sum": 321385,
+      "timestamp_s": 270.408766,
+      "phase": "monise",
+      "index": 3
+    },
+    {
+      "selected_images": [
+        19,
+        38,
+        93,
+        125,
+        137,
+        147
+      ],
+      "cost": 2771650,
+      "cloudy_area": 9142,
+      "max_incidence_angle": 297,
+      "min_resolutions_sum": 398482,
+      "timestamp_s": 575.212871,
+      "phase": "monise",
+      "index": 4
+    }
+  ]
+}

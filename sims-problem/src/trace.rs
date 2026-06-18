@@ -2,7 +2,6 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use indicatif::{ProgressBar, ProgressStyle};
-use log::info;
 use pareto::{HasObjectives, MoSolution};
 use pls::explored_solutions_data::SolutionFingerprint;
 use pyo3::prelude::*;
@@ -222,20 +221,9 @@ pub fn create_optimization_trace_archive<const D: usize>(
         return Err("Cannot create trace archive from empty solution list".into());
     }
 
-    // For large solution sets the per-solution 4-D hypervolume computation is
-    // O(N² × HV_cost) and can take minutes.  Skip it when there are more than
-    // 500 non-dominated trace solutions — consumers can recompute HV post-hoc
-    // from the raw objectives + dominated data with shared bounds.
-    const HV_COMPUTATION_THRESHOLD: usize = 500;
-    let skip_hv = solutions.len() > HV_COMPUTATION_THRESHOLD;
-    if skip_hv {
-        info!(
-            "Skipping in-trace HV computation for {} solutions (threshold {}); \
-             hypervolume.bin will be empty — compute post-hoc from objectives.bin + dominated.bin",
-            solutions.len(),
-            HV_COMPUTATION_THRESHOLD,
-        );
-    }
+    // hypervolume.bin is always skipped — consumers recompute HV post-hoc via
+    // compute_hv_curve_from_trace using objectives + dominated + shared bounds.
+    let skip_hv = true;
 
     let pb = ProgressBar::new(4);
     pb.set_style(
