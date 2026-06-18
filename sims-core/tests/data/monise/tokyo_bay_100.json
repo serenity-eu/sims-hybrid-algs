@@ -1,0 +1,225 @@
+{
+  "instance_name": "tokyo_bay_100",
+  "test_type": "4d",
+  "objectives": [
+    "min_cost",
+    "cloud_coverage",
+    "min_max_incidence_angle",
+    "min_resolution"
+  ],
+  "num_solutions": 10,
+  "pareto_front_complete": false,
+  "solutions": [
+    {
+      "selected_images": [
+        12,
+        53,
+        94
+      ],
+      "cost": 2194210,
+      "cloudy_area": 22226,
+      "max_incidence_angle": 273,
+      "min_resolutions_sum": 163900,
+      "timestamp_s": 1.314708,
+      "phase": "monise",
+      "index": 0
+    },
+    {
+      "selected_images": [
+        1,
+        9,
+        12,
+        13,
+        16,
+        17,
+        21,
+        23,
+        38,
+        39,
+        59,
+        60,
+        64,
+        65,
+        69,
+        70,
+        79,
+        86,
+        88,
+        92,
+        94,
+        97
+      ],
+      "cost": 8785454,
+      "cloudy_area": 0,
+      "max_incidence_angle": 483,
+      "min_resolutions_sum": 99726,
+      "timestamp_s": 12.103055,
+      "phase": "monise",
+      "index": 1
+    },
+    {
+      "selected_images": [
+        4,
+        5,
+        7,
+        9,
+        10,
+        12,
+        16,
+        17,
+        21,
+        22,
+        23,
+        30,
+        33,
+        34,
+        39,
+        48,
+        49,
+        52,
+        53,
+        63,
+        65,
+        69,
+        70,
+        83,
+        86,
+        87,
+        89,
+        94,
+        98
+      ],
+      "cost": 12129084,
+      "cloudy_area": 0,
+      "max_incidence_angle": 483,
+      "min_resolutions_sum": 99027,
+      "timestamp_s": 16.839754,
+      "phase": "monise",
+      "index": 2
+    },
+    {
+      "selected_images": [
+        8,
+        12,
+        14,
+        15,
+        23,
+        30,
+        39,
+        45,
+        94,
+        98
+      ],
+      "cost": 4077726,
+      "cloudy_area": 60005,
+      "max_incidence_angle": 193,
+      "min_resolutions_sum": 108040,
+      "timestamp_s": 20.595523,
+      "phase": "monise",
+      "index": 3
+    },
+    {
+      "selected_images": [
+        12,
+        31,
+        53,
+        76,
+        94
+      ],
+      "cost": 3078010,
+      "cloudy_area": 22226,
+      "max_incidence_angle": 302,
+      "min_resolutions_sum": 114140,
+      "timestamp_s": 44.414189,
+      "phase": "monise",
+      "index": 4
+    },
+    {
+      "selected_images": [
+        12,
+        53,
+        76,
+        94
+      ],
+      "cost": 2606410,
+      "cloudy_area": 22226,
+      "max_incidence_angle": 302,
+      "min_resolutions_sum": 130340,
+      "timestamp_s": 49.687462,
+      "phase": "monise",
+      "index": 5
+    },
+    {
+      "selected_images": [
+        4,
+        12,
+        53,
+        67,
+        88,
+        94
+      ],
+      "cost": 2869878,
+      "cloudy_area": 88,
+      "max_incidence_angle": 273,
+      "min_resolutions_sum": 159226,
+      "timestamp_s": 62.528321,
+      "phase": "monise",
+      "index": 6
+    },
+    {
+      "selected_images": [
+        12,
+        53,
+        88,
+        94
+      ],
+      "cost": 2280770,
+      "cloudy_area": 16846,
+      "max_incidence_angle": 273,
+      "min_resolutions_sum": 163900,
+      "timestamp_s": 102.384371,
+      "phase": "monise",
+      "index": 7
+    },
+    {
+      "selected_images": [
+        4,
+        12,
+        17,
+        44,
+        48,
+        52,
+        53,
+        65,
+        69,
+        83,
+        88
+      ],
+      "cost": 4065108,
+      "cloudy_area": 427,
+      "max_incidence_angle": 330,
+      "min_resolutions_sum": 105955,
+      "timestamp_s": 233.426067,
+      "phase": "monise",
+      "index": 8
+    },
+    {
+      "selected_images": [
+        4,
+        12,
+        53,
+        67,
+        76,
+        80,
+        94
+      ],
+      "cost": 3268478,
+      "cloudy_area": 348,
+      "max_incidence_angle": 302,
+      "min_resolutions_sum": 125666,
+      "timestamp_s": 290.164749,
+      "phase": "monise",
+      "index": 9
+    }
+  ]
+}

@@ -1,0 +1,81 @@
+{
+  "instance_name": "lagos_nigeria_145",
+  "test_type": "4d",
+  "objectives": [
+    "min_cost",
+    "cloud_coverage",
+    "min_max_incidence_angle",
+    "min_resolution"
+  ],
+  "num_solutions": 3,
+  "pareto_front_complete": true,
+  "solutions": [
+    {
+      "selected_images": [
+        106,
+        118
+      ],
+      "cost": 666924,
+      "cloudy_area": 1116263,
+      "max_incidence_angle": 47,
+      "min_resolutions_sum": 1275450,
+      "timestamp_s": 11.263307,
+      "phase": "monise",
+      "index": 0
+    },
+    {
+      "selected_images": [
+        5,
+        11,
+        21,
+        22,
+        29,
+        33,
+        34,
+        46,
+        54,
+        80,
+        81,
+        85,
+        88,
+        104
+      ],
+      "cost": 6600673,
+      "cloudy_area": 0,
+      "max_incidence_angle": 492,
+      "min_resolutions_sum": 269390,
+      "timestamp_s": 205.375597,
+      "phase": "monise",
+      "index": 1
+    },
+    {
+      "selected_images": [
+        21,
+        29,
+        34,
+        40,
+        46,
+        47,
+        54,
+        55,
+        56,
+        63,
+        65,
+        67,
+        73,
+        77,
+        78,
+        85,
+        88,
+        91
+      ],
+      "cost": 7592540,
+      "cloudy_area": 64542,
+      "max_incidence_angle": 492,
+      "min_resolutions_sum": 260890,
+      "timestamp_s": 229.861141,
+      "phase": "monise",
+      "index": 2
+    }
+  ]
+}

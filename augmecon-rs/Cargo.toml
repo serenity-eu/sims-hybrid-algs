@@ -19,6 +19,11 @@ keywords = [
 categories = ["science", "algorithms", "mathematics"]
 autobins = false
 
+[[bin]]
+name = "solver-benchmark"
+path = "src/bin/solver_benchmark.rs"
+required-features = []
+
 [lib]
 name = "augmecon"
 path = "src/lib.rs"

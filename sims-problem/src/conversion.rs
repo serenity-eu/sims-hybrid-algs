@@ -35,121 +35,28 @@ fn extract_objective_values<const D: usize>(
     (cost, cloudy_area, min_resolutions_sum, max_incidence_angle)
 }
 
-/// Convert 2D PLS BitsetEncodedSolution to Python Solution
-impl
-    From<(
-        &BitsetEncodedSolution<ProblemBitset<2>, 2>,
-        &ProblemBitset<2>,
-    )> for Solution
+/// Convert a D-dimensional PLS `BitsetEncodedSolution` to a Python `Solution`.
+impl<const D: usize> From<(&BitsetEncodedSolution<ProblemBitset<D>, D>, &ProblemBitset<D>)>
+    for Solution
 {
-    fn from(
-        val: (
-            &BitsetEncodedSolution<ProblemBitset<2>, 2>,
-            &ProblemBitset<2>,
-        ),
-    ) -> Self {
+    fn from(val: (&BitsetEncodedSolution<ProblemBitset<D>, D>, &ProblemBitset<D>)) -> Self {
         let (pls_solution, problem) = val;
         let timestamp_us = pls_solution.timestamp().as_micros() as u64;
 
-        // Debug logging: Show raw PLS solution data
         let selected_images: Vec<usize> = pls_solution.selected_images().collect();
         debug!(
-            "Converting 2D PLS solution: {} selected images, objectives: {:?}",
+            "Converting {D}D PLS solution: {} selected images, objectives: {:?}",
             selected_images.len(),
             pls_solution.objectives
         );
 
-        debug!("Selected images (0-based): {selected_images:?}");
-
-        // Extract objective values using objective definitions
         let (cost, cloudy_area, min_resolutions_sum, max_incidence_angle) =
             extract_objective_values(&pls_solution.objectives, problem);
 
-        debug!("Created 2D Python solution: cost={cost:?}, cloudy_area={cloudy_area:?}");
-
-        Solution::create(
-            selected_images,
-            cost,
-            cloudy_area,
-            timestamp_us,
-            max_incidence_angle,
-            min_resolutions_sum,
-        )
-        .expect("PLS solution should always have at least 2 objectives set")
-    }
-}
-
-/// Convert 3D PLS BitsetEncodedSolution to Python Solution
-impl
-    From<(
-        &BitsetEncodedSolution<ProblemBitset<3>, 3>,
-        &ProblemBitset<3>,
-    )> for Solution
-{
-    fn from(
-        val: (
-            &BitsetEncodedSolution<ProblemBitset<3>, 3>,
-            &ProblemBitset<3>,
-        ),
-    ) -> Self {
-        let (pls_solution, problem) = val;
-        let timestamp_us = pls_solution.timestamp().as_micros() as u64;
-
-        // Debug logging: Show raw PLS solution data
-        let selected_images: Vec<usize> = pls_solution.selected_images().collect();
         debug!(
-            "Converting 3D PLS solution: {} selected images, objectives: {:?}",
-            selected_images.len(),
-            pls_solution.objectives
+            "Created {D}D Python solution: cost={cost:?}, cloudy_area={cloudy_area:?}, \
+             min_resolutions_sum={min_resolutions_sum:?}, max_incidence_angle={max_incidence_angle:?}"
         );
-
-        // Extract objective values using objective definitions
-        let (cost, cloudy_area, min_resolutions_sum, max_incidence_angle) =
-            extract_objective_values(&pls_solution.objectives, problem);
-
-        debug!("Created 3D Python solution: cost={cost:?}, cloudy_area={cloudy_area:?}, min_resolutions_sum={min_resolutions_sum:?}, max_incidence_angle={max_incidence_angle:?}");
-
-        Solution::create(
-            selected_images,
-            cost,
-            cloudy_area,
-            timestamp_us,
-            max_incidence_angle,
-            min_resolutions_sum,
-        )
-        .expect("PLS solution should always have at least 2 objectives set")
-    }
-}
-
-/// Convert 4D PLS BitsetEncodedSolution to Python Solution  
-impl
-    From<(
-        &BitsetEncodedSolution<ProblemBitset<4>, 4>,
-        &ProblemBitset<4>,
-    )> for Solution
-{
-    fn from(
-        val: (
-            &BitsetEncodedSolution<ProblemBitset<4>, 4>,
-            &ProblemBitset<4>,
-        ),
-    ) -> Self {
-        let (pls_solution, problem) = val;
-        let timestamp_us = pls_solution.timestamp().as_micros() as u64;
-        
-        // Debug logging: Show raw PLS solution data
-        let selected_images: Vec<usize> = pls_solution.selected_images().collect();
-        debug!(
-            "Converting 4D PLS solution: {} selected images, objectives: {:?}",
-            selected_images.len(),
-            pls_solution.objectives
-        );
-
-        // Extract objective values using objective definitions
-        let (cost, cloudy_area, min_resolutions_sum, max_incidence_angle) =
-            extract_objective_values(&pls_solution.objectives, problem);
-
-        debug!("Created 4D Python solution: cost={cost:?}, cloudy_area={cloudy_area:?}, min_resolutions_sum={min_resolutions_sum:?}, max_incidence_angle={max_incidence_angle:?}");
 
         Solution::create(
             selected_images,

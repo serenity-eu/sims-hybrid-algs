@@ -1,6 +1,5 @@
 from sims_solvers.FrontGenerators.FrontGeneratorStrategy import FrontGeneratorStrategy
 from sims_solvers.FrontGenerators.Saugmecon import Saugmecon
-import logging
 
 
 class CoverageGridPoint(FrontGeneratorStrategy):
@@ -16,7 +15,6 @@ class CoverageGridPoint(FrontGeneratorStrategy):
         self.constraint_objectives_lhs = None
         self.constraint_objectives = [0] * (len(self.solver.model.objectives) - 1)
         self.is_a_minimization_model_originally = False
-        self.logger = logging.getLogger(__name__)
         self.obj_k_at_ef_k = [None] * (len(self.solver.model.objectives) - 1)
 
     def set_multiply_solution_by_minus_one(self):
@@ -29,47 +27,26 @@ class CoverageGridPoint(FrontGeneratorStrategy):
         Implements GPBA-A algorithm with objective rotation as described in the paper:
         'performs a single run for every iteration and for each objective function'
         """
-        self.logger.critical("ORIGINAL GPBA-A: Starting solve method")
-        # get the best and worst values for each objective. todo consider computing best and worst only for the objective variables, e.g. all except main_obj_index
         yield from self.get_best_worst_values()
-        # convert problem to maximization problem
         self.convert_model_to_maximization()
-        
-        self.logger.critical("ORIGINAL GPBA-A: Starting solve_with_main_objective(0)")
-        # todo in the original paper only one objective is optimized, rotation is tricky, could lead to missing some points
-        # num_objectives = len(self.solver.model.objectives)
-        # Run GPBA-A for each objective as the main one (complete objective rotation)
-        # for main_obj_index in range(num_objectives):
-        #     print(f"🎯 GPBA-A: Running iteration {main_obj_index + 1}/{num_objectives} with objective {main_obj_index} as main objective")
-        #     yield from self.solve_with_main_objective(main_obj_index)
         yield from self.solve_with_main_objective(0)
     
     def solve_with_main_objective(self, main_obj_index):
         """
         Run GPBA-A algorithm with specified objective as the main one.
-        
+
         Args:
             main_obj_index: Index of objective to optimize (others become constraints)
         """
-        self.logger.critical(f"ORIGINAL GPBA-A: solve_with_main_objective({main_obj_index})")
-        # declare the model with the specified main objective
         self.set_augmecon2_objective_model(main_obj_index)
-        
-        # Determine constraint objective indices (all except main_obj_index)
+
         num_objectives = len(self.solver.model.objectives)
         constraint_indices = [i for i in range(num_objectives) if i != main_obj_index]
-        self.logger.critical(f"ORIGINAL GPBA-A: Main objective: {main_obj_index}, Constraint objectives: {constraint_indices}")
-        
-        # Initializes the loop control variable for all constraint objectives
+
         ef_array = []
         for i in constraint_indices:
             ef_array.append(self.nadir_objectives_values[i])
-        
-        self.logger.critical(f"ORIGINAL GPBA-A: Initial ef_array: {ef_array}")
-        self.logger.critical(f"ORIGINAL GPBA-A: Best values: {self.best_objective_values}")
-        self.logger.critical(f"ORIGINAL GPBA-A: Nadir values: {self.nadir_objectives_values}")
-        
-        # Update constraint_objectives array to match number of constraint objectives
+
         self.constraint_objectives = [0] * len(constraint_indices)
         
         # save previous solutions
@@ -130,11 +107,9 @@ class CoverageGridPoint(FrontGeneratorStrategy):
             ef_intervals: List of interval managers for constraint objectives
             constraint_indices: Indices of objectives that are constraints (not main objective)
         """
-        self.logger.critical(f"ORIGINAL: coverage_most_inner_loop START - ef_array={ef_array}, rwv={rwv}")
         gamma = 1  # with the value of 1, the algorithm will find the whole Pareto front if run enough time
         previous_solution_relaxation, previous_solution_values = \
             Saugmecon.search_previous_solutions_relaxation(ef_array, previous_solution_information, min_sense=False)
-        self.logger.critical(f"ORIGINAL: previous_solution_relaxation={previous_solution_relaxation}")
         if previous_solution_relaxation:
             if type(previous_solution_values) is str:
                 # the previous solution is infeasible
@@ -160,13 +135,11 @@ class CoverageGridPoint(FrontGeneratorStrategy):
                     previous_solutions.add(str_objectives_solution_values)
                     formatted_solution = self.process_feasible_solution(solution_sec)
                     one_solution = formatted_solution["objs"]
-                    self.logger.critical(f"ORIGINAL: Found solution (in max form): {one_solution}")
                     Saugmecon.save_solution_information(ef_array, one_solution, previous_solution_information,
                                                         min_sense=False)
 
                     if self.is_a_minimization_model_originally:
                         formatted_solution.solution.objs = [-1 * i for i in formatted_solution.solution.objs]
-                    self.logger.critical(f"ORIGINAL GPBA-A: Found solution (in min form): {formatted_solution.solution.objs}")
                     yield formatted_solution
                     # todo comment below the line below is for testing purposes, uncomment when necessary
                     try:
@@ -190,12 +163,9 @@ class CoverageGridPoint(FrontGeneratorStrategy):
                 self.obj_k_at_ef_k[i] = rwv[i]
             self.obj_k_at_ef_k[id_interval] = one_solution[constraint_indices[id_interval]]
         
-        self.logger.critical(f"ORIGINAL: Before adjust - ef_array={ef_array}, obj_k_at_ef_k[{id_interval}]={self.obj_k_at_ef_k[id_interval]}, rwv={rwv}")
-
         # Update all constraint objectives. NOTE: An objective x (with 1 <= x <= p-2, where p-1 is the index of the
         # last objective) is only updated when the ef_array[x+1] > best_value[x+1]
         ef_intervals[id_interval] = self.adjust_parameter_ef_array(id_interval, ef_array, self.obj_k_at_ef_k[id_interval], ef_intervals[id_interval], constraint_indices, gamma)
-        self.logger.critical(f"ORIGINAL: After adjust - ef_array={ef_array}")
         for i in range(len(constraint_indices)-1, 0, -1):
             if ef_array[i] > self.best_objective_values[constraint_indices[i]]:
                 ef_array[i] = self.nadir_objectives_values[constraint_indices[i]]
@@ -223,20 +193,12 @@ class CoverageGridPoint(FrontGeneratorStrategy):
             gamma: Coverage parameter
         """
         actual_obj_index = constraint_indices[id_constraint_objective]
-        self.logger.critical(f"ORIGINAL adjust_parameter_ef_array: id={id_constraint_objective}, ef_array[{id_constraint_objective}]={ef_array[id_constraint_objective]}, sol_obj_k={sol_obj_k}")
-        self.logger.critical(f"ORIGINAL adjust_parameter_ef_array: actual_obj_index={actual_obj_index}, best[{actual_obj_index}]={self.best_objective_values[actual_obj_index]}, nadir[{actual_obj_index}]={self.nadir_objectives_values[actual_obj_index]}")
-        self.logger.critical(f"ORIGINAL adjust_parameter_ef_array: ef_interval.intervals={ef_interval.intervals}, min={ef_interval.min_value}, max={ef_interval.max_value}")
-        
-        # check if the list one_solution is empty
         start_removal = ef_array[id_constraint_objective]
         new_max_interval = start_removal - 1
         if sol_obj_k is None:
             end_removal = ef_interval.max_value
         else:
-            # Map from constraint objective index to actual objective index
             end_removal = min(sol_obj_k, ef_interval.max_value)
-        
-        self.logger.critical(f"ORIGINAL adjust_parameter_ef_array: start_removal={start_removal}, end_removal={end_removal}, comparison={start_removal < end_removal}")
         
         if start_removal < end_removal:
             ef_interval.remove_interval(start_removal, end_removal)
@@ -248,21 +210,15 @@ class CoverageGridPoint(FrontGeneratorStrategy):
         if end_removal >= ef_interval.max_value:
             ef_interval.max_value = new_max_interval
         max_interval = ef_interval.find_largest_interval()
-        self.logger.critical(f"ORIGINAL adjust_parameter_ef_array: After removal - max_interval={max_interval}, ef_interval.intervals={ef_interval.intervals}")
-        
+
         if max_interval is not None:
             if ef_array[id_constraint_objective] == self.nadir_objectives_values[actual_obj_index]:
                 ef_array[id_constraint_objective] = self.best_objective_values[actual_obj_index]
-                self.logger.critical(f"ORIGINAL adjust_parameter_ef_array: Was at nadir, jumped to best: {ef_array[id_constraint_objective]}")
             else:
                 ef_array[id_constraint_objective] = int((max_interval[0] + max_interval[1]) / 2)
-                self.logger.critical(f"ORIGINAL adjust_parameter_ef_array: Set to center of max_interval: {ef_array[id_constraint_objective]}")
         else:
             ef_array[id_constraint_objective] = self.best_objective_values[actual_obj_index] + 1
-            self.logger.critical(f"ORIGINAL adjust_parameter_ef_array: No interval left, set to best+1: {ef_array[id_constraint_objective]}")
-            # reinitialize the interval manager to avoid stopping the algorithm
             ef_interval = self.create_interval(actual_obj_index)
-            self.logger.critical(f"ORIGINAL adjust_parameter_ef_array: Reinitialized interval: {ef_interval.intervals}")
         return ef_interval
 
     def convert_model_to_maximization(self):
@@ -277,37 +233,36 @@ class CoverageGridPoint(FrontGeneratorStrategy):
             self.solver.change_objective_sense(i)
 
     def get_best_worst_values(self):
-        """Get extreme points by optimizing each objective individually for any number of objectives."""
+        """Get extreme points by optimizing each objective individually for any number of objectives.
+
+        Uses the AUGMECON2 payoff table approach for nadir computation: nadir[j] is the worst
+        value of obj[j] observed across all extreme solutions for other objectives. This is tighter
+        than independent maximization and requires zero extra solver calls.
+        """
         num_objectives = len(self.solver.model.objectives)
         self.best_objective_values = [0] * num_objectives
         self.nadir_objectives_values = [0] * num_objectives
         formatted_solutions = []
-        
-        # For each objective, find its extreme value (ideal point)
+        payoff_table = []  # payoff_table[i] = all objective values when optimizing objective i
+
         for i in range(num_objectives):
             formatted_solution, objective_val = self.optimize_single_objectives(self.model_optimization_sense, i)
             if formatted_solution is not None and objective_val is not None:
                 self.best_objective_values[i] = int(objective_val)
+                payoff_table.append([int(v) for v in formatted_solution['objs']])
                 formatted_solutions.append(formatted_solution)
                 self.front_solutions.append(formatted_solution)
             else:
                 raise TimeoutError(f"Timeout while optimizing objective {i}")
-        # Get the nadir values by optimizing each objective in the opposite sense. Do it after getting the best values,
-        # because the best values are potential Pareto points, but the nadir values are not. If the time is short, it is better to get the best values.
-        nadir_optimization_sense = "min" if self.model_optimization_sense == "max" else "max"
-        for i in range(num_objectives):
-            sols, objective_val = self.optimize_single_objectives(nadir_optimization_sense, i)
-            if objective_val is not None:
-                self.nadir_objectives_values[i] = int(objective_val)
-            else:
-                raise TimeoutError(f"Timeout while optimizing objective {i}")
 
-        # Yield all found extreme solutions
+        # Payoff table nadir: nadir[j] = worst value of obj[j] among extreme solutions for other objectives
+        for j in range(num_objectives):
+            self.nadir_objectives_values[j] = max(
+                payoff_table[i][j] for i in range(num_objectives) if i != j
+            )
+
         for formatted_solution in formatted_solutions:
-            if formatted_solution is not None:
-                yield formatted_solution
-            else:
-                raise TimeoutError()
+            yield formatted_solution
 
     def set_augmecon2_objective_model(self, main_obj_index=0):
         """

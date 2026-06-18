@@ -1,0 +1,122 @@
+{
+  "instance_name": "mexico_city_150",
+  "test_type": "4d",
+  "objectives": [
+    "min_cost",
+    "cloud_coverage",
+    "min_max_incidence_angle",
+    "min_resolution"
+  ],
+  "num_solutions": 6,
+  "pareto_front_complete": false,
+  "solutions": [
+    {
+      "selected_images": [
+        9
+      ],
+      "cost": 623375,
+      "cloudy_area": 875655,
+      "max_incidence_angle": 216,
+      "min_resolutions_sum": 785400,
+      "timestamp_s": 15.15111,
+      "phase": "monise",
+      "index": 0
+    },
+    {
+      "selected_images": [
+        2,
+        4,
+        6,
+        9,
+        19,
+        23,
+        24,
+        25,
+        26,
+        28,
+        41,
+        50,
+        55,
+        68,
+        70,
+        94,
+        106,
+        149
+      ],
+      "cost": 6918407,
+      "cloudy_area": 0,
+      "max_incidence_angle": 451,
+      "min_resolutions_sum": 158427,
+      "timestamp_s": 177.20219699999998,
+      "phase": "monise",
+      "index": 1
+    },
+    {
+      "selected_images": [
+        0,
+        4,
+        7,
+        23,
+        68,
+        70,
+        94,
+        97,
+        106,
+        113,
+        129,
+        149
+      ],
+      "cost": 4911562,
+      "cloudy_area": 279695,
+      "max_incidence_angle": 218,
+      "min_resolutions_sum": 158123,
+      "timestamp_s": 193.88474,
+      "phase": "monise",
+      "index": 2
+    },
+    {
+      "selected_images": [
+        23,
+        71,
+        75,
+        110,
+        136,
+        146
+      ],
+      "cost": 1863372,
+      "cloudy_area": 168034,
+      "max_incidence_angle": 137,
+      "min_resolutions_sum": 474360,
+      "timestamp_s": 210.360641,
+      "phase": "monise",
+      "index": 3
+    },
+    {
+      "selected_images": [
+        105
+      ],
+      "cost": 623375,
+      "cloudy_area": 1276,
+      "max_incidence_angle": 294,
+      "min_resolutions_sum": 785400,
+      "timestamp_s": 436.768455,
+      "phase": "monise",
+      "index": 4
+    },
+    {
+      "selected_images": [
+        32,
+        33,
+        69,
+        145
+      ],
+      "cost": 1232095,
+      "cloudy_area": 166184,
+      "max_incidence_angle": 226,
+      "min_resolutions_sum": 481000,
+      "timestamp_s": 505.82752100000005,
+      "phase": "monise",
+      "index": 5
+    }
+  ]
+}

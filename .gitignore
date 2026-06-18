@@ -201,3 +201,5 @@ cython_debug/
 
 *.tar.gz
 experiment*
+scratch/
+ephemeral/

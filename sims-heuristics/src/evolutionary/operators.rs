@@ -46,6 +46,9 @@ use crate::solution_impl::bitset_encoded_solution::BitsetEncodedSolution;
 /// or randomly.
 ///
 /// This is the most critical operator: every crossover and most mutations call it.
+/// When the problem exposes `image_bitset()`, bulk FixedBitSet word ops replace
+/// element-by-element iteration (O(N/64) vs O(N) for coverage updates and gain
+/// computation).
 pub fn greedy_repair<P, const D: usize>(selected: &mut FixedBitSet, problem: &P, rng: &mut SmallRng)
 where
     P: SetCoverProblem<D> + Clone + Send + Sync,
@@ -56,11 +59,16 @@ where
 
     let universe_size = problem.num_elements();
 
-    // Build covered-elements bitset from current selection
+    // Build covered-elements bitset from current selection.
+    // Fast path: union_with is a SIMD word-level OR, O(universe_size/64).
     let mut covered = FixedBitSet::with_capacity(universe_size);
     for img in selected.ones() {
-        for elem in problem.image_elements(img) {
-            covered.insert(elem);
+        if let Some(bs) = problem.image_bitset(img) {
+            covered.union_with(bs);
+        } else {
+            for elem in problem.image_elements(img) {
+                covered.insert(elem);
+            }
         }
     }
 
@@ -83,7 +91,8 @@ where
             continue;
         }
 
-        // Find the best image covering this element (max uncovered coverage)
+        // Find the best image covering this element (max uncovered coverage).
+        // Fast path: gain = |candidate \ covered| = |candidate| - |candidate ∩ covered|
         let mut best_image = None;
         let mut best_gain: usize = 0;
 
@@ -91,11 +100,14 @@ where
             if selected.contains(candidate) {
                 continue; // already selected
             }
-            // Count how many currently-uncovered elements this image covers
-            let gain = problem
-                .image_elements(candidate)
-                .filter(|&e| !covered.contains(e))
-                .count();
+            let gain = if let Some(bs) = problem.image_bitset(candidate) {
+                bs.count_ones(..) - bs.intersection_count(&covered)
+            } else {
+                problem
+                    .image_elements(candidate)
+                    .filter(|&e| !covered.contains(e))
+                    .count()
+            };
             if gain > best_gain {
                 best_gain = gain;
                 best_image = Some(candidate);
@@ -104,8 +116,12 @@ where
 
         if let Some(img) = best_image {
             selected.insert(img);
-            for e in problem.image_elements(img) {
-                covered.insert(e);
+            if let Some(bs) = problem.image_bitset(img) {
+                covered.union_with(bs);
+            } else {
+                for e in problem.image_elements(img) {
+                    covered.insert(e);
+                }
             }
         } else {
             // Fallback: pick any unselected image covering the element
@@ -114,8 +130,12 @@ where
                 .find(|&c| !selected.contains(c))
             {
                 selected.insert(img);
-                for e in problem.image_elements(img) {
-                    covered.insert(e);
+                if let Some(bs) = problem.image_bitset(img) {
+                    covered.union_with(bs);
+                } else {
+                    for e in problem.image_elements(img) {
+                        covered.insert(e);
+                    }
                 }
             }
             // If still no image found the element is simply uncoverable (shouldn't happen
@@ -132,9 +152,9 @@ where
 /// one other selected image. Removing redundant images improves cost-related
 /// objectives without violating feasibility.
 ///
-/// We iterate from the image with the worst single-objective contribution downward.
-/// The `cost_fn` closure returns a value used to rank images for removal priority
-/// (higher = removed first).
+/// Fast path (when `image_bitset` is available): the redundancy check uses a
+/// `doubly_covered` FixedBitSet and `is_subset`, replacing the per-element count
+/// loop with a single O(universe/64) bitset scan.
 pub fn remove_redundant_images<P, const D: usize>(
     selected: &mut FixedBitSet,
     problem: &P,
@@ -146,24 +166,42 @@ pub fn remove_redundant_images<P, const D: usize>(
 
     let universe_size = problem.num_elements();
 
-    // Build element coverage counts: how many selected images cover each element
+    // Collect selected images, shuffle for tie-breaking diversity.
+    let mut candidates: Vec<usize> = selected.ones().collect();
+    candidates.shuffle(rng);
+
+    // Build per-element coverage counts and a doubly_covered bitset.
+    // doubly_covered[e] = true iff element e is covered by ≥2 selected images.
+    // We use coverage_count for correct incremental updates when images are removed,
+    // and doubly_covered for the fast is_subset redundancy check.
     let mut coverage_count = vec![0u32; universe_size];
-    for img in selected.ones() {
-        for elem in problem.image_elements(img) {
-            coverage_count[elem] += 1;
+    let mut doubly_covered = FixedBitSet::with_capacity(universe_size);
+
+    for &img in &candidates {
+        if let Some(bs) = problem.image_bitset(img) {
+            for elem in bs.ones() {
+                coverage_count[elem] += 1;
+                if coverage_count[elem] >= 2 {
+                    doubly_covered.insert(elem);
+                }
+            }
+        } else {
+            for elem in problem.image_elements(img) {
+                coverage_count[elem] += 1;
+                if coverage_count[elem] >= 2 {
+                    doubly_covered.insert(elem);
+                }
+            }
         }
     }
 
-    // Collect selected images and sort by number of elements they cover (ascending)
-    // so we try to remove images that cover the fewest elements first (least useful).
-    // Removing low-coverage images first is more likely to succeed (their elements
-    // are covered by others) and tends to produce leaner solutions with fewer images.
-    // We shuffle first for tie-breaking diversity across repeated calls.
-    let mut candidates: Vec<usize> = selected.ones().collect();
-    candidates.shuffle(rng);
+    // Sort ascending by element count (fewest-covering images removed first).
+    // Fast path: bs.count_ones() replaces iterator count.
     candidates.sort_by_key(|&img| {
-        let elem_count: usize = problem.image_elements(img).count();
-        elem_count
+        problem.image_bitset(img).map_or_else(
+            || problem.image_elements(img).count(),
+            |bs| bs.count_ones(..),
+        )
     });
 
     for img in candidates {
@@ -171,15 +209,33 @@ pub fn remove_redundant_images<P, const D: usize>(
             continue;
         }
 
-        // Check if removing this image would leave all its elements still covered
-        let is_redundant = problem
-            .image_elements(img)
-            .all(|elem| coverage_count[elem] >= 2);
+        // Fast redundancy check: image is redundant iff its coverage ⊆ doubly_covered.
+        let is_redundant = problem.image_bitset(img).map_or_else(
+            || {
+                problem
+                    .image_elements(img)
+                    .all(|elem| coverage_count[elem] >= 2)
+            },
+            |bs| bs.is_subset(&doubly_covered),
+        );
 
         if is_redundant {
             selected.toggle(img);
-            for elem in problem.image_elements(img) {
-                coverage_count[elem] -= 1;
+            // Update coverage_count and doubly_covered for the removed image.
+            if let Some(bs) = problem.image_bitset(img) {
+                for elem in bs.ones() {
+                    coverage_count[elem] -= 1;
+                    if coverage_count[elem] < 2 {
+                        doubly_covered.set(elem, false);
+                    }
+                }
+            } else {
+                for elem in problem.image_elements(img) {
+                    coverage_count[elem] -= 1;
+                    if coverage_count[elem] < 2 {
+                        doubly_covered.set(elem, false);
+                    }
+                }
             }
         }
     }
@@ -426,6 +482,9 @@ where
 /// After replacement, redundancy removal may eliminate other images that became
 /// redundant due to the new image's coverage, effectively "shifting" the solution
 /// in objective space.
+///
+/// Fast path: `exposed_elements` is a FixedBitSet, and candidate scoring uses
+/// `intersection_count` + `count_ones` instead of linear `Vec::contains` search.
 pub fn shift_mutation<P, const D: usize>(
     solution: &BitsetEncodedSolution<P, D>,
     problem: &P,
@@ -452,24 +511,42 @@ where
         None => return solution.clone(),
     };
 
-    // Collect elements that would become uncovered if we remove this image
+    // Collect elements that would become exposed (uncovered) if we remove this image.
+    // exposed_elements is a FixedBitSet for O(1) lookup in the scoring loop.
     let mut coverage_count = vec![0u32; problem.num_elements()];
     for img in child_selected.ones() {
-        for elem in problem.image_elements(img) {
-            coverage_count[elem] += 1;
+        if let Some(bs) = problem.image_bitset(img) {
+            for elem in bs.ones() {
+                coverage_count[elem] += 1;
+            }
+        } else {
+            for elem in problem.image_elements(img) {
+                coverage_count[elem] += 1;
+            }
         }
     }
 
-    let exposed_elements: Vec<usize> = problem
-        .image_elements(img_to_remove)
-        .filter(|&elem| coverage_count[elem] == 1)
-        .collect();
+    let mut exposed_elements = FixedBitSet::with_capacity(problem.num_elements());
+    if let Some(bs) = problem.image_bitset(img_to_remove) {
+        for elem in bs.ones() {
+            if coverage_count[elem] == 1 {
+                exposed_elements.insert(elem);
+            }
+        }
+    } else {
+        for elem in problem.image_elements(img_to_remove) {
+            if coverage_count[elem] == 1 {
+                exposed_elements.insert(elem);
+            }
+        }
+    }
 
     child_selected.toggle(img_to_remove);
 
     // Find the best replacement among unselected images:
     // 1. Primary: maximize coverage of exposed elements (restore feasibility)
     // 2. Secondary: maximize total element coverage (create more redundancy for pruning)
+    // Fast path: use intersection_count + count_ones instead of per-element loops.
     let mut best_candidate: Option<usize> = None;
     let mut best_exposed_coverage = 0usize;
     let mut best_total_coverage = 0usize;
@@ -478,17 +555,22 @@ where
         if candidate == img_to_remove {
             continue;
         }
-        // Count how many exposed elements this candidate covers
-        let mut exposed_coverage = 0usize;
-        let mut total_coverage = 0usize;
-        for elem in problem.image_elements(candidate) {
-            total_coverage += 1;
-            if exposed_elements.contains(&elem) {
-                exposed_coverage += 1;
-            }
-        }
 
-        // Prefer candidates that cover more exposed elements, then more total elements
+        let (exposed_coverage, total_coverage) = if let Some(bs) = problem.image_bitset(candidate)
+        {
+            (bs.intersection_count(&exposed_elements), bs.count_ones(..))
+        } else {
+            let mut exp = 0usize;
+            let mut tot = 0usize;
+            for elem in problem.image_elements(candidate) {
+                tot += 1;
+                if exposed_elements.contains(elem) {
+                    exp += 1;
+                }
+            }
+            (exp, tot)
+        };
+
         if exposed_coverage > best_exposed_coverage
             || (exposed_coverage == best_exposed_coverage && total_coverage > best_total_coverage)
         {

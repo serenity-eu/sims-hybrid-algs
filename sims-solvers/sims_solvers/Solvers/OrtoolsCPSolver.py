@@ -228,8 +228,42 @@ class OrtoolsCPSolver(Solver):
         new_constraint = self.model.solver_model.Add(constraint >= rhs)
         return new_constraint
 
+    def add_objective_nogood(self, obj_values):
+        """
+        Exclude one exact objective vector from future solutions.
+
+        For each objective j with value v_j, creates:
+          b_lt[j]=True  =>  obj[j] <= v_j - 1
+          b_gt[j]=True  =>  obj[j] >= v_j + 1
+        and requires AddBoolOr(all b_lt, all b_gt) so at least one objective must differ.
+
+        Returns the list of all added constraints; pass the list to remove_constraint
+        to deactivate the nogood.
+        """
+        count = getattr(self, '_nogood_count', 0)
+        self._nogood_count = count + 1
+        all_cts = []
+        conditions = []
+        for j, v_j in enumerate(obj_values):
+            v_j = int(v_j)
+            b_lt = self.model.solver_model.NewBoolVar(f"ng_lt_{count}_{j}")
+            b_gt = self.model.solver_model.NewBoolVar(f"ng_gt_{count}_{j}")
+            all_cts.append(
+                self.model.solver_model.Add(self.model.objectives[j] <= v_j - 1).OnlyEnforceIf(b_lt)
+            )
+            all_cts.append(
+                self.model.solver_model.Add(self.model.objectives[j] >= v_j + 1).OnlyEnforceIf(b_gt)
+            )
+            conditions.extend([b_lt, b_gt])
+        all_cts.append(self.model.solver_model.AddBoolOr(conditions))
+        return all_cts
+
     def remove_constraint(self, constraint):
-        constraint.Proto().Clear()
+        if isinstance(constraint, list):
+            for c in constraint:
+                c.Proto().Clear()
+        else:
+            constraint.Proto().Clear()
 
     def set_minimization(self):
         if self.current_objective is not None:
@@ -258,13 +292,66 @@ class OrtoolsCPSolver(Solver):
         return one_solution
 
     def set_weighted_sum_objective(self, weights):
-        raise NotImplementedError("set_weighted_sum_objective not implemented for OrtoolsCPSolver.")
+        """
+        Set a weighted-sum objective for CP-SAT.
+
+        CP-SAT only handles integer coefficients, so float weights are scaled by WEIGHT_SCALE
+        (10 000) and rounded.  A new auxiliary IntVar is created each call (uniquely named via
+        a counter) and the model's objective direction is updated immediately — unlike
+        set_single_objective, which only stores current_objective without touching the model.
+
+        The old weighted-sum constraint, if any, is cleared before the new one is added.
+        """
+        WEIGHT_SCALE = 10_000
+        int_weights = [round(w * WEIGHT_SCALE) for w in weights]
+
+        # Tight bounds for the new auxiliary variable
+        lb_total = 0
+        ub_total = 0
+        for i, iw in enumerate(int_weights):
+            dom = self.model.objectives[i].Proto().domain
+            obj_lb, obj_ub = dom[0], dom[-1]
+            if iw >= 0:
+                lb_total += iw * obj_lb
+                ub_total += iw * obj_ub
+            else:
+                lb_total += iw * obj_ub
+                ub_total += iw * obj_lb
+
+        # Clear the previous weighted-sum constraint so it does not conflict
+        if hasattr(self, "_ws_constraint") and self._ws_constraint is not None:
+            self._ws_constraint.Proto().Clear()
+            self._ws_constraint = None
+
+        # Unique name avoids CP-SAT variable-name collisions across calls
+        call_idx = getattr(self, "_ws_call_count", 0)
+        self._ws_call_count = call_idx + 1
+        ws_var = self.model.solver_model.NewIntVar(lb_total, ub_total, f"_ws_obj_{call_idx}")
+
+        self._ws_constraint = self.model.solver_model.Add(
+            ws_var == sum(int_weights[i] * self.model.objectives[i] for i in range(len(int_weights)))
+        )
+
+        self.current_objective = ws_var
+
+        # Unlike set_single_objective, we must also push the direction into the model now.
+        # The caller (strategy) will not call set_optimization_sense again between this and
+        # the next solver.Solve(), so we commit the direction here.
+        if self.last_optimization == LastOptimization.MAXIMIZATION:
+            self.model.solver_model.Maximize(ws_var)
+        else:
+            # Default to minimization (correct for SIMS and for any unset state)
+            self.model.solver_model.Minimize(ws_var)
+            self.last_optimization = LastOptimization.MINIMIZATION
 
     def get_status(self):
         return self.solver.StatusName(self.status)
 
     def status_time_limit(self):
-        return self.status == cp_model.UNKNOWN
+        # FEASIBLE means CP-SAT found a solution but ran out of time before proving optimality.
+        # Treat it as a timeout: the solution is non-optimal and using it as optimal would
+        # corrupt the interval manager in GPBA-A (causing missed Pareto solutions).
+        return self.status in (cp_model.UNKNOWN, cp_model.FEASIBLE)
 
     def status_infeasible(self):
         return self.status == cp_model.INFEASIBLE

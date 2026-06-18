@@ -1,0 +1,29 @@
+{
+  "instance_name": "tokyo_bay_200",
+  "test_type": "4d",
+  "objectives": [
+    "min_cost",
+    "cloud_coverage",
+    "min_max_incidence_angle",
+    "min_resolution"
+  ],
+  "num_solutions": 1,
+  "solutions": [
+    {
+      "selected_images": [
+        101,
+        167,
+        170,
+        180,
+        63
+      ],
+      "cost": 2735510,
+      "cloudy_area": 2288941,
+      "max_incidence_angle": 261,
+      "min_resolutions_sum": 735150,
+      "timestamp_s": 102.109616,
+      "phase": "exact",
+      "index": 0
+    }
+  ]
+}

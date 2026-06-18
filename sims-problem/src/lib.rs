@@ -34,6 +34,10 @@ fn sims_problem(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(solver::solve_with_hybrid, m)?)?;
     m.add_function(wrap_pyfunction!(solver::solve_with_nsga2, m)?)?;
     m.add_function(wrap_pyfunction!(solver::solve_with_moead, m)?)?;
+    m.add_function(wrap_pyfunction!(solver::solve_with_nsga3, m)?)?;
+    m.add_function(wrap_pyfunction!(solver::solve_with_memetic_nsga2, m)?)?;
+    m.add_function(wrap_pyfunction!(solver::solve_with_memetic_nsga3, m)?)?;
+    m.add_function(wrap_pyfunction!(solver::solve_with_memetic_moead, m)?)?;
 
     // Add hypervolume function
     m.add_function(wrap_pyfunction!(hypervolume::compute_hypervolume, m)?)?;

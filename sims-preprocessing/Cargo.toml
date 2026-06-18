@@ -1,0 +1,20 @@
+[package]
+name = "sims-preprocessing"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+pyo3-bindings = ["dep:pyo3"]
+
+[dependencies]
+geo = "0.32"
+geos = { version = "11", features = ["geo", "json"] }
+rstar = "0.12"
+rand = "0.9"
+thiserror = "2"
+pyo3 = { version = "0.27", features = ["extension-module"], optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+serde_json = "1"

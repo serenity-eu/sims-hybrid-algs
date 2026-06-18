@@ -1,0 +1,30 @@
+{
+  "instance_name": "rio_de_janeiro_200",
+  "test_type": "4d",
+  "objectives": [
+    "min_cost",
+    "cloud_coverage",
+    "min_max_incidence_angle",
+    "min_resolution"
+  ],
+  "num_solutions": 1,
+  "pareto_front_complete": false,
+  "solutions": [
+    {
+      "selected_images": [
+        54,
+        56,
+        69,
+        85,
+        178
+      ],
+      "cost": 2141430,
+      "cloudy_area": 336067,
+      "max_incidence_angle": 188,
+      "min_resolutions_sum": 1263550,
+      "timestamp_s": 133.324927,
+      "phase": "monise",
+      "index": 0
+    }
+  ]
+}

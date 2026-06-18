@@ -1133,6 +1133,13 @@ def solve_milp(config: Config, objectives: list[str] | None = None):
             statistics["exhaustive"] = True
     except TimeoutError:
         logger.debug("ORIGINAL: Timeout triggered getting last incomplete solution")
+        # Save Pareto front state before processing the timeout solution.
+        # process_last_incomplete_solution can corrupt pareto_front.front when the
+        # timeout solution is in maximization form (large negative values dominate all
+        # minimization-form solutions), wiping the real front.
+        _front_snapshot = list(pareto_front.front)
+        _pareto_front_str = statistics.get("pareto_front", "")
+        _solutions_pareto_front_str = statistics.get("solutions_pareto_front", "")
         if solver.process_last_incomplete_solution():
             # the last incomplete solution was added to the pareto front
             logger.debug("ORIGINAL: Last incomplete solution added to the pareto front")
@@ -1143,6 +1150,10 @@ def solve_milp(config: Config, objectives: list[str] | None = None):
                 "the pareto front"
             )
             set_right_time_after_timeout(statistics, config.solver_timeout_sec)
+        # Restore valid pre-timeout front (timeout solution may be in max-form with wrong sign)
+        pareto_front.front = _front_snapshot
+        statistics["pareto_front"] = _pareto_front_str
+        statistics["solutions_pareto_front"] = _solutions_pareto_front_str
     except Exception as e:
         logger.debug("ORIGINAL: Error Exception raised: " + str(e))
         logging.error(traceback.format_exc())

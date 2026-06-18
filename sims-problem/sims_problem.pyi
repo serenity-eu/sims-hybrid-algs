@@ -1036,6 +1036,223 @@ def solve_with_moead(
     ...
 
 
+def solve_with_nsga3(
+    sims_instance: SimsDiscreteProblem,
+    objectives: list[str] = ["min_cost", "cloud_coverage", "min_max_incidence_angle", "min_resolution"],
+    timeout: timedelta = timedelta(seconds=120),
+    target_pop_size: int = 200,
+    num_divisions: int = 12,
+    auto_divisions: bool = True,
+    max_generations: int = 500000,
+    seed: int = 42,
+    trace: bool = True,
+    objective_bounds: Optional[list[list[int]]] = None,
+    include_dominated: bool = False,
+    crossover_rate: float = 0.9,
+    swap_mutation_rate: float = 0.4,
+    add_prune_mutation_rate: float = 0.3,
+    bitflip_mutation_rate: float = 0.0,
+    multi_swap_max_removals: int = 3,
+    multi_swap_rate: float = 0.2,
+    shift_mutation_rate: float = 0.25,
+    coverage_biased_crossover_fraction: float = 0.5,
+    ensure_mutation: bool = True,
+    stagnation_limit: int = 50,
+) -> SolvingResult:
+    """
+    Solve the SIMS problem using NSGA-III with reference-point niching (Deb & Jain 2014).
+
+    Only supports 4D optimization. NSGA-III replaces NSGA-II's crowding distance with
+    structured simplex-lattice reference points, making it better suited for 4+ objectives.
+
+    Args:
+        sims_instance: The SIMS problem instance to solve
+        objectives: List of exactly 4 objectives to optimize
+        timeout: Maximum runtime as timedelta
+        target_pop_size: Target population size (actual size determined by simplex-lattice design)
+        num_divisions: Simplex-lattice divisions when auto_divisions=False
+        auto_divisions: If True, choose divisions to match target_pop_size (default True)
+        max_generations: Maximum number of generations
+        seed: Random seed for reproducibility
+        trace: Whether to generate optimization trace archive
+        objective_bounds: Optional [min, max] bounds per objective for trace generation
+        include_dominated: If False, filters dominated solutions from trace
+        crossover_rate: Probability of crossover per offspring
+        swap_mutation_rate: Probability of swap mutation
+        add_prune_mutation_rate: Probability of add/prune mutation
+        bitflip_mutation_rate: Probability of bit-flip mutation (0 = disabled)
+        multi_swap_max_removals: Max removals in multi-swap mutation
+        multi_swap_rate: Probability of multi-swap mutation
+        shift_mutation_rate: Probability of shift mutation
+        coverage_biased_crossover_fraction: Fraction of crossover using coverage bias
+        ensure_mutation: Always apply at least one mutation per offspring
+        stagnation_limit: Generations without archive improvement before restart
+
+    Returns:
+        SolvingResult containing Pareto-optimal solutions and optional trace archive.
+    """
+    ...
+
+
+def solve_with_memetic_nsga2(
+    sims_instance: SimsDiscreteProblem,
+    objectives: list[str] = ["min_cost", "cloud_coverage", "min_max_incidence_angle", "min_resolution"],
+    timeout: timedelta = timedelta(seconds=120),
+    pls_time_fraction: float = 0.3,
+    pls_initial_pop_size: int = 50,
+    max_pls_seed_size: int = 0,
+    population_size: int = 200,
+    max_generations: int = 500000,
+    seed: int = 42,
+    trace: bool = True,
+    objective_bounds: Optional[list[list[int]]] = None,
+    include_dominated: bool = False,
+    crossover_rate: float = 0.9,
+    swap_mutation_rate: float = 0.4,
+    add_prune_mutation_rate: float = 0.3,
+    bitflip_mutation_rate: float = 0.0,
+    multi_swap_max_removals: int = 3,
+    multi_swap_rate: float = 0.2,
+    shift_mutation_rate: float = 0.25,
+    coverage_biased_crossover_fraction: float = 0.5,
+    ensure_mutation: bool = True,
+    stagnation_limit: int = 50,
+) -> SolvingResult:
+    """
+    Solve using the Memetic hybrid: PLS warm-start → NSGA-II.
+
+    Runs PLS for pls_time_fraction of the budget to build an initial archive, then
+    seeds NSGA-II with that archive for the remaining time.
+
+    Args:
+        sims_instance: The SIMS problem instance to solve
+        objectives: List of exactly 4 objectives
+        timeout: Total runtime budget
+        pls_time_fraction: Fraction of budget allocated to the PLS phase (default 0.3)
+        pls_initial_pop_size: Initial population size for PLS
+        max_pls_seed_size: Max solutions from PLS archive to seed NSGA-II (0 = all)
+        population_size: NSGA-II population size
+        max_generations: Max NSGA-II generations (time limit usually binds first)
+        seed: Random seed
+        trace: Whether to generate optimization trace archive
+        objective_bounds: Optional [min, max] bounds per objective
+        include_dominated: If False, filters dominated solutions from trace
+
+    Returns:
+        SolvingResult containing Pareto-optimal solutions and optional trace archive.
+    """
+    ...
+
+
+def solve_with_memetic_nsga3(
+    sims_instance: SimsDiscreteProblem,
+    objectives: list[str] = ["min_cost", "cloud_coverage", "min_max_incidence_angle", "min_resolution"],
+    timeout: timedelta = timedelta(seconds=120),
+    pls_time_fraction: float = 0.3,
+    pls_initial_pop_size: int = 50,
+    max_pls_seed_size: int = 0,
+    target_pop_size: int = 200,
+    num_divisions: int = 12,
+    max_generations: int = 500000,
+    seed: int = 42,
+    trace: bool = True,
+    objective_bounds: Optional[list[list[int]]] = None,
+    include_dominated: bool = False,
+    crossover_rate: float = 0.9,
+    swap_mutation_rate: float = 0.4,
+    add_prune_mutation_rate: float = 0.3,
+    bitflip_mutation_rate: float = 0.0,
+    multi_swap_max_removals: int = 3,
+    multi_swap_rate: float = 0.2,
+    shift_mutation_rate: float = 0.25,
+    coverage_biased_crossover_fraction: float = 0.5,
+    ensure_mutation: bool = True,
+    auto_divisions: bool = True,
+    stagnation_limit: int = 50,
+) -> SolvingResult:
+    """
+    Solve using the Memetic hybrid: PLS warm-start → NSGA-III.
+
+    Args:
+        sims_instance: The SIMS problem instance to solve
+        objectives: List of exactly 4 objectives
+        timeout: Total runtime budget
+        pls_time_fraction: Fraction of budget allocated to the PLS phase (default 0.3)
+        pls_initial_pop_size: Initial population size for PLS
+        max_pls_seed_size: Max solutions from PLS archive to seed NSGA-III (0 = all)
+        target_pop_size: NSGA-III target population size
+        num_divisions: Simplex divisions when auto_divisions=False
+        max_generations: Max NSGA-III generations
+        seed: Random seed
+        trace: Whether to generate optimization trace archive
+        objective_bounds: Optional [min, max] bounds per objective
+        include_dominated: If False, filters dominated solutions from trace
+        auto_divisions: Choose divisions to match target_pop_size
+
+    Returns:
+        SolvingResult containing Pareto-optimal solutions and optional trace archive.
+    """
+    ...
+
+
+def solve_with_memetic_moead(
+    sims_instance: SimsDiscreteProblem,
+    objectives: list[str] = ["min_cost", "cloud_coverage", "min_max_incidence_angle", "min_resolution"],
+    timeout: timedelta = timedelta(seconds=120),
+    pls_time_fraction: float = 0.3,
+    pls_initial_pop_size: int = 50,
+    max_pls_seed_size: int = 0,
+    population_size: int = 200,
+    num_divisions: int = 99,
+    neighbourhood_size: int = 20,
+    delta: float = 0.9,
+    max_replacements: int = 3,
+    max_generations: int = 500000,
+    seed: int = 42,
+    trace: bool = True,
+    objective_bounds: Optional[list[list[int]]] = None,
+    include_dominated: bool = False,
+    crossover_rate: float = 1.0,
+    swap_mutation_rate: float = 0.3,
+    add_prune_mutation_rate: float = 0.2,
+    multi_swap_max_removals: int = 3,
+    multi_swap_rate: float = 0.15,
+    shift_mutation_rate: float = 0.15,
+    coverage_biased_crossover_fraction: float = 0.5,
+    ensure_mutation: bool = False,
+    auto_divisions: bool = True,
+    use_pbi: bool = False,
+    pbi_theta: float = 5.0,
+    stagnation_limit: int = 80,
+) -> SolvingResult:
+    """
+    Solve using the Memetic hybrid: PLS warm-start → MOEA/D.
+
+    Args:
+        sims_instance: The SIMS problem instance to solve
+        objectives: List of exactly 4 objectives
+        timeout: Total runtime budget
+        pls_time_fraction: Fraction of budget allocated to the PLS phase (default 0.3)
+        pls_initial_pop_size: Initial population size for PLS
+        max_pls_seed_size: Max solutions from PLS archive to seed MOEA/D (0 = all)
+        population_size: Target MOEA/D population size
+        num_divisions: Simplex divisions when auto_divisions=False
+        neighbourhood_size: Size of neighbourhood for MOEA/D
+        delta: Probability of selecting parents from neighbourhood
+        max_replacements: Max replacements per offspring in MOEA/D
+        max_generations: Max MOEA/D generations
+        seed: Random seed
+        trace: Whether to generate optimization trace archive
+        objective_bounds: Optional [min, max] bounds per objective
+        include_dominated: If False, filters dominated solutions from trace
+        auto_divisions: Choose divisions to match population_size
+
+    Returns:
+        SolvingResult containing Pareto-optimal solutions and optional trace archive.
+    """
+    ...
+
+
 def compute_hypervolume(
     data: list[Solution] | list[list[int]],
     objective_bounds: list[list[int]],

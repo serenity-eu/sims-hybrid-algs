@@ -122,6 +122,10 @@ class Solver(ABC):
     def set_weighted_sum_objective(self, weights):
         pass
 
+    def add_objective_nogood(self, obj_values):
+        """Exclude a specific objective vector: at least one objective must differ from obj_values."""
+        raise NotImplementedError("add_objective_nogood not implemented for this solver")
+
     # status---------------------------------------------------
     @abstractmethod
     def get_status(self):

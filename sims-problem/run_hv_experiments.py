@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import math
 import re
 import struct
 import sys
@@ -47,7 +48,23 @@ try:
     import matplotlib
 
     matplotlib.use("Agg")
+    import matplotlib.patches as mpatches
     import matplotlib.pyplot as plt
+
+    matplotlib.rcParams.update(
+        {
+            "font.family": "sans-serif",
+            "font.sans-serif": ["Arial", "DejaVu Sans", "Helvetica", "Liberation Sans"],
+            "font.size": 9,
+            "axes.titlesize": 13,
+            "axes.labelsize": 11,
+            "xtick.labelsize": 10,
+            "ytick.labelsize": 10,
+            "legend.fontsize": 9,
+            "legend.title_fontsize": 9,
+            "figure.dpi": 150,
+        }
+    )
 
     HAS_MATPLOTLIB = True
 except ImportError:
@@ -83,6 +100,76 @@ OBJECTIVES = [
     "min_resolution",
 ]
 
+# ─── Plot constants ────────────────────────────────────────────────────
+
+_CITY_LABELS: dict[str, str] = {
+    "lagos_nigeria": "Lagos, Nigeria",
+    "mexico_city": "Mexico City",
+    "paris": "Paris",
+    "rio_de_janeiro": "Rio de Janeiro",
+    "tokyo_bay": "Tokyo Bay",
+}
+
+# Maps config label → short variant name used in large-instance (>100) plots.
+_PLS_VARIANT_MAP: dict[str, str] = {
+    "Default PLS": "Default",
+    "Scalarized PLS": "Scalarized",
+    "Diverse Probe PLS": "Diverse Probe",
+}
+
+_VARIANT_COLORS: dict[str, str] = {
+    "Default": "#e07b00",
+    "Scalarized": "#2166ac",
+    "Diverse Probe": "#2ca02c",
+}
+
+_VARIANT_LINE: dict[str, tuple[str, float]] = {
+    "Default": ("-", 2.0),
+    "Scalarized": ("--", 1.6),
+    "Diverse Probe": ("-.", 1.6),
+}
+
+# (variant_name, hatch, legend_label)  — for bar charts
+_PLS_VARIANTS: list[tuple[str, str, str]] = [
+    ("Default", "", "Default / Hybrid"),
+    ("Scalarized", "//", "Scalarized"),
+    ("Diverse Probe", "oo", "Diverse Probe"),
+]
+
+# Maps config label → (exact_phase_ratio, variant_name) for phase-decomposition bars.
+# Ratio 1.0 = GPBA-A only, 0.0 = PLS only.
+_LABEL_TO_BAR_KEY: dict[str, tuple[float, str]] = {
+    "GPBA-A": (1.00, "Default"),
+    "Default PLS": (0.00, "Default"),
+    "Hybrid 50:50": (0.50, "Default"),
+    "Hybrid 35:65": (0.35, "Default"),
+    "Hybrid 20:80": (0.20, "Default"),
+    "Scalarized PLS": (0.00, "Scalarized"),
+    "Scalarized Hybrid 50:50": (0.50, "Scalarized"),
+    "Scalarized Hybrid 35:65": (0.35, "Scalarized"),
+    "Scalarized Hybrid 20:80": (0.20, "Scalarized"),
+    "Diverse Probe PLS": (0.00, "Diverse Probe"),
+    "Diverse Probe Hybrid 50:50": (0.50, "Diverse Probe"),
+    "Diverse Probe Hybrid 35:65": (0.35, "Diverse Probe"),
+    "Diverse Probe Hybrid 20:80": (0.20, "Diverse Probe"),
+}
+
+_COLOR_PHASE1 = "#2166ac"  # steel blue — GPBA-A exact phase
+_COLOR_PHASE2 = "#e07b00"  # amber      — GPBA-A PLS phase
+_COLOR_PHASE1_MONISE = "#1a9641"  # forest green — MONISE exact phase
+_COLOR_PHASE2_MONISE = "#d73027"  # crimson      — MONISE PLS phase
+
+
+def _city_label(instance_name: str) -> str:
+    for key, label in _CITY_LABELS.items():
+        if instance_name.startswith(key):
+            return label
+    return instance_name
+
+
+def _size_group_label(num_images: int) -> str:
+    return "145 / 150" if num_images in (145, 150) else str(num_images)
+
 
 # ─── Timeout heuristic ────────────────────────────────────────────────
 
@@ -90,14 +177,12 @@ OBJECTIVES = [
 def timeout_for_size(num_images: int) -> int:
     """PLS timeout in seconds – longer budgets for full HV ablation runs."""
     if num_images <= 30:
-        return 300
+        return 30
     if num_images <= 50:
         return 300
-    if num_images <= 100:
-        return 1200
     if num_images <= 150:
-        return 1200
-    return 1200
+        return 1000
+    return 3600
 
 
 # ─── Algorithm configurations ─────────────────────────────────────────
@@ -111,6 +196,12 @@ class AlgorithmConfig:
     color: str
     linestyle: str
     linewidth: float = 2.0
+    skip_normalization: bool = False
+    save_trace: bool = True
+    # Fraction of the total budget spent in the exact (GPBA-A) phase.
+    # Set on hybrid configs so the plot can trim the exact-phase overlap
+    # and show only the PLS tail starting from the GPBA-A handoff point.
+    exact_phase_ratio: Optional[float] = None
 
     def run(
         self,
@@ -135,7 +226,61 @@ class PurePLS(AlgorithmConfig):
             include_dominated=False,
             use_checkpoint=True,
             use_ranked_candidates=False,
-            use_greedy_initial_population=False,
+            use_greedy_initial_population=True,
+            use_perturbation_restart=False,
+        )
+
+
+class Hybrid2080(AlgorithmConfig):
+    """Hybrid 20:80 – 20% exact phase, 80% PLS, seeded with pseudo-solver solutions."""
+
+    def run(self, problem, timeout_s, seed=42):
+        exact_time = timeout_s * 20 // 100
+        pls_time = timeout_s - exact_time
+
+        exact_solutions = _get_pseudo_solutions(problem)
+        initial_pop = (
+            _solutions_to_sims(exact_solutions, problem) if exact_solutions else None
+        )
+
+        return sims_problem.solve_with_pls(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=pls_time),
+            is_deterministic=True,
+            trace=True,
+            include_dominated=False,
+            initial_population=initial_pop,
+            use_checkpoint=False,
+            use_ranked_candidates=False,
+            use_greedy_initial_population=True,
+            use_perturbation_restart=False,
+        )
+
+
+class Hybrid3565(AlgorithmConfig):
+    """Hybrid 35:65 – 35% exact phase, 65% PLS, seeded with pseudo-solver solutions."""
+
+    def run(self, problem, timeout_s, seed=42):
+        exact_time = timeout_s * 35 // 100
+        pls_time = timeout_s - exact_time
+
+        exact_solutions = _get_pseudo_solutions(problem)
+        initial_pop = (
+            _solutions_to_sims(exact_solutions, problem) if exact_solutions else None
+        )
+
+        return sims_problem.solve_with_pls(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=pls_time),
+            is_deterministic=True,
+            trace=True,
+            include_dominated=False,
+            initial_population=initial_pop,
+            use_checkpoint=False,
+            use_ranked_candidates=False,
+            use_greedy_initial_population=True,
             use_perturbation_restart=False,
         )
 
@@ -162,55 +307,8 @@ class HybridBaseline(AlgorithmConfig):
             initial_population=initial_pop,
             use_checkpoint=False,
             use_ranked_candidates=False,
-            use_greedy_initial_population=False,
+            use_greedy_initial_population=True,
             use_perturbation_restart=False,
-        )
-
-
-class ImprovedHybrid(AlgorithmConfig):
-    """Improved Hybrid 50:50 – all PLS enhancements, seeded with pseudo-solver."""
-
-    def run(self, problem, timeout_s, seed=42):
-        exact_time = timeout_s // 2
-        pls_time = timeout_s - exact_time
-
-        exact_solutions = _get_pseudo_solutions(problem)
-        initial_pop = (
-            _solutions_to_sims(exact_solutions, problem) if exact_solutions else None
-        )
-
-        return sims_problem.solve_with_pls(
-            problem,
-            objectives=OBJECTIVES,
-            timeout=timedelta(seconds=pls_time),
-            is_deterministic=True,
-            trace=True,
-            include_dominated=False,
-            initial_population=initial_pop,
-            use_checkpoint=True,
-            use_ranked_candidates=True,
-            max_k1_candidates=15,
-            use_greedy_initial_population=True,
-            use_perturbation_restart=True,
-        )
-
-
-class ImprovedPurePLS(AlgorithmConfig):
-    """Improved Pure PLS – all PLS enhancements enabled, no exact phase."""
-
-    def run(self, problem, timeout_s, seed=42):
-        return sims_problem.solve_with_pls(
-            problem,
-            objectives=OBJECTIVES,
-            timeout=timedelta(seconds=timeout_s),
-            is_deterministic=True,
-            trace=True,
-            include_dominated=False,
-            use_checkpoint=True,
-            use_ranked_candidates=True,
-            max_k1_candidates=15,
-            use_greedy_initial_population=True,
-            use_perturbation_restart=True,
         )
 
 
@@ -226,10 +324,9 @@ class DiverseProbePLS(AlgorithmConfig):
             trace=True,
             include_dominated=False,
             use_checkpoint=True,
-            use_ranked_candidates=True,
-            max_k1_candidates=15,
+            use_ranked_candidates=False,
             use_greedy_initial_population=True,
-            use_perturbation_restart=True,
+            use_perturbation_restart=False,
             use_diverse_probing=True,
         )
 
@@ -255,10 +352,61 @@ class DiverseProbeHybrid(AlgorithmConfig):
             include_dominated=False,
             initial_population=initial_pop,
             use_checkpoint=True,
-            use_ranked_candidates=True,
-            max_k1_candidates=15,
+            use_ranked_candidates=False,
             use_greedy_initial_population=True,
-            use_perturbation_restart=True,
+            use_perturbation_restart=False,
+            use_diverse_probing=True,
+        )
+
+
+class DiverseProbeHybrid3565(DiverseProbeHybrid):
+    """Diverse Probe Hybrid 35:65 – 35% exact, 65% PLS."""
+
+    def run(self, problem, timeout_s, seed=42):
+        exact_time = timeout_s * 35 // 100
+        pls_time = timeout_s - exact_time
+        exact_solutions = _get_pseudo_solutions(problem)
+        initial_pop = (
+            _solutions_to_sims(exact_solutions, problem) if exact_solutions else None
+        )
+        return sims_problem.solve_with_pls(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=pls_time),
+            is_deterministic=True,
+            trace=True,
+            include_dominated=False,
+            initial_population=initial_pop,
+            use_checkpoint=True,
+            use_ranked_candidates=False,
+            use_greedy_initial_population=True,
+            use_perturbation_restart=False,
+            use_diverse_probing=True,
+        )
+
+
+class DiverseProbeHybrid2080(DiverseProbeHybrid):
+    """Diverse Probe Hybrid 20:80 – 20% exact, 80% PLS."""
+
+    def run(self, problem, timeout_s, seed=42):
+        exact_time = timeout_s * 20 // 100
+        pls_time = timeout_s - exact_time
+        exact_solutions = _get_pseudo_solutions(problem)
+        initial_pop = (
+            _solutions_to_sims(exact_solutions, problem) if exact_solutions else None
+        )
+        return sims_problem.solve_with_pls(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=pls_time),
+            is_deterministic=True,
+            trace=True,
+            include_dominated=False,
+            initial_population=initial_pop,
+            use_checkpoint=True,
+            use_ranked_candidates=False,
+            use_greedy_initial_population=True,
+            use_perturbation_restart=False,
             use_diverse_probing=True,
         )
 
@@ -267,8 +415,8 @@ class ScalarizedPLS(AlgorithmConfig):
     """Improved PLS with scalarized parent selection."""
 
     scalarized_selection_source: str = "archive"
-    scalarized_parent_budget: int = 4
-    scalarized_weight_samples: int = 4
+    scalarized_parent_budget: int = 1
+    scalarized_weight_samples: int = 1
     scalarized_rho: float = 1e-3
     use_nd_tree_scalarized_query: bool = True
 
@@ -282,7 +430,7 @@ class ScalarizedPLS(AlgorithmConfig):
             include_dominated=False,
             use_checkpoint=True,
             use_ranked_candidates=False,
-            use_greedy_initial_population=False,
+            use_greedy_initial_population=True,
             use_perturbation_restart=False,
             solution_selection_mode="scalarized-chebycheff",
             scalarized_selection_source=self.scalarized_selection_source,
@@ -297,8 +445,8 @@ class ScalarizedHybrid(AlgorithmConfig):
     """Improved Hybrid with scalarized parent selection."""
 
     scalarized_selection_source: str = "archive"
-    scalarized_parent_budget: int = 4
-    scalarized_weight_samples: int = 4
+    scalarized_parent_budget: int = 1
+    scalarized_weight_samples: int = 1
     scalarized_rho: float = 1e-3
     use_nd_tree_scalarized_query: bool = True
 
@@ -320,10 +468,9 @@ class ScalarizedHybrid(AlgorithmConfig):
             include_dominated=False,
             initial_population=initial_pop,
             use_checkpoint=True,
-            use_ranked_candidates=True,
-            max_k1_candidates=15,
+            use_ranked_candidates=False,
             use_greedy_initial_population=True,
-            use_perturbation_restart=True,
+            use_perturbation_restart=False,
             solution_selection_mode="scalarized-chebycheff",
             scalarized_selection_source=self.scalarized_selection_source,
             scalarized_parent_budget=self.scalarized_parent_budget,
@@ -333,58 +480,16 @@ class ScalarizedHybrid(AlgorithmConfig):
         )
 
 
-class DiverseScalarizedPLS(AlgorithmConfig):
-    """Improved PLS with diverse prefiltering and scalarized parent selection."""
-
-    diverse_probe_budget: int = 8
-    scalarized_selection_source: str = "archive"
-    scalarized_parent_budget: int = 4
-    scalarized_weight_samples: int = 4
-    scalarized_rho: float = 1e-3
-    use_nd_tree_scalarized_query: bool = True
+class ScalarizedHybrid3565(ScalarizedHybrid):
+    """Scalarized Hybrid 35:65 – 35% exact, 65% PLS."""
 
     def run(self, problem, timeout_s, seed=42):
-        return sims_problem.solve_with_pls(
-            problem,
-            objectives=OBJECTIVES,
-            timeout=timedelta(seconds=timeout_s),
-            is_deterministic=True,
-            trace=True,
-            include_dominated=False,
-            use_checkpoint=True,
-            use_ranked_candidates=True,
-            max_k1_candidates=15,
-            use_greedy_initial_population=True,
-            use_perturbation_restart=True,
-            solution_selection_mode="diverse-then-scalarized-chebycheff",
-            diverse_probe_budget=self.diverse_probe_budget,
-            scalarized_selection_source=self.scalarized_selection_source,
-            scalarized_parent_budget=self.scalarized_parent_budget,
-            scalarized_weight_samples=self.scalarized_weight_samples,
-            scalarized_rho=self.scalarized_rho,
-            use_nd_tree_scalarized_query=self.use_nd_tree_scalarized_query,
-        )
-
-
-class DiverseScalarizedHybrid(AlgorithmConfig):
-    """Improved Hybrid with diverse prefiltering and scalarized parent selection."""
-
-    diverse_probe_budget: int = 8
-    scalarized_selection_source: str = "archive"
-    scalarized_parent_budget: int = 4
-    scalarized_weight_samples: int = 4
-    scalarized_rho: float = 1e-3
-    use_nd_tree_scalarized_query: bool = True
-
-    def run(self, problem, timeout_s, seed=42):
-        exact_time = timeout_s // 2
+        exact_time = timeout_s * 35 // 100
         pls_time = timeout_s - exact_time
-
         exact_solutions = _get_pseudo_solutions(problem)
         initial_pop = (
             _solutions_to_sims(exact_solutions, problem) if exact_solutions else None
         )
-
         return sims_problem.solve_with_pls(
             problem,
             objectives=OBJECTIVES,
@@ -394,12 +499,41 @@ class DiverseScalarizedHybrid(AlgorithmConfig):
             include_dominated=False,
             initial_population=initial_pop,
             use_checkpoint=True,
-            use_ranked_candidates=True,
-            max_k1_candidates=15,
+            use_ranked_candidates=False,
             use_greedy_initial_population=True,
-            use_perturbation_restart=True,
-            solution_selection_mode="diverse-then-scalarized-chebycheff",
-            diverse_probe_budget=self.diverse_probe_budget,
+            use_perturbation_restart=False,
+            solution_selection_mode="scalarized-chebycheff",
+            scalarized_selection_source=self.scalarized_selection_source,
+            scalarized_parent_budget=self.scalarized_parent_budget,
+            scalarized_weight_samples=self.scalarized_weight_samples,
+            scalarized_rho=self.scalarized_rho,
+            use_nd_tree_scalarized_query=self.use_nd_tree_scalarized_query,
+        )
+
+
+class ScalarizedHybrid2080(ScalarizedHybrid):
+    """Scalarized Hybrid 20:80 – 20% exact, 80% PLS."""
+
+    def run(self, problem, timeout_s, seed=42):
+        exact_time = timeout_s * 20 // 100
+        pls_time = timeout_s - exact_time
+        exact_solutions = _get_pseudo_solutions(problem)
+        initial_pop = (
+            _solutions_to_sims(exact_solutions, problem) if exact_solutions else None
+        )
+        return sims_problem.solve_with_pls(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=pls_time),
+            is_deterministic=True,
+            trace=True,
+            include_dominated=False,
+            initial_population=initial_pop,
+            use_checkpoint=True,
+            use_ranked_candidates=False,
+            use_greedy_initial_population=True,
+            use_perturbation_restart=False,
+            solution_selection_mode="scalarized-chebycheff",
             scalarized_selection_source=self.scalarized_selection_source,
             scalarized_parent_budget=self.scalarized_parent_budget,
             scalarized_weight_samples=self.scalarized_weight_samples,
@@ -465,19 +599,431 @@ class MOEADConfig(AlgorithmConfig):
         )
 
 
+class NSGA3Config(AlgorithmConfig):
+    """NSGA-III with reference-point niching (Deb & Jain 2014)."""
+
+    def run(self, problem, timeout_s, seed=42):
+        return sims_problem.solve_with_nsga3(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=timeout_s),
+            target_pop_size=200,
+            auto_divisions=True,
+            max_generations=500_000,
+            seed=seed,
+            trace=True,
+            include_dominated=False,
+            crossover_rate=0.95,
+            swap_mutation_rate=0.6,
+            add_prune_mutation_rate=0.45,
+            bitflip_mutation_rate=0.0,
+            multi_swap_max_removals=4,
+            multi_swap_rate=0.35,
+            shift_mutation_rate=0.4,
+            coverage_biased_crossover_fraction=0.7,
+            ensure_mutation=True,
+            stagnation_limit=10,
+        )
+
+
+class MemeticNSGA2Config(AlgorithmConfig):
+    """PLS warm-start → NSGA-II hybrid."""
+
+    def run(self, problem, timeout_s, seed=42):
+        return sims_problem.solve_with_memetic_nsga2(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=timeout_s),
+            pls_time_fraction=0.3,
+            pls_initial_pop_size=50,
+            max_pls_seed_size=0,
+            population_size=200,
+            max_generations=500_000,
+            seed=seed,
+            trace=True,
+            include_dominated=False,
+            crossover_rate=0.95,
+            swap_mutation_rate=0.6,
+            add_prune_mutation_rate=0.45,
+            bitflip_mutation_rate=0.0,
+            multi_swap_max_removals=4,
+            multi_swap_rate=0.35,
+            shift_mutation_rate=0.4,
+            coverage_biased_crossover_fraction=0.7,
+            ensure_mutation=True,
+            stagnation_limit=10,
+        )
+
+
+class MemeticNSGA3Config(AlgorithmConfig):
+    """PLS warm-start → NSGA-III hybrid."""
+
+    def run(self, problem, timeout_s, seed=42):
+        return sims_problem.solve_with_memetic_nsga3(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=timeout_s),
+            pls_time_fraction=0.3,
+            pls_initial_pop_size=50,
+            max_pls_seed_size=0,
+            target_pop_size=200,
+            auto_divisions=True,
+            max_generations=500_000,
+            seed=seed,
+            trace=True,
+            include_dominated=False,
+            crossover_rate=0.95,
+            swap_mutation_rate=0.6,
+            add_prune_mutation_rate=0.45,
+            bitflip_mutation_rate=0.0,
+            multi_swap_max_removals=4,
+            multi_swap_rate=0.35,
+            shift_mutation_rate=0.4,
+            coverage_biased_crossover_fraction=0.7,
+            ensure_mutation=True,
+            stagnation_limit=10,
+        )
+
+
+class MemeticMOEADConfig(AlgorithmConfig):
+    """PLS warm-start → MOEA/D hybrid."""
+
+    def run(self, problem, timeout_s, seed=42):
+        return sims_problem.solve_with_memetic_moead(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=timeout_s),
+            pls_time_fraction=0.3,
+            pls_initial_pop_size=50,
+            max_pls_seed_size=0,
+            population_size=300,
+            max_generations=500_000,
+            seed=seed,
+            trace=True,
+            include_dominated=False,
+            neighbourhood_size=30,
+            delta=0.7,
+            max_replacements=8,
+            crossover_rate=1.0,
+            swap_mutation_rate=0.5,
+            add_prune_mutation_rate=0.35,
+            multi_swap_max_removals=4,
+            multi_swap_rate=0.3,
+            shift_mutation_rate=0.3,
+            coverage_biased_crossover_fraction=0.7,
+            ensure_mutation=True,
+            auto_divisions=True,
+            use_pbi=True,
+            pbi_theta=3.0,
+            stagnation_limit=15,
+        )
+
+
+class GPBASeededPLS(AlgorithmConfig):
+    """Full PLS seeded with the complete GPBA-A solution set, no time split."""
+
+    def run(self, problem, timeout_s, seed=42):
+        exact_solutions = _current_pseudo_solutions
+        initial_pop = (
+            _solutions_to_sims(exact_solutions, problem) if exact_solutions else None
+        )
+        return sims_problem.solve_with_pls(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=timeout_s),
+            is_deterministic=True,
+            trace=True,
+            include_dominated=False,
+            initial_population=initial_pop,
+            use_checkpoint=True,
+            use_ranked_candidates=False,
+            use_greedy_initial_population=True,
+            use_perturbation_restart=False,
+        )
+
+
+@dataclass
+class _SyntheticResult:
+    trace: bytes
+    final_solutions: list = field(default_factory=list)
+
+
+class GPBAAConfig(AlgorithmConfig):
+    """GPBA-A exact-solver phase only — plots HV progression of GPBA-A solutions."""
+
+    def run(self, problem, timeout_s, seed=42):
+        solutions = _current_pseudo_solutions
+        if not solutions:
+            return _SyntheticResult(trace=b"")
+
+        converted: list[sims_problem.Solution] = []
+        for sol_dict in solutions:
+            images = sol_dict.get("selected_images", [])
+            if not images:
+                continue
+            try:
+                sol = sims_problem.Solution.create(
+                    selected_images=images,
+                    cost=sol_dict.get("cost"),
+                    cloudy_area=sol_dict.get("cloudy_area"),
+                    max_incidence_angle=sol_dict.get("max_incidence_angle"),
+                    timestamp_us=int(sol_dict.get("timestamp_s", 0.0) * 1_000_000),
+                    min_resolutions_sum=sol_dict.get("min_resolutions_sum"),
+                )
+                converted.append(sol)
+            except Exception:
+                pass
+
+        if not converted:
+            return _SyntheticResult(trace=b"")
+
+        ndim = len(OBJECTIVES)
+        obj_keys = ("cost", "cloudy_area", "max_incidence_angle", "min_resolutions_sum")
+        points = [
+            [int(s.get(k, 0)) for k in obj_keys]
+            for s in solutions
+            if s.get("selected_images")
+        ]
+        bounds: list[list[int]] = []
+        for j in range(ndim):
+            vals = [p[j] for p in points]
+            lo, hi = min(vals), max(vals)
+            rng = max(hi - lo, 1)
+            bounds.append([max(0, lo - 1), hi + int(rng * 0.1) + 1])
+        ref_point = [b[1] + 1 for b in bounds]
+
+        trace = sims_problem.generate_trace(
+            solutions=converted,
+            objectives=OBJECTIVES,
+            algorithm="GPBA-A",
+            num_objectives=ndim,
+            objective_bounds=bounds,
+            reference_point=ref_point,
+            include_dominated=False,
+        )
+        return _SyntheticResult(trace=trace, final_solutions=converted)
+
+
+class MONISEPseudoConfig(GPBAAConfig):
+    """MONISE exact-solver phase only — plots HV progression of MONISE solutions."""
+
+    def run(self, problem, timeout_s, seed=42):
+        result = super().run(problem, timeout_s, seed)
+        # Re-generate trace with "MONISE" algorithm label (GPBAAConfig uses "GPBA-A")
+        if not result.trace:
+            return result
+        solutions = _current_pseudo_solutions
+        converted = result.final_solutions
+        if not converted:
+            return result
+        ndim = len(OBJECTIVES)
+        obj_keys = ("cost", "cloudy_area", "max_incidence_angle", "min_resolutions_sum")
+        points = [
+            [int(s.get(k, 0)) for k in obj_keys]
+            for s in solutions
+            if s.get("selected_images")
+        ]
+        bounds: list[list[int]] = []
+        for j in range(ndim):
+            vals = [p[j] for p in points]
+            lo, hi = min(vals), max(vals)
+            rng = max(hi - lo, 1)
+            bounds.append([max(0, lo - 1), hi + int(rng * 0.1) + 1])
+        ref_point = [b[1] + 1 for b in bounds]
+        trace = sims_problem.generate_trace(
+            solutions=converted,
+            objectives=OBJECTIVES,
+            algorithm="MONISE",
+            num_objectives=ndim,
+            objective_bounds=bounds,
+            reference_point=ref_point,
+            include_dominated=False,
+        )
+        return _SyntheticResult(trace=trace, final_solutions=converted)
+
+
+# ─── MONISE-seeded hybrid configs ────────────────────────────────────
+# These mirror the existing Hybrid* classes but are given distinct labels so
+# that MONISE-seeded and GPBA-A-seeded variants can appear on the same plot.
+# The actual solution source is controlled by _PSEUDO_SOLUTIONS_SOURCE (set via
+# --pseudo-source), so instantiating these configs when --pseudo-source=monise
+# gives the intended behaviour.
+
+
+class MoniseHybridBaseline(HybridBaseline):
+    """Hybrid 50:50 seeded with MONISE solutions."""
+
+
+class MoniseHybrid3565(Hybrid3565):
+    """Hybrid 35:65 seeded with MONISE solutions."""
+
+
+class MoniseHybrid2080(Hybrid2080):
+    """Hybrid 20:80 seeded with MONISE solutions."""
+
+
+class MoniseDiverseProbeHybrid(DiverseProbeHybrid):
+    """Diverse Probe Hybrid 50:50 seeded with MONISE solutions."""
+
+
+class MoniseDiverseProbeHybrid3565(DiverseProbeHybrid3565):
+    """Diverse Probe Hybrid 35:65 seeded with MONISE solutions."""
+
+
+class MoniseDiverseProbeHybrid2080(DiverseProbeHybrid2080):
+    """Diverse Probe Hybrid 20:80 seeded with MONISE solutions."""
+
+
+class MoniseScalarizedHybrid(ScalarizedHybrid):
+    """Scalarized Hybrid 50:50 seeded with MONISE solutions."""
+
+
+class MoniseScalarizedHybrid3565(ScalarizedHybrid3565):
+    """Scalarized Hybrid 35:65 seeded with MONISE solutions."""
+
+
+class MoniseScalarizedHybrid2080(ScalarizedHybrid2080):
+    """Scalarized Hybrid 20:80 seeded with MONISE solutions."""
+
+
+# MONISE hybrid configurations mirroring CONFIGS but with MONISE-prefixed labels.
+MONISE_CONFIGS: list[AlgorithmConfig] = [
+    MONISEPseudoConfig(
+        label="MONISE",
+        color="#000000",
+        linestyle="--",
+        linewidth=2.0,
+    ),
+    PurePLS(
+        label="Default PLS",
+        color="#d62728",
+        linestyle="-",
+        linewidth=1.5,
+    ),
+    MoniseHybridBaseline(
+        label="MONISE Hybrid 50:50",
+        color="#1f77b4",
+        linestyle="-",
+        linewidth=1.8,
+        exact_phase_ratio=0.50,
+    ),
+    MoniseHybrid3565(
+        label="MONISE Hybrid 35:65",
+        color="#e07b00",
+        linestyle="--",
+        linewidth=1.8,
+        exact_phase_ratio=0.35,
+    ),
+    MoniseHybrid2080(
+        label="MONISE Hybrid 20:80",
+        color="#2ca02c",
+        linestyle="-.",
+        linewidth=1.8,
+        exact_phase_ratio=0.20,
+    ),
+    MoniseDiverseProbeHybrid(
+        label="MONISE Diverse Probe Hybrid 50:50",
+        color="#17becf",
+        linestyle="-",
+        linewidth=2.5,
+        exact_phase_ratio=0.50,
+    ),
+    MoniseDiverseProbeHybrid3565(
+        label="MONISE Diverse Probe Hybrid 35:65",
+        color="#6fe8f5",
+        linestyle="-",
+        linewidth=1.5,
+        exact_phase_ratio=0.35,
+    ),
+    MoniseDiverseProbeHybrid2080(
+        label="MONISE Diverse Probe Hybrid 20:80",
+        color="#adf3fb",
+        linestyle="-",
+        linewidth=1.5,
+        exact_phase_ratio=0.20,
+    ),
+    MoniseScalarizedHybrid(
+        label="MONISE Scalarized Hybrid 50:50",
+        color="#bcbd22",
+        linestyle="-",
+        linewidth=2.5,
+        exact_phase_ratio=0.50,
+    ),
+    MoniseScalarizedHybrid3565(
+        label="MONISE Scalarized Hybrid 35:65",
+        color="#d4d668",
+        linestyle="-",
+        linewidth=1.5,
+        exact_phase_ratio=0.35,
+    ),
+    MoniseScalarizedHybrid2080(
+        label="MONISE Scalarized Hybrid 20:80",
+        color="#e8e9a0",
+        linestyle="-",
+        linewidth=1.5,
+        exact_phase_ratio=0.20,
+    ),
+]
+
+# Also register MONISE labels in the bar-chart mapping.
+_LABEL_TO_BAR_KEY.update(
+    {
+        "MONISE": (1.00, "Default"),
+        "MONISE Hybrid 50:50": (0.50, "Default"),
+        "MONISE Hybrid 35:65": (0.35, "Default"),
+        "MONISE Hybrid 20:80": (0.20, "Default"),
+        "MONISE Diverse Probe Hybrid 50:50": (0.50, "Diverse Probe"),
+        "MONISE Diverse Probe Hybrid 35:65": (0.35, "Diverse Probe"),
+        "MONISE Diverse Probe Hybrid 20:80": (0.20, "Diverse Probe"),
+        "MONISE Scalarized Hybrid 50:50": (0.50, "Scalarized"),
+        "MONISE Scalarized Hybrid 35:65": (0.35, "Scalarized"),
+        "MONISE Scalarized Hybrid 20:80": (0.20, "Scalarized"),
+    }
+)
+
+
 # The series in plot order.
 CONFIGS: list[AlgorithmConfig] = [
+    GPBASeededPLS(
+        label="GPBA-Seeded PLS",
+        color="#2ca02c",
+        linestyle="-",
+        linewidth=2.5,
+        skip_normalization=True,
+        save_trace=True,
+    ),
+    GPBAAConfig(
+        label="GPBA-A",
+        color="#000000",
+        linestyle="--",
+        linewidth=2.0,
+    ),
     PurePLS(
-        label="Pure PLS",
-        color="#7f7f7f",
+        label="Default PLS",
+        color="#d62728",
         linestyle="-",
         linewidth=1.5,
     ),
     HybridBaseline(
         label="Hybrid 50:50",
         color="#1f77b4",
+        linestyle="-",
+        linewidth=1.8,
+        exact_phase_ratio=0.50,
+    ),
+    Hybrid3565(
+        label="Hybrid 35:65",
+        color="#e07b00",
         linestyle="--",
-        linewidth=1.5,
+        linewidth=1.8,
+        exact_phase_ratio=0.35,
+    ),
+    Hybrid2080(
+        label="Hybrid 20:80",
+        color="#2ca02c",
+        linestyle="-.",
+        linewidth=1.8,
+        exact_phase_ratio=0.20,
     ),
     NSGA2Config(
         label="NSGA-II",
@@ -489,17 +1035,25 @@ CONFIGS: list[AlgorithmConfig] = [
         color="#9467bd",
         linestyle=":",
     ),
-    ImprovedPurePLS(
-        label="Improved PLS",
-        color="#d62728",
+    NSGA3Config(
+        label="NSGA-III",
+        color="#2ecc71",
         linestyle="-",
-        linewidth=1.5,
     ),
-    ImprovedHybrid(
-        label="Improved Hybrid",
-        color="#2ca02c",
-        linestyle="-",
-        linewidth=2.5,
+    MemeticNSGA2Config(
+        label="Memetic NSGA-II (30% PLS)",
+        color="#e74c3c",
+        linestyle="--",
+    ),
+    MemeticNSGA3Config(
+        label="Memetic NSGA-III (30% PLS)",
+        color="#c0392b",
+        linestyle="-.",
+    ),
+    MemeticMOEADConfig(
+        label="Memetic MOEA/D (30% PLS)",
+        color="#8e44ad",
+        linestyle=":",
     ),
     DiverseProbePLS(
         label="Diverse Probe PLS",
@@ -508,10 +1062,25 @@ CONFIGS: list[AlgorithmConfig] = [
         linewidth=1.5,
     ),
     DiverseProbeHybrid(
-        label="Diverse Probe Hybrid",
+        label="Diverse Probe Hybrid 50:50",
         color="#17becf",
         linestyle="-",
         linewidth=2.5,
+        exact_phase_ratio=0.50,
+    ),
+    DiverseProbeHybrid3565(
+        label="Diverse Probe Hybrid 35:65",
+        color="#6fe8f5",
+        linestyle="-",
+        linewidth=1.5,
+        exact_phase_ratio=0.35,
+    ),
+    DiverseProbeHybrid2080(
+        label="Diverse Probe Hybrid 20:80",
+        color="#adf3fb",
+        linestyle="-",
+        linewidth=1.5,
+        exact_phase_ratio=0.20,
     ),
     ScalarizedPLS(
         label="Scalarized PLS",
@@ -520,35 +1089,48 @@ CONFIGS: list[AlgorithmConfig] = [
         linewidth=1.5,
     ),
     ScalarizedHybrid(
-        label="Scalarized Hybrid",
+        label="Scalarized Hybrid 50:50",
         color="#bcbd22",
         linestyle="-",
         linewidth=2.5,
+        exact_phase_ratio=0.50,
     ),
-    DiverseScalarizedPLS(
-        label="Diverse+Scalarized PLS",
-        color="#ff9896",
+    ScalarizedHybrid3565(
+        label="Scalarized Hybrid 35:65",
+        color="#d4d668",
         linestyle="-",
         linewidth=1.5,
+        exact_phase_ratio=0.35,
     ),
-    DiverseScalarizedHybrid(
-        label="Diverse+Scalarized Hybrid",
-        color="#98df8a",
+    ScalarizedHybrid2080(
+        label="Scalarized Hybrid 20:80",
+        color="#e8e9a0",
         linestyle="-",
-        linewidth=2.5,
+        linewidth=1.5,
+        exact_phase_ratio=0.20,
     ),
 ]
 
 
 # ─── Pseudo-solver helpers ────────────────────────────────────────────
 
-_PSEUDO_SOLUTIONS_DIR = (
-    Path(__file__).parent.parent
-    / "sims-core"
-    / "tests"
-    / "data"
-    / "pseudo_solver_solutions"
-)
+_DATA_DIR = Path(__file__).parent.parent / "sims-core" / "tests" / "data"
+
+# Sources: "gpbaa" uses GPBA-A pre-computed solutions (classic pseudo-solver),
+#          "monise" uses MONISE-generated solutions.
+# Kept as a module-level variable so run_instance() can read it after main()
+# overrides it based on --pseudo-source.
+_PSEUDO_SOLUTIONS_SOURCE: str = "gpbaa"
+
+# Legacy path kept so existing imports/paths still resolve.
+_PSEUDO_SOLUTIONS_DIR = _DATA_DIR / "pseudo_solver_solutions"
+
+_PSEUDO_SOURCE_DIRS: dict[str, Path] = {
+    "gpbaa": _DATA_DIR / "gpbaa",
+    "monise": _DATA_DIR / "monise",
+    # fallback to original location if gpbaa dir doesn't exist yet
+    "pseudo_solver_solutions": _DATA_DIR / "pseudo_solver_solutions",
+}
 
 _pseudo_cache: dict[str, list[dict]] = {}
 
@@ -570,20 +1152,36 @@ def _solution_to_objective_dict(
 
 
 def _load_pseudo_solutions(instance_name: str) -> list[dict]:
-    """Load pre-recorded exact solver solutions from JSON."""
-    if instance_name in _pseudo_cache:
-        return _pseudo_cache[instance_name]
+    """Load pre-recorded solver solutions from JSON.
 
-    json_path = _PSEUDO_SOLUTIONS_DIR / f"{instance_name}.json"
+    The source directory is controlled by the module-level
+    ``_PSEUDO_SOLUTIONS_SOURCE`` variable (set by ``--pseudo-source``).
+    Falls back to the legacy ``pseudo_solver_solutions`` directory when the
+    configured source directory does not contain the instance file.
+    """
+    cache_key = f"{_PSEUDO_SOLUTIONS_SOURCE}:{instance_name}"
+    if cache_key in _pseudo_cache:
+        return _pseudo_cache[cache_key]
+
+    # Primary: selected source
+    source_dir = _PSEUDO_SOURCE_DIRS.get(
+        _PSEUDO_SOLUTIONS_SOURCE, _PSEUDO_SOLUTIONS_DIR
+    )
+    json_path = source_dir / f"{instance_name}.json"
+
+    # Fallback to legacy directory if primary doesn't have the file
     if not json_path.exists():
-        _pseudo_cache[instance_name] = []
+        json_path = _PSEUDO_SOLUTIONS_DIR / f"{instance_name}.json"
+
+    if not json_path.exists():
+        _pseudo_cache[cache_key] = []
         return []
 
     with open(json_path) as f:
         data = json.load(f)
 
     solutions = data if isinstance(data, list) else data.get("solutions", [])
-    _pseudo_cache[instance_name] = solutions
+    _pseudo_cache[cache_key] = solutions
     return solutions
 
 
@@ -711,7 +1309,7 @@ def _patch_hybrid_trace_timestamps(
 
         pseudo_ts = obj_to_pseudo_ts.get(obj)
         if pseudo_ts is not None and obj not in seen_patched_objectives:
-            new_ts = pseudo_ts
+            new_ts = min(pseudo_ts, int(exact_time_s * 1_000_000))
             is_pseudo_match = True
             seen_patched_objectives.add(obj)
             patched += 1
@@ -897,11 +1495,15 @@ def _extract_shared_hybrid_pseudo_objectives(
     traces: dict[str, bytes],
     pseudo_solutions: list[dict],
 ) -> set[tuple[int, ...]]:
-    """Return pseudo objective vectors present in both hybrid traces."""
-    hybrid = traces.get("Hybrid 50:50")
-    improved = traces.get("Improved Hybrid")
-    if not hybrid or not improved:
+    """Return pseudo objective vectors present in the provided traces dict.
+
+    Accepts any dict of label→bytes (the caller narrows to the relevant hybrid
+    trace), so this function works for both GPBA-A-seeded and MONISE-seeded runs.
+    """
+    hybrid = next(iter(traces.values()), None) if traces else None
+    if not hybrid:
         return set()
+    improved = hybrid
 
     pseudo_objectives = {
         tuple(
@@ -1001,9 +1603,9 @@ def _assert_hybrid_phase1_alignment(
 ) -> None:
     """Assert Hybrid and Improved Hybrid have identical phase-1 fronts and HVs."""
     hybrid = traces.get("Hybrid 50:50")
-    improved = traces.get("Improved Hybrid")
-    if not hybrid or not improved:
+    if not hybrid:
         return
+    improved = hybrid
 
     hybrid_snaps = _extract_front_snapshots(hybrid, num_points)
     improved_snaps = _extract_front_snapshots(improved, num_points)
@@ -1143,6 +1745,855 @@ def _prepend_exact_trace_to_hybrid(
         return shifted_pls
 
 
+# ─── Plotting helpers ─────────────────────────────────────────────────
+
+
+def _save_fig(fig: "plt.Figure", path: "Path", dpi: int = 200) -> None:
+    """Save figure as PNG and EPS side-by-side."""
+    fig.savefig(str(path), dpi=dpi, bbox_inches="tight")
+    fig.savefig(str(path.with_suffix(".eps")), bbox_inches="tight")
+
+
+def _annotate_endpoints(
+    ax: "plt.Axes",
+    endpoint_annotations: list[tuple[float, float, str]],  # (t, hv, color)
+    fmt: str = "{:.3f}",
+) -> None:
+    """Collision-aware right-side HV labels — pure vertical spread, no x-stagger.
+
+    Sorts endpoints by HV descending and cascades each label downward only
+    enough to prevent overlap with the label immediately above it.
+    """
+    ax.figure.canvas.draw()
+    y_lo, y_hi = ax.get_ylim()
+    bbox = ax.get_window_extent()
+    axes_h_pts = bbox.height * (72 / ax.figure.dpi)
+    pts_per_hv = axes_h_pts / max(y_hi - y_lo, 1e-6)
+    min_sep = 10  # typographic points between label centres
+
+    placed_y: list[float] = []  # HV-unit positions, descending
+    # Minimum y position (in HV units) below which we skip the annotation to
+    # avoid labels cascading outside the axes boundary and producing stray
+    # floating text in adjacent whitespace.
+    y_clip = y_lo + (min_sep / 2) / pts_per_hv
+
+    for end_t, end_hv, color in sorted(
+        endpoint_annotations, key=lambda x: x[1], reverse=True
+    ):
+        pos = end_hv
+        if placed_y:
+            ceiling = placed_y[-1] - min_sep / pts_per_hv
+            if pos > ceiling:
+                pos = ceiling
+        placed_y.append(pos)
+
+        # Skip labels that would be placed below the visible axes area.
+        if pos < y_clip:
+            continue
+
+        y_off = (pos - end_hv) * pts_per_hv
+        ax.annotate(
+            fmt.format(end_hv),
+            xy=(end_t, end_hv),
+            xytext=(6, y_off),
+            textcoords="offset points",
+            color=color,
+            fontsize=8,
+            va="center",
+            ha="left",
+            arrowprops=dict(arrowstyle="-", color=color, linewidth=0.7, alpha=0.5)
+            if abs(y_off) > 4
+            else None,
+            annotation_clip=False,
+        )
+
+
+def _plot_instance_phase_bars(
+    result: dict,
+    configs: list[AlgorithmConfig],
+    output_dir: Path,
+    compare_result: dict | None = None,
+) -> None:
+    """Phase-decomposition stacked bar chart.
+
+    X-axis groups: 100%/0%, 50%/50%, 35%/65%, 20%/80%, 0%/100% (exact/PLS ratio).
+    Each group has up to 3 bars per source (Default, Scalarized, Diverse Probe).
+    When compare_result is provided (GPBA-A hybrid data), bars from both sources
+    appear side-by-side within each variant position, distinguished by color and
+    hatch pattern — GPBA-A in blue/amber, MONISE in green/crimson.
+    """
+    if not HAS_MATPLOTLIB:
+        return
+
+    display_name = result["instance"]
+    num_images = result["num_images"]
+    total_timeout = result["timeout_s"]
+
+    has_monise = "MONISE" in result.get("configs", {}) and "GPBA-A" not in result.get(
+        "configs", {}
+    )
+    primary_source = "MONISE" if has_monise else "GPBA-A"
+    exact_phase_label = "MONISE phase" if has_monise else "GPBA-A phase"
+
+    primary_curve = result.get("configs", {}).get("GPBA-A", {}).get(
+        "curve", []
+    ) or result.get("configs", {}).get("MONISE", {}).get("curve", [])
+    if compare_result:
+        _cmp_cfgs = compare_result.get("configs", {})
+        compare_curve = (
+            _cmp_cfgs.get("GPBA-A", {}) or _cmp_cfgs.get("MONISE", {})
+        ).get("curve", [])
+    else:
+        compare_curve = []
+
+    def _hv_at(curve: list, t: float) -> float:
+        if not curve:
+            return 0.0
+        if t <= curve[0][0]:
+            return curve[0][1]
+        for i in range(1, len(curve)):
+            t0, hv0 = curve[i - 1]
+            t1, hv1 = curve[i]
+            if t0 <= t <= t1:
+                alpha = (t - t0) / (t1 - t0) if t1 > t0 else 0.0
+                return hv0 + alpha * (hv1 - hv0)
+        return curve[-1][1]
+
+    def _build_bars(res: dict, ref_curve: list, source: str) -> dict:
+        bars: dict[tuple[float, str, str], dict] = {}
+        # When no time curve is available, use the exact-solver standalone final_hv as
+        # the best-case estimate of what the exact phase contributed.
+        fallback_exact_hv = (
+            res.get("configs", {}).get("GPBA-A", {}).get("final_hv", 0.0)
+            if not ref_curve
+            else 0.0
+        )
+        for label, cdata in res.get("configs", {}).items():
+            key = _LABEL_TO_BAR_KEY.get(label)
+            if key is None:
+                continue
+            ratio, variant = key
+            final_hv = cdata.get("final_hv", 0.0)
+            if final_hv == 0.0:
+                continue
+            if ratio == 1.0:
+                hv_p1, hv_p2 = final_hv, 0.0
+            elif ratio == 0.0:
+                hv_p1, hv_p2 = 0.0, final_hv
+            else:
+                if ref_curve:
+                    hv_p1 = _hv_at(ref_curve, total_timeout * ratio)
+                else:
+                    hv_p1 = min(fallback_exact_hv, final_hv)
+                hv_p2 = max(0.0, final_hv - hv_p1)
+            bars[(ratio, variant, source)] = dict(
+                hv_p1=hv_p1, hv_p2=hv_p2, final_hv=final_hv
+            )
+        return bars
+
+    # Detect compare source from compare_result content
+    has_compare = compare_result is not None
+    if has_compare:
+        _cmp_keys = compare_result.get("configs", {})
+        compare_source: str = "MONISE" if "MONISE" in _cmp_keys else "GPBA-A"
+    else:
+        compare_source = "GPBA-A"  # unused when has_compare is False
+
+    # Build bar data keyed by (ratio, variant, source)
+    all_bars: dict[tuple[float, str, str], dict] = {}
+    all_bars.update(_build_bars(result, primary_curve, primary_source))
+    if has_compare:
+        all_bars.update(_build_bars(compare_result, compare_curve, compare_source))
+
+    if not all_bars:
+        return
+
+    # GPBA-A = blue/amber; MONISE = green/crimson
+    _PHASE_COLORS: dict[str, tuple[str, str]] = {
+        "GPBA-A":  (_COLOR_PHASE1,        _COLOR_PHASE2),
+        "MONISE":  (_COLOR_PHASE1_MONISE,  _COLOR_PHASE2),
+    }
+
+    _GROUPS = [
+        ("100% / 0%", 1.00),
+        ("50% / 50%", 0.50),
+        ("35% / 65%", 0.35),
+        ("20% / 80%", 0.20),
+        ("0% / 100%", 0.00),
+    ]
+    present_groups = [
+        (gname, ratio)
+        for gname, ratio in _GROUPS
+        if any(k[0] == ratio for k in all_bars)
+    ]
+
+    # Source order: GPBA-A left, the other source right
+    _right_source = compare_source if has_compare else primary_source
+    _SOURCES = ["GPBA-A", _right_source] if has_compare else [primary_source]
+
+    if has_compare:
+        # Paired layout: each variant slot has a GPBA-A bar and a MONISE bar side by side
+        bar_w = 0.14
+        pair_gap = 0.03  # between GPBA-A and MONISE within same variant
+        var_gap = 0.12  # between variant pairs
+        pair_w = 2 * bar_w + pair_gap
+        n_var = len(_PLS_VARIANTS)
+        group_span = n_var * pair_w + (n_var - 1) * var_gap
+        group_gap = 0.25
+        # Pair centers relative to group center
+        pair_centers = [
+            -group_span / 2 + v_idx * (pair_w + var_gap) + pair_w / 2
+            for v_idx in range(n_var)
+        ]
+        # Within each pair: GPBA-A left, compare_source right
+        src_pair_off = {
+            "GPBA-A": -(pair_gap / 2 + bar_w / 2),
+            compare_source: +(pair_gap / 2 + bar_w / 2),
+        }
+        fig_w = 16
+    else:
+        bar_w = 0.20
+        inner_gap = 0.04
+        n_var = len(_PLS_VARIANTS)
+        group_span = n_var * bar_w + (n_var - 1) * inner_gap
+        group_gap = 0.18
+        pair_centers = None  # unused in single-source mode
+        src_pair_off = None
+        fig_w = 13
+
+    group_cx = [i * (group_span + group_gap) for i in range(len(present_groups))]
+    # For single-source groups (0%/100%, 100%/0%) in comparison mode, space variant
+    # bars with the same pair_gap used between GPBA-A and MONISE in hybrid groups.
+    _single_group_stride = bar_w + (pair_gap if has_compare else 0.04)
+    var_off = [(j - (n_var - 1) / 2) * _single_group_stride for j in range(n_var)]
+
+    fig, ax = plt.subplots(figsize=(fig_w, 6))
+    legend_done: dict[tuple[str, str], bool] = {}  # (source, phase) -> drawn
+
+    for g_idx, (gname, ratio) in enumerate(present_groups):
+        gx = group_cx[g_idx]
+        n_bars = 1 if ratio == 1.0 else n_var
+
+        for v_idx, (vname, hatch, _) in enumerate(_PLS_VARIANTS):
+            if n_bars == 1 and v_idx > 0:
+                continue
+            lookup_variant = vname if n_bars > 1 else "Default"
+
+            for sname in _SOURCES:
+                # For the 0%/100% group the primary result already has all PLS
+                # variants injected from compare — skip the compare source here
+                # to avoid rendering the same data twice.
+                if ratio == 0.0 and has_compare and sname != primary_source:
+                    continue
+
+                bd = all_bars.get((ratio, lookup_variant, sname))
+                # At 100%/0%, render a superthin placeholder for GPBA-A when it
+                # timed out (no solutions found), so the group still shows both sources.
+                if bd is None and ratio == 1.0 and has_compare and sname == "GPBA-A":
+                    color_p1, _ = _PHASE_COLORS[sname]
+                    bx = gx + src_pair_off[sname]
+                    ax.bar(
+                        bx,
+                        0.001,
+                        width=bar_w * 0.25,
+                        color=color_p1,
+                        edgecolor="white",
+                        linewidth=0.4,
+                        zorder=3,
+                    )
+                    ax.text(
+                        bx,
+                        0.006,
+                        "0",
+                        ha="center",
+                        va="bottom",
+                        fontsize=7,
+                        color="#333333",
+                    )
+                    continue
+                if bd is None:
+                    continue
+
+                color_p1, color_p2 = _PHASE_COLORS[sname]
+                edge_col = "white"
+                edge_lw = 0.4
+
+                if has_compare:
+                    if ratio == 0.0:
+                        # PLS-only group: single source, 3 variant bars tightly spaced
+                        bx = gx + var_off[v_idx]
+                        bw = bar_w
+                    elif ratio == 1.0:
+                        # Exact-only group: two sources (GPBA-A + MONISE), no variant spread
+                        bx = gx + src_pair_off[sname]
+                        bw = bar_w
+                    else:
+                        pc = pair_centers[v_idx]
+                        bx = gx + pc + src_pair_off[sname]
+                        bw = bar_w
+                else:
+                    bx = gx if n_bars == 1 else gx + var_off[v_idx]
+                    bw = bar_w
+
+                lbl_p1 = None
+                if not legend_done.get((sname, "p1")) and bd["hv_p1"] > 0:
+                    phase_lbl = "MONISE phase" if sname == "MONISE" else "GPBA-A phase"
+                    lbl_p1 = phase_lbl
+                    legend_done[(sname, "p1")] = True
+
+                ax.bar(
+                    bx,
+                    bd["hv_p1"],
+                    width=bw,
+                    color=color_p1,
+                    hatch=None,  # no hatch on exact phase — pattern encodes PLS variant
+                    edgecolor=edge_col,
+                    linewidth=edge_lw,
+                    zorder=3,
+                    label=lbl_p1,
+                )
+
+                # When exact phase contributed nothing, draw a thin colored tick
+                # at the base of the bar so the source is still visually identifiable.
+                if bd["hv_p1"] == 0.0 and bd["hv_p2"] > 0:
+                    ax.plot(
+                        [bx - bw / 2, bx + bw / 2],
+                        [0, 0],
+                        color=color_p1,
+                        linewidth=3,
+                        solid_capstyle="butt",
+                        zorder=4,
+                    )
+
+                if bd["hv_p2"] > 0:
+                    lbl_p2 = None
+                    if not legend_done.get(("any", "p2")):
+                        lbl_p2 = "PLS phase gain"
+                        legend_done[("any", "p2")] = True
+                    ax.bar(
+                        bx,
+                        bd["hv_p2"],
+                        width=bw,
+                        bottom=bd["hv_p1"],
+                        color=color_p2,
+                        hatch=hatch,  # hatch encodes PLS variant only on PLS phase
+                        edgecolor=edge_col,
+                        linewidth=edge_lw,
+                        zorder=3,
+                        label=lbl_p2,
+                    )
+
+                ax.text(
+                    bx,
+                    bd["final_hv"] + 0.005,
+                    f"{bd['final_hv']:.3f}",
+                    ha="left",
+                    va="bottom",
+                    fontsize=11 if has_compare else 12,
+                    color="#333333",
+                    rotation=45,
+                    rotation_mode="anchor",
+                )
+
+    ax.set_xticks(group_cx)
+    ax.set_xticklabels([g for g, _ in present_groups], fontsize=14)
+    ax.tick_params(axis="x", length=0)
+
+    if has_compare:
+        from matplotlib.lines import Line2D
+
+        phase_handles = [
+            mpatches.Patch(
+                facecolor=_COLOR_PHASE1, edgecolor="white", label="GPBA-A phase"
+            ),
+            mpatches.Patch(
+                facecolor=_COLOR_PHASE1_MONISE, edgecolor="white", label="MONISE phase"
+            ),
+            mpatches.Patch(
+                facecolor=_COLOR_PHASE2, edgecolor="white", label="PLS phase gain"
+            ),
+        ]
+    else:
+        phase_handles = [
+            mpatches.Patch(
+                facecolor=_COLOR_PHASE1_MONISE if has_monise else _COLOR_PHASE1,
+                edgecolor="white",
+                label=exact_phase_label,
+            ),
+            mpatches.Patch(
+                facecolor=_COLOR_PHASE2, edgecolor="white", label="PLS phase"
+            ),
+        ]
+    variant_handles = [
+        mpatches.Patch(
+            facecolor="#999999", hatch=h, edgecolor="white", linewidth=0.4, label=lbl
+        )
+        for _, h, lbl in _PLS_VARIANTS
+    ]
+    from matplotlib.legend_handler import HandlerBase
+
+    class _NoPatchHandler(HandlerBase):
+        def legend_artist(self, legend, orig_handle, fontsize, handlebox):
+            handlebox.width = 0
+            handlebox.height = 0
+            return None
+
+    _sec = lambda t: mpatches.Patch(color="none", label=f"$\\bf{{{t}}}$")
+    _fill = lambda: mpatches.Patch(color="none", label="")
+    ncol = max(len(phase_handles), len(variant_handles))
+    # Pad both rows to ncol entries
+    ph = phase_handles + [_fill() for _ in range(ncol - len(phase_handles))]
+    vh = variant_handles + [_fill() for _ in range(ncol - len(variant_handles))]
+    # Matplotlib fills column-by-column, so interleave column slices to produce:
+    #   Row 0: "Phases"  blank  blank …
+    #   Row 1: ph[0]     ph[1]  ph[2] …
+    #   Row 2: "PLS variants"  blank  blank …
+    #   Row 3: vh[0]     vh[1]  vh[2] …
+    no_patch_handles = []
+    all_handles = []
+    for c in range(ncol):
+        sec1 = _sec("Phases") if c == 0 else _fill()
+        sec2 = _sec("PLS\\ variants") if c == 0 else _fill()
+        no_patch_handles += [sec1, sec2]
+        all_handles += [sec1, ph[c], sec2, vh[c]]
+    ax.legend(
+        handles=all_handles,
+        handler_map={h: _NoPatchHandler() for h in no_patch_handles},
+        loc="lower left",
+        fontsize=9,
+        title_fontsize=9,
+        framealpha=0.9,
+        ncol=ncol,
+        handlelength=1.2,
+        handletextpad=0.5,
+    )
+
+    if has_compare:
+        ax.set_xlabel("Exact phase % / PLS phase %", fontsize=15)
+    else:
+        ax.set_xlabel(f"{exact_phase_label} % / PLS phase %", fontsize=15)
+    ax.set_ylabel("Normalized Hypervolume", fontsize=15)
+    ax.set_title(
+        f"Final Hypervolume by Phase & Variant — {display_name}"
+        + (" (GPBA-A vs MONISE)" if has_compare else ""),
+        fontsize=13,
+        fontweight="bold",
+    )
+    ax.set_ylim(0, max(bd["final_hv"] for bd in all_bars.values()) * 1.28)
+    ax.grid(True, axis="y", alpha=0.2, zorder=0)
+    ax.set_axisbelow(True)
+
+    out = output_dir / f"{display_name}_phase_bars.png"
+    fig.tight_layout()
+    _save_fig(fig, out)
+    plt.close(fig)
+    print(f"  Phase bar plot saved: {out}", flush=True)
+
+
+def _plot_instance_lines(
+    result: dict,
+    configs: list[AlgorithmConfig],
+    output_dir: Path,
+) -> None:
+    """Render the per-instance HV-over-time line plot from a result artifact dict.
+
+    Reads curve data from result["configs"][label]["curve"] so it can be called
+    both during an experiment run and when replaying from saved JSON.
+    """
+    if not HAS_MATPLOTLIB:
+        return
+
+    display_name = result["instance"]
+    total_timeout = result["timeout_s"]
+
+    curves: dict[str, list[tuple[float, float]]] = {
+        label: [tuple(pt) for pt in cfg_data.get("curve", [])]
+        for label, cfg_data in result.get("configs", {}).items()
+    }
+
+    gpbaa_curve = curves.get("GPBA-A", [])
+    gpbaa_cfg = next((c for c in configs if c.label == "GPBA-A"), None)
+
+    def _hv_at(curve: list, t: float) -> float:
+        if not curve:
+            return 0.0
+        if t <= curve[0][0]:
+            return curve[0][1]
+        for i in range(1, len(curve)):
+            t0, hv0 = curve[i - 1]
+            t1, hv1 = curve[i]
+            if t0 <= t <= t1:
+                return hv0 + (hv1 - hv0) * (t - t0) / (t1 - t0) if t1 > t0 else hv0
+        return curve[-1][1]
+
+    # Group non-GPBA-A configs by exact_phase_ratio (None → 0.0 for pure PLS)
+    ratio_groups: dict[float, list[AlgorithmConfig]] = {}
+    for cfg in configs:
+        if cfg.label == "GPBA-A":
+            continue
+        key = cfg.exact_phase_ratio if cfg.exact_phase_ratio is not None else 0.0
+        ratio_groups.setdefault(key, []).append(cfg)
+
+    sorted_ratios = sorted(
+        ratio_groups.keys(), reverse=True
+    )  # e.g. [0.5, 0.35, 0.2, 0.0]
+    n = len(sorted_ratios)
+    ncols = 2
+    nrows = math.ceil(n / ncols)
+
+    # Pre-compute global max HV across all curves for consistent y-axis
+    global_max_hv = max(
+        (hv for c in curves.values() for _, hv in c),
+        default=1.0,
+    )
+    y_top = global_max_hv * 1.13
+
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(ncols * 6, nrows * 4.5),
+        sharex=True,
+        sharey=True,
+        squeeze=False,
+    )
+    axes_flat = [axes[r][c] for r in range(nrows) for c in range(ncols)]
+
+    deferred_endpoints: list[tuple] = []  # (ax, annotations) — placed after ylims set
+
+    for i, ratio in enumerate(sorted_ratios):
+        ax = axes_flat[i]
+        cfgs = ratio_groups[ratio]
+        endpoint_annotations: list[tuple[float, float, str]] = []
+
+        # GPBA-A reference line on every subplot
+        if gpbaa_curve and gpbaa_cfg:
+            ts = [t for t, _ in gpbaa_curve]
+            hvs = [hv for _, hv in gpbaa_curve]
+            if ts[-1] < total_timeout:
+                ts, hvs = ts + [total_timeout], hvs + [hvs[-1]]
+            ax.plot(
+                ts,
+                hvs,
+                label=gpbaa_cfg.label,
+                color=gpbaa_cfg.color,
+                linestyle=gpbaa_cfg.linestyle,
+                linewidth=gpbaa_cfg.linewidth,
+                marker="o",
+                markersize=3,
+                markevery=max(1, len(ts) // 10),
+                markeredgewidth=0,
+                alpha=0.8,
+                zorder=3,
+            )
+            endpoint_annotations.append((ts[-1], hvs[-1], gpbaa_cfg.color))
+
+        # Handoff guide line for hybrid groups
+        if ratio > 0.0:
+            t_exact = total_timeout * ratio
+            ax.axvline(t_exact, color="#cccccc", linestyle=":", linewidth=1.0, zorder=1)
+            ax.text(
+                t_exact,
+                0.02,
+                f"{t_exact:.0f}s",
+                transform=ax.get_xaxis_transform(),
+                ha="center",
+                va="bottom",
+                fontsize=7,
+                color="#888888",
+            )
+
+        # Algorithm curves for this ratio group
+        for cfg in cfgs:
+            curve = curves.get(cfg.label, [])
+            if not curve:
+                continue
+            ts = [t for t, _ in curve]
+            hvs = [hv for _, hv in curve]
+
+            # Use variant-consistent color and linestyle
+            bar_key = _LABEL_TO_BAR_KEY.get(cfg.label)
+            variant = bar_key[1] if bar_key else None
+            color = _VARIANT_COLORS.get(variant, cfg.color)
+            ls, lw = _VARIANT_LINE.get(variant, (cfg.linestyle, cfg.linewidth))
+
+            if cfg.exact_phase_ratio is not None:
+                t_exact = total_timeout * cfg.exact_phase_ratio
+                pls_pairs = [(t, hv) for t, hv in zip(ts, hvs) if t >= t_exact]
+                if not pls_pairs:
+                    continue
+                handoff_hv = _hv_at(gpbaa_curve, t_exact)
+                ts = [t_exact] + [p[0] for p in pls_pairs]
+                hvs = [handoff_hv] + [p[1] for p in pls_pairs]
+                ax.plot(
+                    t_exact,
+                    handoff_hv,
+                    marker="o",
+                    markersize=7,
+                    color=color,
+                    markerfacecolor="white",
+                    markeredgecolor=color,
+                    markeredgewidth=1.8,
+                    zorder=5,
+                    linestyle="none",
+                )
+
+            suffix = "Hybrid" if ratio > 0.0 else "PLS"
+            plot_label = f"{variant} {suffix}" if variant else cfg.label
+            ax.plot(
+                ts,
+                hvs,
+                label=plot_label,
+                color=color,
+                linestyle=ls,
+                linewidth=lw,
+                marker="o",
+                markersize=4,
+                markevery=max(1, len(ts) // 10),
+                markeredgewidth=0,
+                markerfacecolor=color,
+                alpha=0.92,
+                zorder=3,
+            )
+            endpoint_annotations.append((ts[-1], hvs[-1], color))
+
+        # Subplot title: "50% / 50%", "35% / 65%", … "0% / 100%"
+        pls_pct = int((1.0 - ratio) * 100)
+        gpba_pct = int(ratio * 100)
+        ax.set_title(f"{gpba_pct}% / {pls_pct}%", fontsize=11, fontweight="bold")
+        ax.set_xlim(0, total_timeout)
+        ax.set_ylim(0, y_top)
+        ax.set_xlabel("Time (seconds)")
+        if i % ncols == 0:
+            ax.set_ylabel("Normalized Hypervolume")
+        ax.legend(fontsize=8, loc="lower right", framealpha=0.9)
+        ax.grid(True, alpha=0.25, zorder=0)
+
+        deferred_endpoints.append((ax, endpoint_annotations))
+
+    for j in range(n, len(axes_flat)):
+        axes_flat[j].set_visible(False)
+
+    # Annotate after all ylims are final (sharey propagates y_top everywhere)
+    for ax, endpoints in deferred_endpoints:
+        _annotate_endpoints(ax, endpoints, fmt="{:.4f}")
+
+    fig.suptitle(
+        f"Hypervolume over Time — {display_name}",
+        fontsize=14,
+        fontweight="bold",
+        y=1.01,
+    )
+    fig.tight_layout()
+
+    plot_path = output_dir / f"{display_name}.png"
+    _save_fig(fig, plot_path)
+    plt.close(fig)
+    print(f"\n  Plot saved: {plot_path}", flush=True)
+
+
+def _plot_pls_only_lines(
+    size_label: str,
+    timeout_s: float,
+    instances: list[str],  # display city names
+    curves: dict[
+        tuple[str, str], list[tuple[float, float]]
+    ],  # (city, variant) → [(t, hv)]
+    output_path: "Path",
+) -> None:
+    """Grid of subplots — one per instance, 3 PLS-variant lines each."""
+    n = len(instances)
+    ncols = 2 if n <= 4 else 3
+    nrows = math.ceil(n / ncols)
+
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(ncols * 4.8, nrows * 3.8),
+        sharex=True,
+        sharey=True,
+        squeeze=False,
+    )
+    axes_flat = [axes[r][c] for r in range(nrows) for c in range(ncols)]
+
+    global_max_hv = max(
+        (
+            hv
+            for city in instances
+            for vname in _VARIANT_LINE
+            for _, hv in curves.get((city, vname), [(0, 0)])
+        ),
+        default=0.1,
+    )
+    y_top = global_max_hv * 1.13
+
+    all_endpoints: list[tuple["plt.Axes", list]] = []
+
+    for i, city in enumerate(instances):
+        ax = axes_flat[i]
+        endpoints: list[tuple[float, float, str]] = []
+
+        for vname, (ls, lw) in _VARIANT_LINE.items():
+            curve = curves.get((city, vname), [])
+            if not curve:
+                continue
+            ts = [t for t, _ in curve]
+            hvs = [hv for _, hv in curve]
+            if ts[-1] < timeout_s:
+                ts, hvs = ts + [timeout_s], hvs + [hvs[-1]]
+
+            color = _VARIANT_COLORS[vname]
+            ax.plot(
+                ts,
+                hvs,
+                color=color,
+                linestyle=ls,
+                linewidth=lw,
+                marker="o",
+                markersize=3.5,
+                markevery=max(1, len(ts) // 8),
+                markeredgewidth=0,
+                markerfacecolor=color,
+                alpha=0.9,
+                zorder=3,
+            )
+            endpoints.append((ts[-1], hvs[-1], color))
+
+        ax.set_title(city, fontsize=10, fontweight="bold")
+        ax.grid(True, alpha=0.2, zorder=0)
+        ax.set_xlim(0, timeout_s)
+        ax.set_ylim(0, y_top)
+        ax.set_xlabel("Time (seconds)")
+        if i % ncols == 0:
+            ax.set_ylabel("Norm. Hypervolume")
+
+        all_endpoints.append((ax, endpoints))
+
+    for ax, endpoints in all_endpoints:
+        _annotate_endpoints(ax, endpoints)
+
+    for j in range(n, len(axes_flat)):
+        axes_flat[j].set_visible(False)
+
+    legend_handles = [
+        plt.Line2D(
+            [0], [0], color=_VARIANT_COLORS[vn], linestyle=ls, linewidth=lw, label=vn
+        )
+        for vn, (ls, lw) in _VARIANT_LINE.items()
+    ]
+    bottom_legend = n >= len(axes_flat)
+    if not bottom_legend:
+        ax_leg = axes_flat[-1]
+        ax_leg.set_visible(True)
+        ax_leg.axis("off")
+        ax_leg.legend(
+            handles=legend_handles,
+            loc="center",
+            title="PLS variant",
+            framealpha=0.9,
+            fontsize=9,
+        )
+
+    fig.suptitle(
+        f"Hypervolume over Time — Size {size_label} instances (PLS only)",
+        fontsize=13,
+        fontweight="bold",
+        y=1.01,
+    )
+    tight_rect = [0, 0.1, 1, 1] if bottom_legend else [0, 0, 1, 1]
+    fig.tight_layout(rect=tight_rect)
+
+    if bottom_legend:
+        fig.legend(
+            handles=legend_handles,
+            loc="lower center",
+            title="PLS variant",
+            ncol=3,
+            framealpha=0.9,
+            fontsize=9,
+            bbox_to_anchor=(0.5, 0.01),
+        )
+
+    _save_fig(fig, output_path)
+    plt.close(fig)
+    print(f"  Saved: {output_path}", flush=True)
+
+
+def _plot_pls_only_bars(
+    size_label: str,
+    instances: list[str],
+    hv_by_variant: dict[str, list[float]],  # variant_name → [hv per instance]
+    output_path: "Path",
+) -> None:
+    """Grouped bar chart comparing PLS variants across instances of a given size."""
+    n_inst = len(instances)
+    n_var = len(_PLS_VARIANTS)
+
+    bar_w = 0.20
+    inner_gap = 0.04
+    group_gap = 0.35
+    group_span = n_var * bar_w + (n_var - 1) * inner_gap
+    group_cx = [i * (group_span + group_gap) for i in range(n_inst)]
+    var_off = [(j - (n_var - 1) / 2) * (bar_w + inner_gap) for j in range(n_var)]
+
+    fig, ax = plt.subplots(figsize=(max(10, n_inst * 2.2), 6))
+    legend_done: set[str] = set()
+
+    for i, inst in enumerate(instances):
+        for j, (vname, hatch, _) in enumerate(_PLS_VARIANTS):
+            hvs = hv_by_variant.get(vname, [])
+            if i >= len(hvs):
+                continue
+            hv = hvs[i]
+            bx = group_cx[i] + var_off[j]
+            ax.bar(
+                bx,
+                hv,
+                width=bar_w,
+                color=_COLOR_PHASE2,
+                hatch=hatch,
+                edgecolor="white",
+                linewidth=0.4,
+                zorder=3,
+                label=vname if vname not in legend_done else None,
+            )
+            legend_done.add(vname)
+            ax.text(
+                bx,
+                hv + 0.005,
+                f"{hv:.3f}",
+                ha="left",
+                va="bottom",
+                fontsize=8,
+                color="#333333",
+                rotation=45,
+                rotation_mode="anchor",
+            )
+
+    ax.set_xticks(group_cx)
+    ax.set_xticklabels(instances, fontsize=10)
+    ax.tick_params(axis="x", length=0)
+    ax.set_ylabel("Normalized Hypervolume")
+    ax.set_title(
+        f"Final Hypervolume by PLS Variant — Size {size_label} instances",
+        fontweight="bold",
+    )
+    ax.set_ylim(
+        0,
+        max(
+            (hv for hvs in hv_by_variant.values() for hv in hvs),
+            default=1.0,
+        )
+        * 1.18,
+    )
+    ax.legend(title="Algorithm variant", loc="lower right", framealpha=0.9, ncol=n_var)
+    ax.grid(True, axis="y", alpha=0.2, zorder=0)
+    ax.set_axisbelow(True)
+    fig.tight_layout()
+    _save_fig(fig, output_path)
+    plt.close(fig)
+    print(f"  Saved: {output_path}", flush=True)
+
+
 # ─── Main experiment loop ─────────────────────────────────────────────
 
 
@@ -1163,6 +2614,7 @@ def run_instance(
     total_timeout = timeout_for_size(num_images)
 
     # Load pseudo-solver solutions for hybrid configs
+    # _pseudo_cache is keyed by "source:instance" so no stale hits across sources.
     _current_pseudo_solutions = _load_pseudo_solutions(display_name)
     n_pseudo = len(_current_pseudo_solutions)
 
@@ -1180,6 +2632,25 @@ def run_instance(
     run_meta: dict[str, dict] = {}
 
     for cfg in configs:
+        safe_label = (
+            cfg.label.lower().replace(" ", "_").replace("+", "plus").replace("/", "")
+        )
+        existing_trace = output_dir / f"{display_name}__{safe_label}.trace.tar.gz"
+        if existing_trace.exists():
+            trace_data = existing_trace.read_bytes()
+            traces[cfg.label] = trace_data
+            run_meta[cfg.label] = dict(
+                final_solutions=0,
+                wall_seconds=0.0,
+                trace_bytes=len(trace_data),
+                skipped=True,
+            )
+            print(
+                f"\n  [{cfg.label}] loaded from existing trace ({len(trace_data) // 1024}KB)",
+                flush=True,
+            )
+            continue
+
         print(f"\n  [{cfg.label}] running for {total_timeout}s …", flush=True)
         t0 = time.time()
         try:
@@ -1220,27 +2691,45 @@ def run_instance(
 
     hybrid_labels = {
         "Hybrid 50:50",
-        "Improved Hybrid",
-        "Diverse Probe Hybrid",
-        "Scalarized Hybrid",
-        "Diverse+Scalarized Hybrid",
+        "Hybrid 35:65",
+        "Hybrid 20:80",
+        "Diverse Probe Hybrid 50:50",
+        "Diverse Probe Hybrid 35:65",
+        "Diverse Probe Hybrid 20:80",
+        "Scalarized Hybrid 50:50",
+        "Scalarized Hybrid 35:65",
+        "Scalarized Hybrid 20:80",
+        "MONISE Hybrid 50:50",
+        "MONISE Hybrid 35:65",
+        "MONISE Hybrid 20:80",
+        "MONISE Diverse Probe Hybrid 50:50",
+        "MONISE Diverse Probe Hybrid 35:65",
+        "MONISE Diverse Probe Hybrid 20:80",
+        "MONISE Scalarized Hybrid 50:50",
+        "MONISE Scalarized Hybrid 35:65",
+        "MONISE Scalarized Hybrid 20:80",
     }
-    if {"Hybrid 50:50", "Improved Hybrid"}.issubset(traces):
+    # Determine which baseline hybrid label is present (GPBA-A or MONISE seeded)
+    _baseline_50 = next(
+        (lbl for lbl in ("Hybrid 50:50", "MONISE Hybrid 50:50") if lbl in traces), None
+    )
+    if _baseline_50 is not None and {_baseline_50}.issubset(traces):
         shared_pseudo_objectives = _extract_shared_hybrid_pseudo_objectives(
-            traces, _current_pseudo_solutions
+            {_baseline_50: traces[_baseline_50]}, _current_pseudo_solutions
         )
         if shared_pseudo_objectives:
-            exact_time = total_timeout // 2
-            for label in (
-                "Hybrid 50:50",
-                "Improved Hybrid",
-                "Diverse Probe Hybrid",
-                "Scalarized Hybrid",
-                "Diverse+Scalarized Hybrid",
-            ):
+            cfg_map = {cfg.label: cfg for cfg in configs}
+            for label in hybrid_labels:
                 trace_data = traces.get(label)
                 if not trace_data:
                     continue
+                cfg = cfg_map.get(label)
+                ratio = (
+                    cfg.exact_phase_ratio
+                    if (cfg and cfg.exact_phase_ratio is not None)
+                    else 0.5
+                )
+                exact_time = total_timeout * ratio
                 traces[label] = _patch_hybrid_trace_timestamps(
                     pls_trace_bytes=trace_data,
                     pseudo_solutions=_current_pseudo_solutions,
@@ -1310,129 +2799,34 @@ def run_instance(
             print(f"  [{label}] HV curve failed: {e}", flush=True)
             curves[label] = []
 
-    # Normalize curves to start at HV=0 for PLS algorithms with high initial HV
-    print(f"\n  {'=' * 60}", flush=True)
-    print(f"  NORMALIZATION STEP", flush=True)
-    print(f"  {'=' * 60}", flush=True)
-    for label, curve in curves.items():
-        if curve and len(curve) > 0:
-            first_t, first_hv = curve[0]
+    # Normalize curves to start at HV=0, unless the config opts out
+    skip_norm_labels = {cfg.label for cfg in configs if cfg.skip_normalization}
+    print(f"\n  Normalizing curves to start at HV=0 …", flush=True)
+    for cfg in configs:
+        label = cfg.label
+        curve = curves.get(label, [])
+        if not curve:
+            continue
+        first_t, first_hv = curve[0]
+        if label in skip_norm_labels:
             print(
-                f"  [{label}] checking: first_hv={first_hv:.8f}, threshold=0.05",
+                f"  [{label}] skipping normalization (skip_normalization=True)",
                 flush=True,
             )
-            # If curve starts with high HV (> 0.05), prepend (0, 0) point
-            if first_hv > 0.05:
-                curves[label] = [(0.0, 0.0)] + curve
-                print(
-                    f"  [{label}] ✓ NORMALIZED: prepended (0, 0) - was starting at HV={first_hv:.8f}",
-                    flush=True,
-                )
-            else:
-                print(f"  [{label}] ✗ NOT normalized (below threshold)", flush=True)
-
-    # Normalize curves to start at HV=0 for PLS algorithms with high initial HV
-    print(f"\n  Normalizing curves to start at HV=0 …", flush=True)
-    for label, curve in curves.items():
-        if curve and len(curve) > 0:
-            first_t, first_hv = curve[0]
-            # If curve starts with high HV (> 0.05), prepend (0, 0) point
-            if first_hv > 0.05:
-                curves[label] = [(0.0, 0.0)] + curve
-                print(
-                    f"  [{label}] prepended (0, 0) - was starting at HV={first_hv:.4f}",
-                    flush=True,
-                )
-
-    # ── Phase 4: generate plot ──────────────────────────────────────────
-
-    plot_path = None
-    if HAS_MATPLOTLIB:
-        fig, ax = plt.subplots(figsize=(10, 6))
-
-        endpoint_annotations: list[tuple[float, float, AlgorithmConfig]] = []
-        for cfg in configs:
-            curve = curves.get(cfg.label, [])
-            if not curve:
-                continue
-            ts = [t for t, hv in curve]
-            hvs = [hv for t, hv in curve]
-            # Use different markers for each config for better distinguishability
-            marker_styles = {
-                "Pure PLS": "o",
-                "Hybrid 50:50": "s",
-                "NSGA-II": "^",
-                "MOEA/D": "v",
-                "Improved PLS": "D",
-                "Improved Hybrid": "p",
-                "Diverse Probe PLS": "*",
-                "Diverse Probe Hybrid": "h",
-                "Scalarized PLS": "X",
-                "Scalarized Hybrid": "P",
-                "Diverse+Scalarized PLS": "d",
-                "Diverse+Scalarized Hybrid": "<",
-            }
-            marker = marker_styles.get(cfg.label, "o")
-            # Show marker every N points to avoid clutter
-            marker_every = max(1, len(ts) // 8)
-
-            ax.plot(
-                ts,
-                hvs,
-                label=cfg.label,
-                color=cfg.color,
-                linestyle=cfg.linestyle,
-                linewidth=cfg.linewidth + 0.5,  # Make lines slightly thicker
-                marker=marker,
-                markersize=6,
-                markevery=marker_every,
-                markeredgewidth=1.5,
-                markerfacecolor=cfg.color,
-                markeredgecolor="white",
-                alpha=0.9,
-            )
-            endpoint_annotations.append((ts[-1], hvs[-1], cfg))
-
-        sorted_annotations = sorted(
-            endpoint_annotations, key=lambda item: item[1], reverse=True
-        )
-        n_annotations = len(sorted_annotations)
-        for idx, (end_t, end_hv, cfg) in enumerate(sorted_annotations):
-            ax.annotate(
-                f"{end_hv:.4f}",
-                xy=(end_t, end_hv),
-                xytext=(6, 10 * (n_annotations - 1 - idx)),
-                textcoords="offset points",
-                color=cfg.color,
-                fontsize=9,
-                va="center",
-                ha="left",
+        elif first_hv > 0.05:
+            curves[label] = [(0.0, 0.0)] + curve
+            print(
+                f"  [{label}] prepended (0, 0) — was starting at HV={first_hv:.4f}",
+                flush=True,
             )
 
-        ax.set_xlabel("Time (seconds)", fontsize=12)
-        ax.set_ylabel("Normalized Hypervolume", fontsize=12)
-        ax.set_title(
-            f"HV over Time — {display_name} ({num_images} images, 4D)",
-            fontsize=14,
-            fontweight="bold",
-        )
-        ax.legend(fontsize=10, loc="lower right")
-        ax.grid(True, alpha=0.3)
-        ax.set_xlim(0, total_timeout)
-
-        plot_path = output_dir / f"{display_name}.png"
-        fig.tight_layout()
-        fig.savefig(str(plot_path), dpi=200, bbox_inches="tight")
-        plt.close(fig)
-        print(f"\n  Plot saved: {plot_path}", flush=True)
-
-    # ── Phase 5: build result artifact ──────────────────────────────────
+    # ── Phase 4: build result artifact ─────────────────────────────────
 
     def _final_hv(label: str) -> float:
         c = curves.get(label, [])
         return c[-1][1] if c else 0.0
 
-    pure_pls_hv = _final_hv("Pure PLS")
+    pure_pls_hv = _final_hv("Default PLS")
 
     print(f"\n  {'=' * 60}", flush=True)
     print(f"  FINAL HV VALUES (after normalization)", flush=True)
@@ -1473,20 +2867,30 @@ def run_instance(
             curve=[(round(t, 4), round(hv, 8)) for t, hv in curves.get(cfg.label, [])],
         )
 
-    for cfg in configs:
-        fhv = _final_hv(cfg.label)
-        delta = (fhv - pure_pls_hv) / pure_pls_hv * 100 if pure_pls_hv > 0 else 0.0
-        result_artifact["configs"][cfg.label] = dict(
-            **run_meta.get(cfg.label, {}),
-            final_hv=round(fhv, 8),
-            delta_vs_pure_pls_pct=round(delta, 4),
-            curve=[(round(t, 4), round(hv, 8)) for t, hv in curves.get(cfg.label, [])],
-        )
+    # ── Phase 5: generate per-instance plots ───────────────────────────
+    # Skip for large instances where only PLS configs ran — the combined
+    # figures (pls_lines / pls_bars) cover those adequately.
+    has_hybrid_or_gpbaa = any(
+        cfg.label == "GPBA-A" or cfg.exact_phase_ratio is not None for cfg in configs
+    )
+    if has_hybrid_or_gpbaa:
+        _plot_instance_lines(result_artifact, configs, output_dir)
+        _plot_instance_phase_bars(result_artifact, configs, output_dir)
 
     artifact_path = output_dir / f"{display_name}.json"
     with open(artifact_path, "w") as f:
         json.dump(result_artifact, f, indent=2)
     print(f"  Artifact saved: {artifact_path}", flush=True)
+
+    for cfg in configs:
+        if cfg.save_trace and cfg.label in traces and traces[cfg.label]:
+            safe_label = (
+                cfg.label.lower().replace(" ", "_").replace("+", "plus").replace("/", "")
+            )
+            trace_path = output_dir / f"{display_name}__{safe_label}.trace.tar.gz"
+            with open(trace_path, "wb") as f:
+                f.write(traces[cfg.label])
+            print(f"  Trace saved:    {trace_path}", flush=True)
 
     # ── Summary ─────────────────────────────────────────────────────────
 
@@ -1513,159 +2917,804 @@ def generate_combined_figures(
     output_dir: Path,
     configs: list[AlgorithmConfig],
 ) -> None:
-    """Generate a combined multi-panel convergence plot and a bar chart."""
+    """Generate combined figures grouped by instance size.
+
+    - Instances ≤ 100 images: multi-panel line plot (one panel per instance,
+      all configured series shown with hybrid handoff markers).
+    - Instances > 100 images: PLS-only grid line plot + grouped bar chart,
+      one subplot per city, grouped by size (145/150 merged).
+    """
     if not HAS_MATPLOTLIB or not all_results:
         return
 
-    # ── Multi-panel convergence plot ────────────────────────────────────
-    n_results = len(all_results)
-    ncols = 2
-    nrows = 3
-    fig, axes = plt.subplots(nrows, ncols, figsize=(16, 18))
-    axes = axes.flatten() if hasattr(axes, "flatten") else [axes]
+    small = [r for r in all_results if r["num_images"] <= 100]
+    large = [r for r in all_results if r["num_images"] > 100]
 
-    for ax_idx, r in enumerate(all_results):
-        if ax_idx >= len(axes):
-            break
-        ax = axes[ax_idx]
-        endpoint_annotations: list[tuple[float, float, AlgorithmConfig]] = []
-        for cfg in configs:
-            curve_data = r["configs"].get(cfg.label, {}).get("curve", [])
-            if not curve_data:
-                continue
-            ts = [t for t, hv in curve_data]
-            hvs = [hv for t, hv in curve_data]
-            # Use different markers for each config for better distinguishability
-            marker_styles = {
-                "Pure PLS": "o",
-                "Hybrid 50:50": "s",
-                "NSGA-II": "^",
-                "MOEA/D": "v",
-                "Improved PLS": "D",
-                "Improved Hybrid": "p",
-                "Diverse Probe PLS": "*",
-                "Diverse Probe Hybrid": "h",
-                "Scalarized PLS": "X",
-                "Scalarized Hybrid": "P",
-                "Diverse+Scalarized PLS": "d",
-                "Diverse+Scalarized Hybrid": "<",
-            }
-            marker = marker_styles.get(cfg.label, "o")
-            marker_every = max(1, len(ts) // 6)
+    # ── Small instances: multi-panel convergence line plot ──────────────
+    if small:
+        n = len(small)
+        ncols = 2 if n <= 4 else 3
+        nrows = math.ceil(n / ncols)
 
-            ax.plot(
-                ts,
-                hvs,
-                label=cfg.label,
-                color=cfg.color,
-                linestyle=cfg.linestyle,
-                linewidth=cfg.linewidth + 0.5,
-                marker=marker,
-                markersize=5,
-                markevery=marker_every,
-                markeredgewidth=1.2,
-                markerfacecolor=cfg.color,
-                markeredgecolor="white",
-                alpha=0.9,
-            )
-            endpoint_annotations.append((ts[-1], hvs[-1], cfg))
-
-        sorted_annotations = sorted(
-            endpoint_annotations, key=lambda item: item[1], reverse=True
+        # Per-row height increased to avoid vertical squishing; shared legend
+        # replaces per-subplot legends, so more vertical space is available.
+        fig, axes = plt.subplots(
+            nrows, ncols, figsize=(ncols * 6, nrows * 6), squeeze=False
         )
-        n_annotations = len(sorted_annotations)
-        for idx, (end_t, end_hv, cfg) in enumerate(sorted_annotations):
-            ax.annotate(
-                f"{end_hv:.4f}",
-                xy=(end_t, end_hv),
-                xytext=(4, 7 * (n_annotations - 1 - idx)),
-                textcoords="offset points",
-                color=cfg.color,
-                fontsize=12,
-                va="center",
-                ha="left",
-            )
+        axes_flat = [axes[r][c] for r in range(nrows) for c in range(ncols)]
 
-        ax.set_title(
-            f"{r['instance']} ({r['num_images']} imgs)",
-            fontsize=16,
+        cfg_map = {cfg.label: cfg for cfg in configs}
+        gpbaa_map: dict[str, list] = {}
+        # Accumulate one handle per series label for the shared legend below.
+        legend_handles: dict[str, Any] = {}
+
+        for ax_idx, r in enumerate(small):
+            ax = axes_flat[ax_idx]
+            total_timeout = r["timeout_s"]
+            gpbaa_curve = r["configs"].get("GPBA-A", {}).get("curve", [])
+            gpbaa_map[r["instance"]] = gpbaa_curve
+
+            def _hv_at(curve: list, t: float) -> float:
+                if not curve:
+                    return 0.0
+                if t <= curve[0][0]:
+                    return curve[0][1]
+                for i in range(1, len(curve)):
+                    t0, hv0 = curve[i - 1]
+                    t1, hv1 = curve[i]
+                    if t0 <= t <= t1:
+                        alpha = (t - t0) / (t1 - t0) if t1 > t0 else 0.0
+                        return hv0 + alpha * (hv1 - hv0)
+                return curve[-1][1]
+
+            endpoint_annotations: list[tuple[float, float, str]] = []
+            global_max_hv = 0.0
+
+            for cfg in configs:
+                curve_data = r["configs"].get(cfg.label, {}).get("curve", [])
+                if not curve_data:
+                    continue
+                ts = [t for t, _ in curve_data]
+                hvs = [hv for _, hv in curve_data]
+
+                if cfg.exact_phase_ratio is not None:
+                    t_exact = total_timeout * cfg.exact_phase_ratio
+                    pls_pairs = [(t, hv) for t, hv in zip(ts, hvs) if t >= t_exact]
+                    if not pls_pairs:
+                        continue
+                    handoff_hv = _hv_at(gpbaa_curve, t_exact)
+                    ts = [t_exact] + [p[0] for p in pls_pairs]
+                    hvs = [handoff_hv] + [p[1] for p in pls_pairs]
+                    ax.plot(
+                        t_exact,
+                        handoff_hv,
+                        marker="o",
+                        markersize=6,
+                        color=cfg.color,
+                        markerfacecolor="white",
+                        markeredgecolor=cfg.color,
+                        markeredgewidth=1.6,
+                        zorder=5,
+                        linestyle="none",
+                    )
+                elif cfg.label == "GPBA-A" and gpbaa_curve:
+                    if ts[-1] < total_timeout:
+                        ts = ts + [total_timeout]
+                        hvs = hvs + [hvs[-1]]
+
+                global_max_hv = max(global_max_hv, max(hvs))
+                (line,) = ax.plot(
+                    ts,
+                    hvs,
+                    label=cfg.label,
+                    color=cfg.color,
+                    linestyle=cfg.linestyle,
+                    linewidth=cfg.linewidth,
+                    marker="o",
+                    markersize=3.5,
+                    markevery=max(1, len(ts) // 8),
+                    markeredgewidth=0,
+                    markerfacecolor=cfg.color,
+                    alpha=0.92,
+                    zorder=3,
+                )
+                if cfg.label not in legend_handles:
+                    legend_handles[cfg.label] = line
+                endpoint_annotations.append((ts[-1], hvs[-1], cfg.color))
+
+            ax.set_xlim(0, total_timeout)
+            ax.set_ylim(0, global_max_hv * 1.13)
+            _annotate_endpoints(ax, endpoint_annotations, fmt="{:.3f}")
+            ax.set_title(r["instance"], fontsize=10, fontweight="bold")
+            ax.set_xlabel("Time (seconds)")
+            ax.set_ylabel("Norm. Hypervolume")
+            ax.grid(True, alpha=0.2, zorder=0)
+
+        for j in range(len(small), len(axes_flat)):
+            axes_flat[j].set_visible(False)
+
+        fig.suptitle(
+            "Hypervolume over Time — Small Instances (≤ 100 images)",
+            fontsize=13,
             fontweight="bold",
         )
-        ax.set_xlabel("Time (s)", fontsize=14)
-        ax.set_ylabel("Normalized HV", fontsize=14)
-        ax.legend(fontsize=12, loc="lower right")
-        ax.grid(True, alpha=0.2)
-        ax.set_xlim(0, r["timeout_s"])
-
-    # Hide unused axes
-    for ax_idx in range(n_results, len(axes)):
-        axes[ax_idx].set_visible(False)
-
-    fig.suptitle(
-        "Hypervolume Convergence: Multi-Algorithm Comparison (4 Objectives)",
-        fontsize=22,
-        fontweight="bold",
-        y=1.01,
-    )
-    fig.tight_layout()
-    path = output_dir / "fig_combined.png"
-    fig.savefig(str(path), dpi=200, bbox_inches="tight")
-    plt.close(fig)
-    print(f"\nCombined convergence plot: {path}", flush=True)
-
-    # ── Bar chart: final HV for each algorithm × instance ───────────────
-    fig2, ax2 = plt.subplots(figsize=(18, max(7, 0.8 * n_results * len(configs))))
-
-    instance_names = [r["instance"].replace("_", " ").title() for r in all_results]
-    n_configs = len(configs)
-    bar_height = 0.15
-    y_positions = range(len(all_results))
-
-    for cfg_idx, cfg in enumerate(configs):
-        hvs = []
-        for r in all_results:
-            cfg_data = r["configs"].get(cfg.label, {})
-            hvs.append(cfg_data.get("final_hv", 0))
-
-        offsets = [
-            y + (cfg_idx - n_configs / 2 + 0.5) * bar_height for y in y_positions
-        ]
-        bars = ax2.barh(
-            offsets,
-            hvs,
-            height=bar_height,
-            label=cfg.label,
-            color=cfg.color,
-            alpha=0.85,
-            edgecolor="black",
-            linewidth=0.3,
+        # tight_layout often fails here because right-side annotations (rendered
+        # with annotation_clip=False) extend beyond the axes boundary, making it
+        # impossible to satisfy all constraints.  Use explicit subplots_adjust
+        # instead so the layout is always applied deterministically.
+        #
+        # right=0.86: leave ~14 % on the right for endpoint annotation labels.
+        # bottom=0.08: reserve space for the shared figure legend below the grid.
+        # top=0.96:   a small top margin keeps the suptitle from touching the edge.
+        fig.subplots_adjust(
+            left=0.07,
+            right=0.86,
+            top=0.96,
+            bottom=0.08,
+            hspace=0.50,
+            wspace=0.35,
         )
-        for bar, hv in zip(bars, hvs):
-            ax2.text(
-                bar.get_width() + 0.005,
-                bar.get_y() + bar.get_height() / 2,
-                f"{hv:.4f}",
-                va="center",
-                ha="left",
-                fontsize=11,
-                color="black",
+        # Single shared legend placed at the bottom of the figure.
+        n_lgd_cols = min(len(legend_handles), 5)
+        fig.legend(
+            list(legend_handles.values()),
+            list(legend_handles.keys()),
+            loc="lower center",
+            ncol=n_lgd_cols,
+            fontsize=8,
+            framealpha=0.9,
+            bbox_to_anchor=(0.5, 0.01),
+        )
+        # Save WITHOUT bbox_inches="tight": the layout is fully controlled by
+        # subplots_adjust above, so all intended content fits inside the nominal
+        # figure boundary.  Skipping "tight" prevents bbox_inches expansion
+        # caused by endpoint annotations that slightly exceed the right edge.
+        path = output_dir / "fig_combined_small.png"
+        fig.savefig(str(path), dpi=200)
+        fig.savefig(str(path.with_suffix(".eps")))
+        plt.close(fig)
+        print(f"\nCombined convergence plot (small): {path}", flush=True)
+
+    # ── Large instances: PLS-only grid + bar chart, grouped by size ─────
+    if large:
+        # Group by size label (145 and 150 merged)
+        size_groups: dict[str, list[dict]] = {}
+        for r in large:
+            key = _size_group_label(r["num_images"])
+            size_groups.setdefault(key, []).append(r)
+
+        for size_label, results in sorted(size_groups.items()):
+            instances = [_city_label(r["instance"]) for r in results]
+            timeout_s = results[0]["timeout_s"]
+
+            # Build (city, variant) → curve mapping
+            pls_curves: dict[tuple[str, str], list] = {}
+            for r in results:
+                city = _city_label(r["instance"])
+                for cfg_label, vname in _PLS_VARIANT_MAP.items():
+                    cdata = r["configs"].get(cfg_label, {}).get("curve", [])
+                    if cdata:
+                        pls_curves[(city, vname)] = cdata
+
+            # Grid line plot
+            _plot_pls_only_lines(
+                size_label,
+                timeout_s,
+                instances,
+                pls_curves,
+                output_dir / f"fig_pls_lines_{size_label.replace(' / ', '_')}.png",
             )
 
-    ax2.set_yticks(list(y_positions))
-    ax2.set_yticklabels(instance_names, fontsize=13)
-    ax2.set_xlabel("Normalized Hypervolume", fontsize=16)
-    ax2.set_title(
-        "Final HV by Algorithm and Instance (4D)",
-        fontsize=20,
-        fontweight="bold",
+            # Bar chart
+            hv_by_variant: dict[str, list[float]] = {
+                vname: [
+                    r["configs"].get(cfg_label, {}).get("final_hv", 0.0)
+                    for r in results
+                ]
+                for cfg_label, vname in _PLS_VARIANT_MAP.items()
+            }
+            _plot_pls_only_bars(
+                size_label,
+                instances,
+                hv_by_variant,
+                output_dir / f"fig_pls_bars_{size_label.replace(' / ', '_')}.png",
+            )
+
+
+# ─── Replot from saved artifacts ─────────────────────────────────────
+
+
+def _merge_bounds(
+    bounds_a: list[list[int]], bounds_b: list[list[int]]
+) -> list[list[int]]:
+    return [[min(a[0], b[0]), max(a[1], b[1])] for a, b in zip(bounds_a, bounds_b)]
+
+
+def _recompute_result_with_bounds(
+    result: dict,
+    trace_dir: Path,
+    merged_bounds: list[list[int]],
+    num_points: int = 30,
+) -> dict:
+    """Return a deep copy of result with all HV curves recomputed from trace files
+    using merged_bounds, so values are comparable across experiments."""
+    import copy
+
+    result = copy.deepcopy(result)
+    result["shared_bounds"] = merged_bounds
+    instance = result["instance"]
+
+    for label, cfg_data in result["configs"].items():
+        safe_label = (
+            label.lower()
+            .replace(" ", "_")
+            .replace("+", "plus")
+            .replace(":", "")
+            .replace("/", "")
+        )
+        # Trace filenames use colons for ratios (e.g. 50:50) — try both forms
+        candidates = [
+            trace_dir / f"{instance}__{safe_label}.trace.tar.gz",
+            trace_dir
+            / f"{instance}__{label.lower().replace(' ', '_').replace('+', 'plus').replace('/', '')}.trace.tar.gz",
+        ]
+        trace_bytes = None
+        for c in candidates:
+            if c.exists():
+                trace_bytes = c.read_bytes()
+                break
+
+        if trace_bytes is None:
+            # No trace file on disk — keep existing stored values unchanged.
+            # Caller is responsible for recomputing synthetic configs (e.g. MONISE)
+            # separately if needed.
+            continue
+
+        curve = sims_problem.compute_hv_curve_from_trace(
+            trace_bytes, merged_bounds, num_points
+        )
+        cfg_data["curve"] = [(round(t, 4), round(hv, 8)) for t, hv in curve]
+        cfg_data["final_hv"] = round(curve[-1][1], 8) if curve else 0.0
+
+    # Recompute delta_vs_pure_pls_pct with updated final_hv values
+    pure_pls_hv = result["configs"].get("Default PLS", {}).get("final_hv", 0.0)
+    if pure_pls_hv > 0:
+        for cfg_data in result["configs"].values():
+            fhv = cfg_data.get("final_hv", 0.0)
+            cfg_data["delta_vs_pure_pls_pct"] = round(
+                (fhv - pure_pls_hv) / pure_pls_hv * 100, 4
+            )
+
+    return result
+
+
+def _regenerate_monise_curve_with_bounds(
+    instance_name: str,
+    merged_bounds: list[list[int]],
+    num_points: int = 30,
+) -> tuple[list, float] | None:
+    """Recompute the MONISE HV curve from pseudo-solutions using merged_bounds.
+
+    Returns (curve, final_hv) or None if pseudo-solutions are unavailable.
+    """
+    monise_dir = _PSEUDO_SOURCE_DIRS["monise"]
+    monise_json = monise_dir / f"{instance_name}.json"
+    if not monise_json.exists():
+        return None
+
+    import json as _json
+
+    data = _json.loads(monise_json.read_text())
+    pseudo_solutions = data if isinstance(data, list) else data.get("solutions", [])
+
+    converted = []
+    for sol in pseudo_solutions:
+        images = sol.get("selected_images", [])
+        if not images:
+            continue
+        try:
+            converted.append(
+                sims_problem.Solution.create(
+                    selected_images=images,
+                    cost=sol.get("cost"),
+                    cloudy_area=sol.get("cloudy_area"),
+                    max_incidence_angle=sol.get("max_incidence_angle"),
+                    timestamp_us=int(sol.get("timestamp_s", 0.0) * 1_000_000),
+                    min_resolutions_sum=sol.get("min_resolutions_sum"),
+                )
+            )
+        except Exception:
+            pass
+
+    if not converted:
+        return None
+
+    ref_point = [b[1] + 1 for b in merged_bounds]
+    trace = sims_problem.generate_trace(
+        solutions=converted,
+        objectives=OBJECTIVES,
+        algorithm="MONISE",
+        num_objectives=len(OBJECTIVES),
+        objective_bounds=[[int(b[0]), int(b[1])] for b in merged_bounds],
+        reference_point=ref_point,
+        include_dominated=False,
     )
-    ax2.legend(fontsize=12, loc="lower right")
-    ax2.grid(True, axis="x", alpha=0.3)
-    fig2.tight_layout()
-    path2 = output_dir / "fig_barchart.png"
-    fig2.savefig(str(path2), dpi=200, bbox_inches="tight")
-    plt.close(fig2)
-    print(f"Bar chart: {path2}", flush=True)
+    curve = sims_problem.compute_hv_curve_from_trace(trace, merged_bounds, num_points)
+    if not curve:
+        return None
+    if curve[0][1] > 0.05:
+        curve = [(0.0, 0.0)] + list(curve)
+    final_hv = round(curve[-1][1], 8)
+    curve = [(round(t, 4), round(hv, 8)) for t, hv in curve]
+    return curve, final_hv
+
+
+def replot_from_dir(
+    output_dir: Path,
+    configs: list[AlgorithmConfig],
+    compare_dir: Path | None = None,
+    publish_dir: Path | None = None,
+    figures_dir: Path | None = None,
+) -> None:
+    """Regenerate all plots from existing JSON artifacts without re-running experiments."""
+    json_files = sorted(
+        f for f in output_dir.glob("*.json") if f.stem != "all_experiments"
+    )
+    if not json_files:
+        print(f"No JSON artifacts found in {output_dir}", flush=True)
+        return
+
+    num_points = 30
+    all_results: list[dict] = []
+    for json_path in json_files:
+        result = json.loads(json_path.read_text())
+        print(f"  Loaded: {json_path.name}", flush=True)
+        compare_result: dict | None = None
+        instance_size = result.get("num_images", 0)
+        if compare_dir is not None:
+            cmp_path = compare_dir / json_path.name
+            if cmp_path.exists():
+                cmp_data = json.loads(cmp_path.read_text())
+                if instance_size < 145:
+                    compare_result = cmp_data
+                    primary_bounds = result.get("shared_bounds")
+                    compare_bounds = compare_result.get("shared_bounds")
+                    if primary_bounds and compare_bounds:
+                        merged = _merge_bounds(primary_bounds, compare_bounds)
+                        print(
+                            f"    Recomputing HV curves with merged bounds …",
+                            flush=True,
+                        )
+                        result = _recompute_result_with_bounds(
+                            result, output_dir, merged, num_points
+                        )
+                        compare_result = _recompute_result_with_bounds(
+                            compare_result, compare_dir, merged, num_points
+                        )
+                        # Recompute synthetic MONISE curve with merged bounds
+                        if "MONISE" in result["configs"]:
+                            monise_recomp = _regenerate_monise_curve_with_bounds(
+                                result["instance"], merged, num_points
+                            )
+                            if monise_recomp:
+                                curve, final_hv = monise_recomp
+                                result["configs"]["MONISE"]["curve"] = curve
+                                result["configs"]["MONISE"]["final_hv"] = final_hv
+                # Inject PLS-only configs missing from primary but present in compare,
+                # regardless of instance size (e.g. Scalarized/Diverse Probe PLS run
+                # only in the GPBA-A experiment for 145/150 instances too)
+                for label in _PLS_VARIANT_MAP:
+                    if label not in result["configs"] and label in cmp_data.get(
+                        "configs", {}
+                    ):
+                        result["configs"][label] = cmp_data["configs"][label]
+        all_results.append(
+            result
+        )  # append after recomputation so combined figs use merged HV
+        # Save recomputed result back to JSON so tables can use merged-bounds values
+        json_path.write_text(json.dumps(result, indent=2))
+        if compare_result is not None:
+            cmp_path.write_text(json.dumps(compare_result, indent=2))
+        _plot_instance_lines(result, configs, output_dir)
+        _plot_instance_phase_bars(
+            result, configs, output_dir, compare_result=compare_result
+        )
+
+    generate_combined_figures(all_results, output_dir, configs)
+
+    import shutil
+
+    if publish_dir is not None:
+        publish_dir.mkdir(parents=True, exist_ok=True)
+        copied = 0
+        for png in output_dir.glob("*.png"):
+            shutil.copy2(png, publish_dir / png.name)
+            copied += 1
+        print(f"  Published {copied} PNG(s) → {publish_dir}", flush=True)
+
+    if figures_dir is not None:
+        figures_dir.mkdir(parents=True, exist_ok=True)
+        copied_eps = 0
+        for eps in output_dir.glob("*.eps"):
+            shutil.copy2(eps, figures_dir / eps.name)
+            copied_eps += 1
+        print(f"  Published {copied_eps} EPS(es) → {figures_dir}", flush=True)
+
+    print(f"\nReplot complete — {len(all_results)} instances.", flush=True)
+
+
+# ─── Statistical tests ────────────────────────────────────────────────
+
+
+def print_wilcoxon_tests(
+    primary_dir: Path,
+    monise_dir: Path | None = None,
+) -> None:
+    """Run Wilcoxon signed-rank tests on all pairwise algorithm comparisons.
+
+    Reports two-sided p-values and rank-biserial correlation (effect size r).
+    Uses the 15 small instances (5 cities × 3 sizes: 30/50/100) as the sample.
+    Also tests the 9 large instances (145/150/200) where available.
+    """
+    import json as _json
+
+    from scipy.stats import wilcoxon
+
+    def load_hv(d: Path, slug: str, sz: int, label: str) -> float | None:
+        f = d / f"{slug}_{sz}.json"
+        if not f.exists():
+            return None
+        v = _json.loads(f.read_text()).get("configs", {}).get(label, {}).get("final_hv")
+        return float(v) if v is not None else None
+
+    CITIES = [
+        ("Lagos", "lagos_nigeria"),
+        ("Mexico City", "mexico_city"),
+        ("Paris", "paris"),
+        ("Rio de Janeiro", "rio_de_janeiro"),
+        ("Tokyo Bay", "tokyo_bay"),
+    ]
+
+    def gather(
+        d: Path, sizes: list[int], label_a: str, label_b: str
+    ) -> tuple[list, list]:
+        a_vals, b_vals = [], []
+        for city, slug in CITIES:
+            for sz in sizes:
+                a = load_hv(d, slug, sz, label_a)
+                b = load_hv(d, slug, sz, label_b)
+                if a is not None and b is not None:
+                    a_vals.append(a)
+                    b_vals.append(b)
+        return a_vals, b_vals
+
+    def run_test(a_vals: list, b_vals: list) -> dict:
+        diffs = [a - b for a, b in zip(a_vals, b_vals)]
+        n = len(diffs)
+        nonzero = [d for d in diffs if d != 0]
+        if len(nonzero) < 2:
+            return {"n": n, "p": float("nan"), "r": float("nan"), "note": "all ties"}
+        stat, p = wilcoxon(a_vals, b_vals, alternative="two-sided")
+        # rank-biserial correlation: r = 1 - 2*W / (n*(n+1)/2)
+        # where W is the smaller of W+ and W-
+        n_nz = len(nonzero)
+        r = 1 - (2 * stat) / (n_nz * (n_nz + 1) / 2)
+        return {"n": n, "p": p, "r": r, "W": stat, "note": ""}
+
+    def sig(p: float) -> str:
+        if p < 0.001:
+            return "***"
+        if p < 0.01:
+            return "**"
+        if p < 0.05:
+            return "*"
+        return "n.s."
+
+    sep = "-" * 72
+    print(f"\n{'=' * 72}")
+    print("WILCOXON SIGNED-RANK TESTS (two-sided)")
+    print("Significance: * p<0.05  ** p<0.01  *** p<0.001  n.s. not significant")
+    print("Effect size r (rank-biserial): |r|<0.3 small, 0.3–0.5 medium, >0.5 large")
+    print(sep)
+
+    comparisons_small = [
+        ("Diverse vs Default", "Diverse Probe PLS", "Default PLS"),
+        ("Scalarized vs Default", "Scalarized PLS", "Default PLS"),
+        ("Scalarized vs Diverse", "Scalarized PLS", "Diverse Probe PLS"),
+    ]
+
+    print("\n── Small instances (30/50/100 images, n=15) ──")
+    print(f"{'Comparison':<28}  {'n':>3}  {'W':>8}  {'p-value':>9}  {'r':>6}  Sig")
+    print(sep)
+    small_results = {}
+    for name, lbl_a, lbl_b in comparisons_small:
+        a, b = gather(primary_dir, [30, 50, 100], lbl_a, lbl_b)
+        res = run_test(a, b)
+        small_results[name] = res
+        p_str = f"{res['p']:.4f}" if not (res["p"] != res["p"]) else "  nan"
+        r_str = f"{res['r']:+.3f}" if not (res["r"] != res["r"]) else "  nan"
+        w_str = f"{res['W']:.0f}" if not (res["W"] != res["W"]) else "  nan"
+        print(
+            f"{name:<28}  {res['n']:>3}  {w_str:>8}  {p_str:>9}  {r_str:>6}  {sig(res['p'])}"
+        )
+
+    print("\n── Large instances (145/150/200 images) ──")
+    large_sizes = [145, 150, 200]
+    print(f"{'Comparison':<28}  {'n':>3}  {'W':>8}  {'p-value':>9}  {'r':>6}  Sig")
+    print(sep)
+    large_results = {}
+    for name, lbl_a, lbl_b in comparisons_small:
+        a, b = gather(primary_dir, large_sizes, lbl_a, lbl_b)
+        res = run_test(a, b)
+        large_results[name] = res
+        p_str = f"{res['p']:.4f}" if not (res["p"] != res["p"]) else "  nan"
+        r_str = f"{res['r']:+.3f}" if not (res["r"] != res["r"]) else "  nan"
+        w_str = f"{res['W']:.0f}" if not (res["W"] != res["W"]) else "  nan"
+        print(
+            f"{name:<28}  {res['n']:>3}  {w_str:>8}  {p_str:>9}  {r_str:>6}  {sig(res['p'])}"
+        )
+
+    if monise_dir:
+        print("\n── MONISE hybrid vs Default PLS (100-image, n=5) ──")
+        monise_comparisons = [
+            ("MONISE Hybrid 20:80 vs Default", "MONISE Hybrid 20:80", "Default PLS"),
+        ]
+        print(f"{'Comparison':<38}  {'n':>3}  {'W':>8}  {'p-value':>9}  {'r':>6}  Sig")
+        print(sep)
+        for name, lbl_a, lbl_b in monise_comparisons:
+            a, b = gather(monise_dir, [100], lbl_a, lbl_b)
+            res = run_test(a, b)
+            p_str = f"{res['p']:.4f}" if not (res["p"] != res["p"]) else "  nan"
+            r_str = f"{res['r']:+.3f}" if not (res["r"] != res["r"]) else "  nan"
+            w_str = f"{res['W']:.0f}" if not (res["W"] != res["W"]) else "  nan"
+            print(
+                f"{name:<38}  {res['n']:>3}  {w_str:>8}  {p_str:>9}  {r_str:>6}  {sig(res['p'])}"
+            )
+
+    print()
+    return small_results, large_results
+
+
+# ─── Paper table printer ──────────────────────────────────────────────
+
+
+def print_paper_tables(
+    primary_dir: Path,
+    monise_dir: Path | None = None,
+) -> None:
+    """Print all paper table values from existing JSON artifacts.
+
+    primary_dir  — final_paper_results (GPBA-A experiment, merged bounds)
+    monise_dir   — hv_experiment_results_monise (MONISE experiment)
+    """
+    import json as _json
+
+    def load(d: Path, slug: str, sz: int) -> dict:
+        f = d / f"{slug}_{sz}.json"
+        if not f.exists():
+            return {}
+        return _json.loads(f.read_text()).get("configs", {})
+
+    CITIES = [
+        ("Lagos", "lagos_nigeria"),
+        ("Mexico City", "mexico_city"),
+        ("Paris", "paris"),
+        ("Rio de Janeiro", "rio_de_janeiro"),
+        ("Tokyo Bay", "tokyo_bay"),
+    ]
+    HYBRID_CFGS = [
+        "Hybrid 20:80",
+        "Hybrid 35:65",
+        "Hybrid 50:50",
+        "Diverse Probe Hybrid 20:80",
+        "Diverse Probe Hybrid 35:65",
+        "Diverse Probe Hybrid 50:50",
+        "Scalarized Hybrid 20:80",
+        "Scalarized Hybrid 35:65",
+        "Scalarized Hybrid 50:50",
+    ]
+    MONISE_HYBRID_CFGS = [
+        "MONISE Hybrid 20:80",
+        "MONISE Hybrid 35:65",
+        "MONISE Hybrid 50:50",
+        "MONISE Diverse Probe Hybrid 20:80",
+        "MONISE Diverse Probe Hybrid 35:65",
+        "MONISE Diverse Probe Hybrid 50:50",
+        "MONISE Scalarized Hybrid 20:80",
+        "MONISE Scalarized Hybrid 35:65",
+        "MONISE Scalarized Hybrid 50:50",
+    ]
+
+    def fhv(cfgs: dict, label: str) -> float:
+        return cfgs.get(label, {}).get("final_hv", 0.0)
+
+    def best_of(cfgs: dict, labels: list[str]) -> float:
+        return max((fhv(cfgs, l) for l in labels), default=0.0)
+
+    def pct(a: float, b: float) -> float:
+        return (a - b) / b * 100 if b > 0 else 0.0
+
+    sep = "-" * 80
+
+    # ── Tab 1: PLS-only HV ────────────────────────────────────────────
+    print(f"\n{'=' * 80}")
+    print("TAB:RESULTS — Final normalised HV for PLS variants (30–100 images)")
+    print(sep)
+    print(
+        f"{'Instance':<22} {'Sz':>3}  {'Default PLS':>11}  {'Diverse':>11}  {'Scalarized':>11}  Best"
+    )
+    print(sep)
+    div_pcts_sm, scal_pcts_sm = [], []
+    for city, slug in CITIES:
+        for sz in [30, 50, 100]:
+            cfgs = load(primary_dir, slug, sz)
+            d = fhv(cfgs, "Default PLS")
+            v = fhv(cfgs, "Diverse Probe PLS")
+            s = fhv(cfgs, "Scalarized PLS")
+            winner = (
+                "Default"
+                if d >= v and d >= s
+                else ("Diverse" if v >= s else "Scalarized")
+            )
+            print(
+                f"{city + ' ' + str(sz):<22} {sz:>3}  {d:>11.6f}  {v:>11.6f}  {s:>11.6f}  {winner}"
+            )
+            if d > 0:
+                div_pcts_sm.append(pct(v, d))
+                scal_pcts_sm.append(pct(s, d))
+        print()
+
+    # ── Tab 2: improvement over Default PLS ──────────────────────────
+    print(f"\n{'=' * 80}")
+    print("TAB:IMPROVEMENT — % improvement over Default PLS (30–100 images)")
+    print(sep)
+    print(f"{'Instance':<22} {'Sz':>3}  {'Diverse %':>10}  {'Scalarized %':>13}")
+    print(sep)
+    for city, slug in CITIES:
+        for sz in [30, 50, 100]:
+            cfgs = load(primary_dir, slug, sz)
+            d = fhv(cfgs, "Default PLS")
+            v = fhv(cfgs, "Diverse Probe PLS")
+            s = fhv(cfgs, "Scalarized PLS")
+            print(
+                f"{city + ' ' + str(sz):<22} {sz:>3}  {pct(v, d):>+10.2f}  {pct(s, d):>+13.2f}"
+            )
+        print()
+    avg_d = sum(div_pcts_sm) / len(div_pcts_sm) if div_pcts_sm else 0
+    avg_s = sum(scal_pcts_sm) / len(scal_pcts_sm) if scal_pcts_sm else 0
+    print(f"{'Average':<22}      {avg_d:>+10.2f}  {avg_s:>+13.2f}")
+
+    # ── Tab 3: direct Scalarized vs Diverse ──────────────────────────
+    print(f"\n{'=' * 80}")
+    print("TAB:DIRECT — Scalarized vs Diverse (30–100 images)")
+    print(sep)
+    print(f"{'Instance':<22} {'Sz':>3}  {'Scal–Div %':>11}  Winner")
+    print(sep)
+    diffs = []
+    for city, slug in CITIES:
+        for sz in [30, 50, 100]:
+            cfgs = load(primary_dir, slug, sz)
+            v = fhv(cfgs, "Diverse Probe PLS")
+            s = fhv(cfgs, "Scalarized PLS")
+            d = pct(s, v)
+            diffs.append(d)
+            winner = "Scalarized" if s >= v else "Diverse"
+            print(f"{city + ' ' + str(sz):<22} {sz:>3}  {d:>+11.2f}  {winner}")
+        print()
+    avg_diff = sum(diffs) / len(diffs) if diffs else 0
+    wins = sum(1 for d in diffs if d > 0)
+    print(
+        f"{'Average':<22}      {avg_diff:>+11.2f}  Scalarized ({wins}–{len(diffs) - wins})"
+    )
+
+    # ── Tab 4: GPBA-A hybrid gains ────────────────────────────────────
+    print(f"\n{'=' * 80}")
+    print("TAB:HYBRID_SMALL — GPBA-A hybrid gains + MONISE gains (100-image)")
+    print(sep)
+    print(
+        f"{'Instance':<22} {'Sz':>3}  {'Default PLS':>11}  {'GPBA-A Gain%':>13}  {'MONISE Gain%':>13}"
+    )
+    print(sep)
+    gpbaa_3050, gpbaa_100, monise_100 = [], [], []
+    for city, slug in CITIES:
+        for sz in [30, 50, 100]:
+            cfgs = load(primary_dir, slug, sz)
+            d = fhv(cfgs, "Default PLS")
+            bh = best_of(cfgs, HYBRID_CFGS)
+            gain_g = pct(bh, d)
+            gain_m_str = "---"
+            if sz == 100 and monise_dir:
+                mcfgs = load(monise_dir, slug, sz)
+                dm = fhv(mcfgs, "Default PLS")
+                bm = best_of(mcfgs, MONISE_HYBRID_CFGS)
+                gm = pct(bm, dm)
+                gain_m_str = f"{gm:>+13.1f}"
+                gpbaa_100.append(gain_g)
+                monise_100.append(gm)
+            else:
+                gpbaa_3050.append(gain_g)
+            print(
+                f"{city + ' ' + str(sz):<22} {sz:>3}  {d:>11.4f}  {gain_g:>+13.1f}  {gain_m_str}"
+            )
+        print()
+    avg_g_3050 = sum(gpbaa_3050) / len(gpbaa_3050) if gpbaa_3050 else 0
+    avg_g_100 = sum(gpbaa_100) / len(gpbaa_100) if gpbaa_100 else 0
+    avg_m_100 = sum(monise_100) / len(monise_100) if monise_100 else 0
+    print(f"{'Avg 30–50 (GPBA-A)':<22}           {avg_g_3050:>+13.1f}")
+    print(
+        f"{'Avg 100 (merged)':<22}           {avg_g_100:>+13.1f}  {avg_m_100:>+13.1f}"
+    )
+
+    # ── Tab 5 & 6: MONISE hybrid ──────────────────────────────────────
+    if monise_dir:
+        print(f"\n{'=' * 80}")
+        print("TAB:HYBRID_MEDIUM — MONISE hybrid gains (100 + 145/150 images)")
+        print(sep)
+        print(
+            f"{'Instance':<22} {'Sz':>3}  {'Default PLS':>11}  {'Best Hybrid':>11}  {'Gain%':>7}"
+        )
+        print(sep)
+        med_gains = []
+        for sz_list, label in [([100], "100-image"), ([145, 150], "145/150-image")]:
+            for city, slug in CITIES:
+                for sz in sz_list:
+                    mcfgs = load(monise_dir, slug, sz)
+                    if not mcfgs:
+                        continue
+                    dm = fhv(mcfgs, "Default PLS")
+                    bm = best_of(mcfgs, MONISE_HYBRID_CFGS)
+                    gm = pct(bm, dm)
+                    if sz_list == [145, 150]:
+                        med_gains.append(gm)
+                    print(
+                        f"{city + ' ' + str(sz):<22} {sz:>3}  {dm:>11.4f}  {bm:>11.4f}  {gm:>+7.1f}"
+                    )
+            print()
+        if med_gains:
+            print(
+                f"{'Avg 145/150':<22}           {'':>11}           {sum(med_gains) / len(med_gains):>+7.1f}  (max {max(med_gains):+.1f})"
+            )
+
+    # ── Tab:large: PLS-only 145–200 ──────────────────────────────────
+    print(f"\n{'=' * 80}")
+    print("TAB:LARGE — Final HV for PLS variants (145–200 images, primary-dir bounds)")
+    print(sep)
+    print(
+        f"{'Instance':<22} {'Sz':>3}  {'Default PLS':>11}  {'Diverse':>11}  {'Scalarized':>11}  Best"
+    )
+    print(sep)
+    large_instances = [
+        ("Lagos", "lagos_nigeria", [145]),
+        ("Mexico City", "mexico_city", [150, 200]),
+        ("Paris", "paris", [150, 200]),
+        ("Rio de Janeiro", "rio_de_janeiro", [150, 200]),
+        ("Tokyo Bay", "tokyo_bay", [150, 200]),
+    ]
+    div_pcts_lg, scal_pcts_lg = [], []
+    for city, slug, sizes in large_instances:
+        for sz in sizes:
+            cfgs = load(primary_dir, slug, sz)
+            if not cfgs:
+                continue
+            d = fhv(cfgs, "Default PLS")
+            v = fhv(cfgs, "Diverse Probe PLS")
+            s = fhv(cfgs, "Scalarized PLS")
+            winner = (
+                "Default"
+                if d >= v and d >= s
+                else ("Diverse" if v >= s else "Scalarized")
+            )
+            print(
+                f"{city + ' ' + str(sz):<22} {sz:>3}  {d:>11.6f}  {v:>11.6f}  {s:>11.6f}  {winner}"
+            )
+            if d > 0:
+                div_pcts_lg.append(pct(v, d))
+                scal_pcts_lg.append(pct(s, d))
+        print()
+    avg_dl = sum(div_pcts_lg) / len(div_pcts_lg) if div_pcts_lg else 0
+    avg_sl = sum(scal_pcts_lg) / len(scal_pcts_lg) if scal_pcts_lg else 0
+    print(f"{'Average':<22}      {avg_dl:>+10.2f}%  {avg_sl:>+12.2f}%")
+    print()
 
 
 # ─── CLI ──────────────────────────────────────────────────────────────
@@ -1707,31 +3756,130 @@ def main() -> int:
         default=None,
         help="Subset of series labels to run (default: all 5)",
     )
+    parser.add_argument(
+        "--replot",
+        action="store_true",
+        help="Regenerate plots from existing JSON artifacts in --output-dir without re-running experiments",
+    )
+    parser.add_argument(
+        "--compare-dir",
+        type=Path,
+        default=None,
+        help="Directory with comparison JSON artifacts (e.g. final_paper_results) to overlay on phase bar plots",
+    )
+    parser.add_argument(
+        "--publish-dir",
+        type=Path,
+        default=None,
+        help="Copy all generated PNGs to this directory after replot (e.g. paper/png_figures_new)",
+    )
+    parser.add_argument(
+        "--figures-dir",
+        type=Path,
+        default=None,
+        help="Copy all generated EPS figures to this directory after replot (e.g. paper/figures_new)",
+    )
+    parser.add_argument(
+        "--large-threshold",
+        type=int,
+        default=100,
+        help="Instances with more images than this use --large-configs instead of --configs (default: 100)",
+    )
+    parser.add_argument(
+        "--large-configs",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Config labels to use for instances above --large-threshold",
+    )
+    parser.add_argument(
+        "--pseudo-source",
+        type=str,
+        default="gpbaa",
+        choices=["gpbaa", "monise", "pseudo_solver_solutions"],
+        help=(
+            "Source of initial-population solutions for hybrid configs. "
+            "'gpbaa' uses GPBA-A solutions (default), "
+            "'monise' uses MONISE-generated solutions."
+        ),
+    )
+    parser.add_argument(
+        "--print-tables",
+        action="store_true",
+        help=(
+            "Print all paper table values from existing JSON artifacts in "
+            "--output-dir (primary) and --compare-dir (MONISE), then exit."
+        ),
+    )
+    parser.add_argument(
+        "--wilcoxon",
+        action="store_true",
+        help=(
+            "Run Wilcoxon signed-rank tests on pairwise algorithm comparisons "
+            "from existing JSON artifacts in --output-dir, then exit."
+        ),
+    )
     args = parser.parse_args()
 
-    # Filter instances
+    # Apply pseudo-solution source globally (affects all _load_pseudo_solutions calls)
+    global _PSEUDO_SOLUTIONS_SOURCE, _pseudo_cache
+    _PSEUDO_SOLUTIONS_SOURCE = args.pseudo_source
+    _pseudo_cache.clear()  # invalidate cache when source changes
+
+    # Filter instances and sort by size so all size-30 run before size-50, etc.
     instances = ALL_INSTANCES
     if args.max_size is not None:
         instances = [(n, f, s) for n, f, s in instances if s <= args.max_size]
     if args.filter is not None:
         pat = re.compile(args.filter)
         instances = [(n, f, s) for n, f, s in instances if pat.search(n)]
+    instances = sorted(instances, key=lambda x: (x[0].rsplit("_", 1)[0], x[2]))
 
     if not instances:
         print("No instances matched the filters.", file=sys.stderr)
         return 1
 
-    # Filter configs
-    configs = CONFIGS
+    # Build config lists — search both CONFIGS and MONISE_CONFIGS by label.
+    all_known_configs = CONFIGS + [
+        c for c in MONISE_CONFIGS if c.label not in {x.label for x in CONFIGS}
+    ]
+    default_pool = MONISE_CONFIGS if args.pseudo_source == "monise" else CONFIGS
+
+    configs = default_pool
     if args.configs is not None:
         requested = set(args.configs)
-        configs = [c for c in CONFIGS if c.label in requested]
+        configs = [c for c in all_known_configs if c.label in requested]
+
+    large_configs = configs  # default: same set for all sizes
+    if args.large_configs is not None:
+        requested_large = set(args.large_configs)
+        large_configs = [c for c in all_known_configs if c.label in requested_large]
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Running {len(instances)} instances × {len(configs)} configs")
+    if args.print_tables:
+        print_paper_tables(args.output_dir, monise_dir=args.compare_dir)
+        return 0
+
+    if args.wilcoxon:
+        print_wilcoxon_tests(args.output_dir, monise_dir=args.compare_dir)
+        return 0
+
+    if args.replot:
+        replot_from_dir(
+            args.output_dir,
+            configs,
+            compare_dir=args.compare_dir,
+            publish_dir=args.publish_dir,
+            figures_dir=args.figures_dir,
+        )
+        return 0
+
+    print(f"Running {len(instances)} instances (sorted by size)")
     print(f"Instances: {[n for n, _, _ in instances]}")
-    print(f"Configs:   {[c.label for c in configs]}")
+    print(f"Configs (≤{args.large_threshold}):  {[c.label for c in configs]}")
+    if large_configs is not configs:
+        print(f"Configs (>{args.large_threshold}):  {[c.label for c in large_configs]}")
     print(f"Output:    {args.output_dir}")
     print(f"HV points: {args.num_points}")
 
@@ -1739,6 +3887,9 @@ def main() -> int:
     t_start = time.time()
 
     for display_name, filename, num_images in instances:
+        active_configs = (
+            configs if num_images <= args.large_threshold else large_configs
+        )
         try:
             result = run_instance(
                 display_name,
@@ -1746,7 +3897,7 @@ def main() -> int:
                 num_images,
                 args.output_dir,
                 args.num_points,
-                configs,
+                active_configs,
             )
             all_results.append(result)
         except Exception as e:
@@ -1766,7 +3917,12 @@ def main() -> int:
     print(f"{'=' * 72}", flush=True)
 
     if all_results:
-        labels = [c.label for c in configs]
+        seen: set[str] = set()
+        labels = [
+            c.label
+            for c in configs + large_configs
+            if not (c.label in seen or seen.add(c.label))
+        ]
         header = f"{'Instance':>25s}  {'Size':>5s}"
         for lbl in labels:
             header += f"  {lbl:>14s}"

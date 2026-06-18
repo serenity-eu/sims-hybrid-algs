@@ -95,8 +95,10 @@ def solve(
     )
     
     # Extract hypervolume from statistics if available
-    hypervolume = result["statistics"].get("hypervolume", 0.0)
-    
+    stats = result["statistics"]
+    hypervolume = stats.get("hypervolume", 0.0)
+    pareto_front_complete = bool(stats.get("exhaustive", False))
+
     return SolverResult(
         pareto_front=pareto_front,
         timeout_sec=timeout_s,
@@ -105,6 +107,7 @@ def solve(
         solver_type=SolverType.GUROBI,
         problem_instance=problem_instance,
         front_strategy=front_strategy,
+        pareto_front_complete=pareto_front_complete,
     )
 
 

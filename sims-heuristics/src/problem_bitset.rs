@@ -316,6 +316,10 @@ impl<const D: usize> SetCoverProblem<D> for ProblemBitset<D> {
         self.element_to_images[element_index].iter().copied()
     }
 
+    fn image_bitset(&self, image_idx: usize) -> Option<&FixedBitSet> {
+        Some(&self.images[image_idx])
+    }
+
     // fn image_clear_parts(&self, image_index: usize) -> impl Iterator<Item = usize> + '_ {
     //     // Return elements that are in the image (bitset ones)
     //     self.images[image_index].ones()

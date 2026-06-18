@@ -1,0 +1,223 @@
+{
+  "instance_name": "rio_de_janeiro_50",
+  "test_type": "4d",
+  "objectives": [
+    "min_cost",
+    "cloud_coverage",
+    "min_max_incidence_angle",
+    "min_resolution"
+  ],
+  "num_solutions": 9,
+  "pareto_front_complete": true,
+  "solutions": [
+    {
+      "selected_images": [
+        2,
+        3,
+        7,
+        12,
+        21,
+        28,
+        30,
+        41
+      ],
+      "cost": 3131780,
+      "cloudy_area": 175313,
+      "max_incidence_angle": 239,
+      "min_resolutions_sum": 55200,
+      "timestamp_s": 0.157657,
+      "phase": "monise",
+      "index": 0
+    },
+    {
+      "selected_images": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        7,
+        14,
+        19,
+        20,
+        21,
+        25,
+        26,
+        28,
+        29,
+        30,
+        32,
+        33,
+        35,
+        37,
+        43,
+        44,
+        46
+      ],
+      "cost": 6727646,
+      "cloudy_area": 316,
+      "max_incidence_angle": 329,
+      "min_resolutions_sum": 38922,
+      "timestamp_s": 0.34514,
+      "phase": "monise",
+      "index": 1
+    },
+    {
+      "selected_images": [
+        0,
+        1,
+        2,
+        6,
+        7,
+        13,
+        14,
+        19,
+        21,
+        25,
+        26,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        36,
+        40,
+        41,
+        43,
+        44,
+        46
+      ],
+      "cost": 6783276,
+      "cloudy_area": 316,
+      "max_incidence_angle": 330,
+      "min_resolutions_sum": 38292,
+      "timestamp_s": 0.515536,
+      "phase": "monise",
+      "index": 2
+    },
+    {
+      "selected_images": [
+        2,
+        7,
+        14,
+        21,
+        25,
+        26,
+        28,
+        30,
+        41,
+        43
+      ],
+      "cost": 3643546,
+      "cloudy_area": 47547,
+      "max_incidence_angle": 188,
+      "min_resolutions_sum": 49998,
+      "timestamp_s": 0.658258,
+      "phase": "monise",
+      "index": 3
+    },
+    {
+      "selected_images": [
+        1,
+        2,
+        3,
+        7,
+        21,
+        28,
+        30,
+        40,
+        41,
+        49
+      ],
+      "cost": 3207260,
+      "cloudy_area": 12064,
+      "max_incidence_angle": 284,
+      "min_resolutions_sum": 55200,
+      "timestamp_s": 0.8738859999999999,
+      "phase": "monise",
+      "index": 4
+    },
+    {
+      "selected_images": [
+        2,
+        3,
+        7,
+        12,
+        21,
+        28,
+        30,
+        40,
+        41
+      ],
+      "cost": 3140360,
+      "cloudy_area": 135183,
+      "max_incidence_angle": 239,
+      "min_resolutions_sum": 55200,
+      "timestamp_s": 1.08435,
+      "phase": "monise",
+      "index": 5
+    },
+    {
+      "selected_images": [
+        0,
+        2,
+        3,
+        7,
+        14,
+        21,
+        28,
+        30,
+        40,
+        41
+      ],
+      "cost": 4026786,
+      "cloudy_area": 6523,
+      "max_incidence_angle": 329,
+      "min_resolutions_sum": 39252,
+      "timestamp_s": 1.379889,
+      "phase": "monise",
+      "index": 6
+    },
+    {
+      "selected_images": [
+        0,
+        2,
+        3,
+        7,
+        14,
+        21,
+        28,
+        30,
+        41
+      ],
+      "cost": 4018206,
+      "cloudy_area": 46653,
+      "max_incidence_angle": 329,
+      "min_resolutions_sum": 39252,
+      "timestamp_s": 1.865634,
+      "phase": "monise",
+      "index": 7
+    },
+    {
+      "selected_images": [
+        2,
+        3,
+        7,
+        12,
+        21,
+        25,
+        28,
+        29,
+        41
+      ],
+      "cost": 3214580,
+      "cloudy_area": 225654,
+      "max_incidence_angle": 239,
+      "min_resolutions_sum": 50440,
+      "timestamp_s": 2.063044,
+      "phase": "monise",
+      "index": 8
+    }
+  ]
+}
