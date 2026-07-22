@@ -13,6 +13,16 @@
 //! - **MOEA/D**: Multi-Objective Evolutionary Algorithm based on Decomposition using
 //!   Tchebycheff scalarization with adaptive weight vectors.
 //!
+//! ### Literal paper baselines (`nsga2_baseline`, `nsga3_baseline`, `moead_baseline`)
+//!
+//! Unmodified reference implementations of Deb et al. (2002), Deb & Jain
+//! (2014), and Zhang & Li (2007), used to measure whether the SIMS-specific
+//! extensions in the custom implementations above actually help, rather than
+//! assuming they do because the techniques are individually established
+//! elsewhere. See each module's doc comment for the exact deviations (all
+//! either unavoidable for the bitset set-cover representation, or later
+//! additions from other papers, not the original three).
+//!
 //! ### External Crate Adapters (feature `external_solvers`)
 //!
 //! - **moors adapter**: NSGA-II, SPEA-2, and AGE-MOEA from the [`moors`](https://crates.io/crates/moors)
@@ -37,8 +47,11 @@
 
 pub mod memetic;
 pub mod moead;
+pub mod moead_baseline;
 pub mod nsga2;
+pub mod nsga2_baseline;
 pub mod nsga3;
+pub mod nsga3_baseline;
 pub mod operators;
 
 #[cfg(feature = "external_solvers")]
@@ -48,17 +61,20 @@ pub mod optirustic_adapter;
 
 // Re-export main algorithm entry points
 pub use memetic::{
-    EaBackend, MemeticAlgorithm, MemeticConfig, MemeticResult, run_memetic_moead,
-    run_memetic_nsga2, run_memetic_nsga3,
+    run_memetic_moead, run_memetic_nsga2, run_memetic_nsga3, EaBackend, MemeticAlgorithm,
+    MemeticConfig, MemeticResult,
 };
 pub use moead::Moead;
+pub use moead_baseline::{run_moead_baseline, MoeadBaseline, MoeadBaselineConfig};
 pub use nsga2::Nsga2;
+pub use nsga2_baseline::{run_nsga2_baseline, Nsga2Baseline, Nsga2BaselineConfig};
 pub use nsga3::{Nsga3, Nsga3Config};
+pub use nsga3_baseline::{run_nsga3_baseline, Nsga3Baseline, Nsga3BaselineConfig};
 
 // Re-export external adapter entry points when the feature is enabled
 #[cfg(feature = "external_solvers")]
 pub use moors_adapter::{
-    MoorsConfig, MoorsCrossoverType, run_moors_age_moea, run_moors_nsga2, run_moors_spea2,
+    run_moors_age_moea, run_moors_nsga2, run_moors_spea2, MoorsConfig, MoorsCrossoverType,
 };
 #[cfg(feature = "external_solvers")]
-pub use optirustic_adapter::{OptirusticConfig, run_optirustic_nsga2, run_optirustic_nsga3};
+pub use optirustic_adapter::{run_optirustic_nsga2, run_optirustic_nsga3, OptirusticConfig};

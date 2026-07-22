@@ -151,11 +151,16 @@ impl<'a> SingleObjectiveSolver<'a> {
             }
             #[cfg(feature = "coin_cbc")]
             crate::solver_enum::Solver::CoinCbc => {
-                let model = if matches!(direction, crate::model::ObjectiveDirection::Minimize) {
+                let mut model = if matches!(direction, crate::model::ObjectiveDirection::Minimize) {
                     prob_vars.minimise(objective_expr).using(coin_cbc::coin_cbc)
                 } else {
                     prob_vars.maximise(objective_expr).using(coin_cbc::coin_cbc)
                 };
+                // Enforce the solve budget so a hard single-objective (e.g. the payoff
+                // table on large instances) can't run unbounded.
+                if let Some(t) = effective_timeout {
+                    model.set_parameter("sec", &(t.as_secs_f64().ceil() as u64).to_string());
+                }
                 self.solve_with_model_common(model, objective_index)
             }
             #[cfg(not(feature = "coin_cbc"))]
@@ -169,6 +174,18 @@ impl<'a> SingleObjectiveSolver<'a> {
                 } else {
                     prob_vars.maximise(objective_expr).using(highs::highs)
                 };
+                // HiGHS has no wall-clock stop by default; wire the solve budget in so the
+                // payoff-table / ideal-bounds solve on large instances can't hang forever.
+                let model = match effective_timeout {
+                    Some(t) => model.set_time_limit(t.as_secs_f64()),
+                    None => model,
+                };
+                // Disable presolve: on the large SIMS models (tens of thousands of rows)
+                // HiGHS presolve does not poll the wall-clock and runs past the time limit
+                // (observed: a 30s budget solve running >120s, a 300s budget → hours).
+                // Skipping presolve keeps the solve budget-respecting — branch-and-bound
+                // itself does check the limit — so every instance completes on one backend.
+                let model = model.set_option("presolve", "off");
                 self.solve_with_model_common(model, objective_index)
             }
             #[cfg(not(feature = "highs"))]
@@ -181,6 +198,11 @@ impl<'a> SingleObjectiveSolver<'a> {
                     prob_vars.minimise(objective_expr).using(scip::scip)
                 } else {
                     prob_vars.maximise(objective_expr).using(scip::scip)
+                };
+                // Enforce the solve budget (SCIP takes an integer-second limit).
+                let model = match effective_timeout {
+                    Some(t) => model.set_time_limit(t.as_secs_f64().ceil() as usize),
+                    None => model,
                 };
                 self.solve_with_model_common(model, objective_index)
             }

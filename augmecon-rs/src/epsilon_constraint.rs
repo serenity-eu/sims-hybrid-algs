@@ -134,6 +134,7 @@ impl<'a> EpsilonConstraintBuilder<'a> {
         penalty_sum: Expression,
         epsilon_augmentation: f64,
     ) -> Expression {
+        crate::verify::bump(&crate::verify::AUGMENTATION_BUILT);
         let mut augmented_primary = primary_objective_expr;
         match self.problem.objectives[self.primary_objective].1 {
             crate::model::ObjectiveDirection::Maximize => {
@@ -879,7 +880,7 @@ impl<'a> EpsilonConstraintBuilder<'a> {
         slack_vars: &HashMap<usize, good_lp::Variable>,
         penalty_sum: &Expression,
         epsilon_augmentation: f64,
-        _timeout: Option<Duration>,
+        timeout: Option<Duration>,
     ) -> Option<SolutionWithSlack> {
         let problem = match direction {
             crate::model::ObjectiveDirection::Minimize => {
@@ -891,6 +892,11 @@ impl<'a> EpsilonConstraintBuilder<'a> {
         };
 
         let mut model = problem.using(coin_cbc::coin_cbc);
+
+        // Bound this subproblem's wall-clock; CBC returns its incumbent at the limit.
+        if let Some(t) = timeout {
+            model.set_parameter("sec", &(t.as_secs_f64().ceil() as u64).to_string());
+        }
 
         // Apply solver parameters if specified
         for (key, value) in &self.options.solver_parameters {
@@ -948,8 +954,9 @@ impl<'a> EpsilonConstraintBuilder<'a> {
         slack_vars: &HashMap<usize, good_lp::Variable>,
         penalty_sum: &Expression,
         epsilon_augmentation: f64,
-        _timeout: Option<Duration>,
+        timeout: Option<Duration>,
     ) -> Option<SolutionWithSlack> {
+        crate::verify::bump(&crate::verify::SLACK_SOLVES);
         let problem = match direction {
             crate::model::ObjectiveDirection::Minimize => {
                 prob_vars.minimise(augmented_primary.clone())
@@ -960,6 +967,17 @@ impl<'a> EpsilonConstraintBuilder<'a> {
         };
 
         let mut model = problem.using(highs::highs);
+
+        // Bound this subproblem's wall-clock. HiGHS has no default stop, so without this a
+        // single hard ε-solve runs unbounded (blowing the GPBA budget on one point). On the
+        // time limit HiGHS returns its incumbent (good_lp maps ReachedTimeLimit -> Ok), which
+        // is a valid feasible Pareto candidate — the front dedups any weakly-dominated point.
+        if let Some(t) = timeout {
+            model = model.set_time_limit(t.as_secs_f64());
+        }
+        // Disable presolve so the time limit is actually honored on large models
+        // (HiGHS presolve doesn't poll the clock — see single_objective.rs).
+        model = model.set_option("presolve", "off");
 
         // Note: HiGHS solver doesn't support generic parameter setting via set_parameter
         if !self.options.solver_parameters.is_empty() {

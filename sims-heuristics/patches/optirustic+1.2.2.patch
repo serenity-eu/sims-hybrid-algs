@@ -1,0 +1,26 @@
+diff --git a/src/algorithms/algorithm.rs b/src/algorithms/algorithm.rs
+index 94da28f..135a8d5 100644
+--- a/src/algorithms/algorithm.rs
++++ b/src/algorithms/algorithm.rs
+@@ -500,10 +500,19 @@ pub trait Algorithm<AlgorithmOptions: Serialize + DeserializeOwned>: Display {
+     fn is_stopping_condition_met(&self, condition: &StoppingCondition) -> Result<bool, OError> {
+         let is_met = match condition {
+             StoppingCondition::MaxDurationAsMinutes(duration) => {
+-                *duration <= ((Instant::now().elapsed().as_secs() / 60) as u32)
++                // Patched via `cargo patch-crate`: upstream used
++                // `Instant::now().elapsed()`, which measures elapsed time
++                // since the `Instant::now()` call on the same line (always
++                // ~0), not time since the algorithm started. This made
++                // MaxDurationAsMinutes/MaxDurationAsHours never fire, so an
++                // `Any([MaxGeneration, MaxDurationAsMinutes])` condition
++                // silently fell through to MaxGeneration every time. Use
++                // `self.start_time()` instead, exactly like the correct
++                // `elapsed()` method above. See patches/optirustic+1.2.2.patch.
++                *duration <= ((self.start_time().elapsed().as_secs() / 60) as u32)
+             }
+             StoppingCondition::MaxDurationAsHours(duration) => {
+-                *duration <= ((Instant::now().elapsed().as_secs() / 60 / 60) as u32)
++                *duration <= ((self.start_time().elapsed().as_secs() / 60 / 60) as u32)
+             }
+             StoppingCondition::MaxGeneration(generation) => *generation <= self.generation(),
+             StoppingCondition::MaxFunctionEvaluations(nfe) => {

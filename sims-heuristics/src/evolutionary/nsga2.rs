@@ -78,6 +78,14 @@ pub struct Nsga2Config {
     /// Number of consecutive generations with no archive improvement before
     /// injecting random individuals to restore diversity.
     pub stagnation_limit: usize,
+    /// When true (default), the partial last front for D >= 3 is filled using
+    /// greedy contribution-distance (maximin) selection instead of crowding
+    /// distance, per Kukkonen & Deb (2006). When false, plain crowding
+    /// distance is used regardless of D — kept as an ablation switch to
+    /// measure whether contribution-distance selection actually helps on
+    /// SIMS instances, rather than assuming it does because it's established
+    /// elsewhere.
+    pub use_contribution_distance: bool,
 }
 
 impl Default for Nsga2Config {
@@ -94,6 +102,7 @@ impl Default for Nsga2Config {
             coverage_biased_crossover_fraction: 0.5,
             ensure_mutation: true,
             stagnation_limit: 50,
+            use_contribution_distance: true,
         }
     }
 }
@@ -506,7 +515,7 @@ where
                 // Partial front: select `remaining` solutions with best diversity.
                 let remaining = target_size - next_gen.len();
 
-                if D >= 3 && front.len() > 2 {
+                if self.config.use_contribution_distance && D >= 3 && front.len() > 2 {
                     // Many-objective: use greedy contribution-distance selection.
                     // This picks solutions one at a time, always choosing the one
                     // farthest (in normalised objective space) from the already-
@@ -573,7 +582,11 @@ where
         let obj_range: Vec<f64> = (0..D)
             .map(|d| {
                 let r = obj_max[d] - obj_min[d];
-                if r < f64::EPSILON { 1.0 } else { r }
+                if r < f64::EPSILON {
+                    1.0
+                } else {
+                    r
+                }
             })
             .collect();
 

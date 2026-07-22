@@ -242,6 +242,7 @@ pub mod solution;
 pub mod solver;
 pub mod solver_enum;
 pub mod timer;
+pub mod verify;
 
 // Re-export main types for convenient access
 pub use error::{AugmeconError, Result};
