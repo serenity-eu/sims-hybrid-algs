@@ -11,10 +11,11 @@ crate-type = ["cdylib"]
 [features]
 default = ["bounds_check", "parallel"]
 plotting = ["pls/plotting"]
-milp = ["augmecon", "augmecon/coin_cbc"]
+milp = ["augmecon", "augmecon/coin_cbc", "augmecon/highs"]
 bounds_check = ["pls/bounds_check"]
 parallel = ["pls/parallel"]
 scalarized_selection = ["pls/scalarized_selection"]
+external_solvers = ["pls/external_solvers"]
 
 [dependencies]
 pyo3 = { version = "0.27.2", features = ["extension-module"] }
@@ -33,3 +34,13 @@ tracing-subscriber = { version = "0.3.22", features = ["json", "fmt"] }
 tracing-chrome = "0.7.2"
 indicatif = "0.17"
 rayon = "1.10"
+
+# Cargo only honours [patch] sections declared in the *root* manifest of the
+# crate being built. sims-heuristics declares the same patch for when it is
+# built standalone (e.g. its own test suite); this duplicate is needed for
+# when sims-problem is the build root instead (e.g. building this extension).
+# See sims-heuristics/Cargo.toml and sims-heuristics/patches/moors+0.2.10.patch
+# and optirustic+1.2.2.patch.
+[patch.crates-io]
+moors = { path = "../sims-heuristics/target/patch/moors-0.2.10" }
+optirustic = { path = "../sims-heuristics/target/patch/optirustic-1.2.2" }

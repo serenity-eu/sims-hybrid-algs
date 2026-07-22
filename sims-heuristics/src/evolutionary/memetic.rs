@@ -36,10 +36,10 @@
 
 use std::time::{Duration, Instant};
 
-use pareto::{HasObjectives, MoSolution};
 use crate::PlsOptimizations;
-use rand::SeedableRng;
+use pareto::{HasObjectives, MoSolution};
 use rand::rngs::SmallRng;
+use rand::SeedableRng;
 use tracing::info;
 
 use crate::explored_solutions_data::ExploredSolutionsData;
@@ -301,6 +301,51 @@ impl MemeticAlgorithm {
         }
     }
 
+    /// Run the EA phase only, seeded with an externally-provided population.
+    ///
+    /// Skips Phase 1 (PLS) entirely and gives the full `max_duration` to the
+    /// EA. Used when the caller supplies pseudosolver solutions as the initial
+    /// population (e.g. GPBA-A results) instead of running PLS first.
+    pub fn run_from_seed<P, const D: usize>(
+        problem: &P,
+        config: MemeticConfig,
+        seed_population: Vec<BitsetEncodedSolution<P, D>>,
+        max_duration: Duration,
+    ) -> MemeticResult<P, D>
+    where
+        P: SetCoverProblem<D> + Clone + Send + Sync,
+    {
+        let overall_start = Instant::now();
+
+        info!(
+            "Memetic (seed-only) starting: backend={}, seed_size={}, total_budget={:?}, seed={}",
+            config.ea_backend,
+            seed_population.len(),
+            max_duration,
+            config.seed,
+        );
+
+        let (ea_archive_solutions, ea_explored) =
+            Self::run_ea_phase(problem, &config, seed_population, max_duration);
+        let ea_archive_size = ea_archive_solutions.len();
+        let ea_duration = overall_start.elapsed();
+
+        info!(
+            "Memetic (seed-only) {} complete: archive_size={}, duration={:?}",
+            config.ea_backend, ea_archive_size, ea_duration,
+        );
+
+        MemeticResult {
+            archive: ea_archive_solutions,
+            pls_archive_size: 0,
+            ea_archive_size,
+            pls_duration: Duration::ZERO,
+            ea_duration,
+            total_duration: overall_start.elapsed(),
+            explored_solutions: ea_explored,
+        }
+    }
+
     // -----------------------------------------------------------------
     // Phase 1: PLS
     // -----------------------------------------------------------------
@@ -425,8 +470,12 @@ impl MemeticAlgorithm {
             Some(seed_population)
         };
 
-        let mut nsga3 =
-            Nsga3::<P, D>::new(problem, nsga3_config.clone(), initial_pop, seed.wrapping_add(10_000));
+        let mut nsga3 = Nsga3::<P, D>::new(
+            problem,
+            nsga3_config.clone(),
+            initial_pop,
+            seed.wrapping_add(10_000),
+        );
 
         let archive = nsga3.run(usize::MAX, budget);
         let explored = std::mem::replace(
@@ -527,7 +576,11 @@ impl MemeticAlgorithm {
         let obj_range: Vec<f64> = (0..D)
             .map(|d| {
                 let r = obj_max[d] - obj_min[d];
-                if r < f64::EPSILON { 1.0 } else { r }
+                if r < f64::EPSILON {
+                    1.0
+                } else {
+                    r
+                }
             })
             .collect();
 

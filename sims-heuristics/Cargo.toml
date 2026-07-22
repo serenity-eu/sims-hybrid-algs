@@ -4,6 +4,18 @@ version = "0.1.0"
 edition = "2024"
 autobenches = false
 
+[package.metadata.patch]
+crates = ["moors", "optirustic"]
+
+# Patched via `cargo patch-crate` (see patches/moors+0.2.10.patch): adds
+# `GeneticAlgorithm::run_with_deadline`, a real wall-clock stopping condition.
+# Upstream moors has no time-control API at all (the per-generation step
+# method is private to the crate), so `moors_adapter::run_moors_nsga2`
+# previously ignored its `max_duration` parameter entirely.
+[patch.crates-io]
+moors = { path = "./target/patch/moors-0.2.10" }
+optirustic = { path = "./target/patch/optirustic-1.2.2" }
+
 [lib]
 name = "pls"
 

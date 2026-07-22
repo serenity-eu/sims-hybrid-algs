@@ -355,6 +355,13 @@ impl<const D: usize> optirustic::core::Evaluator for SimsEvaluator<D> {
 // Problem construction helpers
 // ---------------------------------------------------------------------------
 
+/// Ceil a `Duration` to whole minutes (`optirustic`'s `StoppingCondition`
+/// only supports minute/hour granularity, no seconds). Always at least 1.
+fn duration_to_minutes_ceil(d: Duration) -> u32 {
+    let secs = d.as_secs();
+    (secs.div_ceil(60)).max(1) as u32
+}
+
 /// Build an optirustic `Problem` from SIMS problem data.
 fn build_optirustic_problem<P, const D: usize>(
     problem: &P,
@@ -471,7 +478,7 @@ where
 pub fn run_optirustic_nsga2<P, const D: usize>(
     problem: &P,
     config: OptirusticConfig,
-    _max_duration: Duration,
+    max_duration: Duration,
 ) -> (Vec<BitsetEncodedSolution<P, D>>, ExploredSolutionsData<D>)
 where
     P: SetCoverProblem<D> + Clone + Send + Sync,
@@ -486,6 +493,7 @@ where
         num_elements = data.num_elements,
         population_size = config.population_size,
         max_generations = config.max_generations,
+        max_duration_minutes = duration_to_minutes_ceil(max_duration),
         "Starting optirustic NSGA-II"
     );
 
@@ -498,7 +506,7 @@ where
         }
     };
 
-    use optirustic::algorithms::{Algorithm, NSGA2, NSGA2Arg, StoppingCondition};
+    use optirustic::algorithms::{Algorithm, NSGA2Arg, StoppingCondition, NSGA2};
 
     let args = NSGA2Arg {
         number_of_individuals: config.population_size,
@@ -506,9 +514,12 @@ where
         mutation_operator_options: None,  // use defaults
         resume_from_file: None,
         seed: config.seed,
-        stopping_condition: StoppingCondition::MaxGeneration(
-            config.max_generations.try_into().unwrap_or(u32::MAX),
-        ),
+        // Whichever comes first: optirustic has no second-granularity
+        // duration condition, so this is rounded up to whole minutes.
+        stopping_condition: StoppingCondition::Any(vec![
+            StoppingCondition::MaxGeneration(config.max_generations.try_into().unwrap_or(u32::MAX)),
+            StoppingCondition::MaxDurationAsMinutes(duration_to_minutes_ceil(max_duration)),
+        ]),
         parallel: Some(config.parallel),
         export_history: None,
     };
@@ -557,7 +568,7 @@ where
 pub fn run_optirustic_nsga3<P, const D: usize>(
     problem: &P,
     config: OptirusticConfig,
-    _max_duration: Duration,
+    max_duration: Duration,
 ) -> (Vec<BitsetEncodedSolution<P, D>>, ExploredSolutionsData<D>)
 where
     P: SetCoverProblem<D> + Clone + Send + Sync,
@@ -572,6 +583,7 @@ where
         num_elements = data.num_elements,
         population_size = config.population_size,
         max_generations = config.max_generations,
+        max_duration_minutes = duration_to_minutes_ceil(max_duration),
         "Starting optirustic NSGA-III"
     );
 
@@ -585,7 +597,7 @@ where
     };
 
     use optirustic::algorithms::{
-        Algorithm, NSGA3, NSGA3Arg, Nsga3NumberOfIndividuals, StoppingCondition,
+        Algorithm, NSGA3Arg, Nsga3NumberOfIndividuals, StoppingCondition, NSGA3,
     };
 
     let partitions = choose_partitions_for_d(D);
@@ -597,9 +609,10 @@ where
         mutation_operator_options: None,
         resume_from_file: None,
         seed: config.seed,
-        stopping_condition: StoppingCondition::MaxGeneration(
-            config.max_generations.try_into().unwrap_or(u32::MAX),
-        ),
+        stopping_condition: StoppingCondition::Any(vec![
+            StoppingCondition::MaxGeneration(config.max_generations.try_into().unwrap_or(u32::MAX)),
+            StoppingCondition::MaxDurationAsMinutes(duration_to_minutes_ceil(max_duration)),
+        ]),
         parallel: Some(config.parallel),
         export_history: None,
         number_of_partitions: optirustic::utils::NumberOfPartitions::OneLayer(partitions),

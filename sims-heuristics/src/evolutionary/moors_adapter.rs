@@ -418,13 +418,14 @@ where
 pub fn run_moors_nsga2<P, const D: usize>(
     problem: &P,
     config: MoorsConfig,
-    _max_duration: Duration,
+    max_duration: Duration,
 ) -> (Vec<BitsetEncodedSolution<P, D>>, ExploredSolutionsData<D>)
 where
     P: SetCoverProblem<D> + Clone + Send + Sync,
 {
     let _span = info_span!("moors_nsga2").entered();
     let start = std::time::Instant::now();
+    let deadline = start + max_duration;
 
     let data = Arc::new(SimsProblemData::<D>::from_problem(problem));
     let num_images = data.num_images;
@@ -468,6 +469,7 @@ where
                 fitness_fn,
                 moors::operators::UniformBinaryCrossover::new(),
                 &data,
+                deadline,
             )
         }
         MoorsCrossoverType::SinglePoint => {
@@ -479,6 +481,7 @@ where
                 fitness_fn,
                 moors::operators::SinglePointBinaryCrossover::new(),
                 &data,
+                deadline,
             )
         }
         MoorsCrossoverType::TwoPoint => {
@@ -490,6 +493,7 @@ where
                 fitness_fn,
                 moors::operators::TwoPointBinaryCrossover,
                 &data,
+                deadline,
             )
         }
     };
@@ -506,6 +510,7 @@ where
 }
 
 /// Internal helper: run moors NSGA-II with a specific crossover operator type.
+#[allow(clippy::too_many_arguments)]
 fn run_nsga2_with_crossover<P, const D: usize, Cross>(
     problem: &P,
     config: &MoorsConfig,
@@ -514,14 +519,15 @@ fn run_nsga2_with_crossover<P, const D: usize, Cross>(
     fitness_fn: impl Fn(&Array2<f64>) -> Array2<f64> + Send + Sync + 'static,
     crossover: Cross,
     data: &SimsProblemData<D>,
+    deadline: std::time::Instant,
 ) -> Vec<BitsetEncodedSolution<P, D>>
 where
     P: SetCoverProblem<D> + Clone + Send + Sync,
     Cross: moors::operators::CrossoverOperator + 'static,
 {
     use moors::{
-        ExactDuplicatesCleaner, NoConstraints, Nsga2Builder, RandomSamplingBinary,
-        operators::BitFlipMutation,
+        operators::BitFlipMutation, ExactDuplicatesCleaner, NoConstraints, Nsga2Builder,
+        RandomSamplingBinary,
     };
 
     let build_result = Nsga2Builder::default()
@@ -548,7 +554,7 @@ where
         }
     };
 
-    if let Err(e) = algo.run() {
+    if let Err(e) = algo.run_with_deadline(deadline) {
         tracing::error!("moors NSGA-II run failed: {e:?}");
         return Vec::new();
     }
@@ -680,8 +686,8 @@ where
     Cross: moors::operators::CrossoverOperator + 'static,
 {
     use moors::{
-        ExactDuplicatesCleaner, NoConstraints, RandomSamplingBinary, Spea2Builder,
-        operators::BitFlipMutation,
+        operators::BitFlipMutation, ExactDuplicatesCleaner, NoConstraints, RandomSamplingBinary,
+        Spea2Builder,
     };
 
     let build_result = Spea2Builder::default()
@@ -811,8 +817,8 @@ where
     Cross: moors::operators::CrossoverOperator + 'static,
 {
     use moors::{
-        AgeMoeaBuilder, ExactDuplicatesCleaner, NoConstraints, RandomSamplingBinary,
-        operators::BitFlipMutation,
+        operators::BitFlipMutation, AgeMoeaBuilder, ExactDuplicatesCleaner, NoConstraints,
+        RandomSamplingBinary,
     };
 
     let build_result = AgeMoeaBuilder::default()

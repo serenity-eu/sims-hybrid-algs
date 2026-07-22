@@ -38,6 +38,21 @@ fn sims_problem(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(solver::solve_with_memetic_nsga2, m)?)?;
     m.add_function(wrap_pyfunction!(solver::solve_with_memetic_nsga3, m)?)?;
     m.add_function(wrap_pyfunction!(solver::solve_with_memetic_moead, m)?)?;
+    m.add_function(wrap_pyfunction!(solver::solve_with_nsga2_baseline, m)?)?;
+    m.add_function(wrap_pyfunction!(solver::solve_with_nsga3_baseline, m)?)?;
+    m.add_function(wrap_pyfunction!(solver::solve_with_moead_baseline, m)?)?;
+    m.add_function(wrap_pyfunction!(solver::solve_with_pseudo_seeded_nsga2_baseline, m)?)?;
+    m.add_function(wrap_pyfunction!(solver::solve_with_pseudo_seeded_nsga3_baseline, m)?)?;
+    m.add_function(wrap_pyfunction!(solver::solve_with_pseudo_seeded_moead_baseline, m)?)?;
+    m.add_function(wrap_pyfunction!(solver::solve_with_pseudo_seeded_nsga2, m)?)?;
+    m.add_function(wrap_pyfunction!(solver::solve_with_pseudo_seeded_nsga3, m)?)?;
+    m.add_function(wrap_pyfunction!(solver::solve_with_pseudo_seeded_moead, m)?)?;
+    #[cfg(feature = "external_solvers")]
+    m.add_function(wrap_pyfunction!(solver::solve_with_nsga2_moors, m)?)?;
+    #[cfg(feature = "external_solvers")]
+    m.add_function(wrap_pyfunction!(solver::solve_with_nsga2_optirustic, m)?)?;
+    #[cfg(feature = "external_solvers")]
+    m.add_function(wrap_pyfunction!(solver::solve_with_nsga3_optirustic, m)?)?;
 
     // Add hypervolume function
     m.add_function(wrap_pyfunction!(hypervolume::compute_hypervolume, m)?)?;

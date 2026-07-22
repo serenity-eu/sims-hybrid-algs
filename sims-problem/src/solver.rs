@@ -88,7 +88,7 @@ impl MilpConfig {
         bypass_coefficient=true,
         early_exit=true,
         flag_array=true,
-        solver_name="coin_cbc".to_string()
+        solver_name="highs".to_string()
     ))]
     pub fn new(
         objectives: Vec<String>,
@@ -1765,7 +1765,7 @@ fn compute_min_resolutions_sum(
     bypass_coefficient=true,
     early_exit=true,
     flag_array=true,
-    solver_name="coin_cbc".to_string(),
+    solver_name="highs".to_string(),
 ))]
 pub fn solve_with_milp(
     sims_instance: &SimsDiscreteProblem,
@@ -2012,12 +2012,21 @@ pub fn solve_with_milp(
         );
     }
 
+    // Cap each ε-subproblem so no single hard solve consumes the whole GPBA budget:
+    // spread the budget across many solves for a denser coverage front. On the cap the
+    // solver returns its incumbent (a valid feasible Pareto candidate). Bounded to a
+    // sensible [10s, 45s] window regardless of total budget.
+    let per_solve_cap = timeout
+        .checked_div(6)
+        .unwrap_or(timeout)
+        .clamp(Duration::from_secs(10), Duration::from_secs(45));
+
     // Configure GPBA-A for Python-compatible dynamic interval exploration (gamma=1)
     let config = GpbaConfig {
         primary_objective: 0, // First objective is primary
         manual_bounds: Some((ideal_bounds, nadir_heuristic)), // Use computed ideal + heuristic nadir
         target_solutions: None,
-        per_solve_timeout: None,
+        per_solve_timeout: Some(per_solve_cap),
     };
 
     info!("Using GPBA-A algorithm with Python-compatible dynamic interval exploration (gamma=1)");
@@ -2110,12 +2119,20 @@ pub fn solve_with_milp(
             }
         }
 
+        // Real GPBA-A discovery timestamp (µs since solve start), recorded in the
+        // augmecon solution's metadata; fall back to index-based if absent.
+        let timestamp_us = milp_solution
+            .metadata
+            .get("timestamp_us")
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(i as u64 * 1000);
+
         // Create Python solution with computed objective values
         let py_solution = Solution::create(
             selected_images.clone(),
             cost,
             cloudy_area,
-            i as u64 * 1000, // Simple timestamp based on index
+            timestamp_us,
             max_incidence_angle,
             min_resolution_sum,
         )?;
@@ -2956,7 +2973,8 @@ fn solve_hybrid_4d(
     shift_mutation_rate=0.25,
     coverage_biased_crossover_fraction=0.5,
     ensure_mutation=true,
-    stagnation_limit=50usize
+    stagnation_limit=50usize,
+    use_contribution_distance=true
 ))]
 pub fn solve_with_nsga2(
     py: Python<'_>,
@@ -2979,106 +2997,9 @@ pub fn solve_with_nsga2(
     coverage_biased_crossover_fraction: f64,
     ensure_mutation: bool,
     stagnation_limit: usize,
+    use_contribution_distance: bool,
 ) -> PyResult<SolvingResult> {
-    use pls::evolutionary::nsga2::{Nsga2, Nsga2Config};
-    use pls::problem_bitset::ProblemBitset;
-
-    // Validate: only 4D supported
-    if objectives.len() != 4 {
-        return Err(PyValueError::new_err(format!(
-            "solve_with_nsga2 only supports 4 objectives, got {}. \
-             Provide exactly 4 objectives from: min_cost, cloud_coverage, min_max_incidence_angle, min_resolution",
-            objectives.len()
-        )));
-    }
-
-    // Validate objective names
-    let valid_objectives = [
-        "min_cost",
-        "cloud_coverage",
-        "min_resolution",
-        "min_max_incidence_angle",
-    ];
-    for obj in &objectives {
-        if !valid_objectives.contains(&obj.as_str()) {
-            return Err(PyValueError::new_err(format!(
-                "Invalid objective '{obj}'. Valid objectives are: {valid_objectives:?}"
-            )));
-        }
-    }
-
-    info!(
-        "Starting NSGA-II with {} objectives: {objectives:?}, population_size={population_size}, \
-         max_generations={max_generations}, seed={seed}, timeout={:?}",
-        objectives.len(),
-        timeout
-    );
-
-    // Convert to PLS problem format (same as solve_with_pls)
-    let raw_instance = pls::problem::SIMSProblemInstanceRaw {
-        name: "python_instance".to_string(),
-        num_images: sims_instance.num_images,
-        universe_size: sims_instance.universe,
-        images: sims_instance.images.clone(),
-        costs: sims_instance.costs.iter().map(|&c| c as u64).collect(),
-        clouds: sims_instance.clouds.clone(),
-        areas: sims_instance.areas.iter().map(|&a| a as u64).collect(),
-        max_cloud_area: sims_instance.max_cloud_area as u64,
-        resolution: sims_instance.resolution.iter().map(|&r| r as u64).collect(),
-        incidence_angle: sims_instance
-            .incidence_angle
-            .iter()
-            .map(|&i| i as u64)
-            .collect(),
-    };
-
-    // Create 4D objective definitions
-    let mut objective_definitions = [
-        pls::objectives::ObjectiveType::TotalCost,
-        pls::objectives::ObjectiveType::CloudyArea,
-        pls::objectives::ObjectiveType::MaxIncidenceAngle,
-        pls::objectives::ObjectiveType::MinResolution,
-    ];
-    for (i, obj_name) in objectives.iter().enumerate() {
-        objective_definitions[i] = match obj_name.as_str() {
-            "min_cost" => pls::objectives::ObjectiveType::TotalCost,
-            "cloud_coverage" => pls::objectives::ObjectiveType::CloudyArea,
-            "min_resolution" => pls::objectives::ObjectiveType::MinResolution,
-            "min_max_incidence_angle" => pls::objectives::ObjectiveType::MaxIncidenceAngle,
-            _ => {
-                return Err(PyValueError::new_err(format!(
-                    "Unknown objective: {}",
-                    obj_name
-                )))
-            }
-        };
-    }
-
-    let mut pls_problem =
-        ProblemBitset::<4>::from_raw_with_objectives(&raw_instance, objective_definitions);
-
-    // Set objective bounds if provided
-    if let Some(ref bounds) = objective_bounds {
-        let bounds_vec: Vec<[u64; 2]> = bounds
-            .iter()
-            .map(|b| {
-                if b.len() != 2 {
-                    return Err(PyValueError::new_err(format!(
-                        "Each objective bound must have exactly 2 elements [min, max], got {}",
-                        b.len()
-                    )));
-                }
-                Ok([b[0], b[1]])
-            })
-            .collect::<PyResult<Vec<[u64; 2]>>>()?;
-        let bounds_array: [[u64; 2]; 4] = bounds_vec.try_into().map_err(|_| {
-            PyValueError::new_err("Expected exactly 4 objective bounds for 4D problem")
-        })?;
-        pls_problem.set_objective_bounds(bounds_array);
-    }
-
-    // Configure NSGA-II
-    let config = Nsga2Config {
+    let config = pls::evolutionary::nsga2::Nsga2Config {
         population_size,
         crossover_rate,
         swap_mutation_rate,
@@ -3090,101 +3011,84 @@ pub fn solve_with_nsga2(
         coverage_biased_crossover_fraction,
         ensure_mutation,
         stagnation_limit,
+        use_contribution_distance,
     };
 
-    // Run NSGA-II (release the GIL)
+    match objectives.len() {
+        2 => run_nsga2_tailored_dim::<2>(py, sims_instance, &objectives, timeout, None, config, max_generations, seed, trace, &objective_bounds, include_dominated),
+        3 => run_nsga2_tailored_dim::<3>(py, sims_instance, &objectives, timeout, None, config, max_generations, seed, trace, &objective_bounds, include_dominated),
+        4 => run_nsga2_tailored_dim::<4>(py, sims_instance, &objectives, timeout, None, config, max_generations, seed, trace, &objective_bounds, include_dominated),
+        n => Err(PyValueError::new_err(format!(
+            "solve_with_nsga2 only supports 2, 3, or 4 objectives, got {n}"
+        ))),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_nsga2_tailored_dim<const D: usize>(
+    py: Python<'_>,
+    sims_instance: &SimsDiscreteProblem,
+    objectives: &[String],
+    timeout: Duration,
+    initial_population: Option<Vec<crate::solution::Solution>>,
+    config: pls::evolutionary::nsga2::Nsga2Config,
+    max_generations: usize,
+    seed: u64,
+    trace: bool,
+    objective_bounds: &Option<Vec<Vec<u64>>>,
+    include_dominated: bool,
+) -> PyResult<SolvingResult> {
+    use pls::evolutionary::nsga2::Nsga2;
+    use pls::problem_bitset::ProblemBitset;
+
+    let raw_instance = build_raw_instance(sims_instance);
+    let objective_definitions = parse_objective_definitions::<D>(objectives)?;
+    let mut pls_problem =
+        ProblemBitset::<D>::from_raw_with_objectives(&raw_instance, objective_definitions);
+    apply_objective_bounds(&mut pls_problem, objective_bounds)?;
+
+    let seed_pop = initial_population
+        .as_deref()
+        .map(|p| py_solutions_to_bitset::<ProblemBitset<D>, D>(p, &pls_problem));
+
+    info!(
+        "NSGA-II (tailored) {D}D: {} seed solutions, pop_size={}, max_generations={max_generations}",
+        seed_pop.as_ref().map(|p| p.len()).unwrap_or(0),
+        config.population_size,
+    );
+
     let (archive_solutions, explored_fingerprints) = py.allow_threads(|| {
-        let mut nsga2 = Nsga2::new(&pls_problem, config, None, seed);
+        let mut nsga2 = Nsga2::new(&pls_problem, config, seed_pop, seed);
         let archive = nsga2.run(max_generations, timeout);
-
-        // Convert explored solutions to SolutionFingerprint vec
-        let fingerprints: Vec<SolutionFingerprint<4>> = nsga2
-            .explored_solutions
-            .solutions
-            .values()
-            .cloned()
-            .collect();
-
+        let fingerprints: Vec<SolutionFingerprint<D>> =
+            nsga2.explored_solutions.solutions.values().cloned().collect();
         (archive, fingerprints)
     });
 
     info!(
-        "NSGA-II completed: {} archive solutions, {} explored solutions",
+        "NSGA-II (tailored) completed: {} archive solutions, {} explored solutions",
         archive_solutions.len(),
         explored_fingerprints.len()
     );
 
-    // Convert archive solutions to Python Solution format
-    let mut python_final_solutions = Vec::new();
-    for solution in archive_solutions.iter() {
-        let py_solution: crate::solution::Solution = (solution, &pls_problem).into();
-        python_final_solutions.push(py_solution);
-    }
+    let python_final_solutions: Vec<_> = archive_solutions
+        .iter()
+        .map(|s| {
+            let sol: crate::solution::Solution = (s, &pls_problem).into();
+            sol
+        })
+        .collect();
 
-    // Generate trace if requested
-    if trace {
-        info!(
-            "Generating 4D NSGA-II optimization trace archive ({} explored solutions)",
-            explored_fingerprints.len()
-        );
-
-        let dominance_info = if include_dominated {
-            crate::trace::compute_dominance_info(explored_fingerprints, false)
-        } else {
-            info!("Filtering dominated solutions from trace");
-            crate::trace::compute_dominance_info(explored_fingerprints, true)
-        };
-
-        let trace_solutions = dominance_info.solutions;
-        let domination_indices = Some(dominance_info.domination_indices);
-
-        let (trace_objective_bounds, reference_point) = if let Some(provided_bounds) =
-            &objective_bounds
-        {
-            if provided_bounds.len() != objectives.len() {
-                return Err(PyValueError::new_err(format!(
-                    "objective_bounds length ({}) does not match objectives length ({})",
-                    provided_bounds.len(),
-                    objectives.len()
-                )));
-            }
-            let mut bounds_vec = Vec::new();
-            let mut ref_point = Vec::new();
-            for bound in provided_bounds {
-                if bound.len() != 2 {
-                    return Err(PyValueError::new_err(format!(
-                        "Each objective bound must have exactly 2 elements [min, max], got {}",
-                        bound.len()
-                    )));
-                }
-                bounds_vec.push([bound[0], bound[1]]);
-                ref_point.push(bound[1] + 1);
-            }
-            (bounds_vec, ref_point)
-        } else {
-            crate::trace::calculate_objective_bounds_from_solutions(&trace_solutions).map_err(
-                |e| PyValueError::new_err(format!("Failed to calculate objective bounds: {}", e)),
-            )?
-        };
-
-        let trace_archive = crate::trace::create_optimization_trace_archive(
-            trace_solutions,
-            objectives,
-            timeout.as_micros() as u64,
-            "NSGA2-4D".to_string(),
-            trace_objective_bounds,
-            reference_point,
-            domination_indices,
-        )
-        .map_err(|e| PyValueError::new_err(format!("Failed to create trace archive: {}", e)))?;
-
-        Ok(crate::solution::SolvingResult::with_trace(
-            python_final_solutions,
-            trace_archive,
-        ))
-    } else {
-        Ok(crate::solution::SolvingResult::new(python_final_solutions))
-    }
+    build_solving_result(
+        python_final_solutions,
+        explored_fingerprints,
+        objectives,
+        objective_bounds,
+        timeout,
+        format!("NSGA2-{D}D"),
+        trace,
+        include_dominated,
+    )
 }
 
 /// Solve the SIMS problem using the MOEA/D evolutionary algorithm.
@@ -3250,105 +3154,7 @@ pub fn solve_with_moead(
     pbi_theta: f64,
     stagnation_limit: usize,
 ) -> PyResult<SolvingResult> {
-    use pls::evolutionary::moead::{Moead, MoeadConfig};
-    use pls::problem_bitset::ProblemBitset;
-
-    // Validate: only 4D supported
-    if objectives.len() != 4 {
-        return Err(PyValueError::new_err(format!(
-            "solve_with_moead only supports 4 objectives, got {}. \
-             Provide exactly 4 objectives from: min_cost, cloud_coverage, min_max_incidence_angle, min_resolution",
-            objectives.len()
-        )));
-    }
-
-    // Validate objective names
-    let valid_objectives = [
-        "min_cost",
-        "cloud_coverage",
-        "min_resolution",
-        "min_max_incidence_angle",
-    ];
-    for obj in &objectives {
-        if !valid_objectives.contains(&obj.as_str()) {
-            return Err(PyValueError::new_err(format!(
-                "Invalid objective '{obj}'. Valid objectives are: {valid_objectives:?}"
-            )));
-        }
-    }
-
-    info!(
-        "Starting MOEA/D with {} objectives: {objectives:?}, target_pop_size={population_size}, \
-         max_generations={max_generations}, seed={seed}, timeout={:?}",
-        objectives.len(),
-        timeout
-    );
-
-    // Convert to PLS problem format (same as solve_with_pls)
-    let raw_instance = pls::problem::SIMSProblemInstanceRaw {
-        name: "python_instance".to_string(),
-        num_images: sims_instance.num_images,
-        universe_size: sims_instance.universe,
-        images: sims_instance.images.clone(),
-        costs: sims_instance.costs.iter().map(|&c| c as u64).collect(),
-        clouds: sims_instance.clouds.clone(),
-        areas: sims_instance.areas.iter().map(|&a| a as u64).collect(),
-        max_cloud_area: sims_instance.max_cloud_area as u64,
-        resolution: sims_instance.resolution.iter().map(|&r| r as u64).collect(),
-        incidence_angle: sims_instance
-            .incidence_angle
-            .iter()
-            .map(|&i| i as u64)
-            .collect(),
-    };
-
-    // Create 4D objective definitions
-    let mut objective_definitions = [
-        pls::objectives::ObjectiveType::TotalCost,
-        pls::objectives::ObjectiveType::CloudyArea,
-        pls::objectives::ObjectiveType::MaxIncidenceAngle,
-        pls::objectives::ObjectiveType::MinResolution,
-    ];
-    for (i, obj_name) in objectives.iter().enumerate() {
-        objective_definitions[i] = match obj_name.as_str() {
-            "min_cost" => pls::objectives::ObjectiveType::TotalCost,
-            "cloud_coverage" => pls::objectives::ObjectiveType::CloudyArea,
-            "min_resolution" => pls::objectives::ObjectiveType::MinResolution,
-            "min_max_incidence_angle" => pls::objectives::ObjectiveType::MaxIncidenceAngle,
-            _ => {
-                return Err(PyValueError::new_err(format!(
-                    "Unknown objective: {}",
-                    obj_name
-                )))
-            }
-        };
-    }
-
-    let mut pls_problem =
-        ProblemBitset::<4>::from_raw_with_objectives(&raw_instance, objective_definitions);
-
-    // Set objective bounds if provided
-    if let Some(ref bounds) = objective_bounds {
-        let bounds_vec: Vec<[u64; 2]> = bounds
-            .iter()
-            .map(|b| {
-                if b.len() != 2 {
-                    return Err(PyValueError::new_err(format!(
-                        "Each objective bound must have exactly 2 elements [min, max], got {}",
-                        b.len()
-                    )));
-                }
-                Ok([b[0], b[1]])
-            })
-            .collect::<PyResult<Vec<[u64; 2]>>>()?;
-        let bounds_array: [[u64; 2]; 4] = bounds_vec.try_into().map_err(|_| {
-            PyValueError::new_err("Expected exactly 4 objective bounds for 4D problem")
-        })?;
-        pls_problem.set_objective_bounds(bounds_array);
-    }
-
-    // Configure MOEA/D
-    let config = MoeadConfig {
+    let config = pls::evolutionary::moead::MoeadConfig {
         population_size,
         num_divisions,
         target_pop_size: population_size,
@@ -3369,99 +3175,81 @@ pub fn solve_with_moead(
         stagnation_limit,
     };
 
-    // Run MOEA/D (release the GIL)
+    match objectives.len() {
+        2 => run_moead_tailored_dim::<2>(py, sims_instance, &objectives, timeout, None, config, max_generations, seed, trace, &objective_bounds, include_dominated),
+        3 => run_moead_tailored_dim::<3>(py, sims_instance, &objectives, timeout, None, config, max_generations, seed, trace, &objective_bounds, include_dominated),
+        4 => run_moead_tailored_dim::<4>(py, sims_instance, &objectives, timeout, None, config, max_generations, seed, trace, &objective_bounds, include_dominated),
+        n => Err(PyValueError::new_err(format!(
+            "solve_with_moead only supports 2, 3, or 4 objectives, got {n}"
+        ))),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_moead_tailored_dim<const D: usize>(
+    py: Python<'_>,
+    sims_instance: &SimsDiscreteProblem,
+    objectives: &[String],
+    timeout: Duration,
+    initial_population: Option<Vec<crate::solution::Solution>>,
+    config: pls::evolutionary::moead::MoeadConfig,
+    max_generations: usize,
+    seed: u64,
+    trace: bool,
+    objective_bounds: &Option<Vec<Vec<u64>>>,
+    include_dominated: bool,
+) -> PyResult<SolvingResult> {
+    use pls::evolutionary::moead::Moead;
+    use pls::problem_bitset::ProblemBitset;
+
+    let raw_instance = build_raw_instance(sims_instance);
+    let objective_definitions = parse_objective_definitions::<D>(objectives)?;
+    let mut pls_problem =
+        ProblemBitset::<D>::from_raw_with_objectives(&raw_instance, objective_definitions);
+    apply_objective_bounds(&mut pls_problem, objective_bounds)?;
+
+    let seed_pop = initial_population
+        .as_deref()
+        .map(|p| py_solutions_to_bitset::<ProblemBitset<D>, D>(p, &pls_problem));
+
+    info!(
+        "MOEA/D (tailored) {D}D: {} seed solutions, target_pop_size={}, max_generations={max_generations}",
+        seed_pop.as_ref().map(|p| p.len()).unwrap_or(0),
+        config.target_pop_size,
+    );
+
     let (archive_solutions, explored_fingerprints) = py.allow_threads(|| {
-        let mut moead = Moead::new(&pls_problem, config, None, seed);
+        let mut moead = Moead::new(&pls_problem, config, seed_pop, seed);
         let archive = moead.run(max_generations, timeout);
-
-        // Convert explored solutions to SolutionFingerprint vec
-        let fingerprints: Vec<SolutionFingerprint<4>> = moead
-            .explored_solutions
-            .solutions
-            .values()
-            .cloned()
-            .collect();
-
+        let fingerprints: Vec<SolutionFingerprint<D>> =
+            moead.explored_solutions.solutions.values().cloned().collect();
         (archive, fingerprints)
     });
 
     info!(
-        "MOEA/D completed: {} archive solutions, {} explored solutions",
+        "MOEA/D (tailored) completed: {} archive solutions, {} explored solutions",
         archive_solutions.len(),
         explored_fingerprints.len()
     );
 
-    // Convert archive solutions to Python Solution format
-    let mut python_final_solutions = Vec::new();
-    for solution in archive_solutions.iter() {
-        let py_solution: crate::solution::Solution = (solution, &pls_problem).into();
-        python_final_solutions.push(py_solution);
-    }
+    let python_final_solutions: Vec<_> = archive_solutions
+        .iter()
+        .map(|s| {
+            let sol: crate::solution::Solution = (s, &pls_problem).into();
+            sol
+        })
+        .collect();
 
-    // Generate trace if requested
-    if trace {
-        info!(
-            "Generating 4D MOEA/D optimization trace archive ({} explored solutions)",
-            explored_fingerprints.len()
-        );
-
-        let dominance_info = if include_dominated {
-            crate::trace::compute_dominance_info(explored_fingerprints, false)
-        } else {
-            info!("Filtering dominated solutions from trace");
-            crate::trace::compute_dominance_info(explored_fingerprints, true)
-        };
-
-        let trace_solutions = dominance_info.solutions;
-        let domination_indices = Some(dominance_info.domination_indices);
-
-        let (trace_objective_bounds, reference_point) = if let Some(provided_bounds) =
-            &objective_bounds
-        {
-            if provided_bounds.len() != objectives.len() {
-                return Err(PyValueError::new_err(format!(
-                    "objective_bounds length ({}) does not match objectives length ({})",
-                    provided_bounds.len(),
-                    objectives.len()
-                )));
-            }
-            let mut bounds_vec = Vec::new();
-            let mut ref_point = Vec::new();
-            for bound in provided_bounds {
-                if bound.len() != 2 {
-                    return Err(PyValueError::new_err(format!(
-                        "Each objective bound must have exactly 2 elements [min, max], got {}",
-                        bound.len()
-                    )));
-                }
-                bounds_vec.push([bound[0], bound[1]]);
-                ref_point.push(bound[1] + 1);
-            }
-            (bounds_vec, ref_point)
-        } else {
-            crate::trace::calculate_objective_bounds_from_solutions(&trace_solutions).map_err(
-                |e| PyValueError::new_err(format!("Failed to calculate objective bounds: {}", e)),
-            )?
-        };
-
-        let trace_archive = crate::trace::create_optimization_trace_archive(
-            trace_solutions,
-            objectives,
-            timeout.as_micros() as u64,
-            "MOEAD-4D".to_string(),
-            trace_objective_bounds,
-            reference_point,
-            domination_indices,
-        )
-        .map_err(|e| PyValueError::new_err(format!("Failed to create trace archive: {}", e)))?;
-
-        Ok(crate::solution::SolvingResult::with_trace(
-            python_final_solutions,
-            trace_archive,
-        ))
-    } else {
-        Ok(crate::solution::SolvingResult::new(python_final_solutions))
-    }
+    build_solving_result(
+        python_final_solutions,
+        explored_fingerprints,
+        objectives,
+        objective_bounds,
+        timeout,
+        format!("MOEAD-{D}D"),
+        trace,
+        include_dominated,
+    )
 }
 
 /// Solve the SIMS problem using NSGA-III with reference-point niching (Deb & Jain 2014).
@@ -3521,23 +3309,7 @@ pub fn solve_with_nsga3(
     ensure_mutation: bool,
     stagnation_limit: usize,
 ) -> PyResult<SolvingResult> {
-    use pls::evolutionary::nsga3::{Nsga3, Nsga3Config};
-    use pls::problem_bitset::ProblemBitset;
-
-    if objectives.len() != 4 {
-        return Err(PyValueError::new_err(format!(
-            "solve_with_nsga3 only supports 4 objectives, got {}",
-            objectives.len()
-        )));
-    }
-
-    let raw_instance = build_raw_instance(sims_instance);
-    let objective_definitions = parse_objective_definitions(&objectives)?;
-    let mut pls_problem =
-        ProblemBitset::<4>::from_raw_with_objectives(&raw_instance, objective_definitions);
-    apply_objective_bounds(&mut pls_problem, &objective_bounds)?;
-
-    let config = Nsga3Config {
+    let config = pls::evolutionary::nsga3::Nsga3Config {
         num_divisions,
         target_pop_size,
         auto_divisions,
@@ -3553,16 +3325,59 @@ pub fn solve_with_nsga3(
         stagnation_limit,
     };
 
+    match objectives.len() {
+        2 => run_nsga3_tailored_dim::<2>(py, sims_instance, &objectives, timeout, None, config, max_generations, seed, trace, &objective_bounds, include_dominated),
+        3 => run_nsga3_tailored_dim::<3>(py, sims_instance, &objectives, timeout, None, config, max_generations, seed, trace, &objective_bounds, include_dominated),
+        4 => run_nsga3_tailored_dim::<4>(py, sims_instance, &objectives, timeout, None, config, max_generations, seed, trace, &objective_bounds, include_dominated),
+        n => Err(PyValueError::new_err(format!(
+            "solve_with_nsga3 only supports 2, 3, or 4 objectives, got {n}"
+        ))),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_nsga3_tailored_dim<const D: usize>(
+    py: Python<'_>,
+    sims_instance: &SimsDiscreteProblem,
+    objectives: &[String],
+    timeout: Duration,
+    initial_population: Option<Vec<crate::solution::Solution>>,
+    config: pls::evolutionary::nsga3::Nsga3Config,
+    max_generations: usize,
+    seed: u64,
+    trace: bool,
+    objective_bounds: &Option<Vec<Vec<u64>>>,
+    include_dominated: bool,
+) -> PyResult<SolvingResult> {
+    use pls::evolutionary::nsga3::Nsga3;
+    use pls::problem_bitset::ProblemBitset;
+
+    let raw_instance = build_raw_instance(sims_instance);
+    let objective_definitions = parse_objective_definitions::<D>(objectives)?;
+    let mut pls_problem =
+        ProblemBitset::<D>::from_raw_with_objectives(&raw_instance, objective_definitions);
+    apply_objective_bounds(&mut pls_problem, objective_bounds)?;
+
+    let seed_pop = initial_population
+        .as_deref()
+        .map(|p| py_solutions_to_bitset::<ProblemBitset<D>, D>(p, &pls_problem));
+
+    info!(
+        "NSGA-III (tailored) {D}D: {} seed solutions, target_pop_size={}, max_generations={max_generations}",
+        seed_pop.as_ref().map(|p| p.len()).unwrap_or(0),
+        config.target_pop_size,
+    );
+
     let (archive_solutions, explored_fingerprints) = py.allow_threads(|| {
-        let mut nsga3 = Nsga3::new(&pls_problem, config, None, seed);
+        let mut nsga3 = Nsga3::new(&pls_problem, config, seed_pop, seed);
         let archive = nsga3.run(max_generations, timeout);
-        let fingerprints: Vec<SolutionFingerprint<4>> =
+        let fingerprints: Vec<SolutionFingerprint<D>> =
             nsga3.explored_solutions.solutions.values().cloned().collect();
         (archive, fingerprints)
     });
 
     info!(
-        "NSGA-III completed: {} archive solutions, {} explored solutions",
+        "NSGA-III (tailored) completed: {} archive solutions, {} explored solutions",
         archive_solutions.len(),
         explored_fingerprints.len()
     );
@@ -3578,10 +3393,10 @@ pub fn solve_with_nsga3(
     build_solving_result(
         python_final_solutions,
         explored_fingerprints,
-        &objectives,
-        &objective_bounds,
+        objectives,
+        objective_bounds,
         timeout,
-        "NSGA3-4D".to_string(),
+        format!("NSGA3-{D}D"),
         trace,
         include_dominated,
     )
@@ -3618,7 +3433,8 @@ pub fn solve_with_nsga3(
     shift_mutation_rate=0.25,
     coverage_biased_crossover_fraction=0.5,
     ensure_mutation=true,
-    stagnation_limit=50usize
+    stagnation_limit=50usize,
+    use_contribution_distance=true
 ))]
 pub fn solve_with_memetic_nsga2(
     py: Python<'_>,
@@ -3644,6 +3460,7 @@ pub fn solve_with_memetic_nsga2(
     coverage_biased_crossover_fraction: f64,
     ensure_mutation: bool,
     stagnation_limit: usize,
+    use_contribution_distance: bool,
 ) -> PyResult<SolvingResult> {
     let _ = max_generations; // unused but kept for API symmetry with pure EA bindings
     let nsga2_config = pls::evolutionary::nsga2::Nsga2Config {
@@ -3658,6 +3475,7 @@ pub fn solve_with_memetic_nsga2(
         coverage_biased_crossover_fraction,
         ensure_mutation,
         stagnation_limit,
+        use_contribution_distance,
     };
 
     match objectives.len() {
@@ -4180,6 +3998,1456 @@ fn run_memetic_moead_dim<const D: usize>(
         objective_bounds,
         timeout,
         format!("Memetic-MOEAD-{D}D"),
+        trace,
+        include_dominated,
+    )
+}
+
+/// Solve the SIMS problem using a literal NSGA-II baseline (Deb et al., 2002).
+///
+/// Unlike `solve_with_nsga2`, this uses plain crowding distance (no D>=3
+/// fallback), no stagnation injection, no `ensure_mutation` guard, and a
+/// single crossover + single mutation operator -- nothing beyond what the
+/// original paper specifies. See `pls::evolutionary::nsga2_baseline` for the
+/// exact correspondence to the paper's boxed procedures.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "It's okay for Python API to have many parameters"
+)]
+#[pyfunction]
+#[pyo3(signature = (
+    sims_instance,
+    objectives=vec!["min_cost".to_string(), "cloud_coverage".to_string(), "min_max_incidence_angle".to_string(), "min_resolution".to_string()],
+    timeout=Duration::from_secs(120),
+    population_size=100usize,
+    max_generations=500000usize,
+    seed=42u64,
+    trace=true,
+    objective_bounds=None,
+    include_dominated=false,
+    crossover_rate=0.9,
+    mutation_rate=0.01
+))]
+pub fn solve_with_nsga2_baseline(
+    py: Python<'_>,
+    sims_instance: &SimsDiscreteProblem,
+    objectives: Vec<String>,
+    timeout: Duration,
+    population_size: usize,
+    max_generations: usize,
+    seed: u64,
+    trace: bool,
+    objective_bounds: Option<Vec<Vec<u64>>>,
+    include_dominated: bool,
+    crossover_rate: f64,
+    mutation_rate: f64,
+) -> PyResult<SolvingResult> {
+    let config = pls::evolutionary::nsga2_baseline::Nsga2BaselineConfig {
+        population_size,
+        crossover_rate,
+        mutation_rate,
+        seed,
+    };
+
+    match objectives.len() {
+        2 => run_nsga2_baseline_dim::<2>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            config,
+            max_generations,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        3 => run_nsga2_baseline_dim::<3>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            config,
+            max_generations,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        4 => run_nsga2_baseline_dim::<4>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            config,
+            max_generations,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        n => Err(PyValueError::new_err(format!(
+            "solve_with_nsga2_baseline only supports 2, 3, or 4 objectives, got {n}"
+        ))),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_nsga2_baseline_dim<const D: usize>(
+    py: Python<'_>,
+    sims_instance: &SimsDiscreteProblem,
+    objectives: &[String],
+    timeout: Duration,
+    config: pls::evolutionary::nsga2_baseline::Nsga2BaselineConfig,
+    max_generations: usize,
+    trace: bool,
+    objective_bounds: &Option<Vec<Vec<u64>>>,
+    include_dominated: bool,
+) -> PyResult<SolvingResult> {
+    use pls::evolutionary::nsga2_baseline::run_nsga2_baseline;
+    use pls::problem_bitset::ProblemBitset;
+
+    let raw_instance = build_raw_instance(sims_instance);
+    let objective_definitions = parse_objective_definitions::<D>(objectives)?;
+    let mut pls_problem =
+        ProblemBitset::<D>::from_raw_with_objectives(&raw_instance, objective_definitions);
+    apply_objective_bounds(&mut pls_problem, objective_bounds)?;
+
+    let (archive_solutions, explored) = py.allow_threads(|| {
+        run_nsga2_baseline::<ProblemBitset<D>, D>(&pls_problem, config, max_generations, timeout)
+    });
+    let explored_fingerprints: Vec<SolutionFingerprint<D>> =
+        explored.solutions.values().cloned().collect();
+
+    info!(
+        "NSGA-II baseline completed: {} archive solutions, {} explored solutions",
+        archive_solutions.len(),
+        explored_fingerprints.len()
+    );
+
+    let python_final_solutions: Vec<_> = archive_solutions
+        .iter()
+        .map(|s| {
+            let sol: crate::solution::Solution = (s, &pls_problem).into();
+            sol
+        })
+        .collect();
+
+    build_solving_result(
+        python_final_solutions,
+        explored_fingerprints,
+        objectives,
+        objective_bounds,
+        timeout,
+        format!("NSGA2-Baseline-{D}D"),
+        trace,
+        include_dominated,
+    )
+}
+
+/// Solve the SIMS problem using a literal NSGA-III baseline (Deb & Jain, 2014).
+///
+/// Unlike `solve_with_nsga3`, parents are picked uniformly at random (the
+/// paper explicitly does not use tournament selection), divisions are not
+/// auto-sized, and there is no stagnation injection / `ensure_mutation` /
+/// composite mutation suite. See `pls::evolutionary::nsga3_baseline`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "It's okay for Python API to have many parameters"
+)]
+#[pyfunction]
+#[pyo3(signature = (
+    sims_instance,
+    objectives=vec!["min_cost".to_string(), "cloud_coverage".to_string(), "min_max_incidence_angle".to_string(), "min_resolution".to_string()],
+    timeout=Duration::from_secs(120),
+    num_divisions=12usize,
+    max_generations=500000usize,
+    seed=42u64,
+    trace=true,
+    objective_bounds=None,
+    include_dominated=false,
+    crossover_rate=0.9,
+    mutation_rate=0.01
+))]
+pub fn solve_with_nsga3_baseline(
+    py: Python<'_>,
+    sims_instance: &SimsDiscreteProblem,
+    objectives: Vec<String>,
+    timeout: Duration,
+    num_divisions: usize,
+    max_generations: usize,
+    seed: u64,
+    trace: bool,
+    objective_bounds: Option<Vec<Vec<u64>>>,
+    include_dominated: bool,
+    crossover_rate: f64,
+    mutation_rate: f64,
+) -> PyResult<SolvingResult> {
+    let config = pls::evolutionary::nsga3_baseline::Nsga3BaselineConfig {
+        num_divisions,
+        crossover_rate,
+        mutation_rate,
+        seed,
+    };
+
+    match objectives.len() {
+        2 => run_nsga3_baseline_dim::<2>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            config,
+            max_generations,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        3 => run_nsga3_baseline_dim::<3>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            config,
+            max_generations,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        4 => run_nsga3_baseline_dim::<4>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            config,
+            max_generations,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        n => Err(PyValueError::new_err(format!(
+            "solve_with_nsga3_baseline only supports 2, 3, or 4 objectives, got {n}"
+        ))),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_nsga3_baseline_dim<const D: usize>(
+    py: Python<'_>,
+    sims_instance: &SimsDiscreteProblem,
+    objectives: &[String],
+    timeout: Duration,
+    config: pls::evolutionary::nsga3_baseline::Nsga3BaselineConfig,
+    max_generations: usize,
+    trace: bool,
+    objective_bounds: &Option<Vec<Vec<u64>>>,
+    include_dominated: bool,
+) -> PyResult<SolvingResult> {
+    use pls::evolutionary::nsga3_baseline::run_nsga3_baseline;
+    use pls::problem_bitset::ProblemBitset;
+
+    let raw_instance = build_raw_instance(sims_instance);
+    let objective_definitions = parse_objective_definitions::<D>(objectives)?;
+    let mut pls_problem =
+        ProblemBitset::<D>::from_raw_with_objectives(&raw_instance, objective_definitions);
+    apply_objective_bounds(&mut pls_problem, objective_bounds)?;
+
+    let (archive_solutions, explored) = py.allow_threads(|| {
+        run_nsga3_baseline::<ProblemBitset<D>, D>(&pls_problem, config, max_generations, timeout)
+    });
+    let explored_fingerprints: Vec<SolutionFingerprint<D>> =
+        explored.solutions.values().cloned().collect();
+
+    info!(
+        "NSGA-III baseline completed: {} archive solutions, {} explored solutions",
+        archive_solutions.len(),
+        explored_fingerprints.len()
+    );
+
+    let python_final_solutions: Vec<_> = archive_solutions
+        .iter()
+        .map(|s| {
+            let sol: crate::solution::Solution = (s, &pls_problem).into();
+            sol
+        })
+        .collect();
+
+    build_solving_result(
+        python_final_solutions,
+        explored_fingerprints,
+        objectives,
+        objective_bounds,
+        timeout,
+        format!("NSGA3-Baseline-{D}D"),
+        trace,
+        include_dominated,
+    )
+}
+
+/// Solve the SIMS problem using a literal MOEA/D baseline (Zhang & Li, 2007).
+///
+/// Unlike `solve_with_moead`, mating is restricted to the neighbourhood
+/// only (no `delta` whole-population option), every improving neighbour is
+/// replaced (no `max_replacements` cap), and only Tchebycheff decomposition
+/// is used. Those extras are from Li & Zhang (2009), not the original
+/// paper. See `pls::evolutionary::moead_baseline`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "It's okay for Python API to have many parameters"
+)]
+#[pyfunction]
+#[pyo3(signature = (
+    sims_instance,
+    objectives=vec!["min_cost".to_string(), "cloud_coverage".to_string(), "min_max_incidence_angle".to_string(), "min_resolution".to_string()],
+    timeout=Duration::from_secs(120),
+    num_divisions=99usize,
+    neighbourhood_size=10usize,
+    max_generations=500000usize,
+    seed=42u64,
+    trace=true,
+    objective_bounds=None,
+    include_dominated=false,
+    crossover_rate=1.0,
+    mutation_rate=0.01
+))]
+pub fn solve_with_moead_baseline(
+    py: Python<'_>,
+    sims_instance: &SimsDiscreteProblem,
+    objectives: Vec<String>,
+    timeout: Duration,
+    num_divisions: usize,
+    neighbourhood_size: usize,
+    max_generations: usize,
+    seed: u64,
+    trace: bool,
+    objective_bounds: Option<Vec<Vec<u64>>>,
+    include_dominated: bool,
+    crossover_rate: f64,
+    mutation_rate: f64,
+) -> PyResult<SolvingResult> {
+    let config = pls::evolutionary::moead_baseline::MoeadBaselineConfig {
+        num_divisions,
+        neighbourhood_size,
+        crossover_rate,
+        mutation_rate,
+        seed,
+    };
+
+    match objectives.len() {
+        2 => run_moead_baseline_dim::<2>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            config,
+            max_generations,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        3 => run_moead_baseline_dim::<3>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            config,
+            max_generations,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        4 => run_moead_baseline_dim::<4>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            config,
+            max_generations,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        n => Err(PyValueError::new_err(format!(
+            "solve_with_moead_baseline only supports 2, 3, or 4 objectives, got {n}"
+        ))),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_moead_baseline_dim<const D: usize>(
+    py: Python<'_>,
+    sims_instance: &SimsDiscreteProblem,
+    objectives: &[String],
+    timeout: Duration,
+    config: pls::evolutionary::moead_baseline::MoeadBaselineConfig,
+    max_generations: usize,
+    trace: bool,
+    objective_bounds: &Option<Vec<Vec<u64>>>,
+    include_dominated: bool,
+) -> PyResult<SolvingResult> {
+    use pls::evolutionary::moead_baseline::run_moead_baseline;
+    use pls::problem_bitset::ProblemBitset;
+
+    let raw_instance = build_raw_instance(sims_instance);
+    let objective_definitions = parse_objective_definitions::<D>(objectives)?;
+    let mut pls_problem =
+        ProblemBitset::<D>::from_raw_with_objectives(&raw_instance, objective_definitions);
+    apply_objective_bounds(&mut pls_problem, objective_bounds)?;
+
+    let (archive_solutions, explored) = py.allow_threads(|| {
+        run_moead_baseline::<ProblemBitset<D>, D>(&pls_problem, config, max_generations, timeout)
+    });
+    let explored_fingerprints: Vec<SolutionFingerprint<D>> =
+        explored.solutions.values().cloned().collect();
+
+    info!(
+        "MOEA/D baseline completed: {} archive solutions, {} explored solutions",
+        archive_solutions.len(),
+        explored_fingerprints.len()
+    );
+
+    let python_final_solutions: Vec<_> = archive_solutions
+        .iter()
+        .map(|s| {
+            let sol: crate::solution::Solution = (s, &pls_problem).into();
+            sol
+        })
+        .collect();
+
+    build_solving_result(
+        python_final_solutions,
+        explored_fingerprints,
+        objectives,
+        objective_bounds,
+        timeout,
+        format!("MOEAD-Baseline-{D}D"),
+        trace,
+        include_dominated,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Pseudosolver-seeded baseline EAs
+// ---------------------------------------------------------------------------
+//
+// These are hybrids that use GPBA-A / pseudosolver solutions as the initial
+// population for the three literal-paper baseline EAs, with the full timeout
+// given to the EA. The pattern mirrors `Hybrid 50:50` (pseudosolver → PLS) but
+// replaces PLS with a literal-paper baseline EA.
+
+/// Helper: convert Python Solution list → Vec<BitsetEncodedSolution<P, D>>.
+fn py_solutions_to_bitset<P, const D: usize>(
+    solutions: &[crate::solution::Solution],
+    problem: &P,
+) -> Vec<pls::solution_impl::bitset_encoded_solution::BitsetEncodedSolution<P, D>>
+where
+    P: pls::problem::SetCoverProblem<D> + Clone + Send + Sync,
+{
+    solutions
+        .iter()
+        .map(|s| {
+            let selected: Vec<usize> = s.selected_images.iter().cloned().collect();
+            pls::solution_impl::bitset_encoded_solution::BitsetEncodedSolution::from_selected_images(
+                &selected, problem,
+            )
+        })
+        .collect()
+}
+
+/// Solve using a pseudosolver-seeded literal NSGA-II baseline.
+///
+/// The full timeout is given to the EA; no PLS warm-start phase is run.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "It's okay for Python API to have many parameters"
+)]
+#[pyfunction]
+#[pyo3(signature = (
+    sims_instance,
+    objectives=vec!["min_cost".to_string(), "cloud_coverage".to_string(), "min_max_incidence_angle".to_string(), "min_resolution".to_string()],
+    timeout=Duration::from_secs(120),
+    initial_population=None,
+    population_size=100usize,
+    max_generations=500000usize,
+    seed=42u64,
+    trace=true,
+    objective_bounds=None,
+    include_dominated=false,
+    crossover_rate=0.9,
+    mutation_rate=0.01
+))]
+pub fn solve_with_pseudo_seeded_nsga2_baseline(
+    py: Python<'_>,
+    sims_instance: &SimsDiscreteProblem,
+    objectives: Vec<String>,
+    timeout: Duration,
+    initial_population: Option<Vec<crate::solution::Solution>>,
+    population_size: usize,
+    max_generations: usize,
+    seed: u64,
+    trace: bool,
+    objective_bounds: Option<Vec<Vec<u64>>>,
+    include_dominated: bool,
+    crossover_rate: f64,
+    mutation_rate: f64,
+) -> PyResult<SolvingResult> {
+    let config = pls::evolutionary::nsga2_baseline::Nsga2BaselineConfig {
+        population_size,
+        crossover_rate,
+        mutation_rate,
+        seed,
+    };
+
+    match objectives.len() {
+        2 => run_pseudo_seeded_nsga2_baseline_dim::<2>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, trace, &objective_bounds, include_dominated),
+        3 => run_pseudo_seeded_nsga2_baseline_dim::<3>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, trace, &objective_bounds, include_dominated),
+        4 => run_pseudo_seeded_nsga2_baseline_dim::<4>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, trace, &objective_bounds, include_dominated),
+        n => Err(PyValueError::new_err(format!("solve_with_pseudo_seeded_nsga2_baseline only supports 2, 3, or 4 objectives, got {n}"))),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_pseudo_seeded_nsga2_baseline_dim<const D: usize>(
+    py: Python<'_>,
+    sims_instance: &SimsDiscreteProblem,
+    objectives: &[String],
+    timeout: Duration,
+    initial_population: Option<Vec<crate::solution::Solution>>,
+    config: pls::evolutionary::nsga2_baseline::Nsga2BaselineConfig,
+    max_generations: usize,
+    trace: bool,
+    objective_bounds: &Option<Vec<Vec<u64>>>,
+    include_dominated: bool,
+) -> PyResult<SolvingResult> {
+    use pls::evolutionary::nsga2_baseline::run_nsga2_baseline_seeded;
+    use pls::problem_bitset::ProblemBitset;
+
+    let raw_instance = build_raw_instance(sims_instance);
+    let objective_definitions = parse_objective_definitions::<D>(objectives)?;
+    let mut pls_problem =
+        ProblemBitset::<D>::from_raw_with_objectives(&raw_instance, objective_definitions);
+    apply_objective_bounds(&mut pls_problem, objective_bounds)?;
+
+    let seed_pop = initial_population
+        .as_deref()
+        .map(|p| py_solutions_to_bitset::<ProblemBitset<D>, D>(p, &pls_problem))
+        .unwrap_or_default();
+
+    info!(
+        "Pseudo-seeded NSGA-II baseline {D}D: {} seed solutions, pop_size={}",
+        seed_pop.len(),
+        config.population_size,
+    );
+
+    let (archive_solutions, explored) = py.allow_threads(|| {
+        run_nsga2_baseline_seeded::<ProblemBitset<D>, D>(&pls_problem, config, seed_pop, max_generations, timeout)
+    });
+    let explored_fingerprints: Vec<SolutionFingerprint<D>> =
+        explored.solutions.values().cloned().collect();
+
+    let python_final_solutions: Vec<_> = archive_solutions
+        .iter()
+        .map(|s| { let sol: crate::solution::Solution = (s, &pls_problem).into(); sol })
+        .collect();
+
+    build_solving_result(
+        python_final_solutions,
+        explored_fingerprints,
+        objectives,
+        objective_bounds,
+        timeout,
+        format!("PseudoSeeded-NSGA2-Baseline-{D}D"),
+        trace,
+        include_dominated,
+    )
+}
+
+/// Solve using a pseudosolver-seeded literal NSGA-III baseline.
+///
+/// The full timeout is given to the EA; no PLS warm-start phase is run.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "It's okay for Python API to have many parameters"
+)]
+#[pyfunction]
+#[pyo3(signature = (
+    sims_instance,
+    objectives=vec!["min_cost".to_string(), "cloud_coverage".to_string(), "min_max_incidence_angle".to_string(), "min_resolution".to_string()],
+    timeout=Duration::from_secs(120),
+    initial_population=None,
+    num_divisions=12usize,
+    max_generations=500000usize,
+    seed=42u64,
+    trace=true,
+    objective_bounds=None,
+    include_dominated=false,
+    crossover_rate=0.9,
+    mutation_rate=0.01
+))]
+pub fn solve_with_pseudo_seeded_nsga3_baseline(
+    py: Python<'_>,
+    sims_instance: &SimsDiscreteProblem,
+    objectives: Vec<String>,
+    timeout: Duration,
+    initial_population: Option<Vec<crate::solution::Solution>>,
+    num_divisions: usize,
+    max_generations: usize,
+    seed: u64,
+    trace: bool,
+    objective_bounds: Option<Vec<Vec<u64>>>,
+    include_dominated: bool,
+    crossover_rate: f64,
+    mutation_rate: f64,
+) -> PyResult<SolvingResult> {
+    let config = pls::evolutionary::nsga3_baseline::Nsga3BaselineConfig {
+        num_divisions,
+        crossover_rate,
+        mutation_rate,
+        seed,
+    };
+
+    match objectives.len() {
+        2 => run_pseudo_seeded_nsga3_baseline_dim::<2>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, trace, &objective_bounds, include_dominated),
+        3 => run_pseudo_seeded_nsga3_baseline_dim::<3>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, trace, &objective_bounds, include_dominated),
+        4 => run_pseudo_seeded_nsga3_baseline_dim::<4>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, trace, &objective_bounds, include_dominated),
+        n => Err(PyValueError::new_err(format!("solve_with_pseudo_seeded_nsga3_baseline only supports 2, 3, or 4 objectives, got {n}"))),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_pseudo_seeded_nsga3_baseline_dim<const D: usize>(
+    py: Python<'_>,
+    sims_instance: &SimsDiscreteProblem,
+    objectives: &[String],
+    timeout: Duration,
+    initial_population: Option<Vec<crate::solution::Solution>>,
+    config: pls::evolutionary::nsga3_baseline::Nsga3BaselineConfig,
+    max_generations: usize,
+    trace: bool,
+    objective_bounds: &Option<Vec<Vec<u64>>>,
+    include_dominated: bool,
+) -> PyResult<SolvingResult> {
+    use pls::evolutionary::nsga3_baseline::run_nsga3_baseline_seeded;
+    use pls::problem_bitset::ProblemBitset;
+
+    let raw_instance = build_raw_instance(sims_instance);
+    let objective_definitions = parse_objective_definitions::<D>(objectives)?;
+    let mut pls_problem =
+        ProblemBitset::<D>::from_raw_with_objectives(&raw_instance, objective_definitions);
+    apply_objective_bounds(&mut pls_problem, objective_bounds)?;
+
+    let seed_pop = initial_population
+        .as_deref()
+        .map(|p| py_solutions_to_bitset::<ProblemBitset<D>, D>(p, &pls_problem))
+        .unwrap_or_default();
+
+    info!(
+        "Pseudo-seeded NSGA-III baseline {D}D: {} seed solutions, num_divisions={}",
+        seed_pop.len(),
+        config.num_divisions,
+    );
+
+    let (archive_solutions, explored) = py.allow_threads(|| {
+        run_nsga3_baseline_seeded::<ProblemBitset<D>, D>(&pls_problem, config, seed_pop, max_generations, timeout)
+    });
+    let explored_fingerprints: Vec<SolutionFingerprint<D>> =
+        explored.solutions.values().cloned().collect();
+
+    let python_final_solutions: Vec<_> = archive_solutions
+        .iter()
+        .map(|s| { let sol: crate::solution::Solution = (s, &pls_problem).into(); sol })
+        .collect();
+
+    build_solving_result(
+        python_final_solutions,
+        explored_fingerprints,
+        objectives,
+        objective_bounds,
+        timeout,
+        format!("PseudoSeeded-NSGA3-Baseline-{D}D"),
+        trace,
+        include_dominated,
+    )
+}
+
+/// Solve using a pseudosolver-seeded literal MOEA/D baseline.
+///
+/// The full timeout is given to the EA; no PLS warm-start phase is run.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "It's okay for Python API to have many parameters"
+)]
+#[pyfunction]
+#[pyo3(signature = (
+    sims_instance,
+    objectives=vec!["min_cost".to_string(), "cloud_coverage".to_string(), "min_max_incidence_angle".to_string(), "min_resolution".to_string()],
+    timeout=Duration::from_secs(120),
+    initial_population=None,
+    num_divisions=12usize,
+    neighbourhood_size=5usize,
+    max_generations=500000usize,
+    seed=42u64,
+    trace=true,
+    objective_bounds=None,
+    include_dominated=false,
+    crossover_rate=1.0,
+    mutation_rate=0.01
+))]
+pub fn solve_with_pseudo_seeded_moead_baseline(
+    py: Python<'_>,
+    sims_instance: &SimsDiscreteProblem,
+    objectives: Vec<String>,
+    timeout: Duration,
+    initial_population: Option<Vec<crate::solution::Solution>>,
+    num_divisions: usize,
+    neighbourhood_size: usize,
+    max_generations: usize,
+    seed: u64,
+    trace: bool,
+    objective_bounds: Option<Vec<Vec<u64>>>,
+    include_dominated: bool,
+    crossover_rate: f64,
+    mutation_rate: f64,
+) -> PyResult<SolvingResult> {
+    let config = pls::evolutionary::moead_baseline::MoeadBaselineConfig {
+        num_divisions,
+        neighbourhood_size,
+        crossover_rate,
+        mutation_rate,
+        seed,
+    };
+
+    match objectives.len() {
+        2 => run_pseudo_seeded_moead_baseline_dim::<2>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, trace, &objective_bounds, include_dominated),
+        3 => run_pseudo_seeded_moead_baseline_dim::<3>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, trace, &objective_bounds, include_dominated),
+        4 => run_pseudo_seeded_moead_baseline_dim::<4>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, trace, &objective_bounds, include_dominated),
+        n => Err(PyValueError::new_err(format!("solve_with_pseudo_seeded_moead_baseline only supports 2, 3, or 4 objectives, got {n}"))),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_pseudo_seeded_moead_baseline_dim<const D: usize>(
+    py: Python<'_>,
+    sims_instance: &SimsDiscreteProblem,
+    objectives: &[String],
+    timeout: Duration,
+    initial_population: Option<Vec<crate::solution::Solution>>,
+    config: pls::evolutionary::moead_baseline::MoeadBaselineConfig,
+    max_generations: usize,
+    trace: bool,
+    objective_bounds: &Option<Vec<Vec<u64>>>,
+    include_dominated: bool,
+) -> PyResult<SolvingResult> {
+    use pls::evolutionary::moead_baseline::run_moead_baseline_seeded;
+    use pls::problem_bitset::ProblemBitset;
+
+    let raw_instance = build_raw_instance(sims_instance);
+    let objective_definitions = parse_objective_definitions::<D>(objectives)?;
+    let mut pls_problem =
+        ProblemBitset::<D>::from_raw_with_objectives(&raw_instance, objective_definitions);
+    apply_objective_bounds(&mut pls_problem, objective_bounds)?;
+
+    let seed_pop = initial_population
+        .as_deref()
+        .map(|p| py_solutions_to_bitset::<ProblemBitset<D>, D>(p, &pls_problem))
+        .unwrap_or_default();
+
+    info!(
+        "Pseudo-seeded MOEA/D baseline {D}D: {} seed solutions, num_divisions={}",
+        seed_pop.len(),
+        config.num_divisions,
+    );
+
+    let (archive_solutions, explored) = py.allow_threads(|| {
+        run_moead_baseline_seeded::<ProblemBitset<D>, D>(&pls_problem, config, seed_pop, max_generations, timeout)
+    });
+    let explored_fingerprints: Vec<SolutionFingerprint<D>> =
+        explored.solutions.values().cloned().collect();
+
+    let python_final_solutions: Vec<_> = archive_solutions
+        .iter()
+        .map(|s| { let sol: crate::solution::Solution = (s, &pls_problem).into(); sol })
+        .collect();
+
+    build_solving_result(
+        python_final_solutions,
+        explored_fingerprints,
+        objectives,
+        objective_bounds,
+        timeout,
+        format!("PseudoSeeded-MOEAD-Baseline-{D}D"),
+        trace,
+        include_dominated,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Pseudosolver-seeded SIMS-tailored EAs (improved-tier hybrids).
+//
+// These mirror the pseudo-seeded *baseline* bindings above, but route the seed
+// population into the SIMS-tailored `nsga2`/`nsga3`/`moead` algorithms (composite
+// mutation, stagnation injection, delta/nr mating, PBI, etc.) instead of the
+// literal-paper baselines. They reuse the same `run_*_tailored_dim` helpers as
+// the standalone tailored bindings, just with a non-empty initial population.
+// ---------------------------------------------------------------------------
+
+/// Pseudosolver-seeded SIMS-tailored NSGA-II. Full timeout to the EA.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "It's okay for Python API to have many parameters"
+)]
+#[pyfunction]
+#[pyo3(signature = (
+    sims_instance,
+    objectives=vec!["min_cost".to_string(), "cloud_coverage".to_string(), "min_max_incidence_angle".to_string(), "min_resolution".to_string()],
+    timeout=Duration::from_secs(120),
+    initial_population=None,
+    population_size=100usize,
+    max_generations=500000usize,
+    seed=42u64,
+    trace=true,
+    objective_bounds=None,
+    include_dominated=false,
+    crossover_rate=0.9,
+    swap_mutation_rate=0.4,
+    add_prune_mutation_rate=0.3,
+    bitflip_mutation_rate=0.0,
+    multi_swap_max_removals=3usize,
+    multi_swap_rate=0.2,
+    shift_mutation_rate=0.25,
+    coverage_biased_crossover_fraction=0.5,
+    ensure_mutation=true,
+    stagnation_limit=50usize,
+    use_contribution_distance=true
+))]
+pub fn solve_with_pseudo_seeded_nsga2(
+    py: Python<'_>,
+    sims_instance: &SimsDiscreteProblem,
+    objectives: Vec<String>,
+    timeout: Duration,
+    initial_population: Option<Vec<crate::solution::Solution>>,
+    population_size: usize,
+    max_generations: usize,
+    seed: u64,
+    trace: bool,
+    objective_bounds: Option<Vec<Vec<u64>>>,
+    include_dominated: bool,
+    crossover_rate: f64,
+    swap_mutation_rate: f64,
+    add_prune_mutation_rate: f64,
+    bitflip_mutation_rate: f64,
+    multi_swap_max_removals: usize,
+    multi_swap_rate: f64,
+    shift_mutation_rate: f64,
+    coverage_biased_crossover_fraction: f64,
+    ensure_mutation: bool,
+    stagnation_limit: usize,
+    use_contribution_distance: bool,
+) -> PyResult<SolvingResult> {
+    let config = pls::evolutionary::nsga2::Nsga2Config {
+        population_size,
+        crossover_rate,
+        swap_mutation_rate,
+        add_prune_mutation_rate,
+        bitflip_mutation_rate,
+        multi_swap_max_removals,
+        multi_swap_rate,
+        shift_mutation_rate,
+        coverage_biased_crossover_fraction,
+        ensure_mutation,
+        stagnation_limit,
+        use_contribution_distance,
+    };
+
+    match objectives.len() {
+        2 => run_nsga2_tailored_dim::<2>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, seed, trace, &objective_bounds, include_dominated),
+        3 => run_nsga2_tailored_dim::<3>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, seed, trace, &objective_bounds, include_dominated),
+        4 => run_nsga2_tailored_dim::<4>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, seed, trace, &objective_bounds, include_dominated),
+        n => Err(PyValueError::new_err(format!(
+            "solve_with_pseudo_seeded_nsga2 only supports 2, 3, or 4 objectives, got {n}"
+        ))),
+    }
+}
+
+/// Pseudosolver-seeded SIMS-tailored NSGA-III. Full timeout to the EA.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "It's okay for Python API to have many parameters"
+)]
+#[pyfunction]
+#[pyo3(signature = (
+    sims_instance,
+    objectives=vec!["min_cost".to_string(), "cloud_coverage".to_string(), "min_max_incidence_angle".to_string(), "min_resolution".to_string()],
+    timeout=Duration::from_secs(120),
+    initial_population=None,
+    target_pop_size=200usize,
+    num_divisions=12usize,
+    auto_divisions=true,
+    max_generations=500000usize,
+    seed=42u64,
+    trace=true,
+    objective_bounds=None,
+    include_dominated=false,
+    crossover_rate=0.9,
+    swap_mutation_rate=0.4,
+    add_prune_mutation_rate=0.3,
+    bitflip_mutation_rate=0.0,
+    multi_swap_max_removals=3usize,
+    multi_swap_rate=0.2,
+    shift_mutation_rate=0.25,
+    coverage_biased_crossover_fraction=0.5,
+    ensure_mutation=true,
+    stagnation_limit=50usize
+))]
+pub fn solve_with_pseudo_seeded_nsga3(
+    py: Python<'_>,
+    sims_instance: &SimsDiscreteProblem,
+    objectives: Vec<String>,
+    timeout: Duration,
+    initial_population: Option<Vec<crate::solution::Solution>>,
+    target_pop_size: usize,
+    num_divisions: usize,
+    auto_divisions: bool,
+    max_generations: usize,
+    seed: u64,
+    trace: bool,
+    objective_bounds: Option<Vec<Vec<u64>>>,
+    include_dominated: bool,
+    crossover_rate: f64,
+    swap_mutation_rate: f64,
+    add_prune_mutation_rate: f64,
+    bitflip_mutation_rate: f64,
+    multi_swap_max_removals: usize,
+    multi_swap_rate: f64,
+    shift_mutation_rate: f64,
+    coverage_biased_crossover_fraction: f64,
+    ensure_mutation: bool,
+    stagnation_limit: usize,
+) -> PyResult<SolvingResult> {
+    let config = pls::evolutionary::nsga3::Nsga3Config {
+        num_divisions,
+        target_pop_size,
+        auto_divisions,
+        crossover_rate,
+        swap_mutation_rate,
+        add_prune_mutation_rate,
+        bitflip_mutation_rate,
+        multi_swap_max_removals,
+        multi_swap_rate,
+        shift_mutation_rate,
+        coverage_biased_crossover_fraction,
+        ensure_mutation,
+        stagnation_limit,
+    };
+
+    match objectives.len() {
+        2 => run_nsga3_tailored_dim::<2>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, seed, trace, &objective_bounds, include_dominated),
+        3 => run_nsga3_tailored_dim::<3>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, seed, trace, &objective_bounds, include_dominated),
+        4 => run_nsga3_tailored_dim::<4>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, seed, trace, &objective_bounds, include_dominated),
+        n => Err(PyValueError::new_err(format!(
+            "solve_with_pseudo_seeded_nsga3 only supports 2, 3, or 4 objectives, got {n}"
+        ))),
+    }
+}
+
+/// Pseudosolver-seeded SIMS-tailored MOEA/D. Full timeout to the EA.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "It's okay for Python API to have many parameters"
+)]
+#[pyfunction]
+#[pyo3(signature = (
+    sims_instance,
+    objectives=vec!["min_cost".to_string(), "cloud_coverage".to_string(), "min_max_incidence_angle".to_string(), "min_resolution".to_string()],
+    timeout=Duration::from_secs(120),
+    initial_population=None,
+    population_size=200usize,
+    max_generations=500000usize,
+    seed=42u64,
+    trace=true,
+    objective_bounds=None,
+    include_dominated=false,
+    num_divisions=99usize,
+    neighbourhood_size=20usize,
+    delta=0.9,
+    max_replacements=3usize,
+    crossover_rate=1.0,
+    swap_mutation_rate=0.3,
+    add_prune_mutation_rate=0.2,
+    multi_swap_max_removals=3usize,
+    multi_swap_rate=0.15,
+    shift_mutation_rate=0.15,
+    coverage_biased_crossover_fraction=0.5,
+    ensure_mutation=false,
+    auto_divisions=true,
+    use_pbi=false,
+    pbi_theta=5.0,
+    stagnation_limit=80usize
+))]
+pub fn solve_with_pseudo_seeded_moead(
+    py: Python<'_>,
+    sims_instance: &SimsDiscreteProblem,
+    objectives: Vec<String>,
+    timeout: Duration,
+    initial_population: Option<Vec<crate::solution::Solution>>,
+    population_size: usize,
+    max_generations: usize,
+    seed: u64,
+    trace: bool,
+    objective_bounds: Option<Vec<Vec<u64>>>,
+    include_dominated: bool,
+    num_divisions: usize,
+    neighbourhood_size: usize,
+    delta: f64,
+    max_replacements: usize,
+    crossover_rate: f64,
+    swap_mutation_rate: f64,
+    add_prune_mutation_rate: f64,
+    multi_swap_max_removals: usize,
+    multi_swap_rate: f64,
+    shift_mutation_rate: f64,
+    coverage_biased_crossover_fraction: f64,
+    ensure_mutation: bool,
+    auto_divisions: bool,
+    use_pbi: bool,
+    pbi_theta: f64,
+    stagnation_limit: usize,
+) -> PyResult<SolvingResult> {
+    let config = pls::evolutionary::moead::MoeadConfig {
+        population_size,
+        num_divisions,
+        target_pop_size: population_size,
+        auto_divisions,
+        neighbourhood_size,
+        delta,
+        max_replacements,
+        crossover_rate,
+        swap_mutation_rate,
+        add_prune_mutation_rate,
+        multi_swap_max_removals,
+        multi_swap_rate,
+        shift_mutation_rate,
+        coverage_biased_crossover_fraction,
+        ensure_mutation,
+        use_pbi,
+        pbi_theta,
+        stagnation_limit,
+    };
+
+    match objectives.len() {
+        2 => run_moead_tailored_dim::<2>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, seed, trace, &objective_bounds, include_dominated),
+        3 => run_moead_tailored_dim::<3>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, seed, trace, &objective_bounds, include_dominated),
+        4 => run_moead_tailored_dim::<4>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, seed, trace, &objective_bounds, include_dominated),
+        n => Err(PyValueError::new_err(format!(
+            "solve_with_pseudo_seeded_moead only supports 2, 3, or 4 objectives, got {n}"
+        ))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Third-party crate integrations (moors / optirustic), feature-gated
+// ---------------------------------------------------------------------------
+//
+// These wrap independently-implemented NSGA-II (moors, optirustic) and
+// NSGA-III (optirustic) algorithms, used as an external sanity check against
+// our own literal-paper baselines and SIMS-tailored implementations. Neither
+// adapter tracks intermediate solution-discovery times (they're black boxes
+// from our side), so we register the final archive at the actual elapsed
+// wall-time rather than fabricating intermediate timestamps -- the resulting
+// HV-over-time curve is an honest step function (flat at 0, then jumps to
+// the final value when the run completes), not a smooth approximation.
+
+#[cfg(feature = "external_solvers")]
+fn register_final_archive_at_elapsed<P, const D: usize>(
+    archive: &[pls::solution_impl::bitset_encoded_solution::BitsetEncodedSolution<P, D>],
+    elapsed: Duration,
+    timeout: Duration,
+) -> Vec<SolutionFingerprint<D>>
+where
+    P: pls::problem::SetCoverProblem<D> + Clone + Send + Sync,
+{
+    use pls::explored_solutions_data::ExploredSolutionsData;
+
+    // `build_solving_result` sets the trace's total_duration to the nominal
+    // requested `timeout`, not the actual measured `elapsed` time. moors and
+    // optirustic only check their deadline between generations (not
+    // preemptively), so `elapsed` can run slightly past `timeout`. If we
+    // registered the raw `elapsed` timestamp, it would fall outside the
+    // trace's [0, total_duration] sampling window and never appear in any
+    // HV-curve bucket -- producing a flat-zero curve despite a non-empty
+    // archive. Clamp to `timeout` so the final archive is always visible at
+    // the last sample point.
+    let clamped = elapsed.min(timeout);
+    let mut explored = ExploredSolutionsData::<D>::new([u64::MAX; D]);
+    for sol in archive {
+        explored.register_without_selected_images(0, sol, clamped);
+    }
+    explored.solutions.values().cloned().collect()
+}
+
+/// Run NSGA-II from the `moors` crate (uniform binary crossover + bit-flip
+/// mutation, native binary operators) as an external sanity check.
+#[cfg(feature = "external_solvers")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "It's okay for Python API to have many parameters"
+)]
+#[pyfunction]
+#[pyo3(signature = (
+    sims_instance,
+    objectives=vec!["min_cost".to_string(), "cloud_coverage".to_string(), "min_max_incidence_angle".to_string(), "min_resolution".to_string()],
+    timeout=Duration::from_secs(120),
+    population_size=100usize,
+    num_offsprings=50usize,
+    num_iterations=500_000usize,
+    seed=42u64,
+    trace=true,
+    objective_bounds=None,
+    include_dominated=false,
+    crossover_rate=0.9,
+    mutation_rate=0.1,
+    bitflip_probability=0.05
+))]
+pub fn solve_with_nsga2_moors(
+    py: Python<'_>,
+    sims_instance: &SimsDiscreteProblem,
+    objectives: Vec<String>,
+    timeout: Duration,
+    population_size: usize,
+    num_offsprings: usize,
+    num_iterations: usize,
+    seed: u64,
+    trace: bool,
+    objective_bounds: Option<Vec<Vec<u64>>>,
+    include_dominated: bool,
+    crossover_rate: f64,
+    mutation_rate: f64,
+    bitflip_probability: f64,
+) -> PyResult<SolvingResult> {
+    let config = pls::evolutionary::moors_adapter::MoorsConfig {
+        population_size,
+        num_offsprings,
+        num_iterations,
+        crossover_rate,
+        mutation_rate,
+        bitflip_probability,
+        crossover_type: pls::evolutionary::moors_adapter::MoorsCrossoverType::Uniform,
+        seed,
+    };
+
+    match objectives.len() {
+        2 => run_nsga2_moors_dim::<2>(
+            py, sims_instance, &objectives, timeout, config, trace, &objective_bounds,
+            include_dominated,
+        ),
+        3 => run_nsga2_moors_dim::<3>(
+            py, sims_instance, &objectives, timeout, config, trace, &objective_bounds,
+            include_dominated,
+        ),
+        4 => run_nsga2_moors_dim::<4>(
+            py, sims_instance, &objectives, timeout, config, trace, &objective_bounds,
+            include_dominated,
+        ),
+        n => Err(PyValueError::new_err(format!(
+            "solve_with_nsga2_moors only supports 2, 3, or 4 objectives, got {n}"
+        ))),
+    }
+}
+
+#[cfg(feature = "external_solvers")]
+#[allow(clippy::too_many_arguments)]
+fn run_nsga2_moors_dim<const D: usize>(
+    py: Python<'_>,
+    sims_instance: &SimsDiscreteProblem,
+    objectives: &[String],
+    timeout: Duration,
+    config: pls::evolutionary::moors_adapter::MoorsConfig,
+    trace: bool,
+    objective_bounds: &Option<Vec<Vec<u64>>>,
+    include_dominated: bool,
+) -> PyResult<SolvingResult> {
+    use pls::evolutionary::moors_adapter::run_moors_nsga2;
+    use pls::problem_bitset::ProblemBitset;
+
+    let raw_instance = build_raw_instance(sims_instance);
+    let objective_definitions = parse_objective_definitions::<D>(objectives)?;
+    let mut pls_problem =
+        ProblemBitset::<D>::from_raw_with_objectives(&raw_instance, objective_definitions);
+    apply_objective_bounds(&mut pls_problem, objective_bounds)?;
+
+    let start = std::time::Instant::now();
+    let (archive_solutions, _explored) = py.allow_threads(|| {
+        run_moors_nsga2::<ProblemBitset<D>, D>(&pls_problem, config, timeout)
+    });
+    let elapsed = start.elapsed();
+
+    info!(
+        "moors NSGA-II completed: {} archive solutions in {:?}",
+        archive_solutions.len(),
+        elapsed
+    );
+
+    let python_final_solutions: Vec<_> = archive_solutions
+        .iter()
+        .map(|s| {
+            let sol: crate::solution::Solution = (s, &pls_problem).into();
+            sol
+        })
+        .collect();
+
+    let explored_fingerprints =
+        register_final_archive_at_elapsed::<ProblemBitset<D>, D>(&archive_solutions, elapsed, timeout);
+
+    build_solving_result(
+        python_final_solutions,
+        explored_fingerprints,
+        objectives,
+        objective_bounds,
+        timeout,
+        format!("NSGA2-moors-{D}D"),
+        trace,
+        include_dominated,
+    )
+}
+
+/// Run NSGA-II from the `optirustic` crate (continuous relaxation + SBX
+/// crossover + polynomial mutation) as an external sanity check.
+#[cfg(feature = "external_solvers")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "It's okay for Python API to have many parameters"
+)]
+#[pyfunction]
+#[pyo3(signature = (
+    sims_instance,
+    objectives=vec!["min_cost".to_string(), "cloud_coverage".to_string(), "min_max_incidence_angle".to_string(), "min_resolution".to_string()],
+    timeout=Duration::from_secs(120),
+    population_size=100usize,
+    max_generations=500_000usize,
+    seed=42u64,
+    trace=true,
+    objective_bounds=None,
+    include_dominated=false,
+    crossover_probability=0.9,
+    crossover_distribution_index=20.0,
+    mutation_distribution_index=20.0
+))]
+pub fn solve_with_nsga2_optirustic(
+    py: Python<'_>,
+    sims_instance: &SimsDiscreteProblem,
+    objectives: Vec<String>,
+    timeout: Duration,
+    population_size: usize,
+    max_generations: usize,
+    seed: u64,
+    trace: bool,
+    objective_bounds: Option<Vec<Vec<u64>>>,
+    include_dominated: bool,
+    crossover_probability: f64,
+    crossover_distribution_index: f64,
+    mutation_distribution_index: f64,
+) -> PyResult<SolvingResult> {
+    let config = pls::evolutionary::optirustic_adapter::OptirusticConfig {
+        population_size,
+        max_generations,
+        crossover_distribution_index,
+        crossover_probability,
+        mutation_distribution_index,
+        mutation_probability: None,
+        seed: Some(seed),
+        parallel: false,
+    };
+
+    match objectives.len() {
+        2 => run_nsga2_optirustic_dim::<2>(
+            py, sims_instance, &objectives, timeout, config, trace, &objective_bounds,
+            include_dominated,
+        ),
+        3 => run_nsga2_optirustic_dim::<3>(
+            py, sims_instance, &objectives, timeout, config, trace, &objective_bounds,
+            include_dominated,
+        ),
+        4 => run_nsga2_optirustic_dim::<4>(
+            py, sims_instance, &objectives, timeout, config, trace, &objective_bounds,
+            include_dominated,
+        ),
+        n => Err(PyValueError::new_err(format!(
+            "solve_with_nsga2_optirustic only supports 2, 3, or 4 objectives, got {n}"
+        ))),
+    }
+}
+
+#[cfg(feature = "external_solvers")]
+#[allow(clippy::too_many_arguments)]
+fn run_nsga2_optirustic_dim<const D: usize>(
+    py: Python<'_>,
+    sims_instance: &SimsDiscreteProblem,
+    objectives: &[String],
+    timeout: Duration,
+    config: pls::evolutionary::optirustic_adapter::OptirusticConfig,
+    trace: bool,
+    objective_bounds: &Option<Vec<Vec<u64>>>,
+    include_dominated: bool,
+) -> PyResult<SolvingResult> {
+    use pls::evolutionary::optirustic_adapter::run_optirustic_nsga2;
+    use pls::problem_bitset::ProblemBitset;
+
+    let raw_instance = build_raw_instance(sims_instance);
+    let objective_definitions = parse_objective_definitions::<D>(objectives)?;
+    let mut pls_problem =
+        ProblemBitset::<D>::from_raw_with_objectives(&raw_instance, objective_definitions);
+    apply_objective_bounds(&mut pls_problem, objective_bounds)?;
+
+    let start = std::time::Instant::now();
+    let (archive_solutions, _explored) = py.allow_threads(|| {
+        run_optirustic_nsga2::<ProblemBitset<D>, D>(&pls_problem, config, timeout)
+    });
+    let elapsed = start.elapsed();
+
+    info!(
+        "optirustic NSGA-II completed: {} archive solutions in {:?}",
+        archive_solutions.len(),
+        elapsed
+    );
+
+    let python_final_solutions: Vec<_> = archive_solutions
+        .iter()
+        .map(|s| {
+            let sol: crate::solution::Solution = (s, &pls_problem).into();
+            sol
+        })
+        .collect();
+
+    let explored_fingerprints =
+        register_final_archive_at_elapsed::<ProblemBitset<D>, D>(&archive_solutions, elapsed, timeout);
+
+    build_solving_result(
+        python_final_solutions,
+        explored_fingerprints,
+        objectives,
+        objective_bounds,
+        timeout,
+        format!("NSGA2-optirustic-{D}D"),
+        trace,
+        include_dominated,
+    )
+}
+
+/// Run NSGA-III from the `optirustic` crate (continuous relaxation + SBX
+/// crossover + polynomial mutation + reference-point niching) as an
+/// external sanity check.
+#[cfg(feature = "external_solvers")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "It's okay for Python API to have many parameters"
+)]
+#[pyfunction]
+#[pyo3(signature = (
+    sims_instance,
+    objectives=vec!["min_cost".to_string(), "cloud_coverage".to_string(), "min_max_incidence_angle".to_string(), "min_resolution".to_string()],
+    timeout=Duration::from_secs(120),
+    population_size=100usize,
+    max_generations=500_000usize,
+    seed=42u64,
+    trace=true,
+    objective_bounds=None,
+    include_dominated=false,
+    crossover_probability=0.9,
+    crossover_distribution_index=20.0,
+    mutation_distribution_index=20.0
+))]
+pub fn solve_with_nsga3_optirustic(
+    py: Python<'_>,
+    sims_instance: &SimsDiscreteProblem,
+    objectives: Vec<String>,
+    timeout: Duration,
+    population_size: usize,
+    max_generations: usize,
+    seed: u64,
+    trace: bool,
+    objective_bounds: Option<Vec<Vec<u64>>>,
+    include_dominated: bool,
+    crossover_probability: f64,
+    crossover_distribution_index: f64,
+    mutation_distribution_index: f64,
+) -> PyResult<SolvingResult> {
+    let config = pls::evolutionary::optirustic_adapter::OptirusticConfig {
+        population_size,
+        max_generations,
+        crossover_distribution_index,
+        crossover_probability,
+        mutation_distribution_index,
+        mutation_probability: None,
+        seed: Some(seed),
+        parallel: false,
+    };
+
+    match objectives.len() {
+        2 => run_nsga3_optirustic_dim::<2>(
+            py, sims_instance, &objectives, timeout, config, trace, &objective_bounds,
+            include_dominated,
+        ),
+        3 => run_nsga3_optirustic_dim::<3>(
+            py, sims_instance, &objectives, timeout, config, trace, &objective_bounds,
+            include_dominated,
+        ),
+        4 => run_nsga3_optirustic_dim::<4>(
+            py, sims_instance, &objectives, timeout, config, trace, &objective_bounds,
+            include_dominated,
+        ),
+        n => Err(PyValueError::new_err(format!(
+            "solve_with_nsga3_optirustic only supports 2, 3, or 4 objectives, got {n}"
+        ))),
+    }
+}
+
+#[cfg(feature = "external_solvers")]
+#[allow(clippy::too_many_arguments)]
+fn run_nsga3_optirustic_dim<const D: usize>(
+    py: Python<'_>,
+    sims_instance: &SimsDiscreteProblem,
+    objectives: &[String],
+    timeout: Duration,
+    config: pls::evolutionary::optirustic_adapter::OptirusticConfig,
+    trace: bool,
+    objective_bounds: &Option<Vec<Vec<u64>>>,
+    include_dominated: bool,
+) -> PyResult<SolvingResult> {
+    use pls::evolutionary::optirustic_adapter::run_optirustic_nsga3;
+    use pls::problem_bitset::ProblemBitset;
+
+    let raw_instance = build_raw_instance(sims_instance);
+    let objective_definitions = parse_objective_definitions::<D>(objectives)?;
+    let mut pls_problem =
+        ProblemBitset::<D>::from_raw_with_objectives(&raw_instance, objective_definitions);
+    apply_objective_bounds(&mut pls_problem, objective_bounds)?;
+
+    let start = std::time::Instant::now();
+    let (archive_solutions, _explored) = py.allow_threads(|| {
+        run_optirustic_nsga3::<ProblemBitset<D>, D>(&pls_problem, config, timeout)
+    });
+    let elapsed = start.elapsed();
+
+    info!(
+        "optirustic NSGA-III completed: {} archive solutions in {:?}",
+        archive_solutions.len(),
+        elapsed
+    );
+
+    let python_final_solutions: Vec<_> = archive_solutions
+        .iter()
+        .map(|s| {
+            let sol: crate::solution::Solution = (s, &pls_problem).into();
+            sol
+        })
+        .collect();
+
+    let explored_fingerprints =
+        register_final_archive_at_elapsed::<ProblemBitset<D>, D>(&archive_solutions, elapsed, timeout);
+
+    build_solving_result(
+        python_final_solutions,
+        explored_fingerprints,
+        objectives,
+        objective_bounds,
+        timeout,
+        format!("NSGA3-optirustic-{D}D"),
         trace,
         include_dominated,
     )

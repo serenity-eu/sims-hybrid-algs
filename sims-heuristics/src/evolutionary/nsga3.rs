@@ -708,7 +708,7 @@ where
 /// Solves the system: `sum_j(extreme[i][j] / a[j]) = 1` for each extreme point i.
 /// i.e., the matrix equation `E * x = ones` where `x[j] = 1/a[j]`.
 /// Returns intercepts `a[j]`. Falls back to per-axis max if degenerate.
-fn compute_intercepts<const D: usize>(extreme: &[[f64; D]; D]) -> [f64; D] {
+pub(crate) fn compute_intercepts<const D: usize>(extreme: &[[f64; D]; D]) -> [f64; D] {
     // Build augmented matrix [E | 1]
     let mut mat = [[0.0f64; D]; D];
     for i in 0..D {
@@ -776,7 +776,7 @@ fn compute_intercepts<const D: usize>(extreme: &[[f64; D]; D]) -> [f64; D] {
 ///
 /// Returns `(ref_idx, perpendicular_distance)`.
 /// Distance = ||f'' - (f'' · r̂) r̂|| where r̂ = r / ||r||.
-fn closest_reference_point<const D: usize>(
+pub(crate) fn closest_reference_point<const D: usize>(
     f_norm: &[f64; D],
     reference_points: &[[f64; D]],
 ) -> (usize, f64) {

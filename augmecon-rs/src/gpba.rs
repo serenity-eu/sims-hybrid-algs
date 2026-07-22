@@ -104,8 +104,15 @@ impl GpbaA {
 
     /// Check if this constraint configuration was already explored with relaxation.
     ///
-    /// For maximization: a previous `ef_array` is "less constrained" (more relaxed) if
-    /// all `prev_ef[i] >= current_ef[i]`.  When such a previous configuration exists:
+    /// `ef_array` is in **MAX form**, where the constraint is `z_k >= ef_k`, so a *higher*
+    /// `ef_k` is a *tighter* constraint. A previous `ef_array` is therefore "less constrained"
+    /// (more relaxed, larger feasible region) when all `prev_ef[i] <= current_ef[i]`.
+    /// (The phased reference impl in `gpba_phases::relaxation_search` uses the opposite
+    /// `>=` because it works in the un-negated MIN/upper-bound convention; negating ε flips
+    /// the relation. Using `>=` here selected *tighter* previous problems and reused their
+    /// solutions for looser current ones, collapsing the front to the 2 payoff extremes.)
+    ///
+    /// When such a less-constrained previous configuration exists:
     /// - If its solution is feasible **and** satisfies the current (tighter) constraints,
     ///   we can reuse it without solving a new MILP.
     /// - If it was infeasible, the current (tighter) configuration is also infeasible.
@@ -115,12 +122,13 @@ impl GpbaA {
         constraint_indices: &[usize],
     ) -> (bool, Option<Vec<f64>>) {
         for prev_info in &self.previous_solution_information {
-            // Check if previous ef_array is less constrained (all values >= current)
+            // Previous is less constrained (larger feasible region) when its MAX-form
+            // epsilon lower bounds are all <= the current ones.
             let is_less_constrained = prev_info
                 .ef_array
                 .iter()
                 .zip(ef_array.iter())
-                .all(|(&prev, &curr)| prev >= curr);
+                .all(|(&prev, &curr)| prev <= curr);
 
             if is_less_constrained {
                 if let Some(prev_solution) = &prev_info.solution {
@@ -197,6 +205,7 @@ impl GpbaA {
         // Remove explored region from interval
         // In MAX form: epsilon <= solution_value (epsilon is the lower bound constraint)
         // We explored everything from epsilon up to the solution value
+        crate::verify::bump(&crate::verify::INTERVAL_REMOVALS);
         match epsilon_i64.cmp(&solution_i64) {
             std::cmp::Ordering::Less => {
                 log::debug!(
@@ -284,6 +293,9 @@ impl GpbaA {
         log::info!("=== GPBA-A: Starting generate_representation ===");
         log::info!("Number of objectives: {}", problem.num_objectives());
         log::info!("Primary objective index: {}", self.config.primary_objective);
+
+        crate::verify::reset();
+        let _t_total = std::time::Instant::now();
 
         // Step 1: Compute or use provided bounds using shared calculator
         log::info!("=== STEP 1: Computing bounds (payoff table) ===");
@@ -462,6 +474,7 @@ impl GpbaA {
                 relaxation_reuses += 1;
                 // Relaxation search found a match — skip the expensive MILP solve
                 if let Some(prev_obj_vals) = relaxation_solution {
+                    crate::verify::bump(&crate::verify::RELAXATION_REUSE); // SAUGMECON Lemma 1
                     log::info!(
                         "♻ Relaxation reuse: previous solution satisfies current constraints: {prev_obj_vals:?}"
                     );
@@ -473,6 +486,7 @@ impl GpbaA {
                     sol.objective_values = prev_obj_vals;
                     Some(sol)
                 } else {
+                    crate::verify::bump(&crate::verify::INFEASIBLE_PROP); // SAUGMECON Lemma 2
                     log::info!(
                         "♻ Relaxation propagation: previous config was infeasible → current is too"
                     );
@@ -577,10 +591,19 @@ impl GpbaA {
                     consecutive_duplicates += 1;
                 }
 
-                let pareto_solution = Solution::new(
+                let mut pareto_solution = Solution::new(
                     solution.objective_values.clone(),
                     solution.decision_variables.clone(),
                 );
+                // Record the wall-clock discovery time (µs since start) so callers can
+                // reconstruct the GPBA-A front's timeline (used for hybrid pseudo-seeding).
+                let elapsed_us = self
+                    .timer
+                    .as_ref()
+                    .map_or(0, |t| t.elapsed().as_micros() as u64);
+                pareto_solution
+                    .metadata
+                    .insert("timestamp_us".to_string(), elapsed_us.to_string());
                 // Solutions are integers - use 0 decimal places for exact comparison
                 pareto_front.add_solution_with_precision(pareto_solution, 0);
 
@@ -708,6 +731,8 @@ impl GpbaA {
             explored_epsilons.len()
         );
         log::info!("MILP solves avoided via relaxation reuse: {relaxation_reuses}");
+        crate::verify::add_ns(&crate::verify::TOTAL_NS, _t_total.elapsed());
+        crate::verify::report();
 
         Ok(pareto_front)
     }
@@ -739,6 +764,7 @@ impl GpbaA {
         nadir_max: &[f64],
         rwv: &mut [f64],
     ) -> bool {
+        crate::verify::bump(&crate::verify::CASCADE_EXITS);
         for i in (1..constraint_indices.len()).rev() {
             if ef_array[i] > ideal_max[constraint_indices[i]] {
                 // Reset this dimension
@@ -1416,24 +1442,21 @@ mod tests {
         // Constraint indices: objectives 1 and 2 are constrained
         let constraint_indices = vec![1, 2];
 
-        // Save a previous solution:
-        //   ef_array (MAX form): [-400, -150]  (less constrained / more relaxed)
-        //   solution (MIN form): [100, 300, 120]  (obj0=100, obj1=300, obj2=120)
-        //
-        // In MAX form the solution values for constrained objectives are:
-        //   obj1_max = -300, obj2_max = -120
-        gpba.save_solution_information(vec![-400.0, -150.0], Some(vec![100.0, 300.0, 120.0]));
+        // MAX-form constraint is z_k >= ef_k, so a *lower* ef is *less* constrained (larger
+        // feasible region). Save a previous solution from a LESS-constrained (looser) config:
+        //   ef_array (MAX form): [-500, -200]  (lower ef → looser)
+        //   solution (MIN form): [100, 300, 120]  → obj1_max = -300, obj2_max = -120
+        gpba.save_solution_information(vec![-500.0, -200.0], Some(vec![100.0, 300.0, 120.0]));
 
-        // Current (tighter) epsilon: [-500, -200]
-        // Previous ef [-400, -150] >= current [-500, -200]?  -400 >= -500 ✓, -150 >= -200 ✓
-        // Does solution satisfy current constraints?
-        //   sol_val_max for obj1 = -300, ef_val = -500  →  -300 >= -500  ✓
-        //   sol_val_max for obj2 = -120, ef_val = -200  →  -120 >= -200  ✓
-        let ef_array = vec![-500.0, -200.0];
+        // Current (tighter) epsilon: [-400, -150]  (higher ef → tighter)
+        // Previous ef [-500, -200] <= current [-400, -150]?  -500 <= -400 ✓, -200 <= -150 ✓
+        // Does the looser solution satisfy the current (tighter) constraint z_k >= ef?
+        //   obj1_max = -300 >= -400 ✓, obj2_max = -120 >= -150 ✓  → still optimal, reuse.
+        let ef_array = vec![-400.0, -150.0];
         let (found, solution) =
             gpba.search_previous_solutions_relaxation(&ef_array, &constraint_indices);
 
-        assert!(found, "Should find a reusable solution");
+        assert!(found, "Should reuse the looser config's solution");
         let sol = solution.expect("Should return feasible solution");
         assert_eq!(sol, vec![100.0, 300.0, 120.0]);
     }
@@ -1443,18 +1466,19 @@ mod tests {
         let mut gpba = make_gpba_a();
         let constraint_indices = vec![1, 2];
 
-        // Previous solution: ef=[-400, -150], solution=[100, 300, 120]
+        // Previous solution from a looser config: ef=[-500, -200], solution=[100, 300, 120]
         // sol_max for obj1 = -300, sol_max for obj2 = -120
-        gpba.save_solution_information(vec![-400.0, -150.0], Some(vec![100.0, 300.0, 120.0]));
+        gpba.save_solution_information(vec![-500.0, -200.0], Some(vec![100.0, 300.0, 120.0]));
 
-        // Current epsilon: [-350, -200]
-        // Previous ef [-400, -150] >= [-350, -200]?  -400 >= -350 ✗  →  NOT less constrained
-        let ef_array = vec![-350.0, -200.0];
+        // Current epsilon: [-400, -100].  Previous ef [-500, -200] <= [-400, -100] ✓ (looser),
+        // but does the solution satisfy the tighter constraint z_k >= ef?
+        //   obj2_max = -120 >= -100 ✗  →  violates, must re-solve.
+        let ef_array = vec![-400.0, -100.0];
         let (found, _) = gpba.search_previous_solutions_relaxation(&ef_array, &constraint_indices);
 
         assert!(
             !found,
-            "Previous ef is NOT less constrained, should not match"
+            "Looser solution violates the tighter constraint, should not match"
         );
     }
 
@@ -1463,15 +1487,16 @@ mod tests {
         let mut gpba = make_gpba_a();
         let constraint_indices = vec![1];
 
-        // Previous config was infeasible with a less constrained ef
-        gpba.save_solution_information(vec![-200.0], None);
+        // A LESS-constrained (looser, lower ef) config was infeasible.
+        gpba.save_solution_information(vec![-300.0], None);
 
-        // Current is tighter: [-300] <= [-200], so previous ef >= current ef
-        let ef_array = vec![-300.0];
+        // Current is TIGHTER (higher ef): [-200].  prev [-300] <= curr [-200] ✓ (prev looser).
+        // If the looser problem is infeasible, the tighter (subset) one is too.
+        let ef_array = vec![-200.0];
         let (found, solution) =
             gpba.search_previous_solutions_relaxation(&ef_array, &constraint_indices);
 
-        assert!(found, "Should propagate infeasibility");
+        assert!(found, "Looser-infeasible should propagate to tighter");
         assert!(
             solution.is_none(),
             "Infeasible propagation should return None"
@@ -1483,16 +1508,17 @@ mod tests {
         let mut gpba = make_gpba_a();
         let constraint_indices = vec![1];
 
-        // Previous config was infeasible with ef=[-300]
-        gpba.save_solution_information(vec![-300.0], None);
+        // A MORE-constrained (tighter, higher ef) config was infeasible.
+        gpba.save_solution_information(vec![-200.0], None);
 
-        // Current is LOOSER: [-200], previous ef [-300] >= [-200]? -300 >= -200 ✗
-        let ef_array = vec![-200.0];
+        // Current is LOOSER (lower ef): [-300].  prev [-200] <= curr [-300]? -200 <= -300 ✗.
+        // A tighter problem being infeasible says nothing about the looser one → no match.
+        let ef_array = vec![-300.0];
         let (found, _) = gpba.search_previous_solutions_relaxation(&ef_array, &constraint_indices);
 
         assert!(
             !found,
-            "Should NOT propagate infeasibility to a looser configuration"
+            "Tighter-infeasible must NOT propagate to a looser configuration"
         );
     }
 
@@ -1517,16 +1543,15 @@ mod tests {
         let mut gpba = make_gpba_a();
         let constraint_indices = vec![1];
 
-        // Two previous solutions, both with less-constrained ef
-        // Solution A: ef=[-100], solution=[50, 80]  → obj1_max = -80
-        gpba.save_solution_information(vec![-100.0], Some(vec![50.0, 80.0]));
-        // Solution B: ef=[-50], solution=[40, 70]   → obj1_max = -70
-        gpba.save_solution_information(vec![-50.0], Some(vec![40.0, 70.0]));
+        // Two previous solutions, both from LESS-constrained (looser, lower ef) configs.
+        // Solution A: ef=[-200], solution=[50, 80]  → obj1_max = -80
+        gpba.save_solution_information(vec![-200.0], Some(vec![50.0, 80.0]));
+        // Solution B: ef=[-150], solution=[40, 70]  → obj1_max = -70
+        gpba.save_solution_information(vec![-150.0], Some(vec![40.0, 70.0]));
 
-        // Current ef: [-150]
-        // Both previous ef values are >= -150 ✓
-        // Solution A: obj1_max=-80 >= -150 ✓  (first match wins)
-        let ef_array = vec![-150.0];
+        // Current ef: [-100]  (tighter).  Both prev ef <= -100 ✓ (looser).
+        // Solution A: obj1_max = -80 >= -100 ✓  (first match wins)
+        let ef_array = vec![-100.0];
         let (found, solution) =
             gpba.search_previous_solutions_relaxation(&ef_array, &constraint_indices);
 

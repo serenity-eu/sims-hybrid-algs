@@ -26,9 +26,9 @@
 //!   covered by other selected images (most expensive first).
 
 use fixedbitset::FixedBitSet;
-use rand::Rng;
 use rand::rngs::SmallRng;
 use rand::seq::{IteratorRandom, SliceRandom};
+use rand::Rng;
 
 use crate::problem::SetCoverProblem;
 use crate::solution::ImageSet;
@@ -556,8 +556,7 @@ where
             continue;
         }
 
-        let (exposed_coverage, total_coverage) = if let Some(bs) = problem.image_bitset(candidate)
-        {
+        let (exposed_coverage, total_coverage) = if let Some(bs) = problem.image_bitset(candidate) {
             (bs.intersection_count(&exposed_elements), bs.count_ones(..))
         } else {
             let mut exp = 0usize;
