@@ -1,6 +1,3 @@
-use rand::rngs::StdRng;
-use rand::SeedableRng;
-
 use crate::clouds::generate_clouds;
 
 // ── Continuous (float) problem ────────────────────────────────────────────────
@@ -55,8 +52,7 @@ impl SimsProblem {
             .collect();
         let max_cloud_area: i64 = areas.iter().sum();
 
-        let mut rng = StdRng::seed_from_u64(seed);
-        let clouds = generate_clouds(&self.images, &self.areas, &self.cloud_coverages, &mut rng);
+        let clouds = generate_clouds(&self.images, &self.areas, &self.cloud_coverages, seed);
 
         SimsDiscreteProblem {
             num_images: self.num_images,

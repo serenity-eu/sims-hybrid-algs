@@ -1040,6 +1040,8 @@ def solve_command(args):
             front_strategy=args.front_strategy,
             timeout_s=args.timeout_s,
             ratio_step=args.ratio_step,
+            phase2_solver_type=SolverType(args.phase2_solver) if args.phase2_solver else SolverType.PLS,
+            pseudo_solver_dir=Path(args.pseudo_solver).resolve() if args.pseudo_solver else None,
         ),
         dry_run=args.dry_run,
         iter_count=args.iter_count,
@@ -1166,6 +1168,13 @@ def main():
     solve_parser.add_argument("--exact-solver", type=str, help="Name of the exact solver to use")
     solve_parser.add_argument(
         "--front-strategy", type=str, help="Name of the pareto front strategy to use"
+    )
+    solve_parser.add_argument(
+        "--phase2-solver",
+        type=str,
+        choices=["pls", "nsga2", "nsga3", "moead"],
+        default="pls",
+        help="Phase-2 (metaheuristic) solver: pls (default), nsga2, nsga3, or moead",
     )
     solve_parser.add_argument(
         "--dry-run", action="store_true", help="Do not run the solver, only show what would be done"

@@ -1,3 +1,4 @@
+use pareto::Objectives;
 use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::{prelude::*, types::PyDict};
 use std::{
@@ -5,7 +6,6 @@ use std::{
     hash::{Hash, Hasher},
     time::Duration,
 };
-use pareto::Objectives;
 
 use crate::problem::SimsDiscreteProblem;
 
@@ -85,7 +85,7 @@ impl Solution {
         if min_resolutions_sum.is_some() {
             objectives_set += 1;
         }
-        
+
         // Require at least 2 objectives to be set
         if objectives_set < 2 {
             return Err(PyValueError::new_err(
@@ -95,7 +95,7 @@ impl Solution {
                 )
             ));
         }
-        
+
         Ok(Self {
             selected_images: selected_images.into_iter().collect(),
             cost,
@@ -251,11 +251,13 @@ impl Solution {
         let (computed_cost, computed_cloudy_area, computed_max_angle, computed_min_res) =
             self.compute_objectives(problem)?;
 
-        let cost_valid = self.cost
+        let cost_valid = self
+            .cost
             .map(|stored| stored == computed_cost)
             .unwrap_or(true); // If not set, consider valid
 
-        let cloudy_area_valid = self.cloudy_area
+        let cloudy_area_valid = self
+            .cloudy_area
             .map(|stored| stored == computed_cloudy_area)
             .unwrap_or(true); // If not set, consider valid
 
@@ -306,25 +308,25 @@ impl Solution {
 
         Ok(())
     }
-    
+
     /// Get objectives as a 2D array (cost, cloudy_area)
     pub fn objectives_2d(&self) -> Objectives<2> {
         [
             self.cost.unwrap_or(u64::MAX),
-            self.cloudy_area.unwrap_or(u64::MAX)
+            self.cloudy_area.unwrap_or(u64::MAX),
         ]
     }
-    
+
     /// Get objectives as a 3D array (cost, cloudy_area, max_incidence_angle)
     pub fn objectives_3d(&self) -> Objectives<3> {
         let max_angle = self.max_incidence_angle.unwrap_or(u64::MAX);
         [
             self.cost.unwrap_or(u64::MAX),
             self.cloudy_area.unwrap_or(u64::MAX),
-            max_angle
+            max_angle,
         ]
     }
-    
+
     /// Get objectives as a 4D array (cost, cloudy_area, max_incidence_angle, min_resolutions_sum)
     pub fn objectives_4d(&self) -> Objectives<4> {
         let max_angle = self.max_incidence_angle.unwrap_or(u64::MAX);
@@ -333,7 +335,7 @@ impl Solution {
             self.cost.unwrap_or(u64::MAX),
             self.cloudy_area.unwrap_or(u64::MAX),
             max_angle,
-            min_res
+            min_res,
         ]
     }
 }
@@ -366,10 +368,7 @@ impl SolvingResult {
     }
 
     #[staticmethod]
-    pub fn with_trace(
-        final_solutions: Vec<Solution>,
-        trace: Vec<u8>,
-    ) -> Self {
+    pub fn with_trace(final_solutions: Vec<Solution>, trace: Vec<u8>) -> Self {
         Self {
             final_solutions,
             trace: Some(trace),

@@ -75,7 +75,10 @@ pub struct EpsilonSolveResult {
 ///     println!("Found solution: {:?}", result.objectives_max);
 /// }
 /// ```
-#[allow(clippy::implicit_hasher, reason = "Public API uses standard HashMap for simplicity - generics would complicate the interface")]
+#[allow(
+    clippy::implicit_hasher,
+    reason = "Public API uses standard HashMap for simplicity - generics would complicate the interface"
+)]
 /// Solve an epsilon-constraint problem with the given configuration.
 ///
 /// # Errors

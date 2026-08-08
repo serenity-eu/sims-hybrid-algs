@@ -9,8 +9,8 @@ const WORKER_LOG_INTERVAL: Duration = Duration::from_secs(30);
 use crate::{
     concurrent_pls::{
         config::{ConcurrentPLSConfig, RegionSearchMode},
-        decomposition::{belongs_to_region, Region},
-        snapshot::{fingerprint, GlobalFrontSlot, ObjectiveSnapshot, SnapshotSlot},
+        decomposition::{Region, belongs_to_region},
+        snapshot::{GlobalFrontSlot, ObjectiveSnapshot, SnapshotSlot, fingerprint},
     },
     pareto_local_search::{ParetoLocalSearch, SAPlsStatus, StepStatus},
     pls_config::PlsOptimizations,
@@ -96,10 +96,8 @@ impl<'prob, T, P, const D: usize> RegionWorker<'prob, T, P, D>
 where
     T: ImageSet<D> + EncodedSolution<P, D> + std::hash::Hash + Send + Sync + 'prob,
     P: SetCoverProblem<D> + Send + Sync + 'prob,
-    NdTreeSolutionSet<T, D>: ParetoFront<'prob, T>
-        + Clone
-        + FromIterator<T>
-        + IntoIterator<Item = T>,
+    NdTreeSolutionSet<T, D>:
+        ParetoFront<'prob, T> + Clone + FromIterator<T> + IntoIterator<Item = T>,
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -201,9 +199,12 @@ where
 
     /// Phase 3 unconstrained loop: standard PLS with periodic sync.
     fn run_unconstrained(&mut self, timer: &Timer) {
-        let _phase_span =
-            info_span!("region.phase", region = self.region.index, phase = "unconstrained")
-                .entered();
+        let _phase_span = info_span!(
+            "region.phase",
+            region = self.region.index,
+            phase = "unconstrained"
+        )
+        .entered();
         let mut last_log = Instant::now();
         for iteration in 1..=self.config.max_iterations {
             let step_result = self.pls.step(iteration, timer);
@@ -261,9 +262,12 @@ where
 
     /// SA-PLS loop (sections 16.4-16.10): scalarized auxiliary with optional fallback.
     fn run_scalarized(&mut self, timer: &Timer, with_fallback: bool) {
-        let _phase_span =
-            info_span!("region.phase", region = self.region.index, phase = "scalarized")
-                .entered();
+        let _phase_span = info_span!(
+            "region.phase",
+            region = self.region.index,
+            phase = "scalarized"
+        )
+        .entered();
         let weight = self.region.weight_vector;
         let rho = self.config.scalarized_rho;
         let mut last_log = Instant::now();
@@ -348,9 +352,12 @@ where
 
     /// Continue with standard PLS for remaining time after SA-PLS exhaustion (fallback).
     fn run_unconstrained_remainder(&mut self, timer: &Timer, start_iteration: usize) {
-        let _phase_span =
-            info_span!("region.phase", region = self.region.index, phase = "fallback")
-                .entered();
+        let _phase_span = info_span!(
+            "region.phase",
+            region = self.region.index,
+            phase = "fallback"
+        )
+        .entered();
         let mut last_log = Instant::now();
         for iteration in start_iteration..=self.config.max_iterations {
             let step_result = self.pls.step(iteration, timer);
@@ -420,8 +427,7 @@ where
             })
             .collect();
 
-        self.snapshot_slot
-            .store(std::sync::Arc::new(snapshot));
+        self.snapshot_slot.store(std::sync::Arc::new(snapshot));
         self.stats.snapshots_published += 1;
     }
 
@@ -471,11 +477,16 @@ where
             .front
             .iter()
             .filter(|g| {
-                belongs_to_region(&g.objectives, &self.region, &self.all_regions, &ideal, &bounds)
-                    && !self
-                        .pls
-                        .explored_solutions_data()
-                        .is_registered(&g.solution)
+                belongs_to_region(
+                    &g.objectives,
+                    &self.region,
+                    &self.all_regions,
+                    &ideal,
+                    &bounds,
+                ) && !self
+                    .pls
+                    .explored_solutions_data()
+                    .is_registered(&g.solution)
             })
             .map(|g| g.solution.clone())
             .collect();
@@ -524,11 +535,16 @@ where
             .front
             .iter()
             .filter(|g| {
-                belongs_to_region(&g.objectives, &self.region, &self.all_regions, &ideal, &global_bounds)
-                    && !self
-                        .pls
-                        .explored_solutions_data()
-                        .is_registered(&g.solution)
+                belongs_to_region(
+                    &g.objectives,
+                    &self.region,
+                    &self.all_regions,
+                    &ideal,
+                    &global_bounds,
+                ) && !self
+                    .pls
+                    .explored_solutions_data()
+                    .is_registered(&g.solution)
                     && coeffs.score(&g.objectives, &self.local_ideal) < best_local_score
             })
             .map(|g| g.solution.clone())

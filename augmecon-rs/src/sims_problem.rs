@@ -511,7 +511,7 @@ pub fn create_sims_problem(config: &SimsInstance) -> MultiObjectiveProblem {
 /// When `objectives` is `Some`, only the variables, constraints, and objective
 /// functions required by those objectives are created.  This can dramatically
 /// reduce model size — for example, omitting [`SimsObjective::MinResolution`]
-/// avoids creating O(universe_size * num_images) auxiliary binary variables
+/// avoids creating `O(universe_size * num_images)` auxiliary binary variables
 /// (`z_{k,j}`) and their Big-M constraints.
 #[must_use]
 #[allow(

@@ -132,8 +132,6 @@ dependencies = [
  "calamine",
  "env_logger",
  "good_lp",
- "highs",
- "highs-sys",
  "itertools 0.14.0",
  "log",
  "num_cpus",

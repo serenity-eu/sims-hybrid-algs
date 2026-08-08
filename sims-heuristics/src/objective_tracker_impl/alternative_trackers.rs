@@ -101,19 +101,19 @@ fn alt_shared_data<const D: usize>(problem: &impl SetCoverProblem<D>) -> Arc<Alt
 
     // Build immutable shared data once.
     let num_images = problem.num_images();
-    
+
     // Build Image Elements CSR
     let mut image_elements = Vec::with_capacity(num_images * 20); // Estimate
     let mut image_elements_offsets = Vec::with_capacity(num_images + 1);
     image_elements_offsets.push(0);
-    
+
     for img in 0..num_images {
         for e in problem.image_elements(img) {
             image_elements.push(e as u32);
         }
         image_elements_offsets.push(image_elements.len());
     }
-    
+
     let image_elements = Arc::new(image_elements);
     let image_elements_offsets = Arc::new(image_elements_offsets);
 
@@ -137,19 +137,19 @@ fn alt_shared_data<const D: usize>(problem: &impl SetCoverProblem<D>) -> Arc<Alt
                 ..
             } => {
                 element_areas = Some(Arc::new(areas.clone()));
-                
+
                 // Build Clear Elements CSR
                 let mut ce = Vec::with_capacity(num_images * 20);
                 let mut ce_offsets = Vec::with_capacity(num_images + 1);
                 ce_offsets.push(0);
-                
+
                 for bits in clear_images.iter() {
                     for e in bits.ones() {
                         ce.push(e as u32);
                     }
                     ce_offsets.push(ce.len());
                 }
-                
+
                 clear_elements = Some(Arc::new(ce));
                 clear_elements_offsets = Some(Arc::new(ce_offsets));
             }
@@ -179,8 +179,7 @@ fn alt_shared_data<const D: usize>(problem: &impl SetCoverProblem<D>) -> Arc<Alt
                 image_resolution_level = Some(Arc::new(image_levels));
             }
             crate::objectives::ObjectiveState::MaxIncidenceAngle {
-                incidence_angles,
-                ..
+                incidence_angles, ..
             } => {
                 let mut levels = incidence_angles.clone();
                 levels.sort_unstable();
@@ -213,8 +212,10 @@ fn alt_shared_data<const D: usize>(problem: &impl SetCoverProblem<D>) -> Arc<Alt
         image_costs: image_costs.expect("AltTrackerArray requires TotalCost objective"),
         element_areas: element_areas.expect("AltTrackerArray requires CloudyArea objective"),
         clear_elements: clear_elements.expect("AltTrackerArray requires CloudyArea objective"),
-        clear_elements_offsets: clear_elements_offsets.expect("AltTrackerArray requires CloudyArea objective"),
-        resolution_levels: resolution_levels.expect("AltTrackerArray requires MinResolution objective"),
+        clear_elements_offsets: clear_elements_offsets
+            .expect("AltTrackerArray requires CloudyArea objective"),
+        resolution_levels: resolution_levels
+            .expect("AltTrackerArray requires MinResolution objective"),
         image_resolution_level: image_resolution_level
             .expect("AltTrackerArray requires MinResolution objective"),
         image_elements,
@@ -318,7 +319,7 @@ impl<const D: usize> ObjectiveTracker<D> for AltCloudyAreaState {
         let start = unsafe { *self.clear_elements_offsets.get_unchecked(image_index) };
         let end = unsafe { *self.clear_elements_offsets.get_unchecked(image_index + 1) };
         let clear_elements = unsafe { self.clear_elements.get_unchecked(start..end) };
-        
+
         for &element_u32 in clear_elements {
             let element_idx = element_u32 as usize;
             // Safety: element indices come from the problem's own data.
@@ -331,7 +332,6 @@ impl<const D: usize> ObjectiveTracker<D> for AltCloudyAreaState {
         delta
     }
 
-
     fn peek_addition_delta(
         &self,
         image_index: usize,
@@ -342,7 +342,7 @@ impl<const D: usize> ObjectiveTracker<D> for AltCloudyAreaState {
         let start = unsafe { *self.clear_elements_offsets.get_unchecked(image_index) };
         let end = unsafe { *self.clear_elements_offsets.get_unchecked(image_index + 1) };
         let clear_elements = unsafe { self.clear_elements.get_unchecked(start..end) };
-        
+
         for &element_u32 in clear_elements {
             let element_idx = element_u32 as usize;
             unsafe {
@@ -363,7 +363,7 @@ impl<const D: usize> ObjectiveTracker<D> for AltCloudyAreaState {
         let start = unsafe { *self.clear_elements_offsets.get_unchecked(image_index) };
         let end = unsafe { *self.clear_elements_offsets.get_unchecked(image_index + 1) };
         let clear_elements = unsafe { self.clear_elements.get_unchecked(start..end) };
-        
+
         for &element_u32 in clear_elements {
             let element_idx = element_u32 as usize;
             unsafe {
@@ -388,7 +388,7 @@ impl<const D: usize> ObjectiveTracker<D> for AltCloudyAreaState {
         let start = unsafe { *self.clear_elements_offsets.get_unchecked(image_index) };
         let end = unsafe { *self.clear_elements_offsets.get_unchecked(image_index + 1) };
         let clear_elements = unsafe { self.clear_elements.get_unchecked(start..end) };
-        
+
         for &element_u32 in clear_elements {
             let element_idx = element_u32 as usize;
             unsafe {
@@ -418,7 +418,7 @@ impl<const D: usize> ObjectiveTracker<D> for AltMinResolutionState {
     ) -> i64 {
         let img_level = self.image_resolution_level[image_index] as usize;
         let resolution_levels = &self.resolution_levels;
-        
+
         let start = unsafe { *self.image_elements_offsets.get_unchecked(image_index) };
         let end = unsafe { *self.image_elements_offsets.get_unchecked(image_index + 1) };
         let image_elements = unsafe { self.image_elements.get_unchecked(start..end) };
@@ -470,14 +470,14 @@ impl<const D: usize> ObjectiveTracker<D> for AltMinResolutionState {
                 unsafe {
                     let packed = *self.element_packed_small.get_unchecked(element_idx);
                     let count = (packed >> shift) & 0xFF;
-                    
+
                     if count == 1 {
                         // Removing the last image at this level.
                         // Check if this level was the minimum (all lower counts are 0).
                         if (packed & mask_lower) == 0 {
                             let current_val = resolution_levels[img_level];
                             let remaining = packed & mask_higher;
-                            
+
                             if remaining == 0 {
                                 delta -= current_val as i64;
                             } else {
@@ -510,11 +510,12 @@ impl<const D: usize> ObjectiveTracker<D> for AltMinResolutionState {
             }
 
             let base = element_idx * num_levels;
-            let count_at_level = unsafe { *self.element_level_counts.get_unchecked(base + img_level) };
+            let count_at_level =
+                unsafe { *self.element_level_counts.get_unchecked(base + img_level) };
             if count_at_level > 1 {
                 continue;
             }
-            
+
             // If count is 1, and it's the current minimum, finding next min is needed.
             let next_level = if mask_words == 1 {
                 let mask = unsafe { *self.element_level_masks.get_unchecked(element_idx) };
@@ -530,8 +531,10 @@ impl<const D: usize> ObjectiveTracker<D> for AltMinResolutionState {
                 let bit_idx = img_level % 64;
 
                 let first_word_mask = !(1u64 << bit_idx);
-                let first_word = unsafe { 
-                    *self.element_level_masks.get_unchecked(element_masks_base + word_idx) 
+                let first_word = unsafe {
+                    *self
+                        .element_level_masks
+                        .get_unchecked(element_masks_base + word_idx)
                 } & first_word_mask;
 
                 if first_word != 0 {
@@ -611,32 +614,32 @@ impl<const D: usize> ObjectiveTracker<D> for AltMinResolutionState {
         }
 
         if !self.element_packed_small.is_empty() {
-             let mut delta: i64 = 0;
-             let shift = img_level * 8;
-             let mask_lower = (1u64 << shift) - 1;
-             
-             for &element_u32 in image_elements {
-                 let element_idx = element_u32 as usize;
-                 unsafe {
-                     let packed = *self.element_packed_small.get_unchecked(element_idx);
-                     // Only changes if no better (lower index) levels count > 0
-                     if (packed & mask_lower) == 0 {
-                         let count = (packed >> shift) & 0xFF;
-                         if count == 0 {
-                             let current_val = resolution_levels[img_level];
-                             if packed == 0 {
-                                 delta += current_val as i64;
-                             } else {
-                                 // Was covered by something worse (higher index)
-                                 let old_min_level = packed.trailing_zeros() / 8;
-                                 let old_val = resolution_levels[old_min_level as usize];
-                                 delta += (current_val as i64) - (old_val as i64);
-                             }
-                         }
-                     }
-                 }
-             }
-             return delta;
+            let mut delta: i64 = 0;
+            let shift = img_level * 8;
+            let mask_lower = (1u64 << shift) - 1;
+
+            for &element_u32 in image_elements {
+                let element_idx = element_u32 as usize;
+                unsafe {
+                    let packed = *self.element_packed_small.get_unchecked(element_idx);
+                    // Only changes if no better (lower index) levels count > 0
+                    if (packed & mask_lower) == 0 {
+                        let count = (packed >> shift) & 0xFF;
+                        if count == 0 {
+                            let current_val = resolution_levels[img_level];
+                            if packed == 0 {
+                                delta += current_val as i64;
+                            } else {
+                                // Was covered by something worse (higher index)
+                                let old_min_level = packed.trailing_zeros() / 8;
+                                let old_val = resolution_levels[old_min_level as usize];
+                                delta += (current_val as i64) - (old_val as i64);
+                            }
+                        }
+                    }
+                }
+            }
+            return delta;
         }
 
         let mut delta: i64 = 0;
@@ -721,25 +724,25 @@ impl<const D: usize> ObjectiveTracker<D> for AltMinResolutionState {
         if !self.element_packed_small.is_empty() {
             let mut delta: i64 = 0;
             let shift = img_level * 8;
-            let mask_lower = (1u64 << shift) - 1; 
-            
+            let mask_lower = (1u64 << shift) - 1;
+
             for &element_u32 in image_elements {
                 let element_idx = element_u32 as usize;
-                
+
                 unsafe {
                     let slot = self.element_packed_small.get_unchecked_mut(element_idx);
                     let packed = *slot;
                     let count = (packed >> shift) & 0xFF;
-                    
+
                     *slot = packed - (1u64 << shift);
-                    
+
                     if count == 1 {
                         // Count dropped to 0. Min might change.
                         if (packed & mask_lower) == 0 {
                             // Was min level.
                             let remaining = *slot;
                             let current_val = resolution_levels[img_level];
-                            
+
                             if remaining == 0 {
                                 self.current_sum -= current_val;
                                 delta -= current_val as i64;
@@ -764,11 +767,16 @@ impl<const D: usize> ObjectiveTracker<D> for AltMinResolutionState {
         for &element_u32 in image_elements {
             let element_idx = element_u32 as usize;
             let base = element_idx * num_levels;
-            let count_slot = unsafe { self.element_level_counts.get_unchecked_mut(base + img_level) };
-            
+            let count_slot = unsafe {
+                self.element_level_counts
+                    .get_unchecked_mut(base + img_level)
+            };
+
             // Assume count > 0 for valid removal, but check only if needed or keep check for safety.
             // Keeping safety for now:
-            if *count_slot == 0 { continue; }
+            if *count_slot == 0 {
+                continue;
+            }
             *count_slot -= 1;
 
             if *count_slot > 0 {
@@ -779,7 +787,7 @@ impl<const D: usize> ObjectiveTracker<D> for AltMinResolutionState {
                 // But we must NOT update masks if count > 0.
                 continue;
             }
-            
+
             // Claim: Count dropped to 0. Update mask.
             let element_masks_base = element_idx * mask_words;
             let word_idx = img_level / 64;
@@ -790,16 +798,16 @@ impl<const D: usize> ObjectiveTracker<D> for AltMinResolutionState {
                     .get_unchecked_mut(element_masks_base + word_idx);
                 *m &= !(1u64 << bit_idx);
             }
-            
+
             // Now check if this affects the minimum.
             let current_min_level = unsafe { *self.element_min_level.get_unchecked(element_idx) };
-            
+
             // Optimization: if img_level > current_min_level, no change to min.
             if (img_level as u8) > current_min_level {
                 // If it was equal, we need to check. If it was less (impossible if min is maintained), ...
                 continue;
             }
-            
+
             // Here img_level == current_min_level (or <, which implies logic error previously, but equality is the constraint).
             // Since count dropped to 0, we must find new min.
 
@@ -902,35 +910,35 @@ impl<const D: usize> ObjectiveTracker<D> for AltMinResolutionState {
         }
 
         if !self.element_packed_small.is_empty() {
-             let mut delta: i64 = 0;
-             let shift = img_level * 8;
-             let mask_lower = (1u64 << shift) - 1;
-             
-             for &element_u32 in image_elements {
-                 let element_idx = element_u32 as usize;
-                 unsafe {
-                     let slot = self.element_packed_small.get_unchecked_mut(element_idx);
-                     let packed = *slot;
-                     
-                     if (packed & mask_lower) == 0 {
-                         let count = (packed >> shift) & 0xFF;
-                         if count == 0 {
-                             let current_val = resolution_levels[img_level];
-                             if packed == 0 {
-                                 self.current_sum += current_val;
-                                 delta += current_val as i64;
-                             } else {
-                                 let old_min_level = packed.trailing_zeros() / 8;
-                                 let old_val = resolution_levels[old_min_level as usize];
-                                 self.current_sum = self.current_sum - old_val + current_val;
-                                 delta += (current_val as i64) - (old_val as i64);
-                             }
-                         }
-                     }
-                     *slot = packed + (1u64 << shift);
-                 }
-             }
-             return delta;
+            let mut delta: i64 = 0;
+            let shift = img_level * 8;
+            let mask_lower = (1u64 << shift) - 1;
+
+            for &element_u32 in image_elements {
+                let element_idx = element_u32 as usize;
+                unsafe {
+                    let slot = self.element_packed_small.get_unchecked_mut(element_idx);
+                    let packed = *slot;
+
+                    if (packed & mask_lower) == 0 {
+                        let count = (packed >> shift) & 0xFF;
+                        if count == 0 {
+                            let current_val = resolution_levels[img_level];
+                            if packed == 0 {
+                                self.current_sum += current_val;
+                                delta += current_val as i64;
+                            } else {
+                                let old_min_level = packed.trailing_zeros() / 8;
+                                let old_val = resolution_levels[old_min_level as usize];
+                                self.current_sum = self.current_sum - old_val + current_val;
+                                delta += (current_val as i64) - (old_val as i64);
+                            }
+                        }
+                    }
+                    *slot = packed + (1u64 << shift);
+                }
+            }
+            return delta;
         }
 
         let num_levels = resolution_levels.len();
@@ -942,7 +950,9 @@ impl<const D: usize> ObjectiveTracker<D> for AltMinResolutionState {
             let element_idx = element_u32 as usize;
             let base = element_idx * num_levels;
             unsafe {
-                let slot = self.element_level_counts.get_unchecked_mut(base + img_level);
+                let slot = self
+                    .element_level_counts
+                    .get_unchecked_mut(base + img_level);
                 let was_zero = *slot == 0;
                 *slot += 1;
                 if was_zero {
@@ -1238,9 +1248,9 @@ impl<const D: usize> TrackerCollection<D> for AltTrackerArray<D> {
                         Vec::new()
                     },
                     element_packed_small: if small_level {
-                         vec![0; problem.num_elements()]
+                        vec![0; problem.num_elements()]
                     } else {
-                         Vec::new()
+                        Vec::new()
                     },
                     element_level_counts: if two_level || small_level {
                         Vec::new()
@@ -1252,7 +1262,11 @@ impl<const D: usize> TrackerCollection<D> for AltTrackerArray<D> {
                     } else {
                         vec![0; problem.num_elements() * mask_words]
                     },
-                    mask_words: if two_level || small_level { 0 } else { mask_words as u8 },
+                    mask_words: if two_level || small_level {
+                        0
+                    } else {
+                        mask_words as u8
+                    },
                     element_min_level: if two_level || small_level {
                         Vec::new()
                     } else {

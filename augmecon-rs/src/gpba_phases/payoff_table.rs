@@ -169,7 +169,7 @@ mod tests {
     #[test]
     fn test_payoff_table_values_simple_problem() {
         const TOL: f64 = 1e-3;
-        
+
         // Test with known optimal values
         let problem = create_simple_2obj_problem();
         let options = Options::default();

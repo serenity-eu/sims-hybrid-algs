@@ -1,11 +1,13 @@
 //! Benchmark GPBA-A on a single SIMS instance across available solvers.
 //!
 //! Usage:
-//!   cargo run --release --bin solver-benchmark --features coin_cbc \
-//!     -- --dzn tests/input/sims/lagos_nigeria_30.dzn --solver coin_cbc --timeout 120
+//! ```text
+//! cargo run --release --bin solver-benchmark --features coin_cbc \
+//!   -- --dzn tests/input/sims/lagos_nigeria_30.dzn --solver coin_cbc --timeout 120
 //!
-//!   cargo run --release --bin solver-benchmark --features scip,scip_bundled \
-//!     -- --dzn tests/input/sims/lagos_nigeria_30.dzn --solver scip --timeout 120
+//! cargo run --release --bin solver-benchmark --features scip,scip_bundled \
+//!   -- --dzn tests/input/sims/lagos_nigeria_30.dzn --solver scip --timeout 120
+//! ```
 
 use std::{
     collections::HashSet,
@@ -260,12 +262,9 @@ fn parse_dzn(path: &PathBuf) -> Result<SimsInstance, Box<dyn std::error::Error>>
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
 
-    let args = match parse_args() {
-        Some(a) => a,
-        None => {
-            usage();
-            std::process::exit(1);
-        }
+    let Some(args) = parse_args() else {
+        usage();
+        std::process::exit(1);
     };
 
     println!("Instance        : {}", args.dzn.display());

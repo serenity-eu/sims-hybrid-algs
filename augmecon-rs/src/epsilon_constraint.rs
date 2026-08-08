@@ -30,13 +30,15 @@ use crate::{
     options::Options,
     solution::{self, HasObjectives, Solution},
 };
-use good_lp::solvers::lp_solvers::{GurobiSolver, WithMaxSeconds};
 #[cfg(feature = "coin_cbc")]
 use good_lp::solvers::coin_cbc;
 #[cfg(feature = "highs")]
 use good_lp::solvers::highs;
+use good_lp::solvers::lp_solvers::{GurobiSolver, WithMaxSeconds};
 #[cfg(feature = "scip")]
 use good_lp::solvers::scip;
+#[cfg(feature = "gurobi")]
+use good_lp::solvers::{gurobi::gurobi, WithTimeLimit};
 use good_lp::{constraint, variable, Expression, Solution as GoodLpSolution, SolverModel};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -51,7 +53,10 @@ fn create_solver() -> good_lp::solvers::lp_solvers::LpSolver<GurobiSolver> {
 fn create_solver_with_timeout(
     timeout: Duration,
 ) -> good_lp::solvers::lp_solvers::LpSolver<GurobiSolver> {
-    #[allow(clippy::cast_possible_truncation, reason = "Timeout duration in seconds is expected to fit in u32 for Gurobi solver API - values over 4.2 billion seconds (136 years) are not realistic")]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "Timeout duration in seconds is expected to fit in u32 for Gurobi solver API - values over 4.2 billion seconds (136 years) are not realistic"
+    )]
     let seconds = timeout.as_secs() as u32;
     let gurobi = GurobiSolver::new().with_max_seconds(seconds);
     good_lp::solvers::lp_solvers::LpSolver(gurobi)
@@ -251,7 +256,8 @@ impl<'a> EpsilonConstraintBuilder<'a> {
             )),
             #[cfg(not(feature = "coin_cbc"))]
             crate::solver_enum::Solver::CoinCbc => Err(AugmeconError::UnsupportedSolver(
-                "CoinCbc solver is not available. Enable the 'coin_cbc' feature to use it.".to_string(),
+                "CoinCbc solver is not available. Enable the 'coin_cbc' feature to use it."
+                    .to_string(),
             )),
             #[cfg(feature = "highs")]
             crate::solver_enum::Solver::HiGHS => Ok(self.solve_with_highs_impl(
@@ -278,6 +284,20 @@ impl<'a> EpsilonConstraintBuilder<'a> {
             #[cfg(not(feature = "scip"))]
             crate::solver_enum::Solver::SCIP => Err(AugmeconError::UnsupportedSolver(
                 "SCIP solver is not available. Enable the 'scip' feature to use it.".to_string(),
+            )),
+            #[cfg(feature = "gurobi")]
+            crate::solver_enum::Solver::Gurobi => Ok(self.solve_with_gurobi_impl(
+                prob_vars,
+                &augmented_primary,
+                *direction,
+                &slack_vars,
+                &penalty_sum,
+                epsilon_augmentation,
+            )),
+            #[cfg(not(feature = "gurobi"))]
+            crate::solver_enum::Solver::Gurobi => Err(AugmeconError::UnsupportedSolver(
+                "Gurobi solver is not available. Enable the 'gurobi' feature to use it."
+                    .to_string(),
             )),
         }
     }
@@ -345,7 +365,8 @@ impl<'a> EpsilonConstraintBuilder<'a> {
             )),
             #[cfg(not(feature = "coin_cbc"))]
             crate::solver_enum::Solver::CoinCbc => Err(AugmeconError::UnsupportedSolver(
-                "CoinCbc solver is not available. Enable the 'coin_cbc' feature to use it.".to_string(),
+                "CoinCbc solver is not available. Enable the 'coin_cbc' feature to use it."
+                    .to_string(),
             )),
             #[cfg(feature = "highs")]
             crate::solver_enum::Solver::HiGHS => Ok(self.solve_with_slack_highs_impl(
@@ -374,6 +395,21 @@ impl<'a> EpsilonConstraintBuilder<'a> {
             #[cfg(not(feature = "scip"))]
             crate::solver_enum::Solver::SCIP => Err(AugmeconError::UnsupportedSolver(
                 "SCIP solver is not available. Enable the 'scip' feature to use it.".to_string(),
+            )),
+            #[cfg(feature = "gurobi")]
+            crate::solver_enum::Solver::Gurobi => Ok(self.solve_with_slack_gurobi_impl(
+                prob_vars,
+                &augmented_primary,
+                *direction,
+                &slack_vars,
+                &penalty_sum,
+                epsilon_augmentation,
+                timeout,
+            )),
+            #[cfg(not(feature = "gurobi"))]
+            crate::solver_enum::Solver::Gurobi => Err(AugmeconError::UnsupportedSolver(
+                "Gurobi solver is not available. Enable the 'gurobi' feature to use it."
+                    .to_string(),
             )),
         }
     }
@@ -813,6 +849,62 @@ impl<'a> EpsilonConstraintBuilder<'a> {
         }
     }
 
+    /// Solve with the native Gurobi (`grb`) backend.
+    #[cfg(feature = "gurobi")]
+    fn solve_with_gurobi_impl(
+        &self,
+        prob_vars: good_lp::ProblemVariables,
+        augmented_primary: &Expression,
+        direction: crate::model::ObjectiveDirection,
+        slack_vars: &HashMap<usize, good_lp::Variable>,
+        penalty_sum: &Expression,
+        epsilon_augmentation: f64,
+    ) -> Option<Solution> {
+        let problem = match direction {
+            crate::model::ObjectiveDirection::Minimize => {
+                prob_vars.minimise(augmented_primary.clone())
+            }
+            crate::model::ObjectiveDirection::Maximize => {
+                prob_vars.maximise(augmented_primary.clone())
+            }
+        };
+
+        let mut model = problem.using(gurobi);
+
+        // Note: generic parameter setting is not wired for the Gurobi backend.
+        if !self.options.solver_parameters.is_empty() {
+            log::warn!(
+                "Gurobi backend does not support generic parameters, ignoring {} parameters",
+                self.options.solver_parameters.len()
+            );
+        }
+
+        // Add constraints
+        self.add_constraints_to_model(&mut model, slack_vars);
+
+        log::debug!(
+            "Solving epsilon-constraint problem with {} epsilon constraints using Gurobi",
+            self.epsilon_values.len()
+        );
+
+        match model.solve() {
+            Ok(solution) => {
+                let sol = self.extract_solution(
+                    &solution,
+                    penalty_sum,
+                    augmented_primary,
+                    epsilon_augmentation,
+                    slack_vars,
+                );
+                Some(sol)
+            }
+            Err(e) => {
+                log::debug!("Epsilon-constraint problem failed with Gurobi: {e:?}");
+                None
+            }
+        }
+    }
+
     /// Solve with SCIP solver implementation
     #[cfg(feature = "scip")]
     fn solve_with_scip_impl(
@@ -895,7 +987,9 @@ impl<'a> EpsilonConstraintBuilder<'a> {
 
         // Bound this subproblem's wall-clock; CBC returns its incumbent at the limit.
         if let Some(t) = timeout {
-            model.set_parameter("sec", &(t.as_secs_f64().ceil() as u64).to_string());
+            // Integer ceil of the duration in whole seconds (no float cast).
+            let secs = t.as_secs() + u64::from(t.subsec_nanos() > 0);
+            model.set_parameter("sec", &secs.to_string());
         }
 
         // Apply solver parameters if specified
@@ -993,6 +1087,83 @@ impl<'a> EpsilonConstraintBuilder<'a> {
         // Solve the problem
         log::info!(
             "Solving ε-constraint: optimize obj[{}], constraints: {:?} using HiGHS",
+            self.primary_objective,
+            self.epsilon_values
+        );
+
+        match model.solve() {
+            Ok(solution) => {
+                let sol = self.extract_solution_with_slack(
+                    &solution,
+                    penalty_sum,
+                    augmented_primary,
+                    epsilon_augmentation,
+                    slack_vars,
+                );
+                log::info!(
+                    "ε-constraint solved: obj[{}]={:.2}, feasible={}, slacks present={}",
+                    self.primary_objective,
+                    sol.solution.objectives()[self.primary_objective],
+                    sol.solution.feasible,
+                    !sol.slack_values.is_empty()
+                );
+                Some(sol)
+            }
+            Err(e) => {
+                log::info!(
+                    "ε-constraint INFEASIBLE: obj[{}], constraints: {:?}",
+                    self.primary_objective,
+                    self.epsilon_values
+                );
+                log::debug!("Infeasibility reason: {e:?}");
+                None
+            }
+        }
+    }
+
+    /// Solve with slack - native Gurobi (`grb`) backend.
+    #[cfg(feature = "gurobi")]
+    fn solve_with_slack_gurobi_impl(
+        &self,
+        prob_vars: good_lp::ProblemVariables,
+        augmented_primary: &Expression,
+        direction: crate::model::ObjectiveDirection,
+        slack_vars: &HashMap<usize, good_lp::Variable>,
+        penalty_sum: &Expression,
+        epsilon_augmentation: f64,
+        timeout: Option<Duration>,
+    ) -> Option<SolutionWithSlack> {
+        crate::verify::bump(&crate::verify::SLACK_SOLVES);
+        let problem = match direction {
+            crate::model::ObjectiveDirection::Minimize => {
+                prob_vars.minimise(augmented_primary.clone())
+            }
+            crate::model::ObjectiveDirection::Maximize => {
+                prob_vars.maximise(augmented_primary.clone())
+            }
+        };
+
+        let mut model = problem.using(gurobi);
+
+        // Bound this subproblem's wall-clock. Gurobi honours TimeLimit natively
+        // (no presolve workaround needed) and returns its incumbent on the limit,
+        // which good_lp maps to Ok — a valid feasible Pareto candidate.
+        if let Some(t) = timeout {
+            model = model.with_time_limit(t.as_secs_f64());
+        }
+
+        if !self.options.solver_parameters.is_empty() {
+            log::warn!(
+                "Gurobi backend does not support generic parameters, ignoring {} parameters",
+                self.options.solver_parameters.len()
+            );
+        }
+
+        // Add constraints
+        self.add_constraints_to_model(&mut model, slack_vars);
+
+        log::info!(
+            "Solving ε-constraint: optimize obj[{}], constraints: {:?} using Gurobi",
             self.primary_objective,
             self.epsilon_values
         );

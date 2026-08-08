@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 import json
 from pathlib import Path
+from typing import Optional
 
 
 class SolverType(StrEnum):
@@ -13,6 +14,9 @@ class SolverType(StrEnum):
     CBC = "coin_cbc"
     HIGHS = "highs"
     SCIP = "scip"
+    NSGA2 = "nsga2"
+    NSGA3 = "nsga3"
+    MOEAD = "moead"
 
     def __repr__(self) -> str:
         match self:
@@ -32,6 +36,12 @@ class SolverType(StrEnum):
                 return "HiGHS"
             case SolverType.SCIP:
                 return "SCIP"
+            case SolverType.NSGA2:
+                return "NSGA-II"
+            case SolverType.NSGA3:
+                return "NSGA-III"
+            case SolverType.MOEAD:
+                return "MOEA/D"
             case _:
                 return "Unknown"
 
@@ -74,6 +84,8 @@ class SolverConfig:
     front_strategy: FrontStrategy | None
     timeout_s: int
     ratio_step: int = 20
+    phase2_solver_type: SolverType = SolverType.PLS
+    pseudo_solver_dir: Optional[Path] = None
 
     def to_dict(self) -> dict:
         return {
@@ -103,3 +115,5 @@ class TwoPhaseSolverConfig:
     front_strategy: FrontStrategy
     timeout_s: int
     ratio: tuple[int, int]
+    phase2_solver_type: SolverType = SolverType.PLS
+

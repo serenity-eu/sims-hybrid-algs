@@ -13,7 +13,7 @@ except ImportError:
 from .problem import ProblemInstance
 from .solver_config import FrontStrategy, SolverType, TwoPhaseSolverConfig
 from .solver_result import Solution, SolverResult, TwoPhaseSolverResult
-from .solvers import gurobi, ortools, pareto_local_search, python_milp
+from .solvers import evolutionary, gurobi, ortools, pareto_local_search, python_milp
 
 log = logging.getLogger(Path(__file__).stem)
 
@@ -145,6 +145,17 @@ def solve(
                 use_greedy_initial_population=use_greedy_initial_population,
                 use_perturbation_restart=use_perturbation_restart,
             )
+        case SolverType.NSGA2 | SolverType.NSGA3 | SolverType.MOEAD:
+            result = evolutionary.solve(
+                solver_type,
+                problem_instance,
+                timeout_s,
+                objectives,
+                initial_population=initial_population,
+                objective_bounds=objective_bounds,
+                include_dominated=include_dominated,
+                trace=enable_trace,
+            )
         case _:
             raise ValueError(f"Solver type {solver_type} is not supported")
 
@@ -239,20 +250,21 @@ def solve_with_two_phases(
         )
 
     if pls_time != 0:
+        phase2_type = solver_config.phase2_solver_type or SolverType.PLS
         log.info(
-            f"[{problem_instance.name}] - running Pareto Local Search for {pls_time} seconds..."
+            f"[{problem_instance.name}] - running {repr(phase2_type)} for {pls_time} seconds..."
         )
 
         if not dry_run:
             # Convert initial population from first phase results if available
             initial_population = None
             if exact_solver_result is not None and exact_solver_result.pareto_front:
-                # Use solutions from the first phase as initial population for PLS
+                # Use solutions from the first phase as initial population for phase 2
                 initial_population = exact_solver_result.pareto_front
-                log.info(f"[{problem_instance.name}] - seeding PLS with {len(initial_population)} solutions from MILP phase")
+                log.info(f"[{problem_instance.name}] - seeding {repr(phase2_type)} with {len(initial_population)} solutions from exact phase")
 
             pls_result = solve(
-                SolverType.PLS,
+                phase2_type,
                 problem_instance,
                 problem_path,
                 pls_time,
@@ -275,10 +287,10 @@ def solve_with_two_phases(
                 use_perturbation_restart=use_perturbation_restart,
             )
 
-            log.info(f"[{problem_instance.name}][solve_with_two_phases] - PLS found {len(pls_result.pareto_front)} solutions")
+            log.info(f"[{problem_instance.name}][solve_with_two_phases] - {repr(phase2_type)} found {len(pls_result.pareto_front)} solutions")
 
         log.info(
-            f"[{problem_instance.name}] - running Pareto Local Search for {pls_time} seconds...Done"
+            f"[{problem_instance.name}] - running {repr(phase2_type)} for {pls_time} seconds...Done"
         )
 
     two_phase_result = TwoPhaseSolverResult.from_results_pair(exact_solver_result, pls_result, solver_config, filter_invalid=False)

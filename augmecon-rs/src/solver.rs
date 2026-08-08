@@ -914,7 +914,7 @@ impl Augmecon {
 
     /// Get the number of solutions found so far
     #[must_use]
-    pub fn get_solutions_found(&self) -> usize {
+    pub const fn get_solutions_found(&self) -> usize {
         self.pareto_front.len()
     }
 

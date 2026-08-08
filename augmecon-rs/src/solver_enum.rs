@@ -16,8 +16,13 @@ pub enum Solver {
     /// `HiGHS` solver - high performance linear programming solver
     HiGHS,
     /// SCIP solver - Solving Constraint Integer Programs
-    #[allow(clippy::upper_case_acronyms, reason = "SCIP is the official name of the solver and should remain capitalized")]
+    #[allow(
+        clippy::upper_case_acronyms,
+        reason = "SCIP is the official name of the solver and should remain capitalized"
+    )]
     SCIP,
+    /// Gurobi solver via the native `grb` linked-library backend (not `gurobi_cl`)
+    Gurobi,
 }
 
 impl Solver {
@@ -29,6 +34,7 @@ impl Solver {
             Self::CoinCbc => "COIN-OR CBC",
             Self::HiGHS => "HiGHS",
             Self::SCIP => "SCIP",
+            Self::Gurobi => "Gurobi",
         }
     }
 
@@ -38,7 +44,7 @@ impl Solver {
         match self {
             Self::CoinCbc => true,
             // Gurobi via lp-solvers and HiGHS don't support generic parameter setting
-            Self::Default | Self::HiGHS | Self::SCIP => false,
+            Self::Default | Self::HiGHS | Self::SCIP | Self::Gurobi => false,
         }
     }
 }
@@ -57,8 +63,10 @@ impl std::str::FromStr for Solver {
             "default" => Ok(Self::Default),
             "coin_cbc" => Ok(Self::CoinCbc),
             "highs" => Ok(Self::HiGHS),
+            "scip" => Ok(Self::SCIP),
+            "gurobi" => Ok(Self::Gurobi),
             _ => Err(format!(
-                "Unknown solver: {s}. Available solvers: default, coin_cbc, highs"
+                "Unknown solver: {s}. Available solvers: default, coin_cbc, highs, scip, gurobi"
             )),
         }
     }

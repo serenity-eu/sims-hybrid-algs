@@ -125,7 +125,8 @@ where
         Self: 'a,
     {
         // Default implementation: collect from neighborhood() for backward compatibility
-        let iter = self.neighborhood(k, problem, timer, is_deterministic, trackers)
+        let iter = self
+            .neighborhood(k, problem, timer, is_deterministic, trackers)
             .into_iter();
         if let Some(budget) = optimizations.neighborhood_budget {
             Box::new(iter.take(budget))

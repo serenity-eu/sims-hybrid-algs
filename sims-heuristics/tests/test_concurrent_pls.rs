@@ -10,10 +10,10 @@ use std::time::Duration;
 use pareto::ParetoFront;
 use pls::{
     concurrent_pls::{
+        ConcurrentPLS, ConcurrentPLSConfig, RegionSearchMode,
         decomposition::{
             assign_to_regions, belongs_to_region, build_regions, das_dennis_weight_vectors,
         },
-        ConcurrentPLS, ConcurrentPLSConfig, RegionSearchMode,
     },
     objectives::ObjectiveType,
     pareto_local_search::ParetoLocalSearch,
@@ -83,7 +83,11 @@ fn assign_to_regions_hard_boundary() {
     // whose weight emphasizes objective 0.
     let objectives = [1u64, 100, 100, 100];
     let assigned = assign_to_regions(&objectives, &regions, &ideal, &bounds, 0.0);
-    assert_eq!(assigned.len(), 1, "Hard boundary (threshold=0) should assign to exactly 1 region");
+    assert_eq!(
+        assigned.len(),
+        1,
+        "Hard boundary (threshold=0) should assign to exactly 1 region"
+    );
 }
 
 #[test]
@@ -110,7 +114,13 @@ fn belongs_to_region_is_consistent_with_assign() {
     assert!(!assigned.is_empty());
     let best_region_idx = assigned[0];
     assert!(
-        belongs_to_region(&objectives, &regions[best_region_idx], &regions, &ideal, &bounds),
+        belongs_to_region(
+            &objectives,
+            &regions[best_region_idx],
+            &regions,
+            &ideal,
+            &bounds
+        ),
         "Best-assigned region should pass belongs_to_region"
     );
 }
@@ -129,14 +139,20 @@ fn concurrent_pls_4_threads_produces_nonempty_front() {
     let result = ConcurrentPLS::<Solution, Problem, NUM_OBJECTIVES>::new(&problem, config)
         .solve(&initial_pop);
 
-    assert!(!result.archive.is_empty(), "Final archive must be non-empty");
+    assert!(
+        !result.archive.is_empty(),
+        "Final archive must be non-empty"
+    );
     assert!(
         result.archive.len() >= initial_size,
         "Concurrent PLS should find at least as many solutions as the initial population ({} vs {})",
         result.archive.len(),
         initial_size,
     );
-    assert_eq!(result.num_regions, 4, "H=1 with D=4 gives exactly 4 regions");
+    assert_eq!(
+        result.num_regions, 4,
+        "H=1 with D=4 gives exactly 4 regions"
+    );
     assert_eq!(
         result.region_results.len(),
         4,
@@ -306,7 +322,10 @@ fn sa_pls_produces_nonempty_front() {
     let result = ConcurrentPLS::<Solution, Problem, NUM_OBJECTIVES>::new(&problem, config)
         .solve(&initial_pop);
 
-    assert!(!result.archive.is_empty(), "SA-PLS must produce a non-empty archive");
+    assert!(
+        !result.archive.is_empty(),
+        "SA-PLS must produce a non-empty archive"
+    );
     assert!(
         result.archive.len() >= initial_size,
         "SA-PLS should find at least as many solutions as the initial population ({} vs {})",
@@ -336,7 +355,10 @@ fn sa_pls_with_fallback_runs_unconstrained_after_exhaustion() {
     let result = ConcurrentPLS::<Solution, Problem, NUM_OBJECTIVES>::new(&problem, config)
         .solve(&initial_pop);
 
-    assert!(!result.archive.is_empty(), "SA-PLS with fallback must produce solutions");
+    assert!(
+        !result.archive.is_empty(),
+        "SA-PLS with fallback must produce solutions"
+    );
 
     // At least one region should have reached scalarized exhaustion and continued
     // with standard PLS (giving it more iterations).

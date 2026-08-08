@@ -563,13 +563,11 @@ impl<const D: usize> TrackerCollection<D> for StandardTrackerArray<D> {
                 }
                 crate::objectives::ObjectiveState::MaxIncidenceAngle {
                     incidence_angles, ..
-                } => {
-                    StandardTracker::MaxIncidenceAngle(MaxIncidenceAngleState {
-                        sorted_angles: Vec::with_capacity(200),
-                        image_incidence_angles: Arc::new(incidence_angles.clone()),
-                        current_max: 0,
-                    })
-                }
+                } => StandardTracker::MaxIncidenceAngle(MaxIncidenceAngleState {
+                    sorted_angles: Vec::with_capacity(200),
+                    image_incidence_angles: Arc::new(incidence_angles.clone()),
+                    current_max: 0,
+                }),
             }
         });
 

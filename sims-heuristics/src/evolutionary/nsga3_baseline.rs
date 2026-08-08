@@ -40,10 +40,9 @@
 
 use std::time::Duration;
 
-use pareto::{HasObjectives, MoSolution};
-use rand::rngs::SmallRng;
 use rand::Rng;
 use rand::SeedableRng;
+use rand::rngs::SmallRng;
 use tracing::{info, info_span};
 
 use crate::explored_solutions_data::ExploredSolutionsData;
@@ -52,7 +51,7 @@ use crate::solution_impl::bitset_encoded_solution::BitsetEncodedSolution;
 use crate::timer::Timer;
 
 use super::nsga2_baseline::archive_update;
-use super::nsga3::{closest_reference_point, compute_intercepts};
+use super::nsga3::{closest_reference_point, normalise_front};
 use super::operators::{
     bitflip_mutation, fast_non_dominated_sort, generate_weight_vectors, random_population,
     uniform_crossover,
@@ -279,77 +278,9 @@ where
     ) {
         let n_refs = self.reference_points.len();
 
-        // Step 1: ideal point over next_gen ∪ last_front.
-        let mut ideal = [f64::INFINITY; D];
-        for sol in next_gen.iter() {
-            for d in 0..D {
-                let v = sol.objectives()[d] as f64;
-                if v < ideal[d] {
-                    ideal[d] = v;
-                }
-            }
-        }
-        for &idx in last_front {
-            for d in 0..D {
-                let v = combined[idx].objectives()[d] as f64;
-                if v < ideal[d] {
-                    ideal[d] = v;
-                }
-            }
-        }
-
-        // Step 2: translate.
-        let translated: Vec<[f64; D]> = next_gen
-            .iter()
-            .chain(last_front.iter().map(|&i| &combined[i]))
-            .map(|sol| {
-                let mut t = [0.0f64; D];
-                for d in 0..D {
-                    t[d] = sol.objectives()[d] as f64 - ideal[d];
-                }
-                t
-            })
-            .collect();
-
+        // Steps 1-5: adaptive normalisation (Algorithm 2).
         let next_gen_count = next_gen.len();
-
-        // Step 3: extreme points via ASF.
-        let mut extreme = [[0.0f64; D]; D];
-        for j in 0..D {
-            let mut best_asf = f64::INFINITY;
-            let mut best_idx = 0;
-            for (i, t) in translated.iter().enumerate() {
-                let asf = (0..D)
-                    .map(|k| {
-                        let w = if k == j { 1.0 } else { 1e-6 };
-                        t[k] / w
-                    })
-                    .fold(f64::NEG_INFINITY, f64::max);
-                if asf < best_asf {
-                    best_asf = asf;
-                    best_idx = i;
-                }
-            }
-            extreme[j] = translated[best_idx];
-        }
-
-        // Step 4: hyperplane intercepts.
-        let intercepts = compute_intercepts(&extreme);
-
-        // Step 5: normalize.
-        let normalise = |t: &[f64; D]| -> [f64; D] {
-            let mut n = [0.0f64; D];
-            for d in 0..D {
-                let denom = intercepts[d];
-                n[d] = if denom.abs() > 1e-10 {
-                    t[d] / denom
-                } else {
-                    t[d]
-                };
-            }
-            n
-        };
-        let norm_all: Vec<[f64; D]> = translated.iter().map(normalise).collect();
+        let norm_all = normalise_front(next_gen, combined, last_front);
 
         // Step 6: associate.
         let assoc: Vec<(usize, f64)> = norm_all
@@ -431,12 +362,14 @@ where
     }
 
     /// Get a reference to the current population.
+    #[must_use]
     pub fn population(&self) -> &[BitsetEncodedSolution<P, D>] {
         &self.population
     }
 
     /// Get explored solutions data (compatible with PLS/EA output format).
-    pub fn explored_solutions_data(&self) -> &ExploredSolutionsData<D> {
+    #[must_use]
+    pub const fn explored_solutions_data(&self) -> &ExploredSolutionsData<D> {
         &self.explored_solutions
     }
 }
@@ -484,6 +417,7 @@ mod tests {
     use crate::objectives::ObjectiveType;
     use crate::problem::SIMSProblemInstanceRaw;
     use crate::problem_bitset::ProblemBitset;
+    use pareto::{HasObjectives, MoSolution};
 
     const NUM_OBJECTIVES: usize = 4;
     const OBJECTIVE_TYPES: [ObjectiveType; NUM_OBJECTIVES] = [
@@ -563,8 +497,7 @@ mod tests {
 
         assert!(
             elapsed < Duration::from_secs(2),
-            "Should respect timeout, but took {:?}",
-            elapsed
+            "Should respect timeout, but took {elapsed:?}"
         );
     }
 

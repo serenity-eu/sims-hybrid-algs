@@ -45,6 +45,12 @@ default = []
 highs = ["good_lp/highs"]
 coin_cbc = ["good_lp/coin_cbc"]
 scip = ["good_lp/scip", "good_lp/scip_bundled"]
+# Native Gurobi backend. Bare flag: it only gates the `#[cfg(feature = "gurobi")]`
+# code paths. The default git `good_lp` has no `gurobi` backend, so to actually
+# build this feature, point good_lp at a fork that provides it via a local
+# `[patch."https://github.com/hlvlad/good_lp"]` (the vendored fork is a large
+# local checkout and is intentionally not committed).
+gurobi = []
 
 [dev-dependencies]
 approx = "0.5.1"

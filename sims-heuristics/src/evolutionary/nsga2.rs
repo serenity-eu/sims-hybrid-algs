@@ -155,10 +155,10 @@ where
 /// Per-generation diagnostics for evolutionary search dynamics.
 #[derive(Debug, Clone, Default)]
 struct EvolutionDiagnostics {
-    offspring_generated: usize,
-    offspring_novel_genotype: usize,
-    offspring_novel_objectives: usize,
-    offspring_archive_inserted: usize,
+    generated: usize,
+    novel_genotype: usize,
+    novel_objectives: usize,
+    archive_inserted: usize,
 }
 
 impl<'a, P, const D: usize> Nsga2<'a, P, D>
@@ -300,13 +300,13 @@ where
 
             // Register offspring and incrementally update archive
             let mut diagnostics = EvolutionDiagnostics {
-                offspring_generated: offspring.len(),
+                generated: offspring.len(),
                 ..EvolutionDiagnostics::default()
             };
             let mut seen_objectives_this_generation = std::collections::HashSet::new();
             for sol in &offspring {
                 if !self.explored_solutions.is_registered(sol) {
-                    diagnostics.offspring_novel_genotype += 1;
+                    diagnostics.novel_genotype += 1;
                     self.explored_solutions.register_without_selected_images(
                         generation,
                         sol,
@@ -314,10 +314,10 @@ where
                     );
                 }
                 if seen_objectives_this_generation.insert(*sol.objectives()) {
-                    diagnostics.offspring_novel_objectives += 1;
+                    diagnostics.novel_objectives += 1;
                 }
                 if self.try_insert_into_archive(sol) {
-                    diagnostics.offspring_archive_inserted += 1;
+                    diagnostics.archive_inserted += 1;
                 }
             }
 
@@ -522,7 +522,7 @@ where
                     // selected set. This avoids the crowding-distance degeneracy
                     // where boundary solutions all get infinity and interior
                     // solutions get near-identical scores.
-                    self.contribution_distance_selection(
+                    Self::contribution_distance_selection(
                         &combined,
                         front,
                         remaining,
@@ -557,7 +557,6 @@ where
     /// seed with a boundary solution). This produces much better spread than
     /// pure crowding distance in ≥3 objectives.
     fn contribution_distance_selection(
-        &self,
         combined: &[BitsetEncodedSolution<P, D>],
         front: &[usize],
         remaining: usize,
@@ -582,11 +581,7 @@ where
         let obj_range: Vec<f64> = (0..D)
             .map(|d| {
                 let r = obj_max[d] - obj_min[d];
-                if r < f64::EPSILON {
-                    1.0
-                } else {
-                    r
-                }
+                if r < f64::EPSILON { 1.0 } else { r }
             })
             .collect();
 
@@ -720,9 +715,9 @@ where
         // Best objective values from the archive
         let mut best_objectives = vec![u64::MAX; D];
         for sol in &self.archive {
-            for i in 0..D {
-                if sol.objectives()[i] < best_objectives[i] {
-                    best_objectives[i] = sol.objectives()[i];
+            for (best, &obj) in best_objectives.iter_mut().zip(sol.objectives().iter()) {
+                if obj < *best {
+                    *best = obj;
                 }
             }
         }
@@ -734,10 +729,10 @@ where
             best_objectives,
             elapsed_ms: timer.elapsed().as_millis(),
             archive_size: self.archive.len(),
-            offspring_generated: diagnostics.offspring_generated,
-            offspring_novel_genotype: diagnostics.offspring_novel_genotype,
-            offspring_novel_objectives: diagnostics.offspring_novel_objectives,
-            offspring_archive_inserted: diagnostics.offspring_archive_inserted,
+            offspring_generated: diagnostics.generated,
+            offspring_novel_genotype: diagnostics.novel_genotype,
+            offspring_novel_objectives: diagnostics.novel_objectives,
+            offspring_archive_inserted: diagnostics.archive_inserted,
         }
     }
 
@@ -780,17 +775,20 @@ where
     // -----------------------------------------------------------------
 
     /// Get a reference to the current external archive.
+    #[must_use]
     pub fn archive(&self) -> &[BitsetEncodedSolution<P, D>] {
         &self.archive
     }
 
     /// Get a reference to the current population.
+    #[must_use]
     pub fn population(&self) -> &[BitsetEncodedSolution<P, D>] {
         &self.population
     }
 
     /// Get explored solutions data (compatible with PLS output format).
-    pub fn explored_solutions_data(&self) -> &ExploredSolutionsData<D> {
+    #[must_use]
+    pub const fn explored_solutions_data(&self) -> &ExploredSolutionsData<D> {
         &self.explored_solutions
     }
 }
@@ -932,8 +930,7 @@ mod tests {
         // Should finish within roughly the timeout (allow some overhead)
         assert!(
             elapsed < Duration::from_secs(2),
-            "Should respect timeout, but took {:?}",
-            elapsed
+            "Should respect timeout, but took {elapsed:?}"
         );
     }
 

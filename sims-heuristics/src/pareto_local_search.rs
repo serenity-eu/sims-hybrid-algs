@@ -66,6 +66,8 @@ impl StepStats {
 /// Result bundle from a single PLS step: status + accumulated statistics.
 pub(crate) struct StepResult {
     pub(crate) status: StepStatus,
+    /// Per-step statistics, consumed only by the concurrent worker's aggregation.
+    #[cfg(feature = "parallel")]
     pub(crate) stats: StepStats,
 }
 
@@ -137,7 +139,7 @@ fn is_scalarized_selection_mode(mode: SolutionSelectionMode) -> bool {
 }
 
 #[cfg(not(feature = "scalarized_selection"))]
-fn is_scalarized_selection_mode(_mode: SolutionSelectionMode) -> bool {
+const fn is_scalarized_selection_mode(_mode: SolutionSelectionMode) -> bool {
     false
 }
 
@@ -363,6 +365,7 @@ where
             self.determine_next_step(auxiliary_population, step_stats.selected_parent_count);
         StepResult {
             status,
+            #[cfg(feature = "parallel")]
             stats: step_stats,
         }
     }
@@ -471,9 +474,9 @@ where
 
     fn select_parents_for_exploration(
         population_vec: &[T],
-        approximated_pareto_set: &S,
-        explored_solutions: &mut ExploredSolutionsData<D>,
-        neighborhood_structure: u32,
+        _approximated_pareto_set: &S,
+        _explored_solutions: &mut ExploredSolutionsData<D>,
+        _neighborhood_structure: u32,
         optimizations: &PlsOptimizations,
         iteration_seed: u64,
         is_deterministic: bool,

@@ -42,12 +42,22 @@ pub struct SimpleTotalCostState {
 
 impl<const D: usize> ObjectiveTracker<D> for SimpleTotalCostState {
     #[inline(always)]
-    fn peek_removal_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+    fn peek_removal_delta(
+        &self,
+        image_index: usize,
+        _p: &impl SetCoverProblem<D>,
+        _s: &impl ImageSet<D>,
+    ) -> i64 {
         -(self.image_costs[image_index] as i64)
     }
 
     #[inline(always)]
-    fn peek_addition_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+    fn peek_addition_delta(
+        &self,
+        image_index: usize,
+        _p: &impl SetCoverProblem<D>,
+        _s: &impl ImageSet<D>,
+    ) -> i64 {
         self.image_costs[image_index] as i64
     }
 
@@ -93,7 +103,12 @@ pub struct SimpleCloudyAreaState {
 
 impl<const D: usize> ObjectiveTracker<D> for SimpleCloudyAreaState {
     #[inline(always)]
-    fn peek_removal_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+    fn peek_removal_delta(
+        &self,
+        image_index: usize,
+        _p: &impl SetCoverProblem<D>,
+        _s: &impl ImageSet<D>,
+    ) -> i64 {
         let start = self.clear_elements_offsets[image_index];
         let end = self.clear_elements_offsets[image_index + 1];
         let clear_elements = &self.clear_elements[start..end];
@@ -111,7 +126,12 @@ impl<const D: usize> ObjectiveTracker<D> for SimpleCloudyAreaState {
     }
 
     #[inline(always)]
-    fn peek_addition_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+    fn peek_addition_delta(
+        &self,
+        image_index: usize,
+        _p: &impl SetCoverProblem<D>,
+        _s: &impl ImageSet<D>,
+    ) -> i64 {
         let start = self.clear_elements_offsets[image_index];
         let end = self.clear_elements_offsets[image_index + 1];
         let clear_elements = &self.clear_elements[start..end];
@@ -170,7 +190,8 @@ impl<const D: usize> ObjectiveTracker<D> for SimpleCloudyAreaState {
             }
         }
 
-        self.current_area = self.current_area
+        self.current_area = self
+            .current_area
             .checked_sub(total_sub)
             .expect("CloudyArea underflow");
         -(total_sub as i64)
@@ -330,7 +351,8 @@ impl SimpleMinResolutionState {
                     } else {
                         let old_min_level = packed.trailing_zeros() / 8;
                         // SAFETY: old_min_level < resolution_levels.len()
-                        let old_val = unsafe { *resolution_levels.get_unchecked(old_min_level as usize) };
+                        let old_val =
+                            unsafe { *resolution_levels.get_unchecked(old_min_level as usize) };
                         delta += (img_val as i64) - (old_val as i64);
                     }
                 }
@@ -425,7 +447,12 @@ impl SimpleMinResolutionState {
 
 impl<const D: usize> ObjectiveTracker<D> for SimpleMinResolutionState {
     #[inline(always)]
-    fn peek_removal_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+    fn peek_removal_delta(
+        &self,
+        image_index: usize,
+        _p: &impl SetCoverProblem<D>,
+        _s: &impl ImageSet<D>,
+    ) -> i64 {
         let img_level = self.image_resolution_level[image_index] as usize;
         let start = self.image_elements_offsets[image_index];
         let end = self.image_elements_offsets[image_index + 1];
@@ -492,7 +519,12 @@ impl<const D: usize> ObjectiveTracker<D> for SimpleMinResolutionState {
     }
 
     #[inline(always)]
-    fn peek_addition_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+    fn peek_addition_delta(
+        &self,
+        image_index: usize,
+        _p: &impl SetCoverProblem<D>,
+        _s: &impl ImageSet<D>,
+    ) -> i64 {
         let img_level = self.image_resolution_level[image_index] as usize;
         let start = self.image_elements_offsets[image_index];
         let end = self.image_elements_offsets[image_index + 1];
@@ -652,7 +684,12 @@ pub struct SimpleMaxIncidenceAngleState {
 
 impl<const D: usize> ObjectiveTracker<D> for SimpleMaxIncidenceAngleState {
     #[inline(always)]
-    fn peek_removal_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+    fn peek_removal_delta(
+        &self,
+        image_index: usize,
+        _p: &impl SetCoverProblem<D>,
+        _s: &impl ImageSet<D>,
+    ) -> i64 {
         let img_level = self.image_incidence_level[image_index];
         if self.current_max_level == u8::MAX || img_level != self.current_max_level {
             return 0;
@@ -672,7 +709,12 @@ impl<const D: usize> ObjectiveTracker<D> for SimpleMaxIncidenceAngleState {
     }
 
     #[inline(always)]
-    fn peek_addition_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+    fn peek_addition_delta(
+        &self,
+        image_index: usize,
+        _p: &impl SetCoverProblem<D>,
+        _s: &impl ImageSet<D>,
+    ) -> i64 {
         let img_level = self.image_incidence_level[image_index];
         let img_val = self.incidence_levels[img_level as usize];
 
@@ -758,7 +800,12 @@ pub enum SimpleTracker {
 
 impl<const D: usize> ObjectiveTracker<D> for SimpleTracker {
     #[inline(always)]
-    fn peek_removal_delta(&self, image_index: usize, p: &impl SetCoverProblem<D>, s: &impl ImageSet<D>) -> i64 {
+    fn peek_removal_delta(
+        &self,
+        image_index: usize,
+        p: &impl SetCoverProblem<D>,
+        s: &impl ImageSet<D>,
+    ) -> i64 {
         match self {
             SimpleTracker::TotalCost(t) => t.peek_removal_delta(image_index, p, s),
             SimpleTracker::CloudyArea(t) => t.peek_removal_delta(image_index, p, s),
@@ -768,7 +815,12 @@ impl<const D: usize> ObjectiveTracker<D> for SimpleTracker {
     }
 
     #[inline(always)]
-    fn peek_addition_delta(&self, image_index: usize, p: &impl SetCoverProblem<D>, s: &impl ImageSet<D>) -> i64 {
+    fn peek_addition_delta(
+        &self,
+        image_index: usize,
+        p: &impl SetCoverProblem<D>,
+        s: &impl ImageSet<D>,
+    ) -> i64 {
         match self {
             SimpleTracker::TotalCost(t) => t.peek_addition_delta(image_index, p, s),
             SimpleTracker::CloudyArea(t) => t.peek_addition_delta(image_index, p, s),
@@ -827,18 +879,8 @@ impl<const D: usize> TrackerCollection<D> for SimpleTrackerArray<D> {
         let shared = simd_shared_data(problem);
 
         // Compute max element index for bounds checks
-        let max_clear_element = shared
-            .clear_elements
-            .iter()
-            .copied()
-            .max()
-            .unwrap_or(0) as usize;
-        let max_image_element = shared
-            .image_elements
-            .iter()
-            .copied()
-            .max()
-            .unwrap_or(0) as usize;
+        let max_clear_element = shared.clear_elements.iter().copied().max().unwrap_or(0) as usize;
+        let max_image_element = shared.image_elements.iter().copied().max().unwrap_or(0) as usize;
 
         let trackers = std::array::from_fn(|i| match problem.objective(i) {
             crate::objectives::ObjectiveState::TotalCost { .. } => {
@@ -903,7 +945,14 @@ impl<const D: usize> TrackerCollection<D> for SimpleTrackerArray<D> {
         problem: &impl SetCoverProblem<D>,
         solution: &impl ImageSet<D>,
     ) -> [i64; D] {
-        std::array::from_fn(|i| ObjectiveTracker::<D>::peek_removal_delta(&self.trackers[i], image_index, problem, solution))
+        std::array::from_fn(|i| {
+            ObjectiveTracker::<D>::peek_removal_delta(
+                &self.trackers[i],
+                image_index,
+                problem,
+                solution,
+            )
+        })
     }
 
     fn peek_addition_delta(
@@ -912,7 +961,14 @@ impl<const D: usize> TrackerCollection<D> for SimpleTrackerArray<D> {
         problem: &impl SetCoverProblem<D>,
         solution: &impl ImageSet<D>,
     ) -> [i64; D] {
-        std::array::from_fn(|i| ObjectiveTracker::<D>::peek_addition_delta(&self.trackers[i], image_index, problem, solution))
+        std::array::from_fn(|i| {
+            ObjectiveTracker::<D>::peek_addition_delta(
+                &self.trackers[i],
+                image_index,
+                problem,
+                solution,
+            )
+        })
     }
 
     fn track_image_removal(
@@ -920,7 +976,9 @@ impl<const D: usize> TrackerCollection<D> for SimpleTrackerArray<D> {
         image_index: usize,
         problem: &impl SetCoverProblem<D>,
     ) -> [i64; D] {
-        std::array::from_fn(|i| ObjectiveTracker::<D>::track_image_removal(&mut self.trackers[i], image_index, problem))
+        std::array::from_fn(|i| {
+            ObjectiveTracker::<D>::track_image_removal(&mut self.trackers[i], image_index, problem)
+        })
     }
 
     fn track_image_addition(
@@ -928,7 +986,9 @@ impl<const D: usize> TrackerCollection<D> for SimpleTrackerArray<D> {
         image_index: usize,
         problem: &impl SetCoverProblem<D>,
     ) -> [i64; D] {
-        std::array::from_fn(|i| ObjectiveTracker::<D>::track_image_addition(&mut self.trackers[i], image_index, problem))
+        std::array::from_fn(|i| {
+            ObjectiveTracker::<D>::track_image_addition(&mut self.trackers[i], image_index, problem)
+        })
     }
 
     fn values(&self) -> [u64; D] {

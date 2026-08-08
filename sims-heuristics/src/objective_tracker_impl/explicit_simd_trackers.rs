@@ -11,17 +11,17 @@
 
 #![allow(unused)]
 
+use std::simd::Mask;
 use std::simd::cmp::SimdPartialOrd;
 use std::simd::num::SimdUint;
 use std::simd::prelude::*;
-use std::simd::Mask;
 use std::sync::Arc;
 
 use crate::objective_tracker::{ObjectiveTracker, TrackerCollection};
 use crate::problem::SetCoverProblem;
 use crate::solution::ImageSet;
 
-use super::simd_trackers::{simd_shared_data, Interval, SimdTrackerSharedData};
+use super::simd_trackers::{Interval, SimdTrackerSharedData, simd_shared_data};
 
 // =============================================================================
 // SIMD Configuration
@@ -69,63 +69,67 @@ impl ExplicitSimdMinResState {
         let high_val = self.high_val as i64;
         let diff = self.diff;
         let mut delta = 0i64;
-        
+
         let len = end - start;
         let simd_iters = len / LANES_32;
         let remainder_start = start + simd_iters * LANES_32;
-        
+
         // SIMD constants
         let mask_low = U32x8::splat(0xFFFF);
         let one_u32 = U32x8::splat(1);
         let one_i32 = I32x8::splat(1);
         let zero_i32 = I32x8::splat(0);
-        
+
         let packed_ptr = self.packed_counts.as_mut_ptr();
-        
+
         // SIMD loop - process LANES_32 elements at a time
         for i in 0..simd_iters {
             let base = start + i * LANES_32;
             unsafe {
                 // Load LANES_32 packed values
-                let packed = U32x8::from_slice(std::slice::from_raw_parts(packed_ptr.add(base), LANES_32));
-                
+                let packed =
+                    U32x8::from_slice(std::slice::from_raw_parts(packed_ptr.add(base), LANES_32));
+
                 // Extract c0 and c1
                 let c0 = packed & mask_low;
                 let c1 = packed >> 16;
-                
+
                 // Compute new c0 = saturating_sub(c0, 1)
                 // Since we can't easily do saturating_sub in SIMD, use max(c0-1, 0)
                 let c0_minus_1 = c0 - one_u32;
                 let underflow_mask = c0.simd_eq(U32x8::splat(0));
                 let new_c0 = underflow_mask.select(U32x8::splat(0), c0_minus_1);
-                
+
                 // Store updated packed value
                 let new_packed = new_c0 | (c1 << 16);
-                new_packed.copy_to_slice(std::slice::from_raw_parts_mut(packed_ptr.add(base), LANES_32));
-                
+                new_packed.copy_to_slice(std::slice::from_raw_parts_mut(
+                    packed_ptr.add(base),
+                    LANES_32,
+                ));
+
                 // Compute delta contribution
                 // was_one = (c0 == 1)
                 // has_backup = (c1 > 0)
                 // delta += was_one * (has_backup * (diff + low_val) - low_val)
                 let c0_i32: I32x8 = c0.cast();
                 let c1_i32: I32x8 = c1.cast();
-                
+
                 let was_one_mask = c0_i32.simd_eq(one_i32);
                 let has_backup_mask = c1_i32.simd_gt(zero_i32);
-                
+
                 // Count elements where c0 == 1 && c1 > 0 (switch to high-res)
                 let switch_mask = was_one_mask & has_backup_mask;
                 let switch_count = switch_mask.to_bitmask().count_ones() as i64;
-                
+
                 // Count elements where c0 == 1 && c1 == 0 (become uncovered)
                 let uncovered_mask = was_one_mask & !has_backup_mask;
                 let uncovered_count = uncovered_mask.to_bitmask().count_ones() as i64;
-                
+
                 // Delta = switch_count * diff - uncovered_count * low_val
                 delta += switch_count * diff - uncovered_count * low_val;
             }
         }
-        
+
         // Scalar remainder
         for idx in remainder_start..end {
             unsafe {
@@ -139,7 +143,7 @@ impl ExplicitSimdMinResState {
                 delta += was_one * (has_backup * (diff + low_val) - low_val);
             }
         }
-        
+
         delta
     }
 
@@ -149,49 +153,53 @@ impl ExplicitSimdMinResState {
     fn simd_remove_level1(&mut self, start: usize, end: usize) -> i64 {
         let high_val = self.high_val as i64;
         let mut delta = 0i64;
-        
+
         let len = end - start;
         let simd_iters = len / LANES_32;
         let remainder_start = start + simd_iters * LANES_32;
-        
+
         // SIMD constants
         let mask_low = U32x8::splat(0xFFFF);
         let one_high = U32x8::splat(0x10000);
         let one_i32 = I32x8::splat(1);
         let zero_i32 = I32x8::splat(0);
-        
+
         let packed_ptr = self.packed_counts.as_mut_ptr();
-        
+
         for i in 0..simd_iters {
             let base = start + i * LANES_32;
             unsafe {
-                let packed = U32x8::from_slice(std::slice::from_raw_parts(packed_ptr.add(base), LANES_32));
-                
+                let packed =
+                    U32x8::from_slice(std::slice::from_raw_parts(packed_ptr.add(base), LANES_32));
+
                 let c0 = packed & mask_low;
                 let c1 = packed >> 16;
-                
+
                 // Compute new c1 = saturating_sub(c1, 1)
                 let c1_minus_1 = c1 - U32x8::splat(1);
                 let underflow_mask = c1.simd_eq(U32x8::splat(0));
                 let new_c1 = underflow_mask.select(U32x8::splat(0), c1_minus_1);
-                
+
                 // Store updated packed value
                 let new_packed = c0 | (new_c1 << 16);
-                new_packed.copy_to_slice(std::slice::from_raw_parts_mut(packed_ptr.add(base), LANES_32));
-                
+                new_packed.copy_to_slice(std::slice::from_raw_parts_mut(
+                    packed_ptr.add(base),
+                    LANES_32,
+                ));
+
                 // Delta: if c1 == 1 && c0 == 0, then element becomes uncovered
                 let c0_i32: I32x8 = c0.cast();
                 let c1_i32: I32x8 = c1.cast();
-                
+
                 let c1_was_one = c1_i32.simd_eq(one_i32);
                 let c0_was_zero = c0_i32.simd_eq(zero_i32);
                 let uncovered_mask = c1_was_one & c0_was_zero;
                 let uncovered_count = uncovered_mask.to_bitmask().count_ones() as i64;
-                
+
                 delta -= uncovered_count * high_val;
             }
         }
-        
+
         // Scalar remainder
         for idx in remainder_start..end {
             unsafe {
@@ -203,7 +211,7 @@ impl ExplicitSimdMinResState {
                 delta -= ((c1 == 1) as i64) * ((c0 == 0) as i64) * high_val;
             }
         }
-        
+
         delta
     }
 
@@ -214,53 +222,57 @@ impl ExplicitSimdMinResState {
         let low_val = self.low_val as i64;
         let diff = self.diff;
         let mut delta = 0i64;
-        
+
         let len = end - start;
         let simd_iters = len / LANES_32;
         let remainder_start = start + simd_iters * LANES_32;
-        
+
         let mask_low = U32x8::splat(0xFFFF);
         let one_u32 = U32x8::splat(1);
         let zero_i32 = I32x8::splat(0);
-        
+
         let packed_ptr = self.packed_counts.as_mut_ptr();
-        
+
         for i in 0..simd_iters {
             let base = start + i * LANES_32;
             unsafe {
-                let packed = U32x8::from_slice(std::slice::from_raw_parts(packed_ptr.add(base), LANES_32));
-                
+                let packed =
+                    U32x8::from_slice(std::slice::from_raw_parts(packed_ptr.add(base), LANES_32));
+
                 let c0 = packed & mask_low;
                 let c1 = packed >> 16;
-                
+
                 // Compute delta before update
                 // was_zero = (c0 == 0)
                 // has_backup = (c1 > 0)
                 // delta += was_zero * (low_val - has_backup * (diff + low_val))
                 let c0_i32: I32x8 = c0.cast();
                 let c1_i32: I32x8 = c1.cast();
-                
+
                 let was_zero_mask = c0_i32.simd_eq(zero_i32);
                 let has_backup_mask = c1_i32.simd_gt(zero_i32);
-                
+
                 // Count elements where c0 == 0 && c1 == 0 (first cover)
                 let first_cover_mask = was_zero_mask & !has_backup_mask;
                 let first_cover_count = first_cover_mask.to_bitmask().count_ones() as i64;
-                
+
                 // Count elements where c0 == 0 && c1 > 0 (switch from high to low)
                 let switch_mask = was_zero_mask & has_backup_mask;
                 let switch_count = switch_mask.to_bitmask().count_ones() as i64;
-                
+
                 // Delta = first_cover_count * low_val - switch_count * diff
                 delta += first_cover_count * low_val - switch_count * diff;
-                
+
                 // Update: c0 += 1
                 let new_c0 = c0 + one_u32;
                 let new_packed = new_c0 | (c1 << 16);
-                new_packed.copy_to_slice(std::slice::from_raw_parts_mut(packed_ptr.add(base), LANES_32));
+                new_packed.copy_to_slice(std::slice::from_raw_parts_mut(
+                    packed_ptr.add(base),
+                    LANES_32,
+                ));
             }
         }
-        
+
         // Scalar remainder
         for idx in remainder_start..end {
             unsafe {
@@ -274,7 +286,7 @@ impl ExplicitSimdMinResState {
                 *slot = ((c0 + 1) as u32) | ((c1 as u32) << 16);
             }
         }
-        
+
         delta
     }
 
@@ -284,32 +296,36 @@ impl ExplicitSimdMinResState {
     fn simd_add_level1(&mut self, start: usize, end: usize) -> i64 {
         let high_val = self.high_val as i64;
         let mut delta = 0i64;
-        
+
         let len = end - start;
         let simd_iters = len / LANES_32;
         let remainder_start = start + simd_iters * LANES_32;
-        
+
         let one_high = U32x8::splat(0x10000);
         let zero_u32 = U32x8::splat(0);
-        
+
         let packed_ptr = self.packed_counts.as_mut_ptr();
-        
+
         for i in 0..simd_iters {
             let base = start + i * LANES_32;
             unsafe {
-                let packed = U32x8::from_slice(std::slice::from_raw_parts(packed_ptr.add(base), LANES_32));
-                
+                let packed =
+                    U32x8::from_slice(std::slice::from_raw_parts(packed_ptr.add(base), LANES_32));
+
                 // Delta: if packed == 0 (both c0 and c1 are 0), element gets first coverage
                 let was_uncovered_mask = packed.simd_eq(zero_u32);
                 let uncovered_count = was_uncovered_mask.to_bitmask().count_ones() as i64;
                 delta += uncovered_count * high_val;
-                
+
                 // Update: c1 += 1 (add 0x10000)
                 let new_packed = packed + one_high;
-                new_packed.copy_to_slice(std::slice::from_raw_parts_mut(packed_ptr.add(base), LANES_32));
+                new_packed.copy_to_slice(std::slice::from_raw_parts_mut(
+                    packed_ptr.add(base),
+                    LANES_32,
+                ));
             }
         }
-        
+
         // Scalar remainder
         for idx in remainder_start..end {
             unsafe {
@@ -319,46 +335,56 @@ impl ExplicitSimdMinResState {
                 *slot = packed + 0x10000;
             }
         }
-        
+
         delta
     }
 
     /// Track removal using intervals with SIMD processing.
-    fn track_removal_intervals(&mut self, img_level: usize, int_start: usize, int_end: usize) -> i64 {
+    fn track_removal_intervals(
+        &mut self,
+        img_level: usize,
+        int_start: usize,
+        int_end: usize,
+    ) -> i64 {
         let mut delta = 0i64;
-        
+
         for int_idx in int_start..int_end {
             let interval = unsafe { *self.image_intervals.get_unchecked(int_idx) };
             let start = interval.start as usize;
             let end = start + interval.len as usize;
-            
+
             if img_level == 0 {
                 delta += self.simd_remove_level0(start, end);
             } else {
                 delta += self.simd_remove_level1(start, end);
             }
         }
-        
+
         self.current_sum = (self.current_sum as i64 + delta) as u64;
         delta
     }
 
     /// Track addition using intervals with SIMD processing.
-    fn track_addition_intervals(&mut self, img_level: usize, int_start: usize, int_end: usize) -> i64 {
+    fn track_addition_intervals(
+        &mut self,
+        img_level: usize,
+        int_start: usize,
+        int_end: usize,
+    ) -> i64 {
         let mut delta = 0i64;
-        
+
         for int_idx in int_start..int_end {
             let interval = unsafe { *self.image_intervals.get_unchecked(int_idx) };
             let start = interval.start as usize;
             let end = start + interval.len as usize;
-            
+
             if img_level == 0 {
                 delta += self.simd_add_level0(start, end);
             } else {
                 delta += self.simd_add_level1(start, end);
             }
         }
-        
+
         self.current_sum = (self.current_sum as i64 + delta) as u64;
         delta
     }
@@ -369,13 +395,13 @@ impl ExplicitSimdMinResState {
         let high_val = self.high_val as i64;
         let diff = self.diff;
         let mut delta = 0i64;
-        
+
         let mask_low = U32x8::splat(0xFFFF);
         let one_i32 = I32x8::splat(1);
         let zero_i32 = I32x8::splat(0);
-        
+
         let packed_ptr = self.packed_counts.as_ptr();
-        
+
         for int_idx in int_start..int_end {
             let interval = unsafe { *self.image_intervals.get_unchecked(int_idx) };
             let start = interval.start as usize;
@@ -383,32 +409,35 @@ impl ExplicitSimdMinResState {
             let len = end - start;
             let simd_iters = len / LANES_32;
             let remainder_start = start + simd_iters * LANES_32;
-            
+
             if img_level == 0 {
                 // Level 0 (low-res) removal
                 for i in 0..simd_iters {
                     let base = start + i * LANES_32;
                     unsafe {
-                        let packed = U32x8::from_slice(std::slice::from_raw_parts(packed_ptr.add(base), LANES_32));
+                        let packed = U32x8::from_slice(std::slice::from_raw_parts(
+                            packed_ptr.add(base),
+                            LANES_32,
+                        ));
                         let c0 = packed & mask_low;
                         let c1 = packed >> 16;
-                        
+
                         let c0_i32: I32x8 = c0.cast();
                         let c1_i32: I32x8 = c1.cast();
-                        
+
                         let was_one_mask = c0_i32.simd_eq(one_i32);
                         let has_backup_mask = c1_i32.simd_gt(zero_i32);
-                        
+
                         let switch_mask = was_one_mask & has_backup_mask;
                         let switch_count = switch_mask.to_bitmask().count_ones() as i64;
-                        
+
                         let uncovered_mask = was_one_mask & !has_backup_mask;
                         let uncovered_count = uncovered_mask.to_bitmask().count_ones() as i64;
-                        
+
                         delta += switch_count * diff - uncovered_count * low_val;
                     }
                 }
-                
+
                 // Scalar remainder
                 for idx in remainder_start..end {
                     unsafe {
@@ -429,22 +458,25 @@ impl ExplicitSimdMinResState {
                 for i in 0..simd_iters {
                     let base = start + i * LANES_32;
                     unsafe {
-                        let packed = U32x8::from_slice(std::slice::from_raw_parts(packed_ptr.add(base), LANES_32));
+                        let packed = U32x8::from_slice(std::slice::from_raw_parts(
+                            packed_ptr.add(base),
+                            LANES_32,
+                        ));
                         let c0 = packed & mask_low;
                         let c1 = packed >> 16;
-                        
+
                         let c0_i32: I32x8 = c0.cast();
                         let c1_i32: I32x8 = c1.cast();
-                        
+
                         let c1_was_one = c1_i32.simd_eq(one_i32);
                         let c0_was_zero = c0_i32.simd_eq(zero_i32);
                         let uncovered_mask = c1_was_one & c0_was_zero;
                         let uncovered_count = uncovered_mask.to_bitmask().count_ones() as i64;
-                        
+
                         delta -= uncovered_count * high_val;
                     }
                 }
-                
+
                 for idx in remainder_start..end {
                     unsafe {
                         let packed = *packed_ptr.add(idx);
@@ -457,23 +489,23 @@ impl ExplicitSimdMinResState {
                 }
             }
         }
-        
+
         delta
     }
-    
+
     /// Peek addition using intervals with SIMD processing (read-only).
     fn peek_addition_intervals(&self, img_level: usize, int_start: usize, int_end: usize) -> i64 {
         let low_val = self.low_val as i64;
         let high_val = self.high_val as i64;
         let diff = self.diff;
         let mut delta = 0i64;
-        
+
         let mask_low = U32x8::splat(0xFFFF);
         let zero_i32 = I32x8::splat(0);
         let zero_u32 = U32x8::splat(0);
-        
+
         let packed_ptr = self.packed_counts.as_ptr();
-        
+
         for int_idx in int_start..int_end {
             let interval = unsafe { *self.image_intervals.get_unchecked(int_idx) };
             let start = interval.start as usize;
@@ -481,32 +513,35 @@ impl ExplicitSimdMinResState {
             let len = end - start;
             let simd_iters = len / LANES_32;
             let remainder_start = start + simd_iters * LANES_32;
-            
+
             if img_level == 0 {
                 // Level 0 (low-res) addition
                 for i in 0..simd_iters {
                     let base = start + i * LANES_32;
                     unsafe {
-                        let packed = U32x8::from_slice(std::slice::from_raw_parts(packed_ptr.add(base), LANES_32));
+                        let packed = U32x8::from_slice(std::slice::from_raw_parts(
+                            packed_ptr.add(base),
+                            LANES_32,
+                        ));
                         let c0 = packed & mask_low;
                         let c1 = packed >> 16;
-                        
+
                         let c0_i32: I32x8 = c0.cast();
                         let c1_i32: I32x8 = c1.cast();
-                        
+
                         let was_zero_mask = c0_i32.simd_eq(zero_i32);
                         let has_backup_mask = c1_i32.simd_gt(zero_i32);
-                        
+
                         let first_cover_mask = was_zero_mask & !has_backup_mask;
                         let first_cover_count = first_cover_mask.to_bitmask().count_ones() as i64;
-                        
+
                         let switch_mask = was_zero_mask & has_backup_mask;
                         let switch_count = switch_mask.to_bitmask().count_ones() as i64;
-                        
+
                         delta += first_cover_count * low_val - switch_count * diff;
                     }
                 }
-                
+
                 for idx in remainder_start..end {
                     unsafe {
                         let packed = *packed_ptr.add(idx);
@@ -526,13 +561,16 @@ impl ExplicitSimdMinResState {
                 for i in 0..simd_iters {
                     let base = start + i * LANES_32;
                     unsafe {
-                        let packed = U32x8::from_slice(std::slice::from_raw_parts(packed_ptr.add(base), LANES_32));
+                        let packed = U32x8::from_slice(std::slice::from_raw_parts(
+                            packed_ptr.add(base),
+                            LANES_32,
+                        ));
                         let uncovered_mask = packed.simd_eq(zero_u32);
                         let uncovered_count = uncovered_mask.to_bitmask().count_ones() as i64;
                         delta += uncovered_count * high_val;
                     }
                 }
-                
+
                 for idx in remainder_start..end {
                     unsafe {
                         let packed = *packed_ptr.add(idx);
@@ -543,20 +581,30 @@ impl ExplicitSimdMinResState {
                 }
             }
         }
-        
+
         delta
     }
 }
 
 impl<const D: usize> ObjectiveTracker<D> for ExplicitSimdMinResState {
-    fn peek_removal_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+    fn peek_removal_delta(
+        &self,
+        image_index: usize,
+        _p: &impl SetCoverProblem<D>,
+        _s: &impl ImageSet<D>,
+    ) -> i64 {
         let img_level = self.image_resolution_level[image_index] as usize;
         let int_start = unsafe { *self.image_intervals_offsets.get_unchecked(image_index) };
         let int_end = unsafe { *self.image_intervals_offsets.get_unchecked(image_index + 1) };
         self.peek_removal_intervals(img_level, int_start, int_end)
     }
 
-    fn peek_addition_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+    fn peek_addition_delta(
+        &self,
+        image_index: usize,
+        _p: &impl SetCoverProblem<D>,
+        _s: &impl ImageSet<D>,
+    ) -> i64 {
         let img_level = self.image_resolution_level[image_index] as usize;
         let int_start = unsafe { *self.image_intervals_offsets.get_unchecked(image_index) };
         let int_end = unsafe { *self.image_intervals_offsets.get_unchecked(image_index + 1) };
@@ -605,36 +653,40 @@ impl ExplicitSimdCloudyAreaState {
     #[inline]
     fn simd_remove(&mut self, start: usize, end: usize) -> i64 {
         let mut delta_area = 0u64;
-        
+
         let len = end - start;
         // Use 16 lanes for u16 operations (256 bits = AVX2)
         const LANES_16: usize = 16;
         let simd_iters = len / LANES_16;
         let remainder_start = start + simd_iters * LANES_16;
-        
+
         let counts_ptr = self.counts.as_mut_ptr();
         let areas_ptr = self.element_areas.as_ptr();
-        
+
         type U16x16 = Simd<u16, LANES_16>;
         let one_u16 = U16x16::splat(1);
         let zero_u16 = U16x16::splat(0);
-        
+
         for i in 0..simd_iters {
             let base = start + i * LANES_16;
             unsafe {
                 // Load counts
-                let counts = U16x16::from_slice(std::slice::from_raw_parts(counts_ptr.add(base), LANES_16));
-                
+                let counts =
+                    U16x16::from_slice(std::slice::from_raw_parts(counts_ptr.add(base), LANES_16));
+
                 // Decrement (saturating)
                 let underflow_mask = counts.simd_eq(zero_u16);
                 let new_counts = underflow_mask.select(zero_u16, counts - one_u16);
-                
+
                 // Store new counts
-                new_counts.copy_to_slice(std::slice::from_raw_parts_mut(counts_ptr.add(base), LANES_16));
-                
+                new_counts.copy_to_slice(std::slice::from_raw_parts_mut(
+                    counts_ptr.add(base),
+                    LANES_16,
+                ));
+
                 // Find elements that became zero (count was 1, now 0)
                 let became_zero_mask = counts.simd_eq(one_u16);
-                
+
                 // Sum areas for elements that became zero
                 // Since areas are u64 and we need to accumulate selectively, we use scalar fallback
                 // for the area summation
@@ -648,7 +700,7 @@ impl ExplicitSimdCloudyAreaState {
                 }
             }
         }
-        
+
         // Scalar remainder
         for idx in remainder_start..end {
             unsafe {
@@ -660,7 +712,7 @@ impl ExplicitSimdCloudyAreaState {
                 }
             }
         }
-        
+
         self.current_area += delta_area;
         delta_area as i64
     }
@@ -669,27 +721,28 @@ impl ExplicitSimdCloudyAreaState {
     #[inline]
     fn simd_add(&mut self, start: usize, end: usize) -> i64 {
         let mut delta_area = 0u64;
-        
+
         let len = end - start;
         const LANES_16: usize = 16;
         let simd_iters = len / LANES_16;
         let remainder_start = start + simd_iters * LANES_16;
-        
+
         let counts_ptr = self.counts.as_mut_ptr();
         let areas_ptr = self.element_areas.as_ptr();
-        
+
         type U16x16 = Simd<u16, LANES_16>;
         let one_u16 = U16x16::splat(1);
         let zero_u16 = U16x16::splat(0);
-        
+
         for i in 0..simd_iters {
             let base = start + i * LANES_16;
             unsafe {
-                let counts = U16x16::from_slice(std::slice::from_raw_parts(counts_ptr.add(base), LANES_16));
-                
+                let counts =
+                    U16x16::from_slice(std::slice::from_raw_parts(counts_ptr.add(base), LANES_16));
+
                 // Find elements that were zero (will become non-zero)
                 let was_zero_mask = counts.simd_eq(zero_u16);
-                
+
                 // Sum areas for elements that were zero
                 let mask_bits = was_zero_mask.to_bitmask();
                 if mask_bits != 0 {
@@ -699,13 +752,16 @@ impl ExplicitSimdCloudyAreaState {
                         }
                     }
                 }
-                
+
                 // Increment counts
                 let new_counts = counts + one_u16;
-                new_counts.copy_to_slice(std::slice::from_raw_parts_mut(counts_ptr.add(base), LANES_16));
+                new_counts.copy_to_slice(std::slice::from_raw_parts_mut(
+                    counts_ptr.add(base),
+                    LANES_16,
+                ));
             }
         }
-        
+
         // Scalar remainder
         for idx in remainder_start..end {
             unsafe {
@@ -717,25 +773,30 @@ impl ExplicitSimdCloudyAreaState {
                 *count = old_count + 1;
             }
         }
-        
+
         self.current_area -= delta_area;
         -(delta_area as i64)
     }
 }
 
 impl<const D: usize> ObjectiveTracker<D> for ExplicitSimdCloudyAreaState {
-    fn peek_removal_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+    fn peek_removal_delta(
+        &self,
+        image_index: usize,
+        _p: &impl SetCoverProblem<D>,
+        _s: &impl ImageSet<D>,
+    ) -> i64 {
         let int_start = unsafe { *self.clear_intervals_offsets.get_unchecked(image_index) };
         let int_end = unsafe { *self.clear_intervals_offsets.get_unchecked(image_index + 1) };
-        
+
         let mut delta_area = 0u64;
         let counts_ptr = self.counts.as_ptr();
         let areas_ptr = self.element_areas.as_ptr();
-        
+
         const LANES_16: usize = 16;
         type U16x16 = Simd<u16, LANES_16>;
         let one_u16 = U16x16::splat(1);
-        
+
         for int_idx in int_start..int_end {
             let interval = unsafe { *self.clear_intervals.get_unchecked(int_idx) };
             let start = interval.start as usize;
@@ -743,11 +804,14 @@ impl<const D: usize> ObjectiveTracker<D> for ExplicitSimdCloudyAreaState {
             let len = end - start;
             let simd_iters = len / LANES_16;
             let remainder_start = start + simd_iters * LANES_16;
-            
+
             for i in 0..simd_iters {
                 let base = start + i * LANES_16;
                 unsafe {
-                    let counts = U16x16::from_slice(std::slice::from_raw_parts(counts_ptr.add(base), LANES_16));
+                    let counts = U16x16::from_slice(std::slice::from_raw_parts(
+                        counts_ptr.add(base),
+                        LANES_16,
+                    ));
                     let would_become_zero = counts.simd_eq(one_u16);
                     let mask_bits = would_become_zero.to_bitmask();
                     if mask_bits != 0 {
@@ -759,7 +823,7 @@ impl<const D: usize> ObjectiveTracker<D> for ExplicitSimdCloudyAreaState {
                     }
                 }
             }
-            
+
             for idx in remainder_start..end {
                 unsafe {
                     if *counts_ptr.add(idx) == 1 {
@@ -768,22 +832,27 @@ impl<const D: usize> ObjectiveTracker<D> for ExplicitSimdCloudyAreaState {
                 }
             }
         }
-        
+
         delta_area as i64
     }
 
-    fn peek_addition_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+    fn peek_addition_delta(
+        &self,
+        image_index: usize,
+        _p: &impl SetCoverProblem<D>,
+        _s: &impl ImageSet<D>,
+    ) -> i64 {
         let int_start = unsafe { *self.clear_intervals_offsets.get_unchecked(image_index) };
         let int_end = unsafe { *self.clear_intervals_offsets.get_unchecked(image_index + 1) };
-        
+
         let mut delta_area = 0u64;
         let counts_ptr = self.counts.as_ptr();
         let areas_ptr = self.element_areas.as_ptr();
-        
+
         const LANES_16: usize = 16;
         type U16x16 = Simd<u16, LANES_16>;
         let zero_u16 = U16x16::splat(0);
-        
+
         for int_idx in int_start..int_end {
             let interval = unsafe { *self.clear_intervals.get_unchecked(int_idx) };
             let start = interval.start as usize;
@@ -791,11 +860,14 @@ impl<const D: usize> ObjectiveTracker<D> for ExplicitSimdCloudyAreaState {
             let len = end - start;
             let simd_iters = len / LANES_16;
             let remainder_start = start + simd_iters * LANES_16;
-            
+
             for i in 0..simd_iters {
                 let base = start + i * LANES_16;
                 unsafe {
-                    let counts = U16x16::from_slice(std::slice::from_raw_parts(counts_ptr.add(base), LANES_16));
+                    let counts = U16x16::from_slice(std::slice::from_raw_parts(
+                        counts_ptr.add(base),
+                        LANES_16,
+                    ));
                     let is_zero = counts.simd_eq(zero_u16);
                     let mask_bits = is_zero.to_bitmask();
                     if mask_bits != 0 {
@@ -807,7 +879,7 @@ impl<const D: usize> ObjectiveTracker<D> for ExplicitSimdCloudyAreaState {
                     }
                 }
             }
-            
+
             for idx in remainder_start..end {
                 unsafe {
                     if *counts_ptr.add(idx) == 0 {
@@ -816,14 +888,14 @@ impl<const D: usize> ObjectiveTracker<D> for ExplicitSimdCloudyAreaState {
                 }
             }
         }
-        
+
         -(delta_area as i64)
     }
 
     fn track_image_removal(&mut self, image_index: usize, _p: &impl SetCoverProblem<D>) -> i64 {
         let int_start = unsafe { *self.clear_intervals_offsets.get_unchecked(image_index) };
         let int_end = unsafe { *self.clear_intervals_offsets.get_unchecked(image_index + 1) };
-        
+
         let mut total_delta = 0i64;
         for int_idx in int_start..int_end {
             let interval = unsafe { *self.clear_intervals.get_unchecked(int_idx) };
@@ -837,7 +909,7 @@ impl<const D: usize> ObjectiveTracker<D> for ExplicitSimdCloudyAreaState {
     fn track_image_addition(&mut self, image_index: usize, _p: &impl SetCoverProblem<D>) -> i64 {
         let int_start = unsafe { *self.clear_intervals_offsets.get_unchecked(image_index) };
         let int_end = unsafe { *self.clear_intervals_offsets.get_unchecked(image_index + 1) };
-        
+
         let mut total_delta = 0i64;
         for int_idx in int_start..int_end {
             let interval = unsafe { *self.clear_intervals.get_unchecked(int_idx) };
@@ -857,7 +929,7 @@ impl<const D: usize> ObjectiveTracker<D> for ExplicitSimdCloudyAreaState {
 // Explicit SIMD Tracker Array
 // =============================================================================
 
-use super::simd_trackers::{SimdTotalCostState, SimdMaxIncidenceAngleState};
+use super::simd_trackers::{SimdMaxIncidenceAngleState, SimdTotalCostState};
 
 /// Tracker enum for explicit SIMD implementations
 #[derive(Clone, Debug)]
@@ -882,7 +954,12 @@ impl ExplicitSimdTracker {
 }
 
 impl<const D: usize> ObjectiveTracker<D> for ExplicitSimdTracker {
-    fn peek_removal_delta(&self, image_index: usize, problem: &impl SetCoverProblem<D>, solution: &impl ImageSet<D>) -> i64 {
+    fn peek_removal_delta(
+        &self,
+        image_index: usize,
+        problem: &impl SetCoverProblem<D>,
+        solution: &impl ImageSet<D>,
+    ) -> i64 {
         match self {
             Self::TotalCost(s) => s.peek_removal_delta(image_index, problem, solution),
             Self::CloudyArea(s) => s.peek_removal_delta(image_index, problem, solution),
@@ -891,7 +968,12 @@ impl<const D: usize> ObjectiveTracker<D> for ExplicitSimdTracker {
         }
     }
 
-    fn peek_addition_delta(&self, image_index: usize, problem: &impl SetCoverProblem<D>, solution: &impl ImageSet<D>) -> i64 {
+    fn peek_addition_delta(
+        &self,
+        image_index: usize,
+        problem: &impl SetCoverProblem<D>,
+        solution: &impl ImageSet<D>,
+    ) -> i64 {
         match self {
             Self::TotalCost(s) => s.peek_addition_delta(image_index, problem, solution),
             Self::CloudyArea(s) => s.peek_addition_delta(image_index, problem, solution),
@@ -900,7 +982,11 @@ impl<const D: usize> ObjectiveTracker<D> for ExplicitSimdTracker {
         }
     }
 
-    fn track_image_removal(&mut self, image_index: usize, problem: &impl SetCoverProblem<D>) -> i64 {
+    fn track_image_removal(
+        &mut self,
+        image_index: usize,
+        problem: &impl SetCoverProblem<D>,
+    ) -> i64 {
         match self {
             Self::TotalCost(s) => s.track_image_removal(image_index, problem),
             Self::CloudyArea(s) => s.track_image_removal(image_index, problem),
@@ -909,7 +995,11 @@ impl<const D: usize> ObjectiveTracker<D> for ExplicitSimdTracker {
         }
     }
 
-    fn track_image_addition(&mut self, image_index: usize, problem: &impl SetCoverProblem<D>) -> i64 {
+    fn track_image_addition(
+        &mut self,
+        image_index: usize,
+        problem: &impl SetCoverProblem<D>,
+    ) -> i64 {
         match self {
             Self::TotalCost(s) => s.track_image_addition(image_index, problem),
             Self::CloudyArea(s) => s.track_image_addition(image_index, problem),
@@ -997,19 +1087,39 @@ impl<const D: usize> TrackerCollection<D> for ExplicitSimdTrackerArray<D> {
         std::array::from_fn(|i| self.trackers[i].value())
     }
 
-    fn peek_removal_delta(&self, image_index: usize, problem: &impl SetCoverProblem<D>, solution: &impl ImageSet<D>) -> [i64; D] {
+    fn peek_removal_delta(
+        &self,
+        image_index: usize,
+        problem: &impl SetCoverProblem<D>,
+        solution: &impl ImageSet<D>,
+    ) -> [i64; D] {
         std::array::from_fn(|i| self.trackers[i].peek_removal_delta(image_index, problem, solution))
     }
 
-    fn peek_addition_delta(&self, image_index: usize, problem: &impl SetCoverProblem<D>, solution: &impl ImageSet<D>) -> [i64; D] {
-        std::array::from_fn(|i| self.trackers[i].peek_addition_delta(image_index, problem, solution))
+    fn peek_addition_delta(
+        &self,
+        image_index: usize,
+        problem: &impl SetCoverProblem<D>,
+        solution: &impl ImageSet<D>,
+    ) -> [i64; D] {
+        std::array::from_fn(|i| {
+            self.trackers[i].peek_addition_delta(image_index, problem, solution)
+        })
     }
 
-    fn track_image_removal(&mut self, image_index: usize, problem: &impl SetCoverProblem<D>) -> [i64; D] {
+    fn track_image_removal(
+        &mut self,
+        image_index: usize,
+        problem: &impl SetCoverProblem<D>,
+    ) -> [i64; D] {
         std::array::from_fn(|i| self.trackers[i].track_image_removal(image_index, problem))
     }
 
-    fn track_image_addition(&mut self, image_index: usize, problem: &impl SetCoverProblem<D>) -> [i64; D] {
+    fn track_image_addition(
+        &mut self,
+        image_index: usize,
+        problem: &impl SetCoverProblem<D>,
+    ) -> [i64; D] {
         std::array::from_fn(|i| self.trackers[i].track_image_addition(image_index, problem))
     }
 

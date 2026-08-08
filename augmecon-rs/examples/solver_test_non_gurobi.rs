@@ -26,7 +26,9 @@ fn main() {
     #[cfg(not(any(feature = "coin_cbc", feature = "highs")))]
     {
         println!("⚠️  No solvers enabled. Enable 'coin_cbc' or 'highs' features.");
-        println!("   Run with: cargo run --example solver_test_non_gurobi --features highs,coin_cbc");
+        println!(
+            "   Run with: cargo run --example solver_test_non_gurobi --features highs,coin_cbc"
+        );
     }
 }
 
@@ -57,9 +59,13 @@ fn run_solver(solver_name: &str, solver: Solver, test_name: &str) {
 
     let mut solver_instance = Augmecon::try_new(problem, options)
         .unwrap_or_else(|e| panic!("Failed to create {solver_name} solver: {e}"));
-    let solutions = solver_instance.solve()
+    let solutions = solver_instance
+        .solve()
         .unwrap_or_else(|e| panic!("{solver_name} solve failed: {e}"));
-    println!("✅ {solver_name} solver: Found {} solutions", solutions.len());
+    println!(
+        "✅ {solver_name} solver: Found {} solutions",
+        solutions.len()
+    );
 
     for (i, sol) in solutions.iter().take(3).enumerate() {
         println!("  Solution {}: {:?}", i + 1, sol.objectives());

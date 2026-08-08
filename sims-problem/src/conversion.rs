@@ -36,10 +36,18 @@ fn extract_objective_values<const D: usize>(
 }
 
 /// Convert a D-dimensional PLS `BitsetEncodedSolution` to a Python `Solution`.
-impl<const D: usize> From<(&BitsetEncodedSolution<ProblemBitset<D>, D>, &ProblemBitset<D>)>
-    for Solution
+impl<const D: usize>
+    From<(
+        &BitsetEncodedSolution<ProblemBitset<D>, D>,
+        &ProblemBitset<D>,
+    )> for Solution
 {
-    fn from(val: (&BitsetEncodedSolution<ProblemBitset<D>, D>, &ProblemBitset<D>)) -> Self {
+    fn from(
+        val: (
+            &BitsetEncodedSolution<ProblemBitset<D>, D>,
+            &ProblemBitset<D>,
+        ),
+    ) -> Self {
         let (pls_solution, problem) = val;
         let timestamp_us = pls_solution.timestamp().as_micros() as u64;
 

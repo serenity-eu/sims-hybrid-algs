@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 from dataclasses import dataclass, field
@@ -53,47 +54,82 @@ class CannotReduceToCountsError(Exception):
     pass
 
 
+# UP42 migrated authentication to Keycloak (the old api.up42.com/oauth/token is
+# gone). Account-based auth uses a password grant against the public realm with
+# the fixed `up42-api` client. Tokens are short-lived (~5 min).
+_TOKEN_URL = "https://auth.up42.com/realms/public/protocol/openid-connect/token"
+
+
 async def _get_token_async(session: aiohttp.ClientSession) -> str:
     if "UP42_USERNAME" not in os.environ or "UP42_PASSWORD" not in os.environ:
         raise ValueError(
             "UP42_USERNAME and UP42_PASSWORD environment variables must be set"
         )
 
-    async with session.post(
-        "/oauth/token",
-        headers={
-            "accept": "application/json",
-            "content-type": "application/x-www-form-urlencoded",
-        },
-        data={
-            "grant_type": "password",
-            "username": os.getenv("UP42_USERNAME"),
-            "password": os.getenv("UP42_PASSWORD"),
-        },
-    ) as response:
-        return (await response.json())["access_token"]
+    # The token endpoint lives on a different host than the api.up42.com session
+    # base URL, so use a dedicated session for the absolute Keycloak URL.
+    async with aiohttp.ClientSession() as auth_session:
+        async with auth_session.post(
+            _TOKEN_URL,
+            headers={
+                "accept": "application/json",
+                "content-type": "application/x-www-form-urlencoded",
+            },
+            data={
+                "grant_type": "password",
+                "username": os.getenv("UP42_USERNAME"),
+                "password": os.getenv("UP42_PASSWORD"),
+                "client_id": "up42-api",
+            },
+        ) as response:
+            response.raise_for_status()
+            return (await response.json())["access_token"]
+
+
+def _unwrap_paged(payload: dict) -> list[dict]:
+    """Unwrap a UP42 ``data`` envelope that may be a bare list (v1) or a paged
+    ``{"content": [...]}`` object (v2 ``PageOfDataProducts``)."""
+    data = payload.get("data", payload)
+    if isinstance(data, dict):
+        return data.get("content", [])
+    return data or []
 
 
 async def _get_data_products(
     session: aiohttp.ClientSession, collections: list[CollectionName]
 ) -> dict[CollectionName, Up42DataProduct]:
     collection_overview = {}
-    async with session.get("/data-products", headers={"accept": "application/json"}) as response:
-        raw_data_products = (await response.json())["data"]
+    # v2 endpoint; paginated (PageOfDataProducts). Request a large page so all
+    # products for our few collections arrive in a single call.
+    async with session.get(
+        "/v2/data-products",
+        params={"size": "1000"},
+        headers={"accept": "application/json"},
+    ) as response:
+        raw_data_products = _unwrap_paged(await response.json())
         for raw_data_product in raw_data_products:
-            collection_name = raw_data_product["collection"]["name"]
+            collection = raw_data_product.get("collection") or {}
+            collection_name = collection.get("name")
             if collection_name not in collections:
                 continue
 
-            if raw_data_product["productConfiguration"]["title"] != "Display":
+            # v2 exposes three products per collection (Display / Analytic /
+            # Pansharpened Reflectance) as top-level ``title``; we use Display,
+            # matching the original v1 ``productConfiguration == "Display"``.
+            if raw_data_product.get("title") != "Display":
                 continue
 
-            collection_title = raw_data_product["collection"]["title"]
-            host_name = raw_data_product["collection"]["host"]["name"]
+            # Host is the provider carrying the HOST role (e.g. oneatlas);
+            # v2 no longer nests it under ``collection.host``.
+            providers = collection.get("providers") or []
+            host_name = next(
+                (p["name"] for p in providers if "HOST" in (p.get("roles") or [])),
+                "oneatlas",
+            )
 
             collection_overview[collection_name] = Up42DataProduct(
                 collection_name=collection_name,
-                collection_title=collection_title,
+                collection_title=collection.get("title"),
                 host=host_name,
                 data_product_id=raw_data_product["id"],
             )
@@ -164,6 +200,81 @@ async def _search_data_async(
         return images_gdf
 
 
+async def _get_preview_async(
+    session: aiohttp.ClientSession,
+    host_name: str,
+    image_id: str,
+    kind: str = "quicklook",
+) -> bytes | None:
+    """Download a catalog preview (``quicklook`` or ``thumbnail``) for a full
+    scene as PNG bytes.
+
+    Endpoint: ``GET /catalog/{host-name}/image/{image-id}/{kind}`` (Bearer auth,
+    returns ``image/png``). Previews are free — no order required. Not all data
+    hosts provide them; missing previews return ``None`` rather than raising.
+    """
+    url = f"/catalog/{host_name}/image/{image_id}/{kind}"
+    async with session.get(url, headers={"accept": "image/png"}) as response:
+        if response.status == 404:
+            log.warning(f"No {kind} available for image {image_id} on host {host_name}")
+            return None
+        response.raise_for_status()
+        return await response.read()
+
+
+async def fetch_previews_async(
+    image_ids: list[str],
+    host_name: str,
+    out_dir: Path,
+    kind: str = "quicklook",
+    batch_size: int = 20,
+) -> dict[str, Path]:
+    """Download quicklooks (or thumbnails) for ``image_ids`` into ``out_dir``.
+
+    Returns a mapping of image id -> saved PNG path (ids without a preview are
+    omitted). Previews are keyed on the catalog scene ``id`` present in the
+    UP42 image GeoJSONs and require no paid order.
+    """
+    if kind not in ("quicklook", "thumbnail"):
+        raise ValueError(f"kind must be 'quicklook' or 'thumbnail', got {kind!r}")
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    saved: dict[str, Path] = {}
+
+    async with aiohttp.ClientSession("https://api.up42.com", raise_for_status=False) as session:
+        for i in range(0, len(image_ids), batch_size):
+            batch = image_ids[i : i + batch_size]
+            # Refresh the short-lived (~5 min) Bearer token per batch.
+            session.headers.pop("Authorization", None)
+            token = await _get_token_async(session)
+            session.headers.update({"Authorization": f"Bearer {token}"})
+
+            log.info(f"Fetching {kind}s {i} to {i + len(batch)} of {len(image_ids)}")
+            results = await asyncio.gather(
+                *(_get_preview_async(session, host_name, image_id, kind) for image_id in batch)
+            )
+            for image_id, data in zip(batch, results):
+                if data is None:
+                    continue
+                path = out_dir / f"{image_id}.png"
+                path.write_bytes(data)
+                saved[image_id] = path
+
+    log.info(f"Saved {len(saved)}/{len(image_ids)} {kind}s to {out_dir}")
+    return saved
+
+
+def fetch_previews(
+    image_ids: list[str],
+    host_name: str,
+    out_dir: Path,
+    kind: str = "quicklook",
+) -> dict[str, Path]:
+    """Synchronous wrapper around :func:`fetch_previews_async`."""
+    return asyncio.run(fetch_previews_async(image_ids, host_name, out_dir, kind=kind))
+
+
 async def _estimate_cost_async(session: aiohttp.ClientSession, order_parameters: dict) -> int:
     log.info(f"Estimating cost for order {order_parameters['displayName']}")
 
@@ -193,23 +304,22 @@ async def _estimate_costs_batch_async(
         images_ids, collections, aoi_geometry, collection_to_data_product
     )
 
-    cost_estimation_tasks = [
-        _estimate_cost_async(session, order_parameters) for order_parameters in orders_parameters
-    ]
-
+    # UP42's /v2/orders/estimate is single-order (one scene id per call), so we
+    # estimate images concurrently, chunked into batches. The Bearer token is
+    # short-lived (~5 min), so refresh it *before* building each batch's
+    # coroutines — the requests then fire against the freshly-set header.
     costs = []
     for i in range(0, len(orders_parameters), batch_size):
         log.info(f"Estimating cost for orders {i} to {i + batch_size}")
 
-        # Let's refresh the token for each batch
         session.headers.pop("Authorization", None)
-
         token = await _get_token_async(session)
-
         session.headers.update({"Authorization": f"Bearer {token}"})
 
-        batch_costs = await asyncio.gather(*cost_estimation_tasks[i : i + batch_size])
-        # batch_costs = []
+        batch = orders_parameters[i : i + batch_size]
+        batch_costs = await asyncio.gather(
+            *(_estimate_cost_async(session, order_parameters) for order_parameters in batch)
+        )
         costs.extend(batch_costs)
 
     log.info(f"Estimated costs for {len(images_gdf)} images: {costs}")
@@ -406,8 +516,12 @@ def normalize(images_gdf: GeoDataFrame) -> GeoDataFrame:
     """
     preprocessed_images_gdf = GeoDataFrame(images_gdf[["id", "geometry", "cost", "resolution"]], crs=images_gdf.crs)
     preprocessed_images_gdf["cloud_coverage"] = images_gdf["cloudCoverage"]
+    # ``providerProperties`` is a nested object in the API response, but reading
+    # it back from a GeoJSON file yields a JSON string (GeoJSON cannot hold
+    # nested object properties), so parse strings before indexing.
     preprocessed_images_gdf["incidence_angle"] = [
-        props["incidenceAngle"] for props in images_gdf["providerProperties"]
+        (json.loads(props) if isinstance(props, str) else props)["incidenceAngle"]
+        for props in images_gdf["providerProperties"]
     ]
     return preprocessed_images_gdf
 

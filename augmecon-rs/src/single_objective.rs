@@ -9,13 +9,15 @@ use crate::{
     options::Options,
     solution::Solution,
 };
-use good_lp::solvers::lp_solvers::{GurobiSolver, WithMaxSeconds};
 #[cfg(feature = "coin_cbc")]
 use good_lp::solvers::coin_cbc;
 #[cfg(feature = "highs")]
 use good_lp::solvers::highs;
+use good_lp::solvers::lp_solvers::{GurobiSolver, WithMaxSeconds};
 #[cfg(feature = "scip")]
 use good_lp::solvers::scip;
+#[cfg(feature = "gurobi")]
+use good_lp::solvers::{gurobi::gurobi, WithTimeLimit};
 use good_lp::{Solution as GoodLpSolution, SolverModel};
 use std::time::Duration;
 
@@ -34,7 +36,10 @@ fn create_gurobi_solver_with_timeout(
         "DEBUG: Creating Gurobi solver via lp-solvers with {}s timeout",
         timeout.as_secs()
     );
-    #[allow(clippy::cast_possible_truncation, reason = "Timeout duration in seconds is expected to fit in u32 for Gurobi solver API - values over 4.2 billion seconds (136 years) are not realistic")]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "Timeout duration in seconds is expected to fit in u32 for Gurobi solver API - values over 4.2 billion seconds (136 years) are not realistic"
+    )]
     let seconds = timeout.as_secs() as u32;
     let gurobi = GurobiSolver::new().with_max_seconds(seconds);
     good_lp::solvers::lp_solvers::LpSolver(gurobi)
@@ -159,13 +164,16 @@ impl<'a> SingleObjectiveSolver<'a> {
                 // Enforce the solve budget so a hard single-objective (e.g. the payoff
                 // table on large instances) can't run unbounded.
                 if let Some(t) = effective_timeout {
-                    model.set_parameter("sec", &(t.as_secs_f64().ceil() as u64).to_string());
+                    // Integer ceil of the duration in whole seconds (no float cast).
+                    let secs = t.as_secs() + u64::from(t.subsec_nanos() > 0);
+                    model.set_parameter("sec", &secs.to_string());
                 }
                 self.solve_with_model_common(model, objective_index)
             }
             #[cfg(not(feature = "coin_cbc"))]
             crate::solver_enum::Solver::CoinCbc => Err(AugmeconError::UnsupportedSolver(
-                "CoinCbc solver is not available. Enable the 'coin_cbc' feature to use it.".to_string(),
+                "CoinCbc solver is not available. Enable the 'coin_cbc' feature to use it."
+                    .to_string(),
             )),
             #[cfg(feature = "highs")]
             crate::solver_enum::Solver::HiGHS => {
@@ -210,7 +218,159 @@ impl<'a> SingleObjectiveSolver<'a> {
             crate::solver_enum::Solver::SCIP => Err(AugmeconError::UnsupportedSolver(
                 "SCIP solver is not available. Enable the 'scip' feature to use it.".to_string(),
             )),
+            #[cfg(feature = "gurobi")]
+            crate::solver_enum::Solver::Gurobi => {
+                let model = if matches!(direction, crate::model::ObjectiveDirection::Minimize) {
+                    prob_vars.minimise(objective_expr).using(gurobi)
+                } else {
+                    prob_vars.maximise(objective_expr).using(gurobi)
+                };
+                // Gurobi honours TimeLimit natively (unlike HiGHS presolve), so
+                // just wire the solve budget in.
+                let model = match effective_timeout {
+                    Some(t) => model.with_time_limit(t.as_secs_f64()),
+                    None => model,
+                };
+                self.solve_with_model_common(model, objective_index)
+            }
+            #[cfg(not(feature = "gurobi"))]
+            crate::solver_enum::Solver::Gurobi => Err(AugmeconError::UnsupportedSolver(
+                "Gurobi solver is not available. Enable the 'gurobi' feature to use it."
+                    .to_string(),
+            )),
         }
+    }
+
+    /// Minimise an arbitrary linear expression over the problem's feasible set
+    /// (the problem's own constraints plus `extra_constraints`), using the
+    /// configured solver, timeout, and — for `HiGHS` — presolve disabled.
+    ///
+    /// This is the primitive behind the weighted-sum scalarisation used by the
+    /// Anytime Aneja & Nair method (`aneja_nair`) and by lexicographic extreme
+    /// solves. It shares the exact same model-build + solve + extract path as
+    /// [`Self::solve_objective`]; only the objective and extra constraints differ.
+    ///
+    /// # Errors
+    /// Returns an error if the optimisation fails or the problem is infeasible.
+    pub fn solve_minimize_with_constraints(
+        &self,
+        expr: good_lp::Expression,
+        extra_constraints: &[good_lp::constraint::Constraint],
+        timeout: Option<Duration>,
+    ) -> Result<Solution> {
+        let prob_vars = self.problem.variables.clone();
+        let effective_timeout =
+            timeout.or_else(|| self.options.process_timeout.map(Duration::from_secs));
+
+        match self.options.solver {
+            crate::solver_enum::Solver::Default => {
+                let model = match effective_timeout {
+                    Some(t) => prob_vars
+                        .minimise(expr)
+                        .using(create_gurobi_solver_with_timeout(t)),
+                    None => prob_vars.minimise(expr).using(create_gurobi_solver()),
+                };
+                self.solve_with_extra(model, extra_constraints)
+            }
+            #[cfg(feature = "coin_cbc")]
+            crate::solver_enum::Solver::CoinCbc => {
+                let mut model = prob_vars.minimise(expr).using(coin_cbc::coin_cbc);
+                if let Some(t) = effective_timeout {
+                    // Integer ceil of the duration in whole seconds (no float cast).
+                    let secs = t.as_secs() + u64::from(t.subsec_nanos() > 0);
+                    model.set_parameter("sec", &secs.to_string());
+                }
+                self.solve_with_extra(model, extra_constraints)
+            }
+            #[cfg(not(feature = "coin_cbc"))]
+            crate::solver_enum::Solver::CoinCbc => Err(AugmeconError::UnsupportedSolver(
+                "CoinCbc solver is not available. Enable the 'coin_cbc' feature to use it."
+                    .to_string(),
+            )),
+            #[cfg(feature = "highs")]
+            crate::solver_enum::Solver::HiGHS => {
+                let model = prob_vars.minimise(expr).using(highs::highs);
+                let model = match effective_timeout {
+                    Some(t) => model.set_time_limit(t.as_secs_f64()),
+                    None => model,
+                };
+                // Same rationale as solve_objective: HiGHS presolve ignores the
+                // wall-clock limit on the large SIMS models, so disable it.
+                let model = model.set_option("presolve", "off");
+                self.solve_with_extra(model, extra_constraints)
+            }
+            #[cfg(not(feature = "highs"))]
+            crate::solver_enum::Solver::HiGHS => Err(AugmeconError::UnsupportedSolver(
+                "HiGHS solver is not available. Enable the 'highs' feature to use it.".to_string(),
+            )),
+            #[cfg(feature = "scip")]
+            crate::solver_enum::Solver::SCIP => {
+                let model = prob_vars.minimise(expr).using(scip::scip);
+                let model = match effective_timeout {
+                    Some(t) => model.set_time_limit(t.as_secs_f64().ceil() as usize),
+                    None => model,
+                };
+                self.solve_with_extra(model, extra_constraints)
+            }
+            #[cfg(not(feature = "scip"))]
+            crate::solver_enum::Solver::SCIP => Err(AugmeconError::UnsupportedSolver(
+                "SCIP solver is not available. Enable the 'scip' feature to use it.".to_string(),
+            )),
+            #[cfg(feature = "gurobi")]
+            crate::solver_enum::Solver::Gurobi => {
+                let model = prob_vars.minimise(expr).using(gurobi);
+                let model = match effective_timeout {
+                    Some(t) => model.with_time_limit(t.as_secs_f64()),
+                    None => model,
+                };
+                self.solve_with_extra(model, extra_constraints)
+            }
+            #[cfg(not(feature = "gurobi"))]
+            crate::solver_enum::Solver::Gurobi => Err(AugmeconError::UnsupportedSolver(
+                "Gurobi solver is not available. Enable the 'gurobi' feature to use it."
+                    .to_string(),
+            )),
+        }
+    }
+
+    /// Minimise a non-negative weighted sum `Σ wₗ·fₗ(x)` (Maximise objectives are
+    /// negated first). Weights should be pre-normalised by the caller to keep the
+    /// scalarised coefficients small (avoids `f64` precision loss on the large
+    /// integer objectives — see `aneja_nair`).
+    ///
+    /// # Errors
+    /// Returns an error on a weight/objective count mismatch or if the solve fails.
+    pub fn solve_weighted_sum(
+        &self,
+        weights: &[f64],
+        timeout: Option<Duration>,
+    ) -> Result<Solution> {
+        if weights.len() != self.problem.num_objectives() {
+            return Err(AugmeconError::InvalidObjectiveCount(weights.len()));
+        }
+        let expr: good_lp::Expression = self
+            .problem
+            .objectives
+            .iter()
+            .zip(weights)
+            .map(|((obj_expr, dir), &w)| match dir {
+                crate::model::ObjectiveDirection::Minimize => w * obj_expr.clone(),
+                crate::model::ObjectiveDirection::Maximize => (-w) * obj_expr.clone(),
+            })
+            .sum();
+        self.solve_minimize_with_constraints(expr, &[], timeout)
+    }
+
+    /// Add `extra` constraints to a built model, then run the shared solve+extract.
+    fn solve_with_extra<T: SolverModel>(
+        &self,
+        mut model: T,
+        extra: &[good_lp::constraint::Constraint],
+    ) -> Result<Solution> {
+        for c in extra {
+            model.add_constraint(c.clone());
+        }
+        self.solve_with_model_common(model, 0)
     }
 
     /// Common solving logic for all solver types
@@ -229,7 +389,8 @@ impl<'a> SingleObjectiveSolver<'a> {
             self.problem.constraints.len()
         );
         for (idx, constraint) in self.problem.constraints.iter().enumerate() {
-            println!("DEBUG: Adding constraint {idx}: {constraint:?}");
+            // NB: was an unconditional println! — on a 44k-constraint instance ×
+            // dozens of solves that dumped ~450 MB of stdout and filled the disk.
             log::debug!("Adding constraint {idx}: {constraint:?}");
             model.add_constraint(constraint.clone());
         }
@@ -330,7 +491,8 @@ impl<'a> SingleObjectiveSolver<'a> {
             }
             #[cfg(not(feature = "coin_cbc"))]
             crate::solver_enum::Solver::CoinCbc => Err(AugmeconError::UnsupportedSolver(
-                "CoinCbc solver is not available. Enable the 'coin_cbc' feature to use it.".to_string(),
+                "CoinCbc solver is not available. Enable the 'coin_cbc' feature to use it."
+                    .to_string(),
             )),
             #[cfg(feature = "highs")]
             crate::solver_enum::Solver::HiGHS => {
@@ -349,6 +511,21 @@ impl<'a> SingleObjectiveSolver<'a> {
             #[cfg(not(feature = "scip"))]
             crate::solver_enum::Solver::SCIP => Err(AugmeconError::UnsupportedSolver(
                 "SCIP solver is not available. Enable the 'scip' feature to use it.".to_string(),
+            )),
+            #[cfg(feature = "gurobi")]
+            crate::solver_enum::Solver::Gurobi => {
+                // FORCE MAXIMIZATION regardless of original direction
+                let model = prob_vars.maximise(objective_expr).using(gurobi);
+                let model = match effective_timeout {
+                    Some(t) => model.with_time_limit(t.as_secs_f64()),
+                    None => model,
+                };
+                self.solve_with_model_common(model, objective_index)
+            }
+            #[cfg(not(feature = "gurobi"))]
+            crate::solver_enum::Solver::Gurobi => Err(AugmeconError::UnsupportedSolver(
+                "Gurobi solver is not available. Enable the 'gurobi' feature to use it."
+                    .to_string(),
             )),
         }
     }
@@ -454,7 +631,8 @@ impl<'a> SingleObjectiveSolver<'a> {
             }
             #[cfg(not(feature = "coin_cbc"))]
             crate::solver_enum::Solver::CoinCbc => Err(AugmeconError::UnsupportedSolver(
-                "CoinCbc solver is not available. Enable the 'coin_cbc' feature to use it.".to_string(),
+                "CoinCbc solver is not available. Enable the 'coin_cbc' feature to use it."
+                    .to_string(),
             )),
             #[cfg(feature = "highs")]
             crate::solver_enum::Solver::HiGHS => {
@@ -481,6 +659,24 @@ impl<'a> SingleObjectiveSolver<'a> {
             #[cfg(not(feature = "scip"))]
             crate::solver_enum::Solver::SCIP => Err(AugmeconError::UnsupportedSolver(
                 "SCIP solver is not available. Enable the 'scip' feature to use it.".to_string(),
+            )),
+            #[cfg(feature = "gurobi")]
+            crate::solver_enum::Solver::Gurobi => {
+                let model = if matches!(direction, crate::model::ObjectiveDirection::Minimize) {
+                    prob_vars.minimise(objective_expr).using(gurobi)
+                } else {
+                    prob_vars.maximise(objective_expr).using(gurobi)
+                };
+                let model = match effective_timeout {
+                    Some(t) => model.with_time_limit(t.as_secs_f64()),
+                    None => model,
+                };
+                self.solve_with_constraints_common(model, objective_index, additional_constraints)
+            }
+            #[cfg(not(feature = "gurobi"))]
+            crate::solver_enum::Solver::Gurobi => Err(AugmeconError::UnsupportedSolver(
+                "Gurobi solver is not available. Enable the 'gurobi' feature to use it."
+                    .to_string(),
             )),
         }
     }

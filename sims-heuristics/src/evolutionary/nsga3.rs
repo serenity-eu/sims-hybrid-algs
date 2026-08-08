@@ -23,15 +23,15 @@
 //!    b. Fast non-dominated sort of parent + offspring (size 2N).
 //!    c. Fill next generation front-by-front.
 //!    d. For the partial last front: NSGA-III niching (normalisation →
-//!       association → niche-count-based selection).
+//!    association → niche-count-based selection).
 //! 4. Maintain an external Pareto archive updated incrementally each generation.
 
 use std::time::Duration;
 
 use pareto::{HasObjectives, MoSolution};
-use rand::rngs::SmallRng;
+use rand::Rng;
 use rand::SeedableRng;
-use rand::{seq::SliceRandom, Rng};
+use rand::rngs::SmallRng;
 use tracing::{info, info_span};
 
 use crate::explored_solutions_data::ExploredSolutionsData;
@@ -54,7 +54,7 @@ use super::operators::{
 #[derive(Debug, Clone)]
 pub struct Nsga3Config {
     /// Number of weight-vector divisions for simplex-lattice reference points.
-    /// For D=2: population_size = num_divisions + 1.
+    /// For D=2: `population_size` = `num_divisions` + 1.
     /// For D ≥ 3 with `auto_divisions=true`, this is ignored and computed from
     /// `target_pop_size`.
     pub num_divisions: usize,
@@ -126,10 +126,10 @@ struct GenerationStats {
 
 #[derive(Debug, Clone, Default)]
 struct EvolutionDiagnostics {
-    offspring_generated: usize,
-    offspring_novel_genotype: usize,
-    offspring_novel_objectives: usize,
-    offspring_archive_inserted: usize,
+    generated: usize,
+    novel_genotype: usize,
+    novel_objectives: usize,
+    archive_inserted: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -226,6 +226,33 @@ where
     // Main loop
     // -----------------------------------------------------------------
 
+    /// Advance stagnation tracking; when the archive has stalled for
+    /// `stagnation_limit` generations, replace a quarter of the population with
+    /// fresh random individuals and reset the counter.
+    fn maybe_inject_on_stagnation(&mut self) {
+        if self.archive.len() == self.prev_archive_size {
+            self.stagnation_counter += 1;
+        } else {
+            self.stagnation_counter = 0;
+            self.prev_archive_size = self.archive.len();
+        }
+        if self.config.stagnation_limit > 0
+            && self.stagnation_counter >= self.config.stagnation_limit
+        {
+            let inject_count = self.population_size / 4;
+            info!(
+                "NSGA-III stagnation ({} gens), injecting {} random individuals",
+                self.stagnation_counter, inject_count
+            );
+            for _ in 0..inject_count {
+                let s: u64 = self.rng.random();
+                let idx = self.rng.random_range(0..self.population.len());
+                self.population[idx] = BitsetEncodedSolution::random_with_seed(self.problem, s);
+            }
+            self.stagnation_counter = 0;
+        }
+    }
+
     pub fn run(
         &mut self,
         max_generations: usize,
@@ -269,27 +296,7 @@ where
             }
 
             // Stagnation detection: inject random individuals when stuck.
-            if self.archive.len() == self.prev_archive_size {
-                self.stagnation_counter += 1;
-            } else {
-                self.stagnation_counter = 0;
-                self.prev_archive_size = self.archive.len();
-            }
-            if self.config.stagnation_limit > 0
-                && self.stagnation_counter >= self.config.stagnation_limit
-            {
-                let inject_count = self.population_size / 4;
-                info!(
-                    "NSGA-III stagnation ({} gens), injecting {} random individuals",
-                    self.stagnation_counter, inject_count
-                );
-                for _ in 0..inject_count {
-                    let s: u64 = self.rng.random();
-                    let idx = self.rng.random_range(0..self.population.len());
-                    self.population[idx] = BitsetEncodedSolution::random_with_seed(self.problem, s);
-                }
-                self.stagnation_counter = 0;
-            }
+            self.maybe_inject_on_stagnation();
 
             // 1. Compute ranks and crowding for tournament selection.
             let fronts = fast_non_dominated_sort(&self.population);
@@ -301,13 +308,13 @@ where
 
             // 3. Register offspring and update archive.
             let mut diagnostics = EvolutionDiagnostics {
-                offspring_generated: offspring.len(),
+                generated: offspring.len(),
                 ..EvolutionDiagnostics::default()
             };
             let mut seen_objectives = std::collections::HashSet::new();
             for sol in &offspring {
                 if !self.explored_solutions.is_registered(sol) {
-                    diagnostics.offspring_novel_genotype += 1;
+                    diagnostics.novel_genotype += 1;
                     self.explored_solutions.register_without_selected_images(
                         generation,
                         sol,
@@ -315,10 +322,10 @@ where
                     );
                 }
                 if seen_objectives.insert(*sol.objectives()) {
-                    diagnostics.offspring_novel_objectives += 1;
+                    diagnostics.novel_objectives += 1;
                 }
                 if self.try_insert_into_archive(sol) {
-                    diagnostics.offspring_archive_inserted += 1;
+                    diagnostics.archive_inserted += 1;
                 }
             }
 
@@ -332,9 +339,9 @@ where
                 let stats = GenerationStats {
                     generation,
                     archive_size: self.archive.len(),
-                    offspring_generated: diagnostics.offspring_generated,
-                    offspring_novel_objectives: diagnostics.offspring_novel_objectives,
-                    offspring_archive_inserted: diagnostics.offspring_archive_inserted,
+                    offspring_generated: diagnostics.generated,
+                    offspring_novel_objectives: diagnostics.novel_objectives,
+                    offspring_archive_inserted: diagnostics.archive_inserted,
                     elapsed_ms: timer.elapsed().as_millis(),
                 };
                 info!(
@@ -464,7 +471,7 @@ where
 
     /// Survivor selection using NSGA-III reference-point niching.
     ///
-    /// Fronts 0..l-1 are accepted wholesale. For the partial last front F_l,
+    /// Fronts 0..l-1 are accepted wholesale. For the partial last front `F_l`,
     /// reference-point niching (normalisation + association + niche preservation)
     /// selects the k remaining individuals to fill the population.
     fn survivor_selection(
@@ -515,81 +522,9 @@ where
     ) {
         let n_refs = self.reference_points.len();
 
-        // --- Step 1: Ideal point over next_gen ∪ last_front ---
-        let mut ideal = [f64::INFINITY; D];
-        for sol in next_gen.iter() {
-            for d in 0..D {
-                let v = sol.objectives()[d] as f64;
-                if v < ideal[d] {
-                    ideal[d] = v;
-                }
-            }
-        }
-        for &idx in last_front {
-            for d in 0..D {
-                let v = combined[idx].objectives()[d] as f64;
-                if v < ideal[d] {
-                    ideal[d] = v;
-                }
-            }
-        }
-
-        // --- Step 2: Translate objectives ---
-        let translated: Vec<[f64; D]> = next_gen
-            .iter()
-            .chain(last_front.iter().map(|&i| &combined[i]))
-            .map(|sol| {
-                let mut t = [0.0f64; D];
-                for d in 0..D {
-                    t[d] = sol.objectives()[d] as f64 - ideal[d];
-                }
-                t
-            })
-            .collect();
-
+        // --- Steps 1-5: Adaptive normalisation (Deb & Jain 2014, Algorithm 2) ---
         let next_gen_count = next_gen.len();
-
-        // --- Step 3: Extreme points via ASF (Achievement Scalarising Function) ---
-        // For axis j: w_j = 1, w_{i≠j} = 1e-6.
-        let mut extreme = [[0.0f64; D]; D];
-        for j in 0..D {
-            let mut best_asf = f64::INFINITY;
-            let mut best_idx = 0;
-            for (i, t) in translated.iter().enumerate() {
-                let asf = (0..D)
-                    .map(|k| {
-                        let w = if k == j { 1.0 } else { 1e-6 };
-                        t[k] / w
-                    })
-                    .fold(f64::NEG_INFINITY, f64::max);
-                if asf < best_asf {
-                    best_asf = asf;
-                    best_idx = i;
-                }
-            }
-            extreme[j] = translated[best_idx];
-        }
-
-        // --- Step 4: Hyperplane intercepts via Gaussian elimination ---
-        // Solve E * (1/a) = 1 where E[j][k] = extreme[j][k].
-        // If degenerate, fall back to per-axis range normalisation.
-        let intercepts = compute_intercepts(&extreme);
-
-        // --- Step 5: Normalise objectives ---
-        let normalise = |t: &[f64; D]| -> [f64; D] {
-            let mut n = [0.0f64; D];
-            for d in 0..D {
-                let denom = intercepts[d];
-                n[d] = if denom.abs() > 1e-10 {
-                    t[d] / denom
-                } else {
-                    t[d]
-                };
-            }
-            n
-        };
-
-        let norm_all: Vec<[f64; D]> = translated.iter().map(|t| normalise(t)).collect();
+        let norm_all = normalise_front(next_gen, combined, last_front);
 
         // --- Step 6: Associate each solution with nearest reference point ---
         // Perpendicular distance from normalised objective to reference line through origin.
@@ -710,10 +645,7 @@ where
 /// Returns intercepts `a[j]`. Falls back to per-axis max if degenerate.
 pub(crate) fn compute_intercepts<const D: usize>(extreme: &[[f64; D]; D]) -> [f64; D] {
     // Build augmented matrix [E | 1]
-    let mut mat = [[0.0f64; D]; D];
-    for i in 0..D {
-        mat[i] = extreme[i];
-    }
+    let mut mat = *extreme;
     let mut rhs = [1.0f64; D];
 
     // Gaussian elimination with partial pivoting
@@ -721,9 +653,9 @@ pub(crate) fn compute_intercepts<const D: usize>(extreme: &[[f64; D]; D]) -> [f6
         // Find pivot
         let mut max_val = mat[col][col].abs();
         let mut pivot_row = col;
-        for row in (col + 1)..D {
-            if mat[row][col].abs() > max_val {
-                max_val = mat[row][col].abs();
+        for (row, mat_row) in mat.iter().enumerate().skip(col + 1) {
+            if mat_row[col].abs() > max_val {
+                max_val = mat_row[col].abs();
                 pivot_row = row;
             }
         }
@@ -743,20 +675,24 @@ pub(crate) fn compute_intercepts<const D: usize>(extreme: &[[f64; D]; D]) -> [f6
         rhs.swap(col, pivot_row);
 
         let pivot = mat[col][col];
-        for k in col..D {
-            mat[col][k] /= pivot;
+        for v in &mut mat[col][col..] {
+            *v /= pivot;
         }
         rhs[col] /= pivot;
 
+        // Snapshot of the normalised pivot row; it is not modified while the
+        // other rows are eliminated (the `row == col` case is skipped).
+        let pivot_vals = mat[col];
+        let rhs_col = rhs[col];
         for row in 0..D {
             if row == col {
                 continue;
             }
             let factor = mat[row][col];
-            for k in col..D {
-                mat[row][k] -= factor * mat[col][k];
+            for (target, &pv) in mat[row][col..].iter_mut().zip(pivot_vals[col..].iter()) {
+                *target -= factor * pv;
             }
-            rhs[row] -= factor * rhs[col];
+            rhs[row] -= factor * rhs_col;
         }
     }
 
@@ -770,6 +706,93 @@ pub(crate) fn compute_intercepts<const D: usize>(extreme: &[[f64; D]; D]) -> [f6
         }
     }
     intercepts
+}
+
+/// Adaptive normalisation (Deb & Jain 2014, Algorithm 2): ideal-point
+/// translation → ASF extreme points → hyperplane-intercept scaling.
+///
+/// Returns the normalised objective vectors for `next_gen` (the first
+/// `next_gen.len()` entries) followed by the `last_front` solutions, in that
+/// order — matching the association order the niching step expects.
+pub(super) fn normalise_front<P, const D: usize>(
+    next_gen: &[BitsetEncodedSolution<P, D>],
+    combined: &[BitsetEncodedSolution<P, D>],
+    last_front: &[usize],
+) -> Vec<[f64; D]>
+where
+    P: SetCoverProblem<D> + Clone + Send + Sync,
+{
+    // Step 1: ideal point over next_gen ∪ last_front.
+    let mut ideal = [f64::INFINITY; D];
+    for sol in next_gen {
+        for (ideal_d, &obj) in ideal.iter_mut().zip(sol.objectives().iter()) {
+            let v = obj as f64;
+            if v < *ideal_d {
+                *ideal_d = v;
+            }
+        }
+    }
+    for &idx in last_front {
+        for (ideal_d, &obj) in ideal.iter_mut().zip(combined[idx].objectives().iter()) {
+            let v = obj as f64;
+            if v < *ideal_d {
+                *ideal_d = v;
+            }
+        }
+    }
+
+    // Step 2: translate.
+    let translated: Vec<[f64; D]> = next_gen
+        .iter()
+        .chain(last_front.iter().map(|&i| &combined[i]))
+        .map(|sol| {
+            let mut t = [0.0f64; D];
+            for d in 0..D {
+                t[d] = sol.objectives()[d] as f64 - ideal[d];
+            }
+            t
+        })
+        .collect();
+
+    // Step 3: extreme points via ASF (axis j: w_j = 1, w_{i≠j} = 1e-6).
+    let mut extreme = [[0.0f64; D]; D];
+    for (j, extreme_j) in extreme.iter_mut().enumerate() {
+        let mut best_asf = f64::INFINITY;
+        let mut best_idx = 0;
+        for (i, t) in translated.iter().enumerate() {
+            let asf = (0..D)
+                .map(|k| {
+                    let w = if k == j { 1.0 } else { 1e-6 };
+                    t[k] / w
+                })
+                .fold(f64::NEG_INFINITY, f64::max);
+            if asf < best_asf {
+                best_asf = asf;
+                best_idx = i;
+            }
+        }
+        *extreme_j = translated[best_idx];
+    }
+
+    // Step 4: hyperplane intercepts (falls back to per-axis range if degenerate).
+    let intercepts = compute_intercepts(&extreme);
+
+    // Step 5: normalise by intercepts.
+    translated
+        .iter()
+        .map(|t| {
+            let mut n = [0.0f64; D];
+            for d in 0..D {
+                let denom = intercepts[d];
+                n[d] = if denom.abs() > 1e-10 {
+                    t[d] / denom
+                } else {
+                    t[d]
+                };
+            }
+            n
+        })
+        .collect()
 }
 
 /// Associate a normalised objective vector with the nearest reference point.
@@ -834,11 +857,7 @@ fn auto_divisions_for_target<const D: usize>(target: usize) -> usize {
     let mut best_diff = usize::MAX;
     for n in 1..=50 {
         let count = n_weight_vectors(n, D);
-        let diff = if count >= target {
-            count - target
-        } else {
-            target - count
-        };
+        let diff = count.abs_diff(target);
         if diff < best_diff {
             best_diff = diff;
             best_n = n;

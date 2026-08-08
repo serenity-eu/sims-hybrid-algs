@@ -86,12 +86,18 @@ fn build_intervals(elements: &[u32], offsets: &[usize]) -> (Vec<Interval>, Vec<u
             if e == run_start + run_len {
                 run_len += 1;
             } else {
-                intervals.push(Interval { start: run_start, len: run_len });
+                intervals.push(Interval {
+                    start: run_start,
+                    len: run_len,
+                });
                 run_start = e;
                 run_len = 1;
             }
         }
-        intervals.push(Interval { start: run_start, len: run_len });
+        intervals.push(Interval {
+            start: run_start,
+            len: run_len,
+        });
         interval_offsets.push(intervals.len());
     }
 
@@ -143,7 +149,7 @@ fn build_shared_data<const D: usize>(problem: &impl SetCoverProblem<D>) -> Share
                 let mut ce = Vec::with_capacity(num_images * 20);
                 let mut ce_offsets = Vec::with_capacity(num_images + 1);
                 ce_offsets.push(0);
-                for bits in clear_images.iter() {
+                for bits in clear_images {
                     for e in bits.ones() {
                         ce.push(e as u32);
                     }
@@ -206,14 +212,14 @@ pub struct ProvenSafeTotalCostState {
 }
 
 impl ProvenSafeTotalCostState {
-    #[inline(always)]
-    fn reset_to_empty(&mut self) {
+    #[inline]
+    const fn reset_to_empty(&mut self) {
         self.current_cost = 0;
     }
 }
 
 impl<const D: usize> ObjectiveTracker<D> for ProvenSafeTotalCostState {
-    #[inline(always)]
+    #[inline]
     fn peek_removal_delta(
         &self,
         image_index: usize,
@@ -223,7 +229,7 @@ impl<const D: usize> ObjectiveTracker<D> for ProvenSafeTotalCostState {
         -(self.image_costs[image_index] as i64)
     }
 
-    #[inline(always)]
+    #[inline]
     fn peek_addition_delta(
         &self,
         image_index: usize,
@@ -233,29 +239,21 @@ impl<const D: usize> ObjectiveTracker<D> for ProvenSafeTotalCostState {
         self.image_costs[image_index] as i64
     }
 
-    #[inline(always)]
-    fn track_image_removal(
-        &mut self,
-        image_index: usize,
-        _p: &impl SetCoverProblem<D>,
-    ) -> i64 {
+    #[inline]
+    fn track_image_removal(&mut self, image_index: usize, _p: &impl SetCoverProblem<D>) -> i64 {
         let cost = self.image_costs[image_index];
         self.current_cost -= cost;
         -(cost as i64)
     }
 
-    #[inline(always)]
-    fn track_image_addition(
-        &mut self,
-        image_index: usize,
-        _p: &impl SetCoverProblem<D>,
-    ) -> i64 {
+    #[inline]
+    fn track_image_addition(&mut self, image_index: usize, _p: &impl SetCoverProblem<D>) -> i64 {
         let cost = self.image_costs[image_index];
         self.current_cost += cost;
         cost as i64
     }
 
-    #[inline(always)]
+    #[inline]
     fn value(&self) -> u64 {
         self.current_cost
     }
@@ -267,33 +265,33 @@ impl<const D: usize> ObjectiveTracker<D> for ProvenSafeTotalCostState {
 
 #[derive(Clone, Debug)]
 pub struct ProvenSafeCloudyAreaState {
-    /// Per-element coverage count. Length == num_elements.
+    /// Per-element coverage count. Length == `num_elements`.
     counts: Vec<u16>,
     /// Current total cloudy area.
     current_area: u64,
     /// Total area when no images are selected (used to reset without recomputing).
     initial_area: u64,
-    /// Area contribution per element (shared, length >= num_elements).
+    /// Area contribution per element (shared, length >= `num_elements`).
     element_areas: Arc<Vec<u64>>,
-    /// Flattened clear elements for each image (shared). All values < counts.len().
+    /// Flattened clear elements for each image (shared). All values < `counts.len()`.
     clear_elements: Arc<Vec<u32>>,
-    /// CSR offsets into clear_elements per image (shared).
+    /// CSR offsets into `clear_elements` per image (shared).
     clear_elements_offsets: Arc<Vec<usize>>,
-    /// Pre-validated bound: all element indices in clear_elements are < this value.
-    /// This equals min(counts.len(), element_areas.len()).
+    /// Pre-validated bound: all element indices in `clear_elements` are < this value.
+    /// This equals `min(counts.len()`, `element_areas.len()`).
     bound: usize,
 }
 
 impl ProvenSafeCloudyAreaState {
     /// Get elements for an image from the CSR structure.
-    #[inline(always)]
+    #[inline]
     fn image_clear_elements(&self, image_index: usize) -> &[u32] {
         let start = self.clear_elements_offsets[image_index];
         let end = self.clear_elements_offsets[image_index + 1];
         &self.clear_elements[start..end]
     }
 
-    #[inline(always)]
+    #[inline]
     fn reset_to_empty(&mut self) {
         self.counts.fill(0);
         self.current_area = self.initial_area;
@@ -301,7 +299,7 @@ impl ProvenSafeCloudyAreaState {
 }
 
 impl<const D: usize> ObjectiveTracker<D> for ProvenSafeCloudyAreaState {
-    #[inline(always)]
+    #[inline]
     fn peek_removal_delta(
         &self,
         image_index: usize,
@@ -321,7 +319,7 @@ impl<const D: usize> ObjectiveTracker<D> for ProvenSafeCloudyAreaState {
         delta
     }
 
-    #[inline(always)]
+    #[inline]
     fn peek_addition_delta(
         &self,
         image_index: usize,
@@ -341,12 +339,8 @@ impl<const D: usize> ObjectiveTracker<D> for ProvenSafeCloudyAreaState {
         delta
     }
 
-    #[inline(always)]
-    fn track_image_removal(
-        &mut self,
-        image_index: usize,
-        _p: &impl SetCoverProblem<D>,
-    ) -> i64 {
+    #[inline]
+    fn track_image_removal(&mut self, image_index: usize, _p: &impl SetCoverProblem<D>) -> i64 {
         let start = self.clear_elements_offsets[image_index];
         let end = self.clear_elements_offsets[image_index + 1];
         let clear_elements = &self.clear_elements[start..end];
@@ -368,12 +362,8 @@ impl<const D: usize> ObjectiveTracker<D> for ProvenSafeCloudyAreaState {
         total_add as i64
     }
 
-    #[inline(always)]
-    fn track_image_addition(
-        &mut self,
-        image_index: usize,
-        _p: &impl SetCoverProblem<D>,
-    ) -> i64 {
+    #[inline]
+    fn track_image_addition(&mut self, image_index: usize, _p: &impl SetCoverProblem<D>) -> i64 {
         let start = self.clear_elements_offsets[image_index];
         let end = self.clear_elements_offsets[image_index + 1];
         let clear_elements = &self.clear_elements[start..end];
@@ -413,11 +403,11 @@ pub struct ProvenSafeMinResolutionState {
     image_resolution_level: Arc<Vec<u8>>,
     /// Elements covered by each image (shared, flattened CSR).
     image_elements: Arc<Vec<u32>>,
-    /// CSR offsets into image_elements per image (shared).
+    /// CSR offsets into `image_elements` per image (shared).
     image_elements_offsets: Arc<Vec<usize>>,
     /// Interval-compressed image elements for mutation paths.
     image_intervals: Arc<Vec<Interval>>,
-    /// CSR offsets into image_intervals per image (shared).
+    /// CSR offsets into `image_intervals` per image (shared).
     image_intervals_offsets: Arc<Vec<usize>>,
     // -- Two-level path (exactly 2 resolution levels) --
     /// Packed counts for two-level: c0 in low 16 bits, c1 in high 16 bits.
@@ -431,29 +421,29 @@ pub struct ProvenSafeMinResolutionState {
     packed_small: Vec<u64>,
     small_level: bool,
     // -- General path (>8 resolution levels) --
-    /// Per-element per-level counts. Indexed as [element * num_levels + level].
+    /// Per-element per-level counts. Indexed as [element * `num_levels` + level].
     level_counts_general: Vec<u16>,
-    /// Bitmask of active levels per element. Indexed as [element * mask_words + word].
+    /// Bitmask of active levels per element. Indexed as [element * `mask_words` + word].
     level_masks_general: Vec<u64>,
     mask_words: u8,
-    /// Cached min-level per element (u8::MAX = uncovered).
+    /// Cached min-level per element (`u8::MAX` = uncovered).
     element_min_level: Vec<u8>,
     // -- Current sum (all paths) --
     current_sum: u64,
-    /// Validated upper bound: all element indices in image_elements satisfy idx < bound.
+    /// Validated upper bound: all element indices in `image_elements` satisfy idx < bound.
     bound: usize,
 }
 
 impl ProvenSafeMinResolutionState {
     /// Get elements for an image from the CSR structure.
-    #[inline(always)]
+    #[inline]
     fn image_elements(&self, image_index: usize) -> &[u32] {
         let start = self.image_elements_offsets[image_index];
         let end = self.image_elements_offsets[image_index + 1];
         &self.image_elements[start..end]
     }
 
-    #[inline(always)]
+    #[inline]
     fn reset_to_empty(&mut self) {
         if self.two_level {
             self.packed_counts_2l.fill(0);
@@ -470,7 +460,7 @@ impl ProvenSafeMinResolutionState {
     // Two-level specialization
     // =========================================================================
 
-    #[inline(always)]
+    #[inline]
     fn peek_removal_two_level(&self, img_level: usize, elements: &[u32]) -> i64 {
         let packed = &self.packed_counts_2l[..self.bound];
         let low_val = self.low_val as i64;
@@ -506,7 +496,7 @@ impl ProvenSafeMinResolutionState {
         delta
     }
 
-    #[inline(always)]
+    #[inline]
     fn peek_addition_two_level(&self, img_level: usize, elements: &[u32]) -> i64 {
         let packed = &self.packed_counts_2l[..self.bound];
         let low_val = self.low_val as i64;
@@ -540,7 +530,7 @@ impl ProvenSafeMinResolutionState {
         delta
     }
 
-    #[inline(always)]
+    #[inline]
     fn track_removal_two_level_intervals(
         &mut self,
         img_level: usize,
@@ -559,11 +549,10 @@ impl ProvenSafeMinResolutionState {
                 let interval = self.image_intervals[int_idx];
                 let start = interval.start as usize;
                 let end = start + interval.len as usize;
-                for idx in start..end {
-                    let p = packed[idx];
-                    let c0 = (p & 0xFFFF) as u16;
-                    let c1 = (p >> 16) as u16;
-                    packed[idx] = u32::from(c0.saturating_sub(1)) | (u32::from(c1) << 16);
+                for p in &mut packed[start..end] {
+                    let c0 = (*p & 0xFFFF) as u16;
+                    let c1 = (*p >> 16) as u16;
+                    *p = u32::from(c0.saturating_sub(1)) | (u32::from(c1) << 16);
                     let was_one = i64::from(c0 == 1);
                     let has_backup = i64::from(c1 > 0);
                     delta += was_one * (has_backup * (diff + low_val) - low_val);
@@ -574,11 +563,10 @@ impl ProvenSafeMinResolutionState {
                 let interval = self.image_intervals[int_idx];
                 let start = interval.start as usize;
                 let end = start + interval.len as usize;
-                for idx in start..end {
-                    let p = packed[idx];
-                    let c0 = (p & 0xFFFF) as u16;
-                    let c1 = (p >> 16) as u16;
-                    packed[idx] = u32::from(c0) | (u32::from(c1.saturating_sub(1)) << 16);
+                for p in &mut packed[start..end] {
+                    let c0 = (*p & 0xFFFF) as u16;
+                    let c1 = (*p >> 16) as u16;
+                    *p = u32::from(c0) | (u32::from(c1.saturating_sub(1)) << 16);
                     delta -= i64::from(c1 == 1) * i64::from(c0 == 0) * high_val;
                 }
             }
@@ -588,7 +576,7 @@ impl ProvenSafeMinResolutionState {
         delta
     }
 
-    #[inline(always)]
+    #[inline]
     fn track_addition_two_level_intervals(
         &mut self,
         img_level: usize,
@@ -607,14 +595,13 @@ impl ProvenSafeMinResolutionState {
                 let interval = self.image_intervals[int_idx];
                 let start = interval.start as usize;
                 let end = start + interval.len as usize;
-                for idx in start..end {
-                    let p = packed[idx];
-                    let c0 = (p & 0xFFFF) as u16;
-                    let c1 = (p >> 16) as u16;
+                for p in &mut packed[start..end] {
+                    let c0 = (*p & 0xFFFF) as u16;
+                    let c1 = (*p >> 16) as u16;
                     let was_zero = i64::from(c0 == 0);
                     let has_backup = i64::from(c1 > 0);
                     delta += was_zero * (low_val - has_backup * (diff + low_val));
-                    packed[idx] = u32::from(c0 + 1) | (u32::from(c1) << 16);
+                    *p = u32::from(c0 + 1) | (u32::from(c1) << 16);
                 }
             }
         } else {
@@ -622,10 +609,9 @@ impl ProvenSafeMinResolutionState {
                 let interval = self.image_intervals[int_idx];
                 let start = interval.start as usize;
                 let end = start + interval.len as usize;
-                for idx in start..end {
-                    let p = packed[idx];
-                    delta += i64::from(p == 0) * high_val;
-                    packed[idx] = p + 0x10000;
+                for p in &mut packed[start..end] {
+                    delta += i64::from(*p == 0) * high_val;
+                    *p += 0x10000;
                 }
             }
         }
@@ -701,12 +687,7 @@ impl ProvenSafeMinResolutionState {
     }
 
     #[inline]
-    fn track_removal_packed_small(
-        &mut self,
-        img_level: usize,
-        start: usize,
-        end: usize,
-    ) -> i64 {
+    fn track_removal_packed_small(&mut self, img_level: usize, start: usize, end: usize) -> i64 {
         let resolution_levels = &self.resolution_levels;
         let bound = self.bound;
         let packed = &mut self.packed_small[..bound];
@@ -739,12 +720,7 @@ impl ProvenSafeMinResolutionState {
     }
 
     #[inline]
-    fn track_addition_packed_small(
-        &mut self,
-        img_level: usize,
-        start: usize,
-        end: usize,
-    ) -> i64 {
+    fn track_addition_packed_small(&mut self, img_level: usize, start: usize, end: usize) -> i64 {
         let resolution_levels = &self.resolution_levels;
         let bound = self.bound;
         let packed = &mut self.packed_small[..bound];
@@ -795,11 +771,7 @@ impl ProvenSafeMinResolutionState {
     }
 
     #[inline]
-    fn find_next_level_excluding(
-        &self,
-        element_idx: usize,
-        excluded_level: usize,
-    ) -> u8 {
+    fn find_next_level_excluding(&self, element_idx: usize, excluded_level: usize) -> u8 {
         let mask_words = usize::from(self.mask_words);
         let base = element_idx * mask_words;
         let word_idx = excluded_level / 64;
@@ -873,12 +845,7 @@ impl ProvenSafeMinResolutionState {
     }
 
     #[inline]
-    fn track_removal_general(
-        &mut self,
-        img_level: usize,
-        start: usize,
-        end: usize,
-    ) -> i64 {
+    fn track_removal_general(&mut self, img_level: usize, start: usize, end: usize) -> i64 {
         let resolution_levels = &self.resolution_levels;
         let num_levels = resolution_levels.len();
         let mask_words = usize::from(self.mask_words);
@@ -925,12 +892,7 @@ impl ProvenSafeMinResolutionState {
     }
 
     #[inline]
-    fn track_addition_general(
-        &mut self,
-        img_level: usize,
-        start: usize,
-        end: usize,
-    ) -> i64 {
+    fn track_addition_general(&mut self, img_level: usize, start: usize, end: usize) -> i64 {
         let resolution_levels = &self.resolution_levels;
         let num_levels = resolution_levels.len();
         let mask_words = usize::from(self.mask_words);
@@ -967,7 +929,7 @@ impl ProvenSafeMinResolutionState {
 }
 
 impl<const D: usize> ObjectiveTracker<D> for ProvenSafeMinResolutionState {
-    #[inline(always)]
+    #[inline]
     fn peek_removal_delta(
         &self,
         image_index: usize,
@@ -986,7 +948,7 @@ impl<const D: usize> ObjectiveTracker<D> for ProvenSafeMinResolutionState {
         self.peek_removal_general(img_level, elements)
     }
 
-    #[inline(always)]
+    #[inline]
     fn peek_addition_delta(
         &self,
         image_index: usize,
@@ -1005,12 +967,8 @@ impl<const D: usize> ObjectiveTracker<D> for ProvenSafeMinResolutionState {
         self.peek_addition_general(img_level, elements)
     }
 
-    #[inline(always)]
-    fn track_image_removal(
-        &mut self,
-        image_index: usize,
-        _p: &impl SetCoverProblem<D>,
-    ) -> i64 {
+    #[inline]
+    fn track_image_removal(&mut self, image_index: usize, _p: &impl SetCoverProblem<D>) -> i64 {
         let img_level = usize::from(self.image_resolution_level[image_index]);
 
         if self.two_level {
@@ -1028,12 +986,8 @@ impl<const D: usize> ObjectiveTracker<D> for ProvenSafeMinResolutionState {
         self.track_removal_general(img_level, start, end)
     }
 
-    #[inline(always)]
-    fn track_image_addition(
-        &mut self,
-        image_index: usize,
-        _p: &impl SetCoverProblem<D>,
-    ) -> i64 {
+    #[inline]
+    fn track_image_addition(&mut self, image_index: usize, _p: &impl SetCoverProblem<D>) -> i64 {
         let img_level = usize::from(self.image_resolution_level[image_index]);
 
         if self.two_level {
@@ -1070,7 +1024,7 @@ pub struct ProvenSafeMaxIncidenceAngleState {
 }
 
 impl ProvenSafeMaxIncidenceAngleState {
-    #[inline(always)]
+    #[inline]
     fn reset_to_empty(&mut self) {
         self.level_counts.fill(0);
         self.current_max_level = u8::MAX;
@@ -1121,11 +1075,7 @@ impl<const D: usize> ObjectiveTracker<D> for ProvenSafeMaxIncidenceAngleState {
         }
     }
 
-    fn track_image_removal(
-        &mut self,
-        image_index: usize,
-        _p: &impl SetCoverProblem<D>,
-    ) -> i64 {
+    fn track_image_removal(&mut self, image_index: usize, _p: &impl SetCoverProblem<D>) -> i64 {
         let img_level = usize::from(self.image_incidence_level[image_index]);
         let old_max = self.current_max;
 
@@ -1134,29 +1084,26 @@ impl<const D: usize> ObjectiveTracker<D> for ProvenSafeMaxIncidenceAngleState {
             *slot -= 1;
         }
 
-        if self.current_max_level != u8::MAX && img_level == usize::from(self.current_max_level) {
-            if self.level_counts[img_level] == 0 {
-                let mut next = (img_level as i32) - 1;
-                while next >= 0 {
-                    if self.level_counts[next as usize] != 0 {
-                        self.current_max_level = next as u8;
-                        self.current_max = self.incidence_levels[next as usize];
-                        return (self.current_max as i64) - (old_max as i64);
-                    }
-                    next -= 1;
+        if self.current_max_level != u8::MAX
+            && img_level == usize::from(self.current_max_level)
+            && self.level_counts[img_level] == 0
+        {
+            let mut next = (img_level as i32) - 1;
+            while next >= 0 {
+                if self.level_counts[next as usize] != 0 {
+                    self.current_max_level = next as u8;
+                    self.current_max = self.incidence_levels[next as usize];
+                    return (self.current_max as i64) - (old_max as i64);
                 }
-                self.current_max_level = u8::MAX;
-                self.current_max = 0;
+                next -= 1;
             }
+            self.current_max_level = u8::MAX;
+            self.current_max = 0;
         }
         (self.current_max as i64) - (old_max as i64)
     }
 
-    fn track_image_addition(
-        &mut self,
-        image_index: usize,
-        _p: &impl SetCoverProblem<D>,
-    ) -> i64 {
+    fn track_image_addition(&mut self, image_index: usize, _p: &impl SetCoverProblem<D>) -> i64 {
         let img_level = self.image_incidence_level[image_index];
         let old_max = self.current_max;
 
@@ -1187,7 +1134,7 @@ pub enum ProvenSafeTracker {
 }
 
 impl ProvenSafeTracker {
-    #[inline(always)]
+    #[inline]
     fn reset_to_empty(&mut self) {
         match self {
             Self::TotalCost(t) => t.reset_to_empty(),
@@ -1199,7 +1146,7 @@ impl ProvenSafeTracker {
 }
 
 impl<const D: usize> ObjectiveTracker<D> for ProvenSafeTracker {
-    #[inline(always)]
+    #[inline]
     fn peek_removal_delta(
         &self,
         image_index: usize,
@@ -1214,7 +1161,7 @@ impl<const D: usize> ObjectiveTracker<D> for ProvenSafeTracker {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     fn peek_addition_delta(
         &self,
         image_index: usize,
@@ -1229,12 +1176,8 @@ impl<const D: usize> ObjectiveTracker<D> for ProvenSafeTracker {
         }
     }
 
-    #[inline(always)]
-    fn track_image_removal(
-        &mut self,
-        image_index: usize,
-        p: &impl SetCoverProblem<D>,
-    ) -> i64 {
+    #[inline]
+    fn track_image_removal(&mut self, image_index: usize, p: &impl SetCoverProblem<D>) -> i64 {
         match self {
             Self::TotalCost(t) => t.track_image_removal(image_index, p),
             Self::CloudyArea(t) => t.track_image_removal(image_index, p),
@@ -1243,12 +1186,8 @@ impl<const D: usize> ObjectiveTracker<D> for ProvenSafeTracker {
         }
     }
 
-    #[inline(always)]
-    fn track_image_addition(
-        &mut self,
-        image_index: usize,
-        p: &impl SetCoverProblem<D>,
-    ) -> i64 {
+    #[inline]
+    fn track_image_addition(&mut self, image_index: usize, p: &impl SetCoverProblem<D>) -> i64 {
         match self {
             Self::TotalCost(t) => t.track_image_addition(image_index, p),
             Self::CloudyArea(t) => t.track_image_addition(image_index, p),
@@ -1257,7 +1196,7 @@ impl<const D: usize> ObjectiveTracker<D> for ProvenSafeTracker {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     fn value(&self) -> u64 {
         match self {
             Self::TotalCost(t) => ObjectiveTracker::<D>::value(t),
@@ -1459,6 +1398,11 @@ impl<const D: usize> ProvenSafeTrackerArray<D> {
     /// This is used for fast checkpoint/restore in the neighborhood iterator:
     /// save state after removal, restore after each merge instead of undoing
     /// individual add operations.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self` and `dst` do not have identically-typed trackers in the
+    /// same order (which never happens for arrays built from the same problem).
     pub fn snapshot_mutable_state_into(&self, dst: &mut Self) {
         // for each pair of trackers, copy mutable state
         for (src, dst) in self.trackers.iter().zip(dst.trackers.iter_mut()) {
@@ -1478,14 +1422,19 @@ impl<const D: usize> ProvenSafeTrackerArray<D> {
                     } else if s.small_level {
                         d.packed_small.copy_from_slice(&s.packed_small);
                     } else {
-                        d.level_counts_general.copy_from_slice(&s.level_counts_general);
-                        d.level_masks_general.copy_from_slice(&s.level_masks_general);
+                        d.level_counts_general
+                            .copy_from_slice(&s.level_counts_general);
+                        d.level_masks_general
+                            .copy_from_slice(&s.level_masks_general);
                         d.element_min_level.copy_from_slice(&s.element_min_level);
                     }
                     d.current_sum = s.current_sum;
                     // two_level, small_level, bound, diff, etc. are structural/immutable
                 }
-                (ProvenSafeTracker::MaxIncidenceAngle(s), ProvenSafeTracker::MaxIncidenceAngle(d)) => {
+                (
+                    ProvenSafeTracker::MaxIncidenceAngle(s),
+                    ProvenSafeTracker::MaxIncidenceAngle(d),
+                ) => {
                     d.level_counts.copy_from_slice(&s.level_counts);
                     d.current_max_level = s.current_max_level;
                     d.current_max = s.current_max;

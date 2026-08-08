@@ -9,7 +9,7 @@
 //! 4. Objective values are correctly computed (recalculated from scratch).
 //!
 //! Requires the `external_solvers` feature to be enabled:
-//!   cargo test --features external_solvers --test test_external_solvers
+//!   cargo test --features `external_solvers` --test `test_external_solvers`
 
 #![cfg(feature = "external_solvers")]
 

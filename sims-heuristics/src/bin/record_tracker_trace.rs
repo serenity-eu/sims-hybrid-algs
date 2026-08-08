@@ -16,10 +16,9 @@ use clap::Parser;
 use pareto::ParetoFront;
 use pls::objective_tracker::{SimdTrackerArray, TrackerCollection};
 use pls::objectives::ObjectiveType;
-use pls::problem::SetCoverProblem;
 use pls::problem_bitset::ProblemBitset;
-use pls::solution::bitset_encoded_solution::BitsetEncodedSolution;
 use pls::solution::ImageSet;
+use pls::solution::bitset_encoded_solution::BitsetEncodedSolution;
 use pls::solution_set_impl::NdTreeSolutionSet;
 
 const OBJECTIVE_TYPES: [ObjectiveType; 4] = [
@@ -60,12 +59,6 @@ enum Op {
     Reset = 4,
 }
 
-/// A recording wrapper that delegates to an inner TrackerCollection while logging operations.
-#[derive(Clone, Debug)]
-struct RecordingTrackerArray<const D: usize> {
-    inner: SimdTrackerArray<D>,
-}
-
 // Thread-local storage for the trace writer
 thread_local! {
     static TRACE_WRITER: RefCell<Option<BufWriter<File>>> = const { RefCell::new(None) };
@@ -74,7 +67,8 @@ thread_local! {
 fn record_event(op: Op, image_index: usize) {
     TRACE_WRITER.with_borrow_mut(|writer| {
         if let Some(w) = writer.as_mut() {
-            let record = ((op as u16) << 12) | (image_index as u16 & 0x0FFF);
+            let masked = u16::try_from(image_index & 0x0FFF).expect("masked to 12 bits");
+            let record = (u16::from(op as u8) << 12) | masked;
             let _ = w.write_all(&record.to_le_bytes());
         }
     });
@@ -95,80 +89,10 @@ fn flush_trace_writer() {
     });
 }
 
-impl<const D: usize> TrackerCollection<D> for RecordingTrackerArray<D> {
-    type Tracker = <SimdTrackerArray<D> as TrackerCollection<D>>::Tracker;
-
-    fn get(&self, index: usize) -> &Self::Tracker {
-        self.inner.get(index)
-    }
-
-    fn get_mut(&mut self, index: usize) -> &mut Self::Tracker {
-        self.inner.get_mut(index)
-    }
-
-    fn new(problem: &impl SetCoverProblem<D>) -> Self {
-        record_event(Op::Reset, 0);
-        Self {
-            inner: SimdTrackerArray::new(problem),
-        }
-    }
-
-    fn initial_objectives(&self) -> [u64; D] {
-        self.inner.initial_objectives()
-    }
-
-    fn peek_removal_delta(
-        &self,
-        image_index: usize,
-        problem: &impl SetCoverProblem<D>,
-        solution: &impl ImageSet<D>,
-    ) -> [i64; D] {
-        record_event(Op::PeekRem, image_index);
-        self.inner.peek_removal_delta(image_index, problem, solution)
-    }
-
-    fn peek_addition_delta(
-        &self,
-        image_index: usize,
-        problem: &impl SetCoverProblem<D>,
-        solution: &impl ImageSet<D>,
-    ) -> [i64; D] {
-        record_event(Op::PeekAdd, image_index);
-        self.inner.peek_addition_delta(image_index, problem, solution)
-    }
-
-    fn track_image_removal(
-        &mut self,
-        image_index: usize,
-        problem: &impl SetCoverProblem<D>,
-    ) -> [i64; D] {
-        record_event(Op::TrackRem, image_index);
-        self.inner.track_image_removal(image_index, problem)
-    }
-
-    fn track_image_addition(
-        &mut self,
-        image_index: usize,
-        problem: &impl SetCoverProblem<D>,
-    ) -> [i64; D] {
-        record_event(Op::TrackAdd, image_index);
-        self.inner.track_image_addition(image_index, problem)
-    }
-
-    fn values(&self) -> [u64; D] {
-        self.inner.values()
-    }
-
-    fn initialize_from(&mut self, solution: &impl ImageSet<D>, problem: &impl SetCoverProblem<D>) {
-        record_event(Op::Reset, 0);
-        self.inner.initialize_from(solution, problem);
-    }
-}
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
-    println!("Loading instance: {:?}", args.instance);
+    println!("Loading instance: {}", args.instance.display());
     let problem = ProblemBitset::<4>::from_minizinc_datafile(&args.instance, OBJECTIVE_TYPES)?;
 
     println!(
@@ -179,7 +103,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize trace writer
     init_trace_writer(&args.output)?;
-    println!("Recording trace to: {:?}", args.output);
+    println!("Recording trace to: {}", args.output.display());
 
     // Create initial population
     println!(
@@ -199,22 +123,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         initial_population.len()
     );
 
-    // Run PLS with recording trackers
-    // Note: We can't easily inject RecordingTrackerArray into the existing PLS without
-    // major refactoring. Instead, we run the standard PLS which uses SimdTrackerArray internally.
-    // The trace recording happens via the thread-local writer.
-    //
-    // For now, we use a simpler approach: manually simulate tracker operations
-    // similar to what PLS does.
-
+    // Injecting a recording tracker into the real PLS would require a custom
+    // solution type, so instead we drive `SimdTrackerArray` directly through a
+    // PLS-like operation sequence and record each op via the thread-local writer.
     println!("Running PLS for {} seconds...", args.timeout);
     let timeout = Duration::from_secs(args.timeout);
 
-    // Use standard PLS - the recording happens via TrackerCollection trait
-    // We need a custom solution type that uses RecordingTrackerArray, but that requires
-    // significant changes. Instead, let's just run PLS and record at a lower level.
-
-    // Alternative approach: Run a simplified simulation that exercises the trackers
     let mut trackers = SimdTrackerArray::<4>::new(&problem);
 
     // Simulate PLS-like operations by iterating through solutions and their neighborhoods
@@ -223,7 +137,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for iteration in 0u64.. {
         if start.elapsed() >= timeout {
-            println!("Timeout reached after {} iterations", iteration);
+            println!("Timeout reached after {iteration} iterations");
             break;
         }
 
@@ -284,9 +198,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let num_records = file_size / 2;
 
     println!("\nTrace recording complete:");
-    println!("  Total operations: {}", total_ops);
-    println!("  File size: {} bytes ({} records)", file_size, num_records);
-    println!("  Output: {:?}", args.output);
+    println!("  Total operations: {total_ops}");
+    println!("  File size: {file_size} bytes ({num_records} records)");
+    println!("  Output: {}", args.output.display());
 
     Ok(())
 }

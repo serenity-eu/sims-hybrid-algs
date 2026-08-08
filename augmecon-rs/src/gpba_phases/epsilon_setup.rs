@@ -76,7 +76,10 @@ pub fn setup_epsilon_constraints(
     nadir_max: &[f64],
     num_objectives: usize,
 ) -> EpsilonSetupResult {
-    assert!(num_objectives >= 2, "Epsilon-constraint setup requires at least 2 objectives");
+    assert!(
+        num_objectives >= 2,
+        "Epsilon-constraint setup requires at least 2 objectives"
+    );
 
     // Main objective is always the first one (index 0)
     let main_obj_index = 0;
@@ -134,6 +137,10 @@ pub fn setup_epsilon_constraints(
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::no_effect_underscore_binding,
+        reason = "underscore bindings in tests document intermediate values without asserting on them"
+    )]
     use super::*;
 
     #[test]
@@ -152,14 +159,20 @@ mod tests {
 
         // ef_array should be initialized to nadir for constraint objectives
         assert_eq!(setup.ef_array.len(), 1);
-        #[allow(clippy::float_cmp, reason = "Test comparing exact initialization to nadir constant")]
+        #[allow(
+            clippy::float_cmp,
+            reason = "Test comparing exact initialization to nadir constant"
+        )]
         {
             assert_eq!(setup.ef_array[0], -15.0);
         }
 
         // RWV should be initialized to ideal for constraint objectives
         assert_eq!(setup.rwv.len(), 1);
-        #[allow(clippy::float_cmp, reason = "Test comparing exact initialization to ideal constant")]
+        #[allow(
+            clippy::float_cmp,
+            reason = "Test comparing exact initialization to ideal constant"
+        )]
         {
             assert_eq!(setup.rwv[0], -3.0);
         }

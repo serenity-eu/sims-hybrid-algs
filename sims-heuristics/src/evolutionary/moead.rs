@@ -21,7 +21,7 @@
 //!    b. Apply crossover + mutation to produce an offspring `y`.
 //!    c. Update the ideal point with `y`'s objectives.
 //!    d. For each neighbour `j` of `i`: if `y` improves the Tchebycheff value
-//!       of subproblem `j`, replace the solution of `j` with `y`.
+//!    of subproblem `j`, replace the solution of `j` with `y`.
 //! 6. Maintain an external Pareto archive of all non-dominated solutions found.
 //! 7. Repeat until timeout or max generations.
 //!
@@ -74,8 +74,8 @@ pub struct MoeadConfig {
     pub population_size: usize,
 
     /// Number of weight-vector divisions for simplex-lattice design.
-    /// The actual population size will be C(num_divisions + D - 1, D - 1).
-    /// For 2-objective problems: population_size = num_divisions + 1.
+    /// The actual population size will be `C(num_divisions` + D - 1, D - 1).
+    /// For 2-objective problems: `population_size` = `num_divisions` + 1.
     ///
     /// **For D >= 3**: If `auto_divisions` is true (default), this field is
     /// ignored and `num_divisions` is computed automatically from
@@ -760,12 +760,12 @@ where
         // d2 = || (f - z*) - d1 * w_hat ||  (perpendicular distance)
         let mut d2_sq = 0.0f64;
         for i in 0..D {
-            let component = diff[i] - d1 * (weight[i] / norm);
+            let component = d1.mul_add(-(weight[i] / norm), diff[i]);
             d2_sq += component * component;
         }
         let d2 = d2_sq.sqrt();
 
-        d1 + self.config.pbi_theta * d2
+        self.config.pbi_theta.mul_add(d2, d1)
     }
 
     // -----------------------------------------------------------------
@@ -844,27 +844,32 @@ where
     // -----------------------------------------------------------------
 
     /// Get a reference to the current external archive (non-dominated solutions).
+    #[must_use]
     pub fn archive(&self) -> &[BitsetEncodedSolution<P, D>] {
         &self.archive
     }
 
     /// Get a reference to the current population.
+    #[must_use]
     pub fn population(&self) -> &[BitsetEncodedSolution<P, D>] {
         &self.population
     }
 
     /// Get a reference to the weight vectors.
+    #[must_use]
     pub fn weights(&self) -> &[[f64; D]] {
         &self.weights
     }
 
     /// Get the current ideal point.
-    pub fn ideal_point(&self) -> &[f64; D] {
+    #[must_use]
+    pub const fn ideal_point(&self) -> &[f64; D] {
         &self.ideal_point
     }
 
     /// Get explored solutions data (compatible with PLS output format).
-    pub fn explored_solutions_data(&self) -> &ExploredSolutionsData<D> {
+    #[must_use]
+    pub const fn explored_solutions_data(&self) -> &ExploredSolutionsData<D> {
         &self.explored_solutions
     }
 }
@@ -1055,8 +1060,7 @@ mod tests {
 
         assert!(
             elapsed < Duration::from_secs(2),
-            "Should respect timeout, but took {:?}",
-            elapsed
+            "Should respect timeout, but took {elapsed:?}"
         );
     }
 
@@ -1095,13 +1099,15 @@ mod tests {
         let _archive = moead.run(20, Duration::from_secs(3));
 
         // Ideal point should be <= initial for all objectives (minimization)
-        for i in 0..2 {
+        for (i, (&now, &initial)) in moead
+            .ideal_point
+            .iter()
+            .zip(initial_ideal.iter())
+            .enumerate()
+        {
             assert!(
-                moead.ideal_point[i] <= initial_ideal[i],
-                "Ideal point should not worsen: obj {} was {} now {}",
-                i,
-                initial_ideal[i],
-                moead.ideal_point[i]
+                now <= initial,
+                "Ideal point should not worsen: obj {i} was {initial} now {now}",
             );
         }
     }

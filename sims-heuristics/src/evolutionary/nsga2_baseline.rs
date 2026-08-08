@@ -13,11 +13,11 @@
 //!
 //! Deviations from the paper that are unavoidable for this problem domain
 //! (not algorithmic choices):
-//! - The paper is generic over crossover/mutation operators (real-coded SBX
-//!   + polynomial mutation in their experiments). For a discrete set-cover
-//!   bitset we use uniform crossover + per-bit mutation, each followed by
-//!   greedy repair to restore feasibility -- the established pattern for
-//!   binary-encoded set-covering GAs (Beasley & Chu, 1996).
+//! - The paper is generic over crossover/mutation operators (real-coded
+//!   SBX + polynomial mutation in their experiments). For a discrete
+//!   set-cover bitset we use uniform crossover + per-bit mutation, each
+//!   followed by greedy repair to restore feasibility -- the established
+//!   pattern for binary-encoded set-covering GAs (Beasley & Chu, 1996).
 //! - There is no external archive in the paper -- the result is the
 //!   non-dominated subset of the final generation's population. We keep an
 //!   `ExploredSolutionsData` log purely for trace/HV-curve instrumentation;
@@ -37,9 +37,9 @@
 use std::time::Duration;
 
 use pareto::{HasObjectives, MoSolution};
-use rand::rngs::SmallRng;
 use rand::Rng;
 use rand::SeedableRng;
+use rand::rngs::SmallRng;
 use tracing::{info, info_span};
 
 use crate::explored_solutions_data::ExploredSolutionsData;
@@ -201,7 +201,7 @@ where
             // R_t = P_t ∪ Q_t (size 2N), then elitist replacement.
             let mut combined = std::mem::take(&mut self.population);
             combined.extend(offspring);
-            self.population = self.survivor_selection(combined, target_size);
+            self.population = Self::survivor_selection(combined, target_size);
 
             if generation == max_generations {
                 info!("NSGA-II baseline reached max generations ({max_generations})");
@@ -260,7 +260,6 @@ where
     /// `R_t = P_t ∪ Q_t`, sort into fronts, fill `P_{t+1}` front-by-front;
     /// for the partial last front, sort by crowding distance descending.
     fn survivor_selection(
-        &self,
         combined: Vec<BitsetEncodedSolution<P, D>>,
         target_size: usize,
     ) -> Vec<BitsetEncodedSolution<P, D>> {
@@ -296,12 +295,14 @@ where
     }
 
     /// Get a reference to the current population.
+    #[must_use]
     pub fn population(&self) -> &[BitsetEncodedSolution<P, D>] {
         &self.population
     }
 
     /// Get explored solutions data (compatible with PLS/EA output format).
-    pub fn explored_solutions_data(&self) -> &ExploredSolutionsData<D> {
+    #[must_use]
+    pub const fn explored_solutions_data(&self) -> &ExploredSolutionsData<D> {
         &self.explored_solutions
     }
 }
@@ -419,8 +420,7 @@ mod tests {
 
         assert!(
             elapsed < Duration::from_secs(2),
-            "Should respect timeout, but took {:?}",
-            elapsed
+            "Should respect timeout, but took {elapsed:?}"
         );
     }
 

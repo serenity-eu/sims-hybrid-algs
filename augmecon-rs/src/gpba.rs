@@ -76,7 +76,7 @@ impl GpbaA {
     /// Create new GPBA-A instance with coverage focus
     /// Uses Python-compatible dynamic interval exploration (gamma=1)
     #[must_use]
-    pub fn new(config: GpbaConfig) -> Self {
+    pub const fn new(config: GpbaConfig) -> Self {
         Self {
             previous_solution_information: Vec::new(),
             rwv: Vec::new(),
@@ -282,6 +282,10 @@ impl GpbaA {
         clippy::cognitive_complexity,
         reason = "GPBA-A main loop implements the full algorithm from the paper - splitting would reduce clarity"
     )]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "elapsed microseconds for one solve stay far below u64::MAX"
+    )]
     pub fn generate_representation(
         &mut self,
         problem: &MultiObjectiveProblem,
@@ -295,7 +299,7 @@ impl GpbaA {
         log::info!("Primary objective index: {}", self.config.primary_objective);
 
         crate::verify::reset();
-        let _t_total = std::time::Instant::now();
+        let t_total = std::time::Instant::now();
 
         // Step 1: Compute or use provided bounds using shared calculator
         log::info!("=== STEP 1: Computing bounds (payoff table) ===");
@@ -731,7 +735,7 @@ impl GpbaA {
             explored_epsilons.len()
         );
         log::info!("MILP solves avoided via relaxation reuse: {relaxation_reuses}");
-        crate::verify::add_ns(&crate::verify::TOTAL_NS, _t_total.elapsed());
+        crate::verify::add_ns(&crate::verify::TOTAL_NS, t_total.elapsed());
         crate::verify::report();
 
         Ok(pareto_front)
@@ -798,9 +802,9 @@ impl GpbaA {
     #[allow(dead_code, reason = "Method kept for API completeness")]
     fn initialize_epsilons(&self, nadir: &[f64]) -> HashMap<usize, f64> {
         let mut epsilons = HashMap::new();
-        for (k, &_nadir_val) in nadir.iter().enumerate() {
+        for (k, &nadir_val) in nadir.iter().enumerate() {
             if k != self.config.primary_objective {
-                epsilons.insert(k, _nadir_val);
+                epsilons.insert(k, nadir_val);
             }
         }
         epsilons
@@ -895,7 +899,7 @@ impl GpbaB {
     }
 
     /// Adjust `epsilon_k` for GPBA-B (simple midpoint bisection)
-    fn adjust_epsilon_k(current: f64, ideal: f64) -> f64 {
+    const fn adjust_epsilon_k(current: f64, ideal: f64) -> f64 {
         f64::midpoint(current, ideal)
     }
 
@@ -1084,6 +1088,10 @@ impl GpbaC {
     }
 
     /// Adjust `epsilon_k` for GPBA-C (uniform grid stepping)
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "remaining grid-point count is small; f64 conversion for the step size is exact in range"
+    )]
     fn adjust_epsilon_k(
         &mut self,
         current_epsilon: f64,
@@ -1289,6 +1297,13 @@ pub mod presets {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::float_cmp,
+        clippy::nonminimal_bool,
+        clippy::manual_range_contains,
+        clippy::double_comparisons,
+        reason = "test assertions favour explicit exact comparisons and bounds for readability"
+    )]
     use super::*;
 
     #[test]

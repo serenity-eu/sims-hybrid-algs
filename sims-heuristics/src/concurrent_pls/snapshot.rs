@@ -111,8 +111,8 @@ pub type GlobalFrontSlot<T, const D: usize> = Arc<ArcSwap<GlobalFrontSnapshot<T,
 /// Compute fingerprint hash of a solution using `DefaultHasher`.
 #[inline]
 pub fn fingerprint<T: std::hash::Hash>(solution: &T) -> u64 {
-    use std::hash::Hasher;
     use std::collections::hash_map::DefaultHasher;
+    use std::hash::Hasher;
     let mut h = DefaultHasher::new();
     solution.hash(&mut h);
     h.finish()
