@@ -1,0 +1,12 @@
+{
+  "N": 450,
+  "backbone_size": 7,
+  "cloudy_assignments": 3497947,
+  "cost_sum": 279170743,
+  "coverage_pct": 100.0,
+  "grid_cells": 2145,
+  "name": "lagos_nigeria",
+  "seed": 3222652633433894071,
+  "sel_cloud_mean": 40.12407448294881,
+  "universe": 81928
+}

@@ -209,7 +209,11 @@ ephemeral/
 
 # Large generated satellite data & experiment outputs (regenerated via the
 # preprocessing pipeline; kept out of git for size).
-publication-data/satellite-data/
+publication-data/satellite-data/*
+# Exception: the random-clouds benchmark instances are versioned, but only in
+# gzipped form (the raw .dzn are large and stay local).
+!publication-data/satellite-data/instances_random_clouds/
+publication-data/satellite-data/instances_random_clouds/*.dzn
 
 # Local vendored good_lp fork for the native Gurobi backend (large checkout;
 # set up locally with a [patch] on good_lp — see augmecon-rs/Cargo.toml).

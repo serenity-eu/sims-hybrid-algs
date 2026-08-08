@@ -1,0 +1,12 @@
+{
+  "N": 450,
+  "backbone_size": 2,
+  "cloudy_assignments": 645349,
+  "cost_sum": 203737016,
+  "coverage_pct": 100.0,
+  "grid_cells": 1375,
+  "name": "rio_de_janeiro",
+  "seed": 17533703819445342535,
+  "sel_cloud_mean": 8.278394787858963,
+  "universe": 84461
+}

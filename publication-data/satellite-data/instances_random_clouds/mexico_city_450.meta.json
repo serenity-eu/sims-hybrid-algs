@@ -1,0 +1,12 @@
+{
+  "N": 450,
+  "backbone_size": 2,
+  "cloudy_assignments": 1560132,
+  "cost_sum": 246207049,
+  "coverage_pct": 100.0,
+  "grid_cells": 1980,
+  "name": "mexico_city",
+  "seed": 8812898752010510781,
+  "sel_cloud_mean": 8.263499618501257,
+  "universe": 76997
+}
