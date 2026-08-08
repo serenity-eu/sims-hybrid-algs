@@ -29,7 +29,7 @@ name = "augmecon"
 path = "src/lib.rs"
 
 [dependencies]
-good_lp = { git="https://github.com/hlvlad/good_lp", branch = "main", default-features = false, features = ["lp-solvers"] }
+good_lp = { git="https://github.com/hlvlad/good_lp", branch = "gurobi", default-features = false, features = ["lp-solvers"] }
 calamine = "0.32.0"
 itertools = "0.14.0"
 log = "0.4.29"
@@ -45,12 +45,11 @@ default = []
 highs = ["good_lp/highs"]
 coin_cbc = ["good_lp/coin_cbc"]
 scip = ["good_lp/scip", "good_lp/scip_bundled"]
-# Native Gurobi backend. Bare flag: it only gates the `#[cfg(feature = "gurobi")]`
-# code paths. The default git `good_lp` has no `gurobi` backend, so to actually
-# build this feature, point good_lp at a fork that provides it via a local
-# `[patch."https://github.com/hlvlad/good_lp"]` (the vendored fork is a large
-# local checkout and is intentionally not committed).
-gurobi = []
+# Native Gurobi backend via good_lp's grb-linked backend (from the fork's
+# `gurobi` branch). `grb` is optional there, so this only pulls the Gurobi
+# runtime when the feature is enabled; building it needs a licensed Gurobi
+# install (GUROBI_HOME / GUROBI_LIBNAME), so it stays opt-in.
+gurobi = ["good_lp/gurobi"]
 
 [dev-dependencies]
 approx = "0.5.1"
