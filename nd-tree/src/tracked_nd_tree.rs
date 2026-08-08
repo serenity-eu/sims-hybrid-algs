@@ -43,7 +43,7 @@
 //! assert_eq!(result.dominated_indices, vec![0]); // Dominated s1
 //! ```
 
-use crate::nd_tree::{NDTree, Solution};
+use crate::nd_tree::NDTree;
 use pareto::{HasObjectives, MoSolution};
 use std::collections::HashMap;
 
@@ -71,7 +71,7 @@ pub struct InsertionResult {
 
 impl InsertionResult {
     /// Create a result for a rejected solution (filtering mode only).
-    fn rejected() -> Self {
+    const fn rejected() -> Self {
         Self {
             inserted: false,
             assigned_index: None,
@@ -81,7 +81,7 @@ impl InsertionResult {
     }
 
     /// Create a result for an accepted solution.
-    fn accepted(index: u32, dominated: Vec<u32>, was_dominated: bool) -> Self {
+    const fn accepted(index: u32, dominated: Vec<u32>, was_dominated: bool) -> Self {
         Self {
             inserted: true,
             assigned_index: Some(index),
@@ -142,6 +142,7 @@ where
     T: MoSolution<D> + HasObjectives<D> + Clone + PartialEq,
 {
     /// Create a new `TrackedNdTree` with the given configuration.
+    #[must_use]
     pub fn new(config: TrackedNdTreeConfig) -> Self {
         Self {
             tree: NDTree::new(),
@@ -153,6 +154,7 @@ where
     }
 
     /// Create a new `TrackedNdTree` with filtering enabled.
+    #[must_use]
     pub fn new_with_filtering() -> Self {
         Self::new(TrackedNdTreeConfig {
             filter_dominated: true,
@@ -160,6 +162,7 @@ where
     }
 
     /// Create a new `TrackedNdTree` with filtering disabled (no-filtering mode).
+    #[must_use]
     pub fn new_without_filtering() -> Self {
         Self::new(TrackedNdTreeConfig {
             filter_dominated: false,
@@ -248,19 +251,22 @@ where
     /// Returns `None` if:
     /// - The index was never assigned
     /// - In filtering mode: the solution was dominated and removed
+    #[must_use]
     pub fn get_solution(&self, index: u32) -> Option<&T> {
         self.index_to_solution.get(&index)
     }
 
     /// Get the index of a solution by its objectives.
+    #[must_use]
     pub fn get_index(&self, objectives: &[u64; D]) -> Option<u32> {
-        self.solution_to_index.get(&objectives.to_vec()).copied()
+        self.solution_to_index.get(objectives.as_slice()).copied()
     }
 
     /// Get the number of solutions currently tracked.
     ///
     /// - In filtering mode: equals the number of non-dominated solutions
     /// - In no-filtering mode: equals the total number of solutions inserted
+    #[must_use]
     pub fn num_tracked_solutions(&self) -> usize {
         self.index_to_solution.len()
     }
@@ -268,16 +274,19 @@ where
     /// Get the number of solutions in the underlying ND-tree.
     ///
     /// This is always the number of non-dominated solutions.
+    #[must_use]
     pub fn num_tree_solutions(&self) -> usize {
         self.tree.len()
     }
 
     /// Get the next index that will be assigned.
-    pub fn next_index(&self) -> u32 {
+    #[must_use]
+    pub const fn next_index(&self) -> u32 {
         self.next_index
     }
 
     /// Check if the tree is empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.tree.is_empty()
     }
@@ -293,6 +302,7 @@ where
     /// Get all tracked solutions with their indices.
     ///
     /// Returns a vector of (index, solution) pairs sorted by index.
+    #[must_use]
     pub fn get_all_tracked(&self) -> Vec<(u32, &T)> {
         let mut items: Vec<_> = self
             .index_to_solution
@@ -304,7 +314,8 @@ where
     }
 
     /// Get the configuration.
-    pub fn config(&self) -> TrackedNdTreeConfig {
+    #[must_use]
+    pub const fn config(&self) -> TrackedNdTreeConfig {
         self.config
     }
 
@@ -329,6 +340,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::nd_tree::Solution;
 
     type TestTree = TrackedNdTree<Solution<2>, 8, 2, 4>;
 

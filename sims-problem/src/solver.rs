@@ -13,7 +13,7 @@ use pyo3::prelude::*;
 #[cfg(feature = "milp")]
 use std::collections::HashSet;
 use std::str::FromStr;
-use std::{iter::IntoIterator, ops::RangeInclusive, thread, time::Duration};
+use std::{iter::IntoIterator, ops::RangeInclusive, time::Duration};
 
 use crate::problem::SimsDiscreteProblem;
 #[cfg(feature = "milp")]
@@ -658,8 +658,8 @@ pub fn solve_with_pls(
                 };
 
                 info!("Starting 2D ConcurrentPLS execution ({num_threads} threads, {max_iterations} iterations timeout)");
-                let cpls_result = py
-                    .allow_threads(|| ConcurrentPLS::new(&pls_problem, config).solve(&initial_nd));
+                let cpls_result =
+                    py.detach(|| ConcurrentPLS::new(&pls_problem, config).solve(&initial_nd));
                 info!(
                     "2D ConcurrentPLS completed, processing {} solutions",
                     cpls_result.archive.len()
@@ -1086,8 +1086,8 @@ pub fn solve_with_pls(
                 };
 
                 info!("Starting 3D ConcurrentPLS execution ({num_threads} threads, {max_iterations} iterations timeout)");
-                let cpls_result = py
-                    .allow_threads(|| ConcurrentPLS::new(&pls_problem, config).solve(&initial_nd));
+                let cpls_result =
+                    py.detach(|| ConcurrentPLS::new(&pls_problem, config).solve(&initial_nd));
                 info!(
                     "3D ConcurrentPLS completed, processing {} solutions",
                     cpls_result.archive.len()
@@ -1514,8 +1514,8 @@ pub fn solve_with_pls(
                 };
 
                 info!("Starting 4D ConcurrentPLS execution ({num_threads} threads, {max_iterations} iterations timeout)");
-                let cpls_result = py
-                    .allow_threads(|| ConcurrentPLS::new(&pls_problem, config).solve(&initial_nd));
+                let cpls_result =
+                    py.detach(|| ConcurrentPLS::new(&pls_problem, config).solve(&initial_nd));
                 info!(
                     "4D ConcurrentPLS completed, processing {} solutions",
                     cpls_result.archive.len()
@@ -1766,6 +1766,7 @@ fn compute_min_resolutions_sum(
     early_exit=true,
     flag_array=true,
     solver_name="highs".to_string(),
+    method="gpba".to_string(),
 ))]
 pub fn solve_with_milp(
     sims_instance: &SimsDiscreteProblem,
@@ -1776,6 +1777,7 @@ pub fn solve_with_milp(
     early_exit: bool,
     flag_array: bool,
     solver_name: String,
+    method: String,
 ) -> PyResult<SolvingResult> {
     // Validate objectives
     let valid_objectives = [
@@ -2029,19 +2031,35 @@ pub fn solve_with_milp(
         per_solve_timeout: Some(per_solve_cap),
     };
 
-    info!("Using GPBA-A algorithm with Python-compatible dynamic interval exploration (gamma=1)");
-
-    // Solve with GPBA-A (Coverage-focused representation)
-    let mut gpba_a = GpbaA::new(config);
-
-    // Set timeout if provided
-    if timeout.as_secs() > 0 {
-        gpba_a = gpba_a.with_timeout(timeout);
-    }
-
-    let pareto_front = gpba_a
-        .generate_representation(&problem, &options)
-        .map_err(|e| PyValueError::new_err(format!("GPBA-A solving failed: {e}")))?;
+    // First-phase method: GPBA-A (ε-constraint coverage bisection) or Anytime
+    // Aneja & Nair (weighted-sum dichotomic search). Both return a ParetoFront.
+    let pareto_front = if method.eq_ignore_ascii_case("aneja")
+        || method.eq_ignore_ascii_case("aneja_nair")
+        || method.eq_ignore_ascii_case("an")
+    {
+        info!("Using Anytime Aneja & Nair first-phase method");
+        let an_config = augmecon::aneja_nair::AnejaNairConfig {
+            per_solve_timeout: Some(per_solve_cap),
+            target_solutions: None,
+        };
+        let mut an = augmecon::aneja_nair::AnejaNair::new(an_config);
+        if timeout.as_secs() > 0 {
+            an = an.with_timeout(timeout);
+        }
+        an.generate_representation(&problem, &options)
+            .map_err(|e| PyValueError::new_err(format!("Aneja & Nair solving failed: {e}")))?
+    } else {
+        info!(
+            "Using GPBA-A algorithm with Python-compatible dynamic interval exploration (gamma=1)"
+        );
+        let mut gpba_a = GpbaA::new(config);
+        if timeout.as_secs() > 0 {
+            gpba_a = gpba_a.with_timeout(timeout);
+        }
+        gpba_a
+            .generate_representation(&problem, &options)
+            .map_err(|e| PyValueError::new_err(format!("GPBA-A solving failed: {e}")))?
+    };
 
     let pareto_solutions = &pareto_front.solutions;
 
@@ -2297,6 +2315,7 @@ pub fn solve_with_hybrid(
             milp_config.early_exit,
             milp_config.flag_array,
             milp_config.solver_name.clone(),
+            "gpba".to_string(),
         );
     }
 
@@ -2311,6 +2330,7 @@ pub fn solve_with_hybrid(
         milp_config.early_exit,
         milp_config.flag_array,
         milp_config.solver_name.clone(),
+        "gpba".to_string(),
     )?;
 
     info!(
@@ -3015,9 +3035,45 @@ pub fn solve_with_nsga2(
     };
 
     match objectives.len() {
-        2 => run_nsga2_tailored_dim::<2>(py, sims_instance, &objectives, timeout, None, config, max_generations, seed, trace, &objective_bounds, include_dominated),
-        3 => run_nsga2_tailored_dim::<3>(py, sims_instance, &objectives, timeout, None, config, max_generations, seed, trace, &objective_bounds, include_dominated),
-        4 => run_nsga2_tailored_dim::<4>(py, sims_instance, &objectives, timeout, None, config, max_generations, seed, trace, &objective_bounds, include_dominated),
+        2 => run_nsga2_tailored_dim::<2>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            None,
+            config,
+            max_generations,
+            seed,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        3 => run_nsga2_tailored_dim::<3>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            None,
+            config,
+            max_generations,
+            seed,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        4 => run_nsga2_tailored_dim::<4>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            None,
+            config,
+            max_generations,
+            seed,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
         n => Err(PyValueError::new_err(format!(
             "solve_with_nsga2 only supports 2, 3, or 4 objectives, got {n}"
         ))),
@@ -3057,11 +3113,15 @@ fn run_nsga2_tailored_dim<const D: usize>(
         config.population_size,
     );
 
-    let (archive_solutions, explored_fingerprints) = py.allow_threads(|| {
+    let (archive_solutions, explored_fingerprints) = py.detach(|| {
         let mut nsga2 = Nsga2::new(&pls_problem, config, seed_pop, seed);
         let archive = nsga2.run(max_generations, timeout);
-        let fingerprints: Vec<SolutionFingerprint<D>> =
-            nsga2.explored_solutions.solutions.values().cloned().collect();
+        let fingerprints: Vec<SolutionFingerprint<D>> = nsga2
+            .explored_solutions
+            .solutions
+            .values()
+            .cloned()
+            .collect();
         (archive, fingerprints)
     });
 
@@ -3176,9 +3236,45 @@ pub fn solve_with_moead(
     };
 
     match objectives.len() {
-        2 => run_moead_tailored_dim::<2>(py, sims_instance, &objectives, timeout, None, config, max_generations, seed, trace, &objective_bounds, include_dominated),
-        3 => run_moead_tailored_dim::<3>(py, sims_instance, &objectives, timeout, None, config, max_generations, seed, trace, &objective_bounds, include_dominated),
-        4 => run_moead_tailored_dim::<4>(py, sims_instance, &objectives, timeout, None, config, max_generations, seed, trace, &objective_bounds, include_dominated),
+        2 => run_moead_tailored_dim::<2>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            None,
+            config,
+            max_generations,
+            seed,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        3 => run_moead_tailored_dim::<3>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            None,
+            config,
+            max_generations,
+            seed,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        4 => run_moead_tailored_dim::<4>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            None,
+            config,
+            max_generations,
+            seed,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
         n => Err(PyValueError::new_err(format!(
             "solve_with_moead only supports 2, 3, or 4 objectives, got {n}"
         ))),
@@ -3218,11 +3314,15 @@ fn run_moead_tailored_dim<const D: usize>(
         config.target_pop_size,
     );
 
-    let (archive_solutions, explored_fingerprints) = py.allow_threads(|| {
+    let (archive_solutions, explored_fingerprints) = py.detach(|| {
         let mut moead = Moead::new(&pls_problem, config, seed_pop, seed);
         let archive = moead.run(max_generations, timeout);
-        let fingerprints: Vec<SolutionFingerprint<D>> =
-            moead.explored_solutions.solutions.values().cloned().collect();
+        let fingerprints: Vec<SolutionFingerprint<D>> = moead
+            .explored_solutions
+            .solutions
+            .values()
+            .cloned()
+            .collect();
         (archive, fingerprints)
     });
 
@@ -3326,9 +3426,45 @@ pub fn solve_with_nsga3(
     };
 
     match objectives.len() {
-        2 => run_nsga3_tailored_dim::<2>(py, sims_instance, &objectives, timeout, None, config, max_generations, seed, trace, &objective_bounds, include_dominated),
-        3 => run_nsga3_tailored_dim::<3>(py, sims_instance, &objectives, timeout, None, config, max_generations, seed, trace, &objective_bounds, include_dominated),
-        4 => run_nsga3_tailored_dim::<4>(py, sims_instance, &objectives, timeout, None, config, max_generations, seed, trace, &objective_bounds, include_dominated),
+        2 => run_nsga3_tailored_dim::<2>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            None,
+            config,
+            max_generations,
+            seed,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        3 => run_nsga3_tailored_dim::<3>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            None,
+            config,
+            max_generations,
+            seed,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        4 => run_nsga3_tailored_dim::<4>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            None,
+            config,
+            max_generations,
+            seed,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
         n => Err(PyValueError::new_err(format!(
             "solve_with_nsga3 only supports 2, 3, or 4 objectives, got {n}"
         ))),
@@ -3368,11 +3504,15 @@ fn run_nsga3_tailored_dim<const D: usize>(
         config.target_pop_size,
     );
 
-    let (archive_solutions, explored_fingerprints) = py.allow_threads(|| {
+    let (archive_solutions, explored_fingerprints) = py.detach(|| {
         let mut nsga3 = Nsga3::new(&pls_problem, config, seed_pop, seed);
         let archive = nsga3.run(max_generations, timeout);
-        let fingerprints: Vec<SolutionFingerprint<D>> =
-            nsga3.explored_solutions.solutions.values().cloned().collect();
+        let fingerprints: Vec<SolutionFingerprint<D>> = nsga3
+            .explored_solutions
+            .solutions
+            .values()
+            .cloned()
+            .collect();
         (archive, fingerprints)
     });
 
@@ -3561,8 +3701,8 @@ fn run_memetic_nsga2_dim<const D: usize>(
         ..MemeticConfig::default()
     };
 
-    let (archive_solutions, explored_fingerprints) = py.allow_threads(|| {
-        let result = MemeticAlgorithm::run::<ProblemBitset<D>, D>(&pls_problem, config, timeout);
+    let (archive_solutions, explored_fingerprints) = py.detach(|| {
+        let result = MemeticAlgorithm::run::<ProblemBitset<D>, D>(&pls_problem, &config, timeout);
         let fingerprints: Vec<SolutionFingerprint<D>> = result
             .explored_solutions
             .solutions
@@ -3757,8 +3897,8 @@ fn run_memetic_nsga3_dim<const D: usize>(
         ..MemeticConfig::default()
     };
 
-    let (archive_solutions, explored_fingerprints) = py.allow_threads(|| {
-        let result = MemeticAlgorithm::run::<ProblemBitset<D>, D>(&pls_problem, config, timeout);
+    let (archive_solutions, explored_fingerprints) = py.detach(|| {
+        let result = MemeticAlgorithm::run::<ProblemBitset<D>, D>(&pls_problem, &config, timeout);
         let fingerprints: Vec<SolutionFingerprint<D>> = result
             .explored_solutions
             .solutions
@@ -3966,8 +4106,8 @@ fn run_memetic_moead_dim<const D: usize>(
         ..MemeticConfig::default()
     };
 
-    let (archive_solutions, explored_fingerprints) = py.allow_threads(|| {
-        let result = MemeticAlgorithm::run::<ProblemBitset<D>, D>(&pls_problem, config, timeout);
+    let (archive_solutions, explored_fingerprints) = py.detach(|| {
+        let result = MemeticAlgorithm::run::<ProblemBitset<D>, D>(&pls_problem, &config, timeout);
         let fingerprints: Vec<SolutionFingerprint<D>> = result
             .explored_solutions
             .solutions
@@ -4110,7 +4250,7 @@ fn run_nsga2_baseline_dim<const D: usize>(
         ProblemBitset::<D>::from_raw_with_objectives(&raw_instance, objective_definitions);
     apply_objective_bounds(&mut pls_problem, objective_bounds)?;
 
-    let (archive_solutions, explored) = py.allow_threads(|| {
+    let (archive_solutions, explored) = py.detach(|| {
         run_nsga2_baseline::<ProblemBitset<D>, D>(&pls_problem, config, max_generations, timeout)
     });
     let explored_fingerprints: Vec<SolutionFingerprint<D>> =
@@ -4248,7 +4388,7 @@ fn run_nsga3_baseline_dim<const D: usize>(
         ProblemBitset::<D>::from_raw_with_objectives(&raw_instance, objective_definitions);
     apply_objective_bounds(&mut pls_problem, objective_bounds)?;
 
-    let (archive_solutions, explored) = py.allow_threads(|| {
+    let (archive_solutions, explored) = py.detach(|| {
         run_nsga3_baseline::<ProblemBitset<D>, D>(&pls_problem, config, max_generations, timeout)
     });
     let explored_fingerprints: Vec<SolutionFingerprint<D>> =
@@ -4390,7 +4530,7 @@ fn run_moead_baseline_dim<const D: usize>(
         ProblemBitset::<D>::from_raw_with_objectives(&raw_instance, objective_definitions);
     apply_objective_bounds(&mut pls_problem, objective_bounds)?;
 
-    let (archive_solutions, explored) = py.allow_threads(|| {
+    let (archive_solutions, explored) = py.detach(|| {
         run_moead_baseline::<ProblemBitset<D>, D>(&pls_problem, config, max_generations, timeout)
     });
     let explored_fingerprints: Vec<SolutionFingerprint<D>> =
@@ -4495,10 +4635,45 @@ pub fn solve_with_pseudo_seeded_nsga2_baseline(
     };
 
     match objectives.len() {
-        2 => run_pseudo_seeded_nsga2_baseline_dim::<2>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, trace, &objective_bounds, include_dominated),
-        3 => run_pseudo_seeded_nsga2_baseline_dim::<3>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, trace, &objective_bounds, include_dominated),
-        4 => run_pseudo_seeded_nsga2_baseline_dim::<4>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, trace, &objective_bounds, include_dominated),
-        n => Err(PyValueError::new_err(format!("solve_with_pseudo_seeded_nsga2_baseline only supports 2, 3, or 4 objectives, got {n}"))),
+        2 => run_pseudo_seeded_nsga2_baseline_dim::<2>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            initial_population,
+            config,
+            max_generations,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        3 => run_pseudo_seeded_nsga2_baseline_dim::<3>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            initial_population,
+            config,
+            max_generations,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        4 => run_pseudo_seeded_nsga2_baseline_dim::<4>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            initial_population,
+            config,
+            max_generations,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        n => Err(PyValueError::new_err(format!(
+            "solve_with_pseudo_seeded_nsga2_baseline only supports 2, 3, or 4 objectives, got {n}"
+        ))),
     }
 }
 
@@ -4535,15 +4710,24 @@ fn run_pseudo_seeded_nsga2_baseline_dim<const D: usize>(
         config.population_size,
     );
 
-    let (archive_solutions, explored) = py.allow_threads(|| {
-        run_nsga2_baseline_seeded::<ProblemBitset<D>, D>(&pls_problem, config, seed_pop, max_generations, timeout)
+    let (archive_solutions, explored) = py.detach(|| {
+        run_nsga2_baseline_seeded::<ProblemBitset<D>, D>(
+            &pls_problem,
+            config,
+            seed_pop,
+            max_generations,
+            timeout,
+        )
     });
     let explored_fingerprints: Vec<SolutionFingerprint<D>> =
         explored.solutions.values().cloned().collect();
 
     let python_final_solutions: Vec<_> = archive_solutions
         .iter()
-        .map(|s| { let sol: crate::solution::Solution = (s, &pls_problem).into(); sol })
+        .map(|s| {
+            let sol: crate::solution::Solution = (s, &pls_problem).into();
+            sol
+        })
         .collect();
 
     build_solving_result(
@@ -4603,10 +4787,45 @@ pub fn solve_with_pseudo_seeded_nsga3_baseline(
     };
 
     match objectives.len() {
-        2 => run_pseudo_seeded_nsga3_baseline_dim::<2>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, trace, &objective_bounds, include_dominated),
-        3 => run_pseudo_seeded_nsga3_baseline_dim::<3>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, trace, &objective_bounds, include_dominated),
-        4 => run_pseudo_seeded_nsga3_baseline_dim::<4>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, trace, &objective_bounds, include_dominated),
-        n => Err(PyValueError::new_err(format!("solve_with_pseudo_seeded_nsga3_baseline only supports 2, 3, or 4 objectives, got {n}"))),
+        2 => run_pseudo_seeded_nsga3_baseline_dim::<2>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            initial_population,
+            config,
+            max_generations,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        3 => run_pseudo_seeded_nsga3_baseline_dim::<3>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            initial_population,
+            config,
+            max_generations,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        4 => run_pseudo_seeded_nsga3_baseline_dim::<4>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            initial_population,
+            config,
+            max_generations,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        n => Err(PyValueError::new_err(format!(
+            "solve_with_pseudo_seeded_nsga3_baseline only supports 2, 3, or 4 objectives, got {n}"
+        ))),
     }
 }
 
@@ -4643,15 +4862,24 @@ fn run_pseudo_seeded_nsga3_baseline_dim<const D: usize>(
         config.num_divisions,
     );
 
-    let (archive_solutions, explored) = py.allow_threads(|| {
-        run_nsga3_baseline_seeded::<ProblemBitset<D>, D>(&pls_problem, config, seed_pop, max_generations, timeout)
+    let (archive_solutions, explored) = py.detach(|| {
+        run_nsga3_baseline_seeded::<ProblemBitset<D>, D>(
+            &pls_problem,
+            config,
+            seed_pop,
+            max_generations,
+            timeout,
+        )
     });
     let explored_fingerprints: Vec<SolutionFingerprint<D>> =
         explored.solutions.values().cloned().collect();
 
     let python_final_solutions: Vec<_> = archive_solutions
         .iter()
-        .map(|s| { let sol: crate::solution::Solution = (s, &pls_problem).into(); sol })
+        .map(|s| {
+            let sol: crate::solution::Solution = (s, &pls_problem).into();
+            sol
+        })
         .collect();
 
     build_solving_result(
@@ -4714,10 +4942,45 @@ pub fn solve_with_pseudo_seeded_moead_baseline(
     };
 
     match objectives.len() {
-        2 => run_pseudo_seeded_moead_baseline_dim::<2>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, trace, &objective_bounds, include_dominated),
-        3 => run_pseudo_seeded_moead_baseline_dim::<3>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, trace, &objective_bounds, include_dominated),
-        4 => run_pseudo_seeded_moead_baseline_dim::<4>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, trace, &objective_bounds, include_dominated),
-        n => Err(PyValueError::new_err(format!("solve_with_pseudo_seeded_moead_baseline only supports 2, 3, or 4 objectives, got {n}"))),
+        2 => run_pseudo_seeded_moead_baseline_dim::<2>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            initial_population,
+            config,
+            max_generations,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        3 => run_pseudo_seeded_moead_baseline_dim::<3>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            initial_population,
+            config,
+            max_generations,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        4 => run_pseudo_seeded_moead_baseline_dim::<4>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            initial_population,
+            config,
+            max_generations,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        n => Err(PyValueError::new_err(format!(
+            "solve_with_pseudo_seeded_moead_baseline only supports 2, 3, or 4 objectives, got {n}"
+        ))),
     }
 }
 
@@ -4754,15 +5017,24 @@ fn run_pseudo_seeded_moead_baseline_dim<const D: usize>(
         config.num_divisions,
     );
 
-    let (archive_solutions, explored) = py.allow_threads(|| {
-        run_moead_baseline_seeded::<ProblemBitset<D>, D>(&pls_problem, config, seed_pop, max_generations, timeout)
+    let (archive_solutions, explored) = py.detach(|| {
+        run_moead_baseline_seeded::<ProblemBitset<D>, D>(
+            &pls_problem,
+            config,
+            seed_pop,
+            max_generations,
+            timeout,
+        )
     });
     let explored_fingerprints: Vec<SolutionFingerprint<D>> =
         explored.solutions.values().cloned().collect();
 
     let python_final_solutions: Vec<_> = archive_solutions
         .iter()
-        .map(|s| { let sol: crate::solution::Solution = (s, &pls_problem).into(); sol })
+        .map(|s| {
+            let sol: crate::solution::Solution = (s, &pls_problem).into();
+            sol
+        })
         .collect();
 
     build_solving_result(
@@ -4856,9 +5128,45 @@ pub fn solve_with_pseudo_seeded_nsga2(
     };
 
     match objectives.len() {
-        2 => run_nsga2_tailored_dim::<2>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, seed, trace, &objective_bounds, include_dominated),
-        3 => run_nsga2_tailored_dim::<3>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, seed, trace, &objective_bounds, include_dominated),
-        4 => run_nsga2_tailored_dim::<4>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, seed, trace, &objective_bounds, include_dominated),
+        2 => run_nsga2_tailored_dim::<2>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            initial_population,
+            config,
+            max_generations,
+            seed,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        3 => run_nsga2_tailored_dim::<3>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            initial_population,
+            config,
+            max_generations,
+            seed,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        4 => run_nsga2_tailored_dim::<4>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            initial_population,
+            config,
+            max_generations,
+            seed,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
         n => Err(PyValueError::new_err(format!(
             "solve_with_pseudo_seeded_nsga2 only supports 2, 3, or 4 objectives, got {n}"
         ))),
@@ -4937,9 +5245,45 @@ pub fn solve_with_pseudo_seeded_nsga3(
     };
 
     match objectives.len() {
-        2 => run_nsga3_tailored_dim::<2>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, seed, trace, &objective_bounds, include_dominated),
-        3 => run_nsga3_tailored_dim::<3>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, seed, trace, &objective_bounds, include_dominated),
-        4 => run_nsga3_tailored_dim::<4>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, seed, trace, &objective_bounds, include_dominated),
+        2 => run_nsga3_tailored_dim::<2>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            initial_population,
+            config,
+            max_generations,
+            seed,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        3 => run_nsga3_tailored_dim::<3>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            initial_population,
+            config,
+            max_generations,
+            seed,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        4 => run_nsga3_tailored_dim::<4>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            initial_population,
+            config,
+            max_generations,
+            seed,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
         n => Err(PyValueError::new_err(format!(
             "solve_with_pseudo_seeded_nsga3 only supports 2, 3, or 4 objectives, got {n}"
         ))),
@@ -5031,9 +5375,45 @@ pub fn solve_with_pseudo_seeded_moead(
     };
 
     match objectives.len() {
-        2 => run_moead_tailored_dim::<2>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, seed, trace, &objective_bounds, include_dominated),
-        3 => run_moead_tailored_dim::<3>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, seed, trace, &objective_bounds, include_dominated),
-        4 => run_moead_tailored_dim::<4>(py, sims_instance, &objectives, timeout, initial_population, config, max_generations, seed, trace, &objective_bounds, include_dominated),
+        2 => run_moead_tailored_dim::<2>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            initial_population,
+            config,
+            max_generations,
+            seed,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        3 => run_moead_tailored_dim::<3>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            initial_population,
+            config,
+            max_generations,
+            seed,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
+        4 => run_moead_tailored_dim::<4>(
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            initial_population,
+            config,
+            max_generations,
+            seed,
+            trace,
+            &objective_bounds,
+            include_dominated,
+        ),
         n => Err(PyValueError::new_err(format!(
             "solve_with_pseudo_seeded_moead only supports 2, 3, or 4 objectives, got {n}"
         ))),
@@ -5133,15 +5513,33 @@ pub fn solve_with_nsga2_moors(
 
     match objectives.len() {
         2 => run_nsga2_moors_dim::<2>(
-            py, sims_instance, &objectives, timeout, config, trace, &objective_bounds,
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            config,
+            trace,
+            &objective_bounds,
             include_dominated,
         ),
         3 => run_nsga2_moors_dim::<3>(
-            py, sims_instance, &objectives, timeout, config, trace, &objective_bounds,
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            config,
+            trace,
+            &objective_bounds,
             include_dominated,
         ),
         4 => run_nsga2_moors_dim::<4>(
-            py, sims_instance, &objectives, timeout, config, trace, &objective_bounds,
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            config,
+            trace,
+            &objective_bounds,
             include_dominated,
         ),
         n => Err(PyValueError::new_err(format!(
@@ -5172,9 +5570,8 @@ fn run_nsga2_moors_dim<const D: usize>(
     apply_objective_bounds(&mut pls_problem, objective_bounds)?;
 
     let start = std::time::Instant::now();
-    let (archive_solutions, _explored) = py.allow_threads(|| {
-        run_moors_nsga2::<ProblemBitset<D>, D>(&pls_problem, config, timeout)
-    });
+    let (archive_solutions, _explored) =
+        py.detach(|| run_moors_nsga2::<ProblemBitset<D>, D>(&pls_problem, config, timeout));
     let elapsed = start.elapsed();
 
     info!(
@@ -5191,8 +5588,11 @@ fn run_nsga2_moors_dim<const D: usize>(
         })
         .collect();
 
-    let explored_fingerprints =
-        register_final_archive_at_elapsed::<ProblemBitset<D>, D>(&archive_solutions, elapsed, timeout);
+    let explored_fingerprints = register_final_archive_at_elapsed::<ProblemBitset<D>, D>(
+        &archive_solutions,
+        elapsed,
+        timeout,
+    );
 
     build_solving_result(
         python_final_solutions,
@@ -5256,15 +5656,33 @@ pub fn solve_with_nsga2_optirustic(
 
     match objectives.len() {
         2 => run_nsga2_optirustic_dim::<2>(
-            py, sims_instance, &objectives, timeout, config, trace, &objective_bounds,
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            config,
+            trace,
+            &objective_bounds,
             include_dominated,
         ),
         3 => run_nsga2_optirustic_dim::<3>(
-            py, sims_instance, &objectives, timeout, config, trace, &objective_bounds,
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            config,
+            trace,
+            &objective_bounds,
             include_dominated,
         ),
         4 => run_nsga2_optirustic_dim::<4>(
-            py, sims_instance, &objectives, timeout, config, trace, &objective_bounds,
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            config,
+            trace,
+            &objective_bounds,
             include_dominated,
         ),
         n => Err(PyValueError::new_err(format!(
@@ -5295,9 +5713,8 @@ fn run_nsga2_optirustic_dim<const D: usize>(
     apply_objective_bounds(&mut pls_problem, objective_bounds)?;
 
     let start = std::time::Instant::now();
-    let (archive_solutions, _explored) = py.allow_threads(|| {
-        run_optirustic_nsga2::<ProblemBitset<D>, D>(&pls_problem, config, timeout)
-    });
+    let (archive_solutions, _explored) =
+        py.detach(|| run_optirustic_nsga2::<ProblemBitset<D>, D>(&pls_problem, config, timeout));
     let elapsed = start.elapsed();
 
     info!(
@@ -5314,8 +5731,11 @@ fn run_nsga2_optirustic_dim<const D: usize>(
         })
         .collect();
 
-    let explored_fingerprints =
-        register_final_archive_at_elapsed::<ProblemBitset<D>, D>(&archive_solutions, elapsed, timeout);
+    let explored_fingerprints = register_final_archive_at_elapsed::<ProblemBitset<D>, D>(
+        &archive_solutions,
+        elapsed,
+        timeout,
+    );
 
     build_solving_result(
         python_final_solutions,
@@ -5380,15 +5800,33 @@ pub fn solve_with_nsga3_optirustic(
 
     match objectives.len() {
         2 => run_nsga3_optirustic_dim::<2>(
-            py, sims_instance, &objectives, timeout, config, trace, &objective_bounds,
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            config,
+            trace,
+            &objective_bounds,
             include_dominated,
         ),
         3 => run_nsga3_optirustic_dim::<3>(
-            py, sims_instance, &objectives, timeout, config, trace, &objective_bounds,
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            config,
+            trace,
+            &objective_bounds,
             include_dominated,
         ),
         4 => run_nsga3_optirustic_dim::<4>(
-            py, sims_instance, &objectives, timeout, config, trace, &objective_bounds,
+            py,
+            sims_instance,
+            &objectives,
+            timeout,
+            config,
+            trace,
+            &objective_bounds,
             include_dominated,
         ),
         n => Err(PyValueError::new_err(format!(
@@ -5419,9 +5857,8 @@ fn run_nsga3_optirustic_dim<const D: usize>(
     apply_objective_bounds(&mut pls_problem, objective_bounds)?;
 
     let start = std::time::Instant::now();
-    let (archive_solutions, _explored) = py.allow_threads(|| {
-        run_optirustic_nsga3::<ProblemBitset<D>, D>(&pls_problem, config, timeout)
-    });
+    let (archive_solutions, _explored) =
+        py.detach(|| run_optirustic_nsga3::<ProblemBitset<D>, D>(&pls_problem, config, timeout));
     let elapsed = start.elapsed();
 
     info!(
@@ -5438,8 +5875,11 @@ fn run_nsga3_optirustic_dim<const D: usize>(
         })
         .collect();
 
-    let explored_fingerprints =
-        register_final_archive_at_elapsed::<ProblemBitset<D>, D>(&archive_solutions, elapsed, timeout);
+    let explored_fingerprints = register_final_archive_at_elapsed::<ProblemBitset<D>, D>(
+        &archive_solutions,
+        elapsed,
+        timeout,
+    );
 
     build_solving_result(
         python_final_solutions,
@@ -5566,8 +6006,9 @@ fn build_solving_result<const D: usize>(
         }
         (bounds_vec, ref_point)
     } else {
-        crate::trace::calculate_objective_bounds_from_solutions(&trace_solutions)
-            .map_err(|e| PyValueError::new_err(format!("Failed to calculate objective bounds: {e}")))?
+        crate::trace::calculate_objective_bounds_from_solutions(&trace_solutions).map_err(|e| {
+            PyValueError::new_err(format!("Failed to calculate objective bounds: {e}"))
+        })?
     };
 
     let trace_archive = crate::trace::create_optimization_trace_archive(

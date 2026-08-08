@@ -223,6 +223,7 @@
 //! - Mavrotas, G., & Florios, K. (2013). An improved version of the augmented ε-constraint
 //!   method (AUGMECON2) for finding the exact pareto set. *Applied Mathematics and Computation*, 219(18), 9652-9669.
 
+pub mod aneja_nair;
 pub mod bounds;
 pub mod bypass;
 pub mod epsilon_constraint;

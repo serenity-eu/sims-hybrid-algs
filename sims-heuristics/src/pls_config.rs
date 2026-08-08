@@ -8,9 +8,10 @@
 //! toggle are enabled.
 
 /// How parent solutions are selected for neighborhood exploration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SolutionSelectionMode {
     /// Explore the full working population in random order.
+    #[default]
     RandomShuffle,
     /// Explore a well-spread subset selected by farthest-point sampling.
     DiverseProbe,
@@ -22,25 +23,14 @@ pub enum SolutionSelectionMode {
     DiverseThenScalarizedChebycheff,
 }
 
-impl Default for SolutionSelectionMode {
-    fn default() -> Self {
-        Self::RandomShuffle
-    }
-}
-
 /// Which solution pool scalarized parent selection should draw from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ScalarizedSelectionSource {
     /// Rank the current working population.
+    #[default]
     Population,
     /// Rank the current approximated Pareto archive.
     Archive,
-}
-
-impl Default for ScalarizedSelectionSource {
-    fn default() -> Self {
-        Self::Population
-    }
 }
 
 /// Runtime-toggleable PLS optimization switches.
@@ -157,7 +147,7 @@ impl PlsOptimizations {
     /// Baseline configuration: all optimizations disabled.
     /// Produces behaviour equivalent to the original PLS before any changes.
     #[must_use]
-    pub fn baseline() -> Self {
+    pub const fn baseline() -> Self {
         Self {
             use_checkpoint: false,
             use_ranked_candidates: false,

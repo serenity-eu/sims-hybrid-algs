@@ -96,18 +96,12 @@ where
     }
     let ranges: [f64; D] = std::array::from_fn(|d| {
         let r = obj_max[d] - obj_min[d];
-        if r < f64::EPSILON {
-            1.0
-        } else {
-            r
-        }
+        if r < f64::EPSILON { 1.0 } else { r }
     });
 
     let normalised: Vec<[f64; D]> = population
         .iter()
-        .map(|sol| {
-            std::array::from_fn(|d| (sol.objectives()[d] as f64 - obj_min[d]) / ranges[d])
-        })
+        .map(|sol| std::array::from_fn(|d| (sol.objectives()[d] as f64 - obj_min[d]) / ranges[d]))
         .collect();
 
     // ── 2. Greedy farthest-point selection ─────────────────────────
@@ -205,7 +199,7 @@ fn chebyshev_distance<const D: usize>(a: &[f64; D], b: &[f64; D]) -> f64 {
 mod tests {
     use super::*;
 
-    /// Trivial HasObjectives implementation for testing.
+    /// Trivial `HasObjectives` implementation for testing.
     #[derive(Clone, Debug, PartialEq)]
     struct FakeSolution<const D: usize> {
         objectives: [u64; D],
@@ -221,37 +215,44 @@ mod tests {
     fn empty_population_yields_nothing() {
         let iter = diverse_probe_iter::<FakeSolution<2>, 2>(vec![], None, 42);
         assert_eq!(iter.budget(), 0);
-        assert_eq!(iter.collect::<Vec<_>>().len(), 0);
+        assert_eq!(iter.count(), 0);
     }
 
     #[test]
     fn budget_exceeds_population_returns_all() {
         let pop = vec![
             FakeSolution { objectives: [0, 0] },
-            FakeSolution { objectives: [100, 100] },
+            FakeSolution {
+                objectives: [100, 100],
+            },
         ];
-        let results: Vec<_> = diverse_probe_iter(pop.clone(), Some(10), 0).collect();
-        assert_eq!(results.len(), 2);
+        assert_eq!(diverse_probe_iter(pop, Some(10), 0).count(), 2);
     }
 
     #[test]
     fn selects_diverse_subset() {
         // 5 solutions: corners + center in 2D
         let pop = vec![
-            FakeSolution { objectives: [0, 0] },       // corner
-            FakeSolution { objectives: [100, 0] },      // corner
-            FakeSolution { objectives: [0, 100] },      // corner
-            FakeSolution { objectives: [100, 100] },    // corner
-            FakeSolution { objectives: [50, 50] },      // center
+            FakeSolution { objectives: [0, 0] }, // corner
+            FakeSolution {
+                objectives: [100, 0],
+            }, // corner
+            FakeSolution {
+                objectives: [0, 100],
+            }, // corner
+            FakeSolution {
+                objectives: [100, 100],
+            }, // corner
+            FakeSolution {
+                objectives: [50, 50],
+            }, // center
         ];
         // Select 4 — should pick all 4 corners, skip center
         let results: Vec<_> = diverse_probe_iter(pop, Some(4), 0).collect();
         assert_eq!(results.len(), 4);
 
         // The center (50,50) should NOT be selected
-        let has_center = results
-            .iter()
-            .any(|s| s.objectives == [50, 50]);
+        let has_center = results.iter().any(|s| s.objectives == [50, 50]);
         assert!(!has_center, "Center should not be among the 4 most diverse");
     }
 

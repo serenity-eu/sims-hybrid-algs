@@ -16,11 +16,11 @@
 //! Deviations from the 2007 paper that are unavoidable for this problem
 //! domain (not algorithmic choices):
 //! - The paper is generic over "genetic operators" and a "problem-specific
-//!   repair/improvement heuristic" (Step 2.1/2.2). We use uniform crossover
-//!   + per-bit mutation on the image-selection bitset, each followed by
-//!   greedy repair to restore set-cover feasibility -- the same operator
-//!   family the paper's own MOKP example uses (one-point crossover + 0.01
-//!   per-bit mutation + a greedy repair heuristic).
+//!   repair/improvement heuristic" (Step 2.1/2.2). We use uniform
+//!   crossover plus per-bit mutation on the image-selection bitset, each
+//!   followed by greedy repair to restore set-cover feasibility -- the
+//!   same operator family the paper's own MOKP example uses (one-point
+//!   crossover, 0.01 per-bit mutation, and a greedy repair heuristic).
 //!
 //! Faithfully reproduced from Section III-A "General Framework", Step 2:
 //! - Step 2.1 (Reproduction): parents `k, l` are drawn **only** from the
@@ -37,9 +37,9 @@
 use std::time::Duration;
 
 use pareto::{HasObjectives, MoSolution};
-use rand::rngs::SmallRng;
 use rand::Rng;
 use rand::SeedableRng;
+use rand::rngs::SmallRng;
 use tracing::{info, info_span};
 
 use crate::explored_solutions_data::ExploredSolutionsData;
@@ -287,17 +287,20 @@ where
     }
 
     /// Get a reference to the current external population (archive).
+    #[must_use]
     pub fn archive(&self) -> &[BitsetEncodedSolution<P, D>] {
         &self.archive
     }
 
     /// Get a reference to the current internal population.
+    #[must_use]
     pub fn population(&self) -> &[BitsetEncodedSolution<P, D>] {
         &self.population
     }
 
     /// Get explored solutions data (compatible with PLS/EA output format).
-    pub fn explored_solutions_data(&self) -> &ExploredSolutionsData<D> {
+    #[must_use]
+    pub const fn explored_solutions_data(&self) -> &ExploredSolutionsData<D> {
         &self.explored_solutions
     }
 }
@@ -417,8 +420,7 @@ mod tests {
 
         assert!(
             elapsed < Duration::from_secs(2),
-            "Should respect timeout, but took {:?}",
-            elapsed
+            "Should respect timeout, but took {elapsed:?}"
         );
     }
 
@@ -446,8 +448,7 @@ mod tests {
             neighbourhood_size: 5,
             ..Default::default()
         };
-        let (archive, explored) =
-            run_moead_baseline(&problem, config, 20, Duration::from_secs(3));
+        let (archive, explored) = run_moead_baseline(&problem, config, 20, Duration::from_secs(3));
         assert!(!archive.is_empty());
         assert!(!explored.solutions.is_empty());
     }

@@ -128,9 +128,7 @@ pub fn adjust_parameter_ef_array(
             nadir_objectives_values[actual_obj_index].max(best_objective_values[actual_obj_index]);
 
         let new_interval = IntervalManager::new(min_interval, max_interval_val);
-        log::debug!(
-            "EPS ADJUST: Recreated interval: min={min_interval}, max={max_interval_val}"
-        );
+        log::debug!("EPS ADJUST: Recreated interval: min={min_interval}, max={max_interval_val}");
 
         new_interval
     }

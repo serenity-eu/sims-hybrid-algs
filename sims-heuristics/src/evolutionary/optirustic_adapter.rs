@@ -506,7 +506,7 @@ where
         }
     };
 
-    use optirustic::algorithms::{Algorithm, NSGA2Arg, StoppingCondition, NSGA2};
+    use optirustic::algorithms::{Algorithm, NSGA2, NSGA2Arg, StoppingCondition};
 
     let args = NSGA2Arg {
         number_of_individuals: config.population_size,
@@ -597,7 +597,7 @@ where
     };
 
     use optirustic::algorithms::{
-        Algorithm, NSGA3Arg, Nsga3NumberOfIndividuals, StoppingCondition, NSGA3,
+        Algorithm, NSGA3, NSGA3Arg, Nsga3NumberOfIndividuals, StoppingCondition,
     };
 
     let partitions = choose_partitions_for_d(D);

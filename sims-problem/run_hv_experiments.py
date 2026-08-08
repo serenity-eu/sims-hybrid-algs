@@ -72,6 +72,25 @@ except ImportError:
 
 import sims_problem
 
+# ─── Optional sims_solvers import (for live MONISE / GPBA-A phase 1) ──
+try:
+    from types import SimpleNamespace
+
+    from sims_solvers import constants as _sims_constants
+    from sims_solvers.FrontGenerators.CoverageGridPoint import CoverageGridPoint
+    from sims_solvers.FrontGenerators.MONISE import MONISE as _MONISE
+    from sims_solvers.Instances.InstanceGeneric import InstanceGeneric as _InstanceGeneric
+    from sims_solvers.Instances.InstanceSIMS import InstanceSIMS as _InstanceSIMS
+    from sims_solvers.Models.OrtoolsCPModels.SatelliteImageMosaicSelectionOrtoolsCPModel import (
+        SatelliteImageMosaicSelectionOrtoolsCPModel,
+    )
+    from sims_solvers.Solvers.OrtoolsCPSolver import OrtoolsCPSolver
+    from sims_solvers.Timer import Timer as _SolversTimer
+
+    HAS_SIMS_SOLVERS = True
+except ImportError:
+    HAS_SIMS_SOLVERS = False
+
 # ─── Instance registry ────────────────────────────────────────────────
 
 INSTANCES_DIR = Path(__file__).parent / "tests" / "data"
@@ -117,6 +136,30 @@ _PLS_VARIANT_MAP: dict[str, str] = {
     "Diverse Probe PLS": "Diverse Probe",
 }
 
+# Maps config label → (short_name, hex_color) for hybrid comparison bars.
+# Grouped by algorithm family: PLS, NSGA-II, NSGA-III, MOEA/D.
+_HYBRID_BAR_STYLES: list[tuple[str, str, str]] = [
+    # (config_label, display_name, color)
+    # Grouped by algorithm family, ratios 80:20→50:50→20:80 left to right.
+    # Default PLS (no exact phase) appears last/rightmost as the baseline reference.
+    ("Hybrid 80:20",          "PLS 80:20",      "#08306b"),
+    ("Hybrid 50:50",          "PLS 50:50",      "#2171b5"),
+    ("Hybrid 20:80",          "PLS 20:80",      "#6baed6"),
+    ("Default PLS",           "PLS 0:100",      "#9ecae1"),
+    ("Hybrid NSGA-II 80:20",  "NSGA-II 80:20",  "#7f2704"),
+    ("Hybrid NSGA-II 50:50",  "NSGA-II 50:50",  "#d94801"),
+    ("Hybrid NSGA-II 20:80",  "NSGA-II 20:80",  "#f16913"),
+    ("Baseline NSGA-II",      "NSGA-II 0:100",  "#fdae6b"),
+    ("Hybrid NSGA-III 80:20", "NSGA-III 80:20", "#00441b"),
+    ("Hybrid NSGA-III 50:50", "NSGA-III 50:50", "#238b45"),
+    ("Hybrid NSGA-III 20:80", "NSGA-III 20:80", "#41ab5d"),
+    ("Baseline NSGA-III",     "NSGA-III 0:100", "#74c476"),
+    ("Hybrid MOEA/D 80:20",   "MOEA/D 80:20",   "#3f007d"),
+    ("Hybrid MOEA/D 50:50",   "MOEA/D 50:50",   "#756bb1"),
+    ("Hybrid MOEA/D 20:80",   "MOEA/D 20:80",   "#9e9ac8"),
+    ("Baseline MOEA/D",       "MOEA/D 0:100",   "#bcbddc"),
+]
+
 _VARIANT_COLORS: dict[str, str] = {
     "Default": "#e07b00",
     "Scalarized": "#2166ac",
@@ -141,12 +184,16 @@ _PLS_VARIANTS: list[tuple[str, str, str]] = [
 _LABEL_TO_BAR_KEY: dict[str, tuple[float, str]] = {
     "GPBA-A": (1.00, "Default"),
     "Default PLS": (0.00, "Default"),
+    "Hybrid 75:25": (0.75, "Default"),
     "Hybrid 50:50": (0.50, "Default"),
     "Hybrid 35:65": (0.35, "Default"),
+    "Hybrid 25:75": (0.25, "Default"),
     "Hybrid 20:80": (0.20, "Default"),
     "Scalarized PLS": (0.00, "Scalarized"),
+    "Scalarized Hybrid 75:25": (0.75, "Scalarized"),
     "Scalarized Hybrid 50:50": (0.50, "Scalarized"),
     "Scalarized Hybrid 35:65": (0.35, "Scalarized"),
+    "Scalarized Hybrid 25:75": (0.25, "Scalarized"),
     "Scalarized Hybrid 20:80": (0.20, "Scalarized"),
     "Diverse Probe PLS": (0.00, "Diverse Probe"),
     "Diverse Probe Hybrid 50:50": (0.50, "Diverse Probe"),
@@ -174,8 +221,17 @@ def _size_group_label(num_images: int) -> str:
 # ─── Timeout heuristic ────────────────────────────────────────────────
 
 
+_timeout_override: int | None = None
+
+# When True, PLS configs run with is_deterministic=False so multiple runs
+# produce different results (set automatically when --runs > 1).
+_force_nondeterministic: bool = False
+
+
 def timeout_for_size(num_images: int) -> int:
     """PLS timeout in seconds – longer budgets for full HV ablation runs."""
+    if _timeout_override is not None:
+        return _timeout_override
     if num_images <= 30:
         return 30
     if num_images <= 50:
@@ -221,7 +277,7 @@ class PurePLS(AlgorithmConfig):
             problem,
             objectives=OBJECTIVES,
             timeout=timedelta(seconds=timeout_s),
-            is_deterministic=True,
+            is_deterministic=not _force_nondeterministic,
             trace=True,
             include_dominated=False,
             use_checkpoint=True,
@@ -238,7 +294,7 @@ class Hybrid2080(AlgorithmConfig):
         exact_time = timeout_s * 20 // 100
         pls_time = timeout_s - exact_time
 
-        exact_solutions = _get_pseudo_solutions(problem)
+        exact_solutions = _get_pseudo_solutions(problem, max_timestamp_s=exact_time)
         initial_pop = (
             _solutions_to_sims(exact_solutions, problem) if exact_solutions else None
         )
@@ -247,7 +303,40 @@ class Hybrid2080(AlgorithmConfig):
             problem,
             objectives=OBJECTIVES,
             timeout=timedelta(seconds=pls_time),
-            is_deterministic=True,
+            is_deterministic=not _force_nondeterministic,
+            trace=True,
+            include_dominated=False,
+            initial_population=initial_pop,
+            use_checkpoint=False,
+            use_ranked_candidates=False,
+            use_greedy_initial_population=True,
+            use_perturbation_restart=False,
+        )
+
+
+class HybridPLSParam(AlgorithmConfig):
+    """PLS hybrid at an arbitrary exact:PLS split read from `exact_phase_ratio`.
+
+    The per-ratio classes above (Hybrid2080, HybridBaseline, ...) each hardcode
+    their split; this one is parameterised so the 10% grid can be filled without
+    a new class per ratio. Solver flags are identical to those classes.
+    """
+
+    def run(self, problem, timeout_s, seed=42):
+        ratio = self.exact_phase_ratio if self.exact_phase_ratio is not None else 0.5
+        exact_time = int(timeout_s * ratio)
+        pls_time = timeout_s - exact_time
+
+        exact_solutions = _get_pseudo_solutions(problem, max_timestamp_s=exact_time)
+        initial_pop = (
+            _solutions_to_sims(exact_solutions, problem) if exact_solutions else None
+        )
+
+        return sims_problem.solve_with_pls(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=pls_time),
+            is_deterministic=not _force_nondeterministic,
             trace=True,
             include_dominated=False,
             initial_population=initial_pop,
@@ -265,7 +354,7 @@ class Hybrid3565(AlgorithmConfig):
         exact_time = timeout_s * 35 // 100
         pls_time = timeout_s - exact_time
 
-        exact_solutions = _get_pseudo_solutions(problem)
+        exact_solutions = _get_pseudo_solutions(problem, max_timestamp_s=exact_time)
         initial_pop = (
             _solutions_to_sims(exact_solutions, problem) if exact_solutions else None
         )
@@ -274,7 +363,7 @@ class Hybrid3565(AlgorithmConfig):
             problem,
             objectives=OBJECTIVES,
             timeout=timedelta(seconds=pls_time),
-            is_deterministic=True,
+            is_deterministic=not _force_nondeterministic,
             trace=True,
             include_dominated=False,
             initial_population=initial_pop,
@@ -292,7 +381,7 @@ class HybridBaseline(AlgorithmConfig):
         exact_time = timeout_s // 2
         pls_time = timeout_s - exact_time
 
-        exact_solutions = _get_pseudo_solutions(problem)
+        exact_solutions = _get_pseudo_solutions(problem, max_timestamp_s=exact_time)
         initial_pop = (
             _solutions_to_sims(exact_solutions, problem) if exact_solutions else None
         )
@@ -301,7 +390,88 @@ class HybridBaseline(AlgorithmConfig):
             problem,
             objectives=OBJECTIVES,
             timeout=timedelta(seconds=pls_time),
-            is_deterministic=True,
+            is_deterministic=not _force_nondeterministic,
+            trace=True,
+            include_dominated=False,
+            initial_population=initial_pop,
+            use_checkpoint=False,
+            use_ranked_candidates=False,
+            use_greedy_initial_population=True,
+            use_perturbation_restart=False,
+        )
+
+
+class Hybrid7525(AlgorithmConfig):
+    """Hybrid 75:25 – 75% exact phase, 25% PLS, seeded with pseudo-solver solutions."""
+
+    def run(self, problem, timeout_s, seed=42):
+        exact_time = timeout_s * 75 // 100
+        pls_time = timeout_s - exact_time
+
+        exact_solutions = _get_pseudo_solutions(problem, max_timestamp_s=exact_time)
+        initial_pop = (
+            _solutions_to_sims(exact_solutions, problem) if exact_solutions else None
+        )
+
+        return sims_problem.solve_with_pls(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=pls_time),
+            is_deterministic=not _force_nondeterministic,
+            trace=True,
+            include_dominated=False,
+            initial_population=initial_pop,
+            use_checkpoint=False,
+            use_ranked_candidates=False,
+            use_greedy_initial_population=True,
+            use_perturbation_restart=False,
+        )
+
+
+class Hybrid2575(AlgorithmConfig):
+    """Hybrid 25:75 – 25% exact phase, 75% PLS, seeded with pseudo-solver solutions."""
+
+    def run(self, problem, timeout_s, seed=42):
+        exact_time = timeout_s * 25 // 100
+        pls_time = timeout_s - exact_time
+
+        exact_solutions = _get_pseudo_solutions(problem, max_timestamp_s=exact_time)
+        initial_pop = (
+            _solutions_to_sims(exact_solutions, problem) if exact_solutions else None
+        )
+
+        return sims_problem.solve_with_pls(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=pls_time),
+            is_deterministic=not _force_nondeterministic,
+            trace=True,
+            include_dominated=False,
+            initial_population=initial_pop,
+            use_checkpoint=False,
+            use_ranked_candidates=False,
+            use_greedy_initial_population=True,
+            use_perturbation_restart=False,
+        )
+
+
+class Hybrid8020(AlgorithmConfig):
+    """Hybrid 80:20 – 80% exact phase, 20% PLS, seeded with pseudo-solver solutions."""
+
+    def run(self, problem, timeout_s, seed=42):
+        exact_time = timeout_s * 80 // 100
+        pls_time = timeout_s - exact_time
+
+        exact_solutions = _get_pseudo_solutions(problem, max_timestamp_s=exact_time)
+        initial_pop = (
+            _solutions_to_sims(exact_solutions, problem) if exact_solutions else None
+        )
+
+        return sims_problem.solve_with_pls(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=pls_time),
+            is_deterministic=not _force_nondeterministic,
             trace=True,
             include_dominated=False,
             initial_population=initial_pop,
@@ -320,7 +490,7 @@ class DiverseProbePLS(AlgorithmConfig):
             problem,
             objectives=OBJECTIVES,
             timeout=timedelta(seconds=timeout_s),
-            is_deterministic=True,
+            is_deterministic=not _force_nondeterministic,
             trace=True,
             include_dominated=False,
             use_checkpoint=True,
@@ -338,7 +508,7 @@ class DiverseProbeHybrid(AlgorithmConfig):
         exact_time = timeout_s // 2
         pls_time = timeout_s - exact_time
 
-        exact_solutions = _get_pseudo_solutions(problem)
+        exact_solutions = _get_pseudo_solutions(problem, max_timestamp_s=exact_time)
         initial_pop = (
             _solutions_to_sims(exact_solutions, problem) if exact_solutions else None
         )
@@ -347,7 +517,7 @@ class DiverseProbeHybrid(AlgorithmConfig):
             problem,
             objectives=OBJECTIVES,
             timeout=timedelta(seconds=pls_time),
-            is_deterministic=True,
+            is_deterministic=not _force_nondeterministic,
             trace=True,
             include_dominated=False,
             initial_population=initial_pop,
@@ -365,7 +535,7 @@ class DiverseProbeHybrid3565(DiverseProbeHybrid):
     def run(self, problem, timeout_s, seed=42):
         exact_time = timeout_s * 35 // 100
         pls_time = timeout_s - exact_time
-        exact_solutions = _get_pseudo_solutions(problem)
+        exact_solutions = _get_pseudo_solutions(problem, max_timestamp_s=exact_time)
         initial_pop = (
             _solutions_to_sims(exact_solutions, problem) if exact_solutions else None
         )
@@ -373,7 +543,7 @@ class DiverseProbeHybrid3565(DiverseProbeHybrid):
             problem,
             objectives=OBJECTIVES,
             timeout=timedelta(seconds=pls_time),
-            is_deterministic=True,
+            is_deterministic=not _force_nondeterministic,
             trace=True,
             include_dominated=False,
             initial_population=initial_pop,
@@ -391,7 +561,7 @@ class DiverseProbeHybrid2080(DiverseProbeHybrid):
     def run(self, problem, timeout_s, seed=42):
         exact_time = timeout_s * 20 // 100
         pls_time = timeout_s - exact_time
-        exact_solutions = _get_pseudo_solutions(problem)
+        exact_solutions = _get_pseudo_solutions(problem, max_timestamp_s=exact_time)
         initial_pop = (
             _solutions_to_sims(exact_solutions, problem) if exact_solutions else None
         )
@@ -399,7 +569,7 @@ class DiverseProbeHybrid2080(DiverseProbeHybrid):
             problem,
             objectives=OBJECTIVES,
             timeout=timedelta(seconds=pls_time),
-            is_deterministic=True,
+            is_deterministic=not _force_nondeterministic,
             trace=True,
             include_dominated=False,
             initial_population=initial_pop,
@@ -425,7 +595,7 @@ class ScalarizedPLS(AlgorithmConfig):
             problem,
             objectives=OBJECTIVES,
             timeout=timedelta(seconds=timeout_s),
-            is_deterministic=True,
+            is_deterministic=not _force_nondeterministic,
             trace=True,
             include_dominated=False,
             use_checkpoint=True,
@@ -454,7 +624,7 @@ class ScalarizedHybrid(AlgorithmConfig):
         exact_time = timeout_s // 2
         pls_time = timeout_s - exact_time
 
-        exact_solutions = _get_pseudo_solutions(problem)
+        exact_solutions = _get_pseudo_solutions(problem, max_timestamp_s=exact_time)
         initial_pop = (
             _solutions_to_sims(exact_solutions, problem) if exact_solutions else None
         )
@@ -463,7 +633,7 @@ class ScalarizedHybrid(AlgorithmConfig):
             problem,
             objectives=OBJECTIVES,
             timeout=timedelta(seconds=pls_time),
-            is_deterministic=True,
+            is_deterministic=not _force_nondeterministic,
             trace=True,
             include_dominated=False,
             initial_population=initial_pop,
@@ -486,7 +656,7 @@ class ScalarizedHybrid3565(ScalarizedHybrid):
     def run(self, problem, timeout_s, seed=42):
         exact_time = timeout_s * 35 // 100
         pls_time = timeout_s - exact_time
-        exact_solutions = _get_pseudo_solutions(problem)
+        exact_solutions = _get_pseudo_solutions(problem, max_timestamp_s=exact_time)
         initial_pop = (
             _solutions_to_sims(exact_solutions, problem) if exact_solutions else None
         )
@@ -494,7 +664,7 @@ class ScalarizedHybrid3565(ScalarizedHybrid):
             problem,
             objectives=OBJECTIVES,
             timeout=timedelta(seconds=pls_time),
-            is_deterministic=True,
+            is_deterministic=not _force_nondeterministic,
             trace=True,
             include_dominated=False,
             initial_population=initial_pop,
@@ -517,7 +687,7 @@ class ScalarizedHybrid2080(ScalarizedHybrid):
     def run(self, problem, timeout_s, seed=42):
         exact_time = timeout_s * 20 // 100
         pls_time = timeout_s - exact_time
-        exact_solutions = _get_pseudo_solutions(problem)
+        exact_solutions = _get_pseudo_solutions(problem, max_timestamp_s=exact_time)
         initial_pop = (
             _solutions_to_sims(exact_solutions, problem) if exact_solutions else None
         )
@@ -525,7 +695,69 @@ class ScalarizedHybrid2080(ScalarizedHybrid):
             problem,
             objectives=OBJECTIVES,
             timeout=timedelta(seconds=pls_time),
-            is_deterministic=True,
+            is_deterministic=not _force_nondeterministic,
+            trace=True,
+            include_dominated=False,
+            initial_population=initial_pop,
+            use_checkpoint=True,
+            use_ranked_candidates=False,
+            use_greedy_initial_population=True,
+            use_perturbation_restart=False,
+            solution_selection_mode="scalarized-chebycheff",
+            scalarized_selection_source=self.scalarized_selection_source,
+            scalarized_parent_budget=self.scalarized_parent_budget,
+            scalarized_weight_samples=self.scalarized_weight_samples,
+            scalarized_rho=self.scalarized_rho,
+            use_nd_tree_scalarized_query=self.use_nd_tree_scalarized_query,
+        )
+
+
+class ScalarizedHybrid7525(ScalarizedHybrid):
+    """Scalarized Hybrid 75:25 – 75% exact, 25% PLS."""
+
+    def run(self, problem, timeout_s, seed=42):
+        exact_time = timeout_s * 75 // 100
+        pls_time = timeout_s - exact_time
+        exact_solutions = _get_pseudo_solutions(problem, max_timestamp_s=exact_time)
+        initial_pop = (
+            _solutions_to_sims(exact_solutions, problem) if exact_solutions else None
+        )
+        return sims_problem.solve_with_pls(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=pls_time),
+            is_deterministic=not _force_nondeterministic,
+            trace=True,
+            include_dominated=False,
+            initial_population=initial_pop,
+            use_checkpoint=True,
+            use_ranked_candidates=False,
+            use_greedy_initial_population=True,
+            use_perturbation_restart=False,
+            solution_selection_mode="scalarized-chebycheff",
+            scalarized_selection_source=self.scalarized_selection_source,
+            scalarized_parent_budget=self.scalarized_parent_budget,
+            scalarized_weight_samples=self.scalarized_weight_samples,
+            scalarized_rho=self.scalarized_rho,
+            use_nd_tree_scalarized_query=self.use_nd_tree_scalarized_query,
+        )
+
+
+class ScalarizedHybrid2575(ScalarizedHybrid):
+    """Scalarized Hybrid 25:75 – 25% exact, 75% PLS."""
+
+    def run(self, problem, timeout_s, seed=42):
+        exact_time = timeout_s * 25 // 100
+        pls_time = timeout_s - exact_time
+        exact_solutions = _get_pseudo_solutions(problem, max_timestamp_s=exact_time)
+        initial_pop = (
+            _solutions_to_sims(exact_solutions, problem) if exact_solutions else None
+        )
+        return sims_problem.solve_with_pls(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=pls_time),
+            is_deterministic=not _force_nondeterministic,
             trace=True,
             include_dominated=False,
             initial_population=initial_pop,
@@ -623,6 +855,316 @@ class NSGA3Config(AlgorithmConfig):
             coverage_biased_crossover_fraction=0.7,
             ensure_mutation=True,
             stagnation_limit=10,
+        )
+
+
+class NSGA2BaselineConfig(AlgorithmConfig):
+    """Literal NSGA-II baseline (Deb, Pratap, Agarwal & Meyarivan, 2002)."""
+
+    def run(self, problem, timeout_s, seed=42):
+        return sims_problem.solve_with_nsga2_baseline(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=timeout_s),
+            population_size=100,
+            max_generations=500_000,
+            seed=seed,
+            trace=True,
+            include_dominated=False,
+            crossover_rate=0.9,
+            mutation_rate=0.01,
+        )
+
+
+class NSGA3BaselineConfig(AlgorithmConfig):
+    """Literal NSGA-III baseline (Deb & Jain, 2014)."""
+
+    def run(self, problem, timeout_s, seed=42):
+        return sims_problem.solve_with_nsga3_baseline(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=timeout_s),
+            num_divisions=99 if len(OBJECTIVES) == 2 else 12,
+            max_generations=500_000,
+            seed=seed,
+            trace=True,
+            include_dominated=False,
+            crossover_rate=0.9,
+            mutation_rate=0.01,
+        )
+
+
+class MOEADBaselineConfig(AlgorithmConfig):
+    """Literal MOEA/D baseline (Zhang & Li, 2007)."""
+
+    def run(self, problem, timeout_s, seed=42):
+        return sims_problem.solve_with_moead_baseline(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=timeout_s),
+            num_divisions=99 if len(OBJECTIVES) == 2 else 12,
+            neighbourhood_size=10,
+            max_generations=500_000,
+            seed=seed,
+            trace=True,
+            include_dominated=False,
+            crossover_rate=1.0,
+            mutation_rate=0.01,
+        )
+
+
+class PseudoSeededNSGA2BaselineConfig(AlgorithmConfig):
+    """Pseudosolver-seeded literal NSGA-II baseline.
+
+    `exact_phase_ratio` simulates the fraction of the budget consumed by
+    GPBA-A; the EA receives the remaining `(1 - exact_phase_ratio) * timeout_s`
+    seconds, matching the accounting used by the Hybrid 50:50/35:65/20:80 PLS
+    configs.
+    """
+
+    def run(self, problem, timeout_s, seed=42):
+        ratio = self.exact_phase_ratio if self.exact_phase_ratio is not None else 0.0
+        ea_timeout = int(timeout_s * (1.0 - ratio))
+        initial_pop = _get_pseudo_solutions(problem, max_timestamp_s=timeout_s - ea_timeout)
+        initial_population = (
+            _solutions_to_sims(initial_pop, problem) if initial_pop else None
+        )
+        return sims_problem.solve_with_pseudo_seeded_nsga2_baseline(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=ea_timeout),
+            initial_population=initial_population,
+            population_size=100,
+            max_generations=500_000,
+            seed=seed,
+            trace=True,
+            include_dominated=False,
+            crossover_rate=0.9,
+            mutation_rate=0.01,
+        )
+
+
+class PseudoSeededNSGA3BaselineConfig(AlgorithmConfig):
+    """Pseudosolver-seeded literal NSGA-III baseline.
+
+    `exact_phase_ratio` simulates the fraction of the budget consumed by
+    GPBA-A; the EA receives the remaining `(1 - exact_phase_ratio) * timeout_s`
+    seconds.
+    """
+
+    def run(self, problem, timeout_s, seed=42):
+        ratio = self.exact_phase_ratio if self.exact_phase_ratio is not None else 0.0
+        ea_timeout = int(timeout_s * (1.0 - ratio))
+        initial_pop = _get_pseudo_solutions(problem, max_timestamp_s=timeout_s - ea_timeout)
+        initial_population = (
+            _solutions_to_sims(initial_pop, problem) if initial_pop else None
+        )
+        return sims_problem.solve_with_pseudo_seeded_nsga3_baseline(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=ea_timeout),
+            initial_population=initial_population,
+            num_divisions=99 if len(OBJECTIVES) == 2 else 12,
+            max_generations=500_000,
+            seed=seed,
+            trace=True,
+            include_dominated=False,
+            crossover_rate=0.9,
+            mutation_rate=0.01,
+        )
+
+
+class PseudoSeededMOEADBaselineConfig(AlgorithmConfig):
+    """Pseudosolver-seeded literal MOEA/D baseline.
+
+    `exact_phase_ratio` simulates the fraction of the budget consumed by
+    GPBA-A; the EA receives the remaining `(1 - exact_phase_ratio) * timeout_s`
+    seconds.
+    """
+
+    def run(self, problem, timeout_s, seed=42):
+        ratio = self.exact_phase_ratio if self.exact_phase_ratio is not None else 0.0
+        ea_timeout = int(timeout_s * (1.0 - ratio))
+        initial_pop = _get_pseudo_solutions(problem, max_timestamp_s=timeout_s - ea_timeout)
+        initial_population = (
+            _solutions_to_sims(initial_pop, problem) if initial_pop else None
+        )
+        return sims_problem.solve_with_pseudo_seeded_moead_baseline(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=ea_timeout),
+            initial_population=initial_population,
+            num_divisions=99 if len(OBJECTIVES) == 2 else 12,
+            neighbourhood_size=10,
+            max_generations=500_000,
+            seed=seed,
+            trace=True,
+            include_dominated=False,
+            crossover_rate=1.0,
+            mutation_rate=0.01,
+        )
+
+
+class PseudoSeededNSGA2Config(AlgorithmConfig):
+    """Pseudosolver-seeded SIMS-tailored NSGA-II (improved-tier hybrid).
+
+    Same GPBA-A-ratio accounting as ``PseudoSeededNSGA2BaselineConfig``, but the
+    seed population feeds the tailored ``solve_with_pseudo_seeded_nsga2`` (composite
+    mutation, stagnation injection, contribution-distance selection) instead of the
+    literal-paper baseline. Tuning mirrors the standalone ``NSGA2Config``.
+    """
+
+    def run(self, problem, timeout_s, seed=42):
+        ratio = self.exact_phase_ratio if self.exact_phase_ratio is not None else 0.0
+        ea_timeout = int(timeout_s * (1.0 - ratio))
+        initial_pop = _get_pseudo_solutions(problem, max_timestamp_s=timeout_s - ea_timeout)
+        initial_population = (
+            _solutions_to_sims(initial_pop, problem) if initial_pop else None
+        )
+        return sims_problem.solve_with_pseudo_seeded_nsga2(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=ea_timeout),
+            initial_population=initial_population,
+            population_size=200,
+            max_generations=500_000,
+            seed=seed,
+            trace=True,
+            include_dominated=False,
+            crossover_rate=0.95,
+            swap_mutation_rate=0.6,
+            add_prune_mutation_rate=0.45,
+            bitflip_mutation_rate=0.0,
+            multi_swap_max_removals=4,
+            multi_swap_rate=0.35,
+            shift_mutation_rate=0.4,
+            coverage_biased_crossover_fraction=0.7,
+            ensure_mutation=True,
+            stagnation_limit=10,
+        )
+
+
+class PseudoSeededNSGA3Config(AlgorithmConfig):
+    """Pseudosolver-seeded SIMS-tailored NSGA-III (improved-tier hybrid)."""
+
+    def run(self, problem, timeout_s, seed=42):
+        ratio = self.exact_phase_ratio if self.exact_phase_ratio is not None else 0.0
+        ea_timeout = int(timeout_s * (1.0 - ratio))
+        initial_pop = _get_pseudo_solutions(problem, max_timestamp_s=timeout_s - ea_timeout)
+        initial_population = (
+            _solutions_to_sims(initial_pop, problem) if initial_pop else None
+        )
+        return sims_problem.solve_with_pseudo_seeded_nsga3(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=ea_timeout),
+            initial_population=initial_population,
+            target_pop_size=200,
+            auto_divisions=True,
+            max_generations=500_000,
+            seed=seed,
+            trace=True,
+            include_dominated=False,
+            crossover_rate=0.95,
+            swap_mutation_rate=0.6,
+            add_prune_mutation_rate=0.45,
+            bitflip_mutation_rate=0.0,
+            multi_swap_max_removals=4,
+            multi_swap_rate=0.35,
+            shift_mutation_rate=0.4,
+            coverage_biased_crossover_fraction=0.7,
+            ensure_mutation=True,
+            stagnation_limit=10,
+        )
+
+
+class PseudoSeededMOEADConfig(AlgorithmConfig):
+    """Pseudosolver-seeded SIMS-tailored MOEA/D (improved-tier hybrid).
+
+    Uses the Li & Zhang (2009) enhancements (delta mating, nr replacement cap, PBI)
+    exposed by ``solve_with_pseudo_seeded_moead``. Tuning mirrors ``MOEADConfig``.
+    """
+
+    def run(self, problem, timeout_s, seed=42):
+        ratio = self.exact_phase_ratio if self.exact_phase_ratio is not None else 0.0
+        ea_timeout = int(timeout_s * (1.0 - ratio))
+        initial_pop = _get_pseudo_solutions(problem, max_timestamp_s=timeout_s - ea_timeout)
+        initial_population = (
+            _solutions_to_sims(initial_pop, problem) if initial_pop else None
+        )
+        return sims_problem.solve_with_pseudo_seeded_moead(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=ea_timeout),
+            initial_population=initial_population,
+            population_size=300,
+            max_generations=500_000,
+            seed=seed,
+            trace=True,
+            include_dominated=False,
+            neighbourhood_size=30,
+            delta=0.7,
+            max_replacements=8,
+            crossover_rate=1.0,
+            swap_mutation_rate=0.5,
+            add_prune_mutation_rate=0.35,
+            multi_swap_max_removals=4,
+            multi_swap_rate=0.3,
+            shift_mutation_rate=0.3,
+            coverage_biased_crossover_fraction=0.7,
+            ensure_mutation=True,
+            auto_divisions=True,
+            use_pbi=True,
+            pbi_theta=3.0,
+            stagnation_limit=15,
+        )
+
+
+class NSGA2MoorsConfig(AlgorithmConfig):
+    """NSGA-II via the `moors` crate (native binary operators) -- external sanity check."""
+
+    def run(self, problem, timeout_s, seed=42):
+        return sims_problem.solve_with_nsga2_moors(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=timeout_s),
+            population_size=100,
+            num_iterations=500_000,
+            seed=seed,
+            trace=True,
+            include_dominated=False,
+        )
+
+
+class NSGA2OptirusticConfig(AlgorithmConfig):
+    """NSGA-II via the `optirustic` crate (SBX + polynomial mutation) -- external sanity check."""
+
+    def run(self, problem, timeout_s, seed=42):
+        return sims_problem.solve_with_nsga2_optirustic(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=timeout_s),
+            population_size=100,
+            max_generations=500_000,
+            seed=seed,
+            trace=True,
+            include_dominated=False,
+        )
+
+
+class NSGA3OptirusticConfig(AlgorithmConfig):
+    """NSGA-III via the `optirustic` crate (SBX + polynomial mutation + niching) -- external sanity check."""
+
+    def run(self, problem, timeout_s, seed=42):
+        return sims_problem.solve_with_nsga3_optirustic(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=timeout_s),
+            population_size=100,
+            max_generations=500_000,
+            seed=seed,
+            trace=True,
+            include_dominated=False,
         )
 
 
@@ -731,7 +1273,7 @@ class GPBASeededPLS(AlgorithmConfig):
             problem,
             objectives=OBJECTIVES,
             timeout=timedelta(seconds=timeout_s),
-            is_deterministic=True,
+            is_deterministic=not _force_nondeterministic,
             trace=True,
             include_dominated=False,
             initial_population=initial_pop,
@@ -840,6 +1382,377 @@ class MONISEPseudoConfig(GPBAAConfig):
             include_dominated=False,
         )
         return _SyntheticResult(trace=trace, final_solutions=converted)
+
+
+# ─── EA-phase-1 → PLS-phase-2 hybrid configs ─────────────────────────
+# These configs run a multi-objective EA (NSGA-II/III/MOEA/D baseline) live as
+# the first phase for `exact_phase_ratio * timeout_s` seconds, then seed PLS
+# with the EA's Pareto front for the remaining time.  Unlike the Pseudo-seeded
+# configs, there is no reliance on pre-recorded solutions: the EA is executed
+# during the experiment.  The two sub-phase traces are merged with
+# sims_problem.merge_traces() so the combined trace spans the full timeline.
+
+
+def _bounds_from_solutions(
+    solutions: list[sims_problem.Solution],
+    ndim: int,
+) -> list[list[int]]:
+    """Compute [[lo, hi], ...] bounds from a list of Solution objects."""
+    obj_keys = ("cost", "cloudy_area", "max_incidence_angle", "min_resolutions_sum")
+    result = []
+    for j in range(ndim):
+        key = obj_keys[j]
+        vals = []
+        for sol in solutions:
+            d = sol.to_json()
+            v = d.get(key)
+            if v is not None:
+                vals.append(int(v))
+        if not vals:
+            result.append([0, 1])
+            continue
+        lo, hi = min(vals), max(vals)
+        rng = max(hi - lo, 1)
+        result.append([max(0, lo - 1), hi + int(rng * 0.1) + 1])
+    return result
+
+
+class EAPhase1PLSHybrid(AlgorithmConfig):
+    """EA (phase 1) → PLS (phase 2) live hybrid.
+
+    Subclasses override ``_run_ea_phase`` to select the algorithm.
+    ``exact_phase_ratio`` is the fraction of the budget given to the EA.
+    """
+
+    def _run_ea_phase(
+        self, problem: sims_problem.SimsDiscreteProblem, ea_time_s: int, seed: int
+    ) -> sims_problem.SolvingResult:
+        raise NotImplementedError
+
+    def run(self, problem, timeout_s, seed=42):
+        ratio = self.exact_phase_ratio if self.exact_phase_ratio is not None else 0.0
+        ea_time = int(timeout_s * ratio)
+        pls_time = timeout_s - ea_time
+
+        if ea_time <= 0:
+            # Pure PLS — no EA phase
+            return sims_problem.solve_with_pls(
+                problem,
+                objectives=OBJECTIVES,
+                timeout=timedelta(seconds=pls_time),
+                is_deterministic=not _force_nondeterministic,
+                trace=True,
+                include_dominated=False,
+                initial_population=None,
+                use_checkpoint=False,
+                use_ranked_candidates=False,
+                use_greedy_initial_population=True,
+                use_perturbation_restart=False,
+            )
+
+        ea_result = self._run_ea_phase(problem, ea_time, seed)
+
+        if pls_time <= 0:
+            # Pure EA — no PLS phase
+            return ea_result
+
+        ea_solutions = ea_result.final_solutions
+
+        pls_result = sims_problem.solve_with_pls(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=pls_time),
+            is_deterministic=not _force_nondeterministic,
+            trace=True,
+            include_dominated=False,
+            initial_population=ea_solutions if ea_solutions else None,
+            use_checkpoint=False,
+            use_ranked_candidates=False,
+            use_greedy_initial_population=True,
+            use_perturbation_restart=False,
+        )
+
+        # Merge traces so the combined timeline spans 0 → total_timeout.
+        ea_trace = ea_result.trace
+        pls_trace = pls_result.trace
+        if ea_trace and pls_trace:
+            all_sols = (ea_solutions or []) + (pls_result.final_solutions or [])
+            ndim = len(OBJECTIVES)
+            bounds = _bounds_from_solutions(all_sols, ndim) if all_sols else [
+                [0, 1] for _ in range(ndim)
+            ]
+            ref_point = [b[1] + 1 for b in bounds]
+            merged_trace = sims_problem.merge_traces(
+                ea_trace, pls_trace, self.label, bounds, ref_point
+            )
+        else:
+            merged_trace = pls_trace or ea_trace or b""
+
+        final_sols = pls_result.final_solutions or ea_solutions or []
+        if merged_trace:
+            return sims_problem.SolvingResult.with_trace(final_sols, merged_trace)
+        return sims_problem.SolvingResult(final_sols)
+
+
+class NSGA2Phase1PLS(EAPhase1PLSHybrid):
+    """NSGA-II baseline (phase 1) → PLS (phase 2)."""
+
+    def _run_ea_phase(self, problem, ea_time_s, seed):
+        return sims_problem.solve_with_nsga2_baseline(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=ea_time_s),
+            population_size=100,
+            max_generations=500_000,
+            seed=seed,
+            trace=True,
+            include_dominated=False,
+            crossover_rate=0.9,
+            mutation_rate=0.01,
+        )
+
+
+class NSGA3Phase1PLS(EAPhase1PLSHybrid):
+    """NSGA-III baseline (phase 1) → PLS (phase 2)."""
+
+    def _run_ea_phase(self, problem, ea_time_s, seed):
+        num_div = 99 if len(OBJECTIVES) == 2 else 12
+        return sims_problem.solve_with_nsga3_baseline(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=ea_time_s),
+            num_divisions=num_div,
+            max_generations=500_000,
+            seed=seed,
+            trace=True,
+            include_dominated=False,
+            crossover_rate=0.9,
+            mutation_rate=0.01,
+        )
+
+
+class MOEADPhase1PLS(EAPhase1PLSHybrid):
+    """MOEA/D baseline (phase 1) → PLS (phase 2)."""
+
+    def _run_ea_phase(self, problem, ea_time_s, seed):
+        num_div = 99 if len(OBJECTIVES) == 2 else 12
+        return sims_problem.solve_with_moead_baseline(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=ea_time_s),
+            num_divisions=num_div,
+            neighbourhood_size=10,
+            max_generations=500_000,
+            seed=seed,
+            trace=True,
+            include_dominated=False,
+            crossover_rate=1.0,
+            mutation_rate=0.01,
+        )
+
+
+# ─── Live exact-phase-1 → PLS-phase-2 hybrid configs ─────────────────
+# These configs run MONISE or GPBA-A (via OR-Tools, no Gurobi required) LIVE
+# for `exact_phase_ratio * timeout_s` seconds, then seed PLS with the exact
+# solver's Pareto front for the remaining time.  Traces are merged so the
+# combined trace spans the full timeline.  Requires HAS_SIMS_SOLVERS=True.
+
+
+class _InstanceSimsDirect(_InstanceSIMS):
+    """Adapts SimsDiscreteProblem to the InstanceSIMS attribute interface.
+
+    InstanceSIMS.__init__ adjusts 1-based MiniZinc indices to 0-based.
+    SimsDiscreteProblem data is already 0-based, so we bypass that correction
+    by calling the grandparent InstanceGeneric.__init__ directly.
+    """
+
+    def __init__(self, problem: sims_problem.SimsDiscreteProblem) -> None:
+        # Bypass InstanceSIMS.__init__ (which expects 1-based MiniZinc dict)
+        _InstanceGeneric.__init__(
+            self,
+            is_minizinc=False,
+            problem_name=_sims_constants.Problem.SATELLITE_IMAGE_SELECTION_PROBLEM.value,
+        )
+        self.images = [set(img) for img in problem.images]
+        self.clouds = [set(cl) for cl in problem.clouds]
+        self.costs = list(problem.costs)
+        self.areas = list(problem.areas)
+        self.max_cloud_area = problem.max_cloud_area
+        self.resolution = list(problem.resolution)
+        self.incidence_angle = list(problem.incidence_angle)
+        self.cloud_covered_by_image, self.clouds_id_area = self.get_clouds_covered_by_image()
+
+
+def _build_ortools_solver(problem: sims_problem.SimsDiscreteProblem) -> "OrtoolsCPSolver":
+    """Build an OR-Tools CP-SAT solver wired to the SIMS model for `problem`."""
+    sims_inst = _InstanceSimsDirect(problem)
+    config = SimpleNamespace(objectives=OBJECTIVES)
+    model = SatelliteImageMosaicSelectionOrtoolsCPModel(sims_inst, config)
+    return OrtoolsCPSolver(model, statistics={}, threads=1, free_search=True)
+
+
+def _collect_exact_solver_solutions(
+    front_generator: Any,
+    timer: "Timer",
+    phase_time_s: float,
+) -> list[sims_problem.Solution]:
+    """Drive a FrontGeneratorStrategy generator and convert solutions.
+
+    Returns a list of sims_problem.Solution objects with timestamps set to
+    the cumulative wall-clock time within the phase.
+    """
+    obj_name_to_idx: dict[str, int] = {name: i for i, name in enumerate(OBJECTIVES)}
+    ndim = len(OBJECTIVES)
+
+    solutions: list[sims_problem.Solution] = []
+    try:
+        for sol_result in front_generator.solve():
+            ts_s = phase_time_s - timer.time_budget_sec
+            objs = sol_result.solution.objs          # list[int], one per OBJECTIVE
+            selected = sol_result.solution.solution_values   # list[int] of image indices
+
+            # map objective names to keyword args for Solution.create
+            obj_vals: dict[str, int] = {}
+            for name, idx in obj_name_to_idx.items():
+                obj_vals[name] = objs[idx]
+
+            solutions.append(
+                sims_problem.Solution.create(
+                    selected_images=selected,
+                    cost=obj_vals.get("min_cost"),
+                    cloudy_area=obj_vals.get("cloud_coverage"),
+                    max_incidence_angle=obj_vals.get("min_max_incidence_angle"),
+                    min_resolutions_sum=obj_vals.get("min_resolution"),
+                    timestamp_us=int(ts_s * 1_000_000),
+                )
+            )
+    except TimeoutError:
+        pass
+    return solutions
+
+
+class ExactLivePhase1PLSHybrid(AlgorithmConfig):
+    """Base: live exact solver (phase 1) → PLS (phase 2).
+
+    Subclasses override ``_make_front_generator`` to choose the algorithm.
+    ``exact_phase_ratio`` is the fraction of the total budget given to the
+    exact solver; the remainder goes to PLS.
+    """
+
+    algo_label: str = "Exact"  # used in generate_trace algorithm field
+
+    def _make_front_generator(
+        self, solver: "OrtoolsCPSolver", timer: "Timer"
+    ) -> Any:
+        raise NotImplementedError
+
+    def run(self, problem, timeout_s, seed=42):
+        if not HAS_SIMS_SOLVERS:
+            raise RuntimeError(
+                f"{self.label}: sims_solvers not available — "
+                "install with `uv sync` from the workspace root."
+            )
+
+        ratio = self.exact_phase_ratio if self.exact_phase_ratio is not None else 0.5
+        exact_time_s = timeout_s * ratio
+        pls_time_s = timeout_s - exact_time_s
+        ndim = len(OBJECTIVES)
+
+        if exact_time_s <= 0:
+            return sims_problem.solve_with_pls(
+                problem,
+                objectives=OBJECTIVES,
+                timeout=timedelta(seconds=int(pls_time_s)),
+                is_deterministic=not _force_nondeterministic,
+                trace=True,
+                include_dominated=False,
+                initial_population=None,
+                use_checkpoint=False,
+                use_ranked_candidates=False,
+                use_greedy_initial_population=True,
+                use_perturbation_restart=False,
+            )
+
+        # ── Phase 1: run exact solver ───────────────────────────────────
+        solver = _build_ortools_solver(problem)
+        timer = _SolversTimer(exact_time_s)
+        fg = self._make_front_generator(solver, timer)
+        exact_solutions = _collect_exact_solver_solutions(fg, timer, exact_time_s)
+
+        if not exact_solutions:
+            print(f"  WARN: {self.label}: exact phase found 0 solutions", flush=True)
+
+        # Build a trace for the exact phase
+        if exact_solutions:
+            ex_bounds = _bounds_from_solutions(exact_solutions, ndim)
+            ex_ref = [b[1] + 1 for b in ex_bounds]
+            exact_trace = sims_problem.generate_trace(
+                solutions=exact_solutions,
+                objectives=OBJECTIVES,
+                algorithm=self.algo_label,
+                num_objectives=ndim,
+                objective_bounds=ex_bounds,
+                reference_point=ex_ref,
+                include_dominated=False,
+            )
+        else:
+            exact_trace = b""
+
+        if pls_time_s <= 0:
+            if exact_trace:
+                return sims_problem.SolvingResult.with_trace(exact_solutions, exact_trace)
+            return sims_problem.SolvingResult(exact_solutions)
+
+        # ── Phase 2: PLS seeded with exact solutions ────────────────────
+        pls_result = sims_problem.solve_with_pls(
+            problem,
+            objectives=OBJECTIVES,
+            timeout=timedelta(seconds=int(pls_time_s)),
+            is_deterministic=not _force_nondeterministic,
+            trace=True,
+            include_dominated=False,
+            initial_population=exact_solutions if exact_solutions else None,
+            use_checkpoint=False,
+            use_ranked_candidates=False,
+            use_greedy_initial_population=True,
+            use_perturbation_restart=False,
+        )
+
+        pls_trace = pls_result.trace
+        final_sols = pls_result.final_solutions or exact_solutions or []
+
+        # ── Merge traces into a unified timeline ────────────────────────
+        if exact_trace and pls_trace:
+            all_sols = list(exact_solutions) + list(pls_result.final_solutions or [])
+            merged_bounds = _bounds_from_solutions(all_sols, ndim) if all_sols else [[0, 1]] * ndim
+            merged_ref = [b[1] + 1 for b in merged_bounds]
+            merged = sims_problem.merge_traces(
+                exact_trace, pls_trace, self.label, merged_bounds, merged_ref
+            )
+            return sims_problem.SolvingResult.with_trace(final_sols, merged)
+        elif pls_trace:
+            return pls_result
+        elif exact_trace:
+            return sims_problem.SolvingResult.with_trace(exact_solutions, exact_trace)
+        return sims_problem.SolvingResult(final_sols)
+
+
+class MONISELivePhase1PLS(ExactLivePhase1PLSHybrid):
+    """Live MONISE (OR-Tools) → PLS hybrid."""
+
+    algo_label = "MONISE"
+
+    def _make_front_generator(self, solver, timer):
+        return _MONISE(solver, timer)
+
+
+class GPBAALivePhase1PLS(ExactLivePhase1PLSHybrid):
+    """Live GPBA-A / CoverageGridPoint (OR-Tools) → PLS hybrid."""
+
+    algo_label = "GPBA-A"
+
+    def _make_front_generator(self, solver, timer):
+        return CoverageGridPoint(solver, timer)
 
 
 # ─── MONISE-seeded hybrid configs ────────────────────────────────────
@@ -1004,6 +1917,20 @@ CONFIGS: list[AlgorithmConfig] = [
         linestyle="-",
         linewidth=1.5,
     ),
+    Hybrid8020(
+        label="Hybrid 80:20",
+        color="#08306b",
+        linestyle="-",
+        linewidth=1.5,
+        exact_phase_ratio=0.80,
+    ),
+    Hybrid7525(
+        label="Hybrid 75:25",
+        color="#08306b",
+        linestyle="--",
+        linewidth=1.5,
+        exact_phase_ratio=0.75,
+    ),
     HybridBaseline(
         label="Hybrid 50:50",
         color="#1f77b4",
@@ -1017,6 +1944,13 @@ CONFIGS: list[AlgorithmConfig] = [
         linestyle="--",
         linewidth=1.8,
         exact_phase_ratio=0.35,
+    ),
+    Hybrid2575(
+        label="Hybrid 25:75",
+        color="#74c476",
+        linestyle=":",
+        linewidth=1.5,
+        exact_phase_ratio=0.25,
     ),
     Hybrid2080(
         label="Hybrid 20:80",
@@ -1039,6 +1973,250 @@ CONFIGS: list[AlgorithmConfig] = [
         label="NSGA-III",
         color="#2ecc71",
         linestyle="-",
+    ),
+    NSGA2BaselineConfig(
+        label="Baseline NSGA-II",
+        color="#ff7f0e",
+        linestyle=":",
+        linewidth=1.2,
+    ),
+    MOEADBaselineConfig(
+        label="Baseline MOEA/D",
+        color="#9467bd",
+        linestyle=":",
+        linewidth=1.2,
+    ),
+    NSGA3BaselineConfig(
+        label="Baseline NSGA-III",
+        color="#2ecc71",
+        linestyle=":",
+        linewidth=1.2,
+    ),
+    PseudoSeededNSGA2BaselineConfig(
+        label="Hybrid NSGA-II 80:20",
+        color="#ff7f0e",
+        linestyle="-",
+        linewidth=1.6,
+        exact_phase_ratio=0.80,
+    ),
+    PseudoSeededNSGA2BaselineConfig(
+        label="Hybrid NSGA-II 75:25",
+        color="#ff7f0e",
+        linestyle="-",
+        linewidth=1.4,
+        exact_phase_ratio=0.75,
+    ),
+    PseudoSeededNSGA2BaselineConfig(
+        label="Hybrid NSGA-II 50:50",
+        color="#ff7f0e",
+        linestyle="--",
+        linewidth=1.2,
+        exact_phase_ratio=0.50,
+    ),
+    PseudoSeededNSGA2BaselineConfig(
+        label="Hybrid NSGA-II 35:65",
+        color="#ff7f0e",
+        linestyle="-.",
+        linewidth=1.1,
+        exact_phase_ratio=0.35,
+    ),
+    PseudoSeededNSGA2BaselineConfig(
+        label="Hybrid NSGA-II 25:75",
+        color="#ff7f0e",
+        linestyle=":",
+        linewidth=1.0,
+        exact_phase_ratio=0.25,
+    ),
+    PseudoSeededNSGA2BaselineConfig(
+        label="Hybrid NSGA-II 20:80",
+        color="#ff7f0e",
+        linestyle=(0, (3, 1, 1, 1)),
+        linewidth=1.0,
+        exact_phase_ratio=0.20,
+    ),
+    PseudoSeededNSGA3BaselineConfig(
+        label="Hybrid NSGA-III 80:20",
+        color="#2ecc71",
+        linestyle="-",
+        linewidth=1.6,
+        exact_phase_ratio=0.80,
+    ),
+    PseudoSeededNSGA3BaselineConfig(
+        label="Hybrid NSGA-III 75:25",
+        color="#2ecc71",
+        linestyle="-",
+        linewidth=1.4,
+        exact_phase_ratio=0.75,
+    ),
+    PseudoSeededNSGA3BaselineConfig(
+        label="Hybrid NSGA-III 50:50",
+        color="#2ecc71",
+        linestyle="--",
+        linewidth=1.2,
+        exact_phase_ratio=0.50,
+    ),
+    PseudoSeededNSGA3BaselineConfig(
+        label="Hybrid NSGA-III 35:65",
+        color="#2ecc71",
+        linestyle="-.",
+        linewidth=1.1,
+        exact_phase_ratio=0.35,
+    ),
+    PseudoSeededNSGA3BaselineConfig(
+        label="Hybrid NSGA-III 25:75",
+        color="#2ecc71",
+        linestyle=":",
+        linewidth=1.0,
+        exact_phase_ratio=0.25,
+    ),
+    PseudoSeededNSGA3BaselineConfig(
+        label="Hybrid NSGA-III 20:80",
+        color="#2ecc71",
+        linestyle=(0, (3, 1, 1, 1)),
+        linewidth=1.0,
+        exact_phase_ratio=0.20,
+    ),
+    PseudoSeededMOEADBaselineConfig(
+        label="Hybrid MOEA/D 80:20",
+        color="#9467bd",
+        linestyle="-",
+        linewidth=1.6,
+        exact_phase_ratio=0.80,
+    ),
+    PseudoSeededMOEADBaselineConfig(
+        label="Hybrid MOEA/D 75:25",
+        color="#9467bd",
+        linestyle="-",
+        linewidth=1.4,
+        exact_phase_ratio=0.75,
+    ),
+    PseudoSeededMOEADBaselineConfig(
+        label="Hybrid MOEA/D 50:50",
+        color="#9467bd",
+        linestyle="--",
+        linewidth=1.2,
+        exact_phase_ratio=0.50,
+    ),
+    PseudoSeededMOEADBaselineConfig(
+        label="Hybrid MOEA/D 35:65",
+        color="#9467bd",
+        linestyle="-.",
+        linewidth=1.1,
+        exact_phase_ratio=0.35,
+    ),
+    PseudoSeededMOEADBaselineConfig(
+        label="Hybrid MOEA/D 25:75",
+        color="#9467bd",
+        linestyle=":",
+        linewidth=1.0,
+        exact_phase_ratio=0.25,
+    ),
+    PseudoSeededMOEADBaselineConfig(
+        label="Hybrid MOEA/D 20:80",
+        color="#9467bd",
+        linestyle=(0, (3, 1, 1, 1)),
+        linewidth=1.0,
+        exact_phase_ratio=0.20,
+    ),
+    # ── Improved-tier: SIMS-tailored EAs (standalone + pseudo-seeded hybrids) ──
+    NSGA2Config(
+        label="Improved NSGA-II",
+        color="#ff7f0e",
+        linestyle="-.",
+        linewidth=1.2,
+    ),
+    PseudoSeededNSGA2Config(
+        label="Improved NSGA-II 80:20",
+        color="#ff7f0e",
+        linestyle="-",
+        linewidth=1.6,
+        exact_phase_ratio=0.80,
+    ),
+    PseudoSeededNSGA2Config(
+        label="Improved NSGA-II 50:50",
+        color="#ff7f0e",
+        linestyle="--",
+        linewidth=1.4,
+        exact_phase_ratio=0.50,
+    ),
+    PseudoSeededNSGA2Config(
+        label="Improved NSGA-II 20:80",
+        color="#ff7f0e",
+        linestyle=":",
+        linewidth=1.2,
+        exact_phase_ratio=0.20,
+    ),
+    NSGA3Config(
+        label="Improved NSGA-III",
+        color="#2ecc71",
+        linestyle="-.",
+        linewidth=1.2,
+    ),
+    PseudoSeededNSGA3Config(
+        label="Improved NSGA-III 80:20",
+        color="#2ecc71",
+        linestyle="-",
+        linewidth=1.6,
+        exact_phase_ratio=0.80,
+    ),
+    PseudoSeededNSGA3Config(
+        label="Improved NSGA-III 50:50",
+        color="#2ecc71",
+        linestyle="--",
+        linewidth=1.4,
+        exact_phase_ratio=0.50,
+    ),
+    PseudoSeededNSGA3Config(
+        label="Improved NSGA-III 20:80",
+        color="#2ecc71",
+        linestyle=":",
+        linewidth=1.2,
+        exact_phase_ratio=0.20,
+    ),
+    MOEADConfig(
+        label="Improved MOEA/D",
+        color="#9467bd",
+        linestyle="-.",
+        linewidth=1.2,
+    ),
+    PseudoSeededMOEADConfig(
+        label="Improved MOEA/D 80:20",
+        color="#9467bd",
+        linestyle="-",
+        linewidth=1.6,
+        exact_phase_ratio=0.80,
+    ),
+    PseudoSeededMOEADConfig(
+        label="Improved MOEA/D 50:50",
+        color="#9467bd",
+        linestyle="--",
+        linewidth=1.4,
+        exact_phase_ratio=0.50,
+    ),
+    PseudoSeededMOEADConfig(
+        label="Improved MOEA/D 20:80",
+        color="#9467bd",
+        linestyle=":",
+        linewidth=1.2,
+        exact_phase_ratio=0.20,
+    ),
+    NSGA2MoorsConfig(
+        label="NSGA-II (moors)",
+        color="#ff7f0e",
+        linestyle="--",
+        linewidth=1.0,
+    ),
+    NSGA2OptirusticConfig(
+        label="NSGA-II (optirustic)",
+        color="#ff7f0e",
+        linestyle="-",
+        linewidth=1.0,
+    ),
+    NSGA3OptirusticConfig(
+        label="NSGA-III (optirustic)",
+        color="#2ecc71",
+        linestyle="-",
+        linewidth=1.0,
     ),
     MemeticNSGA2Config(
         label="Memetic NSGA-II (30% PLS)",
@@ -1088,6 +2266,13 @@ CONFIGS: list[AlgorithmConfig] = [
         linestyle="-",
         linewidth=1.5,
     ),
+    ScalarizedHybrid7525(
+        label="Scalarized Hybrid 75:25",
+        color="#6b7d00",
+        linestyle="-",
+        linewidth=1.5,
+        exact_phase_ratio=0.75,
+    ),
     ScalarizedHybrid(
         label="Scalarized Hybrid 50:50",
         color="#bcbd22",
@@ -1102,6 +2287,13 @@ CONFIGS: list[AlgorithmConfig] = [
         linewidth=1.5,
         exact_phase_ratio=0.35,
     ),
+    ScalarizedHybrid2575(
+        label="Scalarized Hybrid 25:75",
+        color="#adb800",
+        linestyle=":",
+        linewidth=1.5,
+        exact_phase_ratio=0.25,
+    ),
     ScalarizedHybrid2080(
         label="Scalarized Hybrid 20:80",
         color="#e8e9a0",
@@ -1109,7 +2301,174 @@ CONFIGS: list[AlgorithmConfig] = [
         linewidth=1.5,
         exact_phase_ratio=0.20,
     ),
+    # ── EA-phase-1 → PLS-phase-2 hybrids ─────────────────────────────────
+    NSGA2Phase1PLS(
+        label="EA NSGA-II PLS 75:25",
+        color="#d62728",
+        linestyle="-",
+        linewidth=1.4,
+        exact_phase_ratio=0.75,
+    ),
+    NSGA2Phase1PLS(
+        label="EA NSGA-II PLS 50:50",
+        color="#d62728",
+        linestyle="--",
+        linewidth=1.2,
+        exact_phase_ratio=0.50,
+    ),
+    NSGA2Phase1PLS(
+        label="EA NSGA-II PLS 25:75",
+        color="#d62728",
+        linestyle=":",
+        linewidth=1.0,
+        exact_phase_ratio=0.25,
+    ),
+    NSGA3Phase1PLS(
+        label="EA NSGA-III PLS 75:25",
+        color="#2ca02c",
+        linestyle="-",
+        linewidth=1.4,
+        exact_phase_ratio=0.75,
+    ),
+    NSGA3Phase1PLS(
+        label="EA NSGA-III PLS 50:50",
+        color="#2ca02c",
+        linestyle="--",
+        linewidth=1.2,
+        exact_phase_ratio=0.50,
+    ),
+    NSGA3Phase1PLS(
+        label="EA NSGA-III PLS 25:75",
+        color="#2ca02c",
+        linestyle=":",
+        linewidth=1.0,
+        exact_phase_ratio=0.25,
+    ),
+    MOEADPhase1PLS(
+        label="EA MOEAD PLS 75:25",
+        color="#9467bd",
+        linestyle="-",
+        linewidth=1.4,
+        exact_phase_ratio=0.75,
+    ),
+    MOEADPhase1PLS(
+        label="EA MOEAD PLS 50:50",
+        color="#9467bd",
+        linestyle="--",
+        linewidth=1.2,
+        exact_phase_ratio=0.50,
+    ),
+    MOEADPhase1PLS(
+        label="EA MOEAD PLS 25:75",
+        color="#9467bd",
+        linestyle=":",
+        linewidth=1.0,
+        exact_phase_ratio=0.25,
+    ),
+    # ── Live MONISE-phase-1 → PLS-phase-2 hybrids ────────────────────────
+    MONISELivePhase1PLS(
+        label="MONISE Live 75:25",
+        color="#1a9641",
+        linestyle="-",
+        linewidth=1.4,
+        exact_phase_ratio=0.75,
+    ),
+    MONISELivePhase1PLS(
+        label="MONISE Live 50:50",
+        color="#1a9641",
+        linestyle="--",
+        linewidth=1.2,
+        exact_phase_ratio=0.50,
+    ),
+    MONISELivePhase1PLS(
+        label="MONISE Live 35:65",
+        color="#1a9641",
+        linestyle="-.",
+        linewidth=1.1,
+        exact_phase_ratio=0.35,
+    ),
+    MONISELivePhase1PLS(
+        label="MONISE Live 25:75",
+        color="#1a9641",
+        linestyle=":",
+        linewidth=1.0,
+        exact_phase_ratio=0.25,
+    ),
+    MONISELivePhase1PLS(
+        label="MONISE Live 20:80",
+        color="#1a9641",
+        linestyle=(0, (3, 1, 1, 1)),
+        linewidth=1.0,
+        exact_phase_ratio=0.20,
+    ),
+    # ── Live GPBA-A-phase-1 → PLS-phase-2 hybrids ────────────────────────
+    GPBAALivePhase1PLS(
+        label="GPBA-A Live 75:25",
+        color="#08306b",
+        linestyle="-",
+        linewidth=1.4,
+        exact_phase_ratio=0.75,
+    ),
+    GPBAALivePhase1PLS(
+        label="GPBA-A Live 50:50",
+        color="#08306b",
+        linestyle="--",
+        linewidth=1.2,
+        exact_phase_ratio=0.50,
+    ),
+    GPBAALivePhase1PLS(
+        label="GPBA-A Live 35:65",
+        color="#08306b",
+        linestyle="-.",
+        linewidth=1.1,
+        exact_phase_ratio=0.35,
+    ),
+    GPBAALivePhase1PLS(
+        label="GPBA-A Live 25:75",
+        color="#08306b",
+        linestyle=":",
+        linewidth=1.0,
+        exact_phase_ratio=0.25,
+    ),
+    GPBAALivePhase1PLS(
+        label="GPBA-A Live 20:80",
+        color="#08306b",
+        linestyle=(0, (3, 1, 1, 1)),
+        linewidth=1.0,
+        exact_phase_ratio=0.20,
+    ),
 ]
+
+
+# ─── 10%-step grid fill ───────────────────────────────────────────────
+# The registry above defines hybrids only at 80:20, 75:25, 50:50, 35:65, 25:75,
+# 20:80. To reproduce the paper's 10%-step ratio sweep for every second-phase
+# algorithm (PLS, NSGA-II, NSGA-III, MOEA/D), append configs at the six missing
+# on-grid ratios. The EA seeded classes already read `exact_phase_ratio`, and
+# HybridPLSParam does the same for PLS, so this is pure construction -- no new
+# behaviour. The three ratios already present (80:20/50:50/20:80) are skipped so
+# labels stay unique.
+# Exact-phase percentages, as integers to keep labels exact (0.1 is not
+# representable, so int((1-0.9)*100) is 9, not 10).
+_GRID_MISSING_PCT = [90, 70, 60, 40, 30, 10]
+_GRID_SECOND_PHASE = [
+    ("Hybrid {r}", HybridPLSParam, "#1f77b4", "-"),
+    ("Hybrid NSGA-II {r}", PseudoSeededNSGA2BaselineConfig, "#ff7f0e", "-"),
+    ("Hybrid NSGA-III {r}", PseudoSeededNSGA3BaselineConfig, "#9467bd", "-"),
+    ("Hybrid MOEA/D {r}", PseudoSeededMOEADBaselineConfig, "#17becf", "-"),
+]
+for _pct in _GRID_MISSING_PCT:
+    _r_label = f"{_pct}:{100 - _pct}"
+    for _tmpl, _cls, _col, _ls in _GRID_SECOND_PHASE:
+        CONFIGS.append(
+            _cls(
+                label=_tmpl.format(r=_r_label),
+                color=_col,
+                linestyle=_ls,
+                linewidth=1.5,
+                exact_phase_ratio=_pct / 100.0,
+            )
+        )
 
 
 # ─── Pseudo-solver helpers ────────────────────────────────────────────
@@ -1122,13 +2481,19 @@ _DATA_DIR = Path(__file__).parent.parent / "sims-core" / "tests" / "data"
 # overrides it based on --pseudo-source.
 _PSEUDO_SOLUTIONS_SOURCE: str = "gpbaa"
 
-# Legacy path kept so existing imports/paths still resolve.
 _PSEUDO_SOLUTIONS_DIR = _DATA_DIR / "pseudo_solver_solutions"
 
 _PSEUDO_SOURCE_DIRS: dict[str, Path] = {
-    "gpbaa": _DATA_DIR / "gpbaa",
-    "monise": _DATA_DIR / "monise",
-    # fallback to original location if gpbaa dir doesn't exist yet
+    "gpbaa":               _DATA_DIR / "gpbaa",
+    "monise":              _DATA_DIR / "monise",
+    "gpbaa_2d":            _DATA_DIR / "gpbaa_2d",
+    "monise_2d":           _DATA_DIR / "monise_2d",
+    "gpbaa_2d_pub":        _DATA_DIR / "gpbaa_2d_pub",
+    "gpbaa_2d_highs":      _DATA_DIR / "gpbaa_2d_highs",
+    "an_2d_highs":         _DATA_DIR / "an_2d_highs",
+    "gpbaa_2d_gurobi":     _DATA_DIR / "gpbaa_2d_gurobi",
+    "an_2d_gurobi":        _DATA_DIR / "an_2d_gurobi",
+    "monise_2d_pub":       _DATA_DIR / "monise_2d_pub",
     "pseudo_solver_solutions": _DATA_DIR / "pseudo_solver_solutions",
 }
 
@@ -1156,24 +2521,23 @@ def _load_pseudo_solutions(instance_name: str) -> list[dict]:
 
     The source directory is controlled by the module-level
     ``_PSEUDO_SOLUTIONS_SOURCE`` variable (set by ``--pseudo-source``).
-    Falls back to the legacy ``pseudo_solver_solutions`` directory when the
-    configured source directory does not contain the instance file.
+    Returns an empty list (with a warning) when the file is absent or contains
+    no solutions; does not fall back to other directories.
     """
     cache_key = f"{_PSEUDO_SOLUTIONS_SOURCE}:{instance_name}"
     if cache_key in _pseudo_cache:
         return _pseudo_cache[cache_key]
 
-    # Primary: selected source
     source_dir = _PSEUDO_SOURCE_DIRS.get(
         _PSEUDO_SOLUTIONS_SOURCE, _PSEUDO_SOLUTIONS_DIR
     )
     json_path = source_dir / f"{instance_name}.json"
 
-    # Fallback to legacy directory if primary doesn't have the file
     if not json_path.exists():
-        json_path = _PSEUDO_SOLUTIONS_DIR / f"{instance_name}.json"
-
-    if not json_path.exists():
+        print(
+            f"  WARN: pseudo-solver file not found: {json_path}",
+            flush=True,
+        )
         _pseudo_cache[cache_key] = []
         return []
 
@@ -1181,16 +2545,31 @@ def _load_pseudo_solutions(instance_name: str) -> list[dict]:
         data = json.load(f)
 
     solutions = data if isinstance(data, list) else data.get("solutions", [])
+    if not solutions:
+        print(
+            f"  WARN: pseudo-solver file has 0 solutions: {json_path}",
+            flush=True,
+        )
     _pseudo_cache[cache_key] = solutions
     return solutions
 
 
-def _get_pseudo_solutions(problem: sims_problem.SimsDiscreteProblem) -> list[dict]:
-    """Get pseudo-solver solutions for a problem instance."""
-    # Try to determine instance name from the problem
-    # The problem doesn't expose its name, so we try all cached names
-    # This is called after we've loaded the instance by name
-    return _current_pseudo_solutions
+def _get_pseudo_solutions(
+    problem: sims_problem.SimsDiscreteProblem,
+    max_timestamp_s: float | None = None,
+) -> list[dict]:
+    """Get pseudo-solver solutions for a problem instance.
+
+    If `max_timestamp_s` is given, only solutions with `timestamp_s` <=
+    that value are returned, simulating GPBA-A having run for that duration.
+    """
+    solutions = _current_pseudo_solutions
+    if max_timestamp_s is not None:
+        solutions = [
+            s for s in solutions
+            if s.get("timestamp_s", 0.0) <= max_timestamp_s
+        ]
+    return solutions
 
 
 _current_pseudo_solutions: list[dict] = []
@@ -2604,6 +3983,7 @@ def run_instance(
     output_dir: Path,
     num_points: int,
     configs: list[AlgorithmConfig],
+    num_runs: int = 1,
 ) -> dict:
     """Run all algorithm configs for one instance, compute HV curves, plot."""
 
@@ -2633,10 +4013,10 @@ def run_instance(
 
     for cfg in configs:
         safe_label = (
-            cfg.label.lower().replace(" ", "_").replace("+", "plus").replace("/", "")
+            cfg.label.lower().replace(" ", "_").replace("+", "plus").replace("/", "").replace(":", "")
         )
         existing_trace = output_dir / f"{display_name}__{safe_label}.trace.tar.gz"
-        if existing_trace.exists():
+        if existing_trace.exists() and num_runs == 1:
             trace_data = existing_trace.read_bytes()
             traces[cfg.label] = trace_data
             run_meta[cfg.label] = dict(
@@ -2885,12 +4265,78 @@ def run_instance(
     for cfg in configs:
         if cfg.save_trace and cfg.label in traces and traces[cfg.label]:
             safe_label = (
-                cfg.label.lower().replace(" ", "_").replace("+", "plus").replace("/", "")
+                cfg.label.lower().replace(" ", "_").replace("+", "plus").replace("/", "").replace(":", "")
             )
             trace_path = output_dir / f"{display_name}__{safe_label}.trace.tar.gz"
             with open(trace_path, "wb") as f:
                 f.write(traces[cfg.label])
             print(f"  Trace saved:    {trace_path}", flush=True)
+
+    # ── Multi-run additional iterations ──────────────────────────────────
+    if num_runs > 1:
+        # run_hvs[label][0] = HV from run 0 (canonical run above)
+        run_hvs: dict[str, list[float]] = {
+            cfg.label: [result_artifact["configs"][cfg.label].get("final_hv", 0.0)]
+            for cfg in configs
+        }
+
+        for run_idx in range(1, num_runs):
+            print(f"\n  ── Additional run {run_idx + 1}/{num_runs} ──────────────────────────", flush=True)
+            for cfg in configs:
+                try:
+                    run_result = cfg.run(problem, total_timeout, seed=run_idx)
+                    trace_data = run_result.trace
+                    hv = 0.0
+                    if trace_data:
+                        try:
+                            curve = sims_problem.compute_hv_curve_from_trace(
+                                trace_data, bounds, 2
+                            )
+                            hv = curve[-1][1] if curve else 0.0
+                        except BaseException:
+                            hv = 0.0
+                    run_hvs[cfg.label].append(hv)
+                    # Persist this run's full trace so its final front (the
+                    # non-dominated subset of the trace) is reconstructable and
+                    # HV can be re-normalized under any reference later. Run 0
+                    # keeps its unsuffixed name for backward compat; runs >=1
+                    # get a __run{n} suffix.
+                    if cfg.save_trace and trace_data:
+                        safe_label = (
+                            cfg.label.lower().replace(" ", "_").replace("+", "plus").replace("/", "").replace(":", "")
+                        )
+                        run_trace_path = (
+                            output_dir
+                            / f"{display_name}__{safe_label}__run{run_idx}.trace.tar.gz"
+                        )
+                        with open(run_trace_path, "wb") as rf:
+                            rf.write(trace_data)
+                    print(
+                        f"    [{cfg.label}] run {run_idx + 1}: HV={hv:.6f}", flush=True
+                    )
+                except Exception as e:
+                    print(
+                        f"    [{cfg.label}] run {run_idx + 1} ERROR: {e}", flush=True
+                    )
+                    run_hvs[cfg.label].append(0.0)
+
+        # Compute mean and std over all runs; update artifact
+        for cfg in configs:
+            hvs = run_hvs[cfg.label]
+            valid = [h for h in hvs if h > 0]
+            if not valid:
+                continue
+            mean_hv = sum(valid) / len(valid)
+            variance = sum((h - mean_hv) ** 2 for h in valid) / max(len(valid) - 1, 1)
+            std_hv = variance ** 0.5
+            result_artifact["configs"][cfg.label]["run_hvs"] = [round(h, 8) for h in hvs]
+            result_artifact["configs"][cfg.label]["final_hv"] = round(mean_hv, 8)
+            result_artifact["configs"][cfg.label]["final_hv_std"] = round(std_hv, 8)
+
+        # Re-save JSON with multi-run statistics
+        with open(artifact_path, "w") as f:
+            json.dump(result_artifact, f, indent=2)
+        print(f"\n  Multi-run artifact ({num_runs} runs) saved: {artifact_path}", flush=True)
 
     # ── Summary ─────────────────────────────────────────────────────────
 
@@ -2900,9 +4346,11 @@ def run_instance(
         fhv = info.get("final_hv", 0)
         nsol = info.get("final_solutions", 0)
         delta = info.get("delta_vs_pure_pls_pct", 0)
+        std = info.get("final_hv_std", 0)
+        std_str = f" ±{std:.4f}" if std > 0 else ""
         tag = "" if cfg.label == "Pure PLS" else f"Δ={delta:+.1f}%"
         print(
-            f"    {cfg.label:22s}  HV={fhv:.6f}  sols={nsol:6d}  {tag}",
+            f"    {cfg.label:22s}  HV={fhv:.6f}{std_str}  sols={nsol:6d}  {tag}",
             flush=True,
         )
 
@@ -3120,6 +4568,138 @@ def generate_combined_figures(
                 output_dir / f"fig_pls_bars_{size_label.replace(' / ', '_')}.png",
             )
 
+    # Hybrid comparison bar chart across ALL instances (both small and large)
+    if any(
+        any(cfg_label in r["configs"] for cfg_label, _, _ in _HYBRID_BAR_STYLES)
+        for r in all_results
+    ):
+        _plot_hybrid_comparison_bars(
+            all_results,
+            output_dir / "fig_hybrid_comparison_bars.png",
+        )
+
+
+def _plot_hybrid_comparison_bars(
+    all_results: list[dict],
+    output_path: "Path",
+) -> None:
+    """Grouped bar chart comparing all hybrid configs (PLS + EA variants) across
+    every instance in all_results, ordered by size then city."""
+    if not all_results:
+        return
+
+    # Sort: 100-image instances first, then 150
+    sorted_results = sorted(all_results, key=lambda r: (r["num_images"], r["instance"]))
+    instance_labels = [
+        f"{_city_label(r['instance'])}\n{r['num_images']}" for r in sorted_results
+    ]
+
+    n_inst = len(sorted_results)
+    inner_gap = 0.01
+    group_gap = 0.45
+
+    fig, ax = plt.subplots(figsize=(max(14, n_inst * 2.8), 6))
+
+    # Compute per-instance GPBA-A HV from the FULL pseudo-solver solution set
+    # (all solutions regardless of timestamp — equivalent to running GPBA-A for
+    # the full pre-generation budget, not the reduced hybrid exact-phase slice).
+    gpbaa_hvs: list[float] = []
+    for r in sorted_results:
+        inst = r["instance"]
+        bounds = r.get("shared_bounds")
+        sols = _load_pseudo_solutions(inst)
+        hv = 0.0
+        if sols and bounds:
+            pts = [
+                [s["cost"], s["cloudy_area"]] for s in sols
+                if s["cost"] <= bounds[0][1] and s["cloudy_area"] <= bounds[1][1]
+            ]
+            try:
+                hv = sims_problem.compute_hypervolume(pts, bounds, normalized=True) if pts else 0.0
+            except BaseException:
+                hv = 0.0
+        gpbaa_hvs.append(hv)
+
+    # Total bars = GPBA-A synthetic bar + configured styles
+    _ALL_BARS: list[tuple[str | None, str, str]] = [
+        (None, "GPBA-A (100:0)", "#1a1a2e"),
+        *((lbl, dn, col) for lbl, dn, col in _HYBRID_BAR_STYLES),
+    ]
+    n_cfg = len(_ALL_BARS)
+    bar_w = 0.65 / n_cfg
+    group_span = n_cfg * bar_w + (n_cfg - 1) * inner_gap
+    group_cx = [i * (group_span + group_gap) for i in range(n_inst)]
+    var_off = [(j - (n_cfg - 1) / 2) * (bar_w + inner_gap) for j in range(n_cfg)]
+
+    # Separator lines between size groups
+    sizes_seen: list[int] = []
+    for i, r in enumerate(sorted_results):
+        if r["num_images"] not in sizes_seen:
+            if sizes_seen:
+                sep_x = (group_cx[i - 1] + group_cx[i]) / 2
+                ax.axvline(sep_x, color="#cccccc", linewidth=1.0, zorder=1)
+            sizes_seen.append(r["num_images"])
+
+    legend_done: set[str] = set()
+    for j, (cfg_label, display_name, color) in enumerate(_ALL_BARS):
+        for i, r in enumerate(sorted_results):
+            if cfg_label is None:
+                hv = gpbaa_hvs[i]
+                std = 0.0
+            else:
+                cfg_data = r["configs"].get(cfg_label, {})
+                hv = cfg_data.get("final_hv", 0.0)
+                std = cfg_data.get("final_hv_std", 0.0)
+            if not hv:
+                continue
+            bx = group_cx[i] + var_off[j]
+            ax.bar(
+                bx,
+                hv,
+                width=bar_w,
+                color=color,
+                edgecolor="white",
+                linewidth=0.3,
+                zorder=3,
+                label=display_name if display_name not in legend_done else None,
+                yerr=std if std > 0 else None,
+                error_kw=dict(ecolor="#444444", capsize=1.5, elinewidth=0.7, capthick=0.7, zorder=4),
+            )
+            legend_done.add(display_name)
+
+    ax.set_xticks(group_cx)
+    ax.set_xticklabels(instance_labels, fontsize=8)
+    ax.tick_params(axis="x", length=0)
+    ax.set_ylabel("Normalized Hypervolume")
+    ax.set_title(
+        "Hybrid Algorithm Comparison — All Instances (PLS + EA variants)",
+        fontweight="bold",
+    )
+    all_hvs = gpbaa_hvs + [
+        r["configs"].get(cfg_label, {}).get("final_hv", 0.0)
+        for r in sorted_results
+        for cfg_label, _, _ in _HYBRID_BAR_STYLES
+        if cfg_label is not None
+    ]
+    y_min = max(0.0, min((h for h in all_hvs if h > 0), default=0.0) - 0.05)
+    y_max = max((h for h in all_hvs), default=1.0) * 1.06
+    ax.set_ylim(y_min, y_max)
+    ax.legend(
+        fontsize=7,
+        ncol=3,
+        loc="lower right",
+        framealpha=0.9,
+        title="Algorithm",
+        title_fontsize=7,
+    )
+    ax.yaxis.grid(True, alpha=0.25, zorder=0)
+    ax.set_axisbelow(True)
+
+    fig.tight_layout()
+    _save_fig(fig, output_path)
+    plt.close(fig)
+    print(f"  Saved: {output_path}", flush=True)
+
 
 # ─── Replot from saved artifacts ─────────────────────────────────────
 
@@ -3156,7 +4736,7 @@ def _recompute_result_with_bounds(
         candidates = [
             trace_dir / f"{instance}__{safe_label}.trace.tar.gz",
             trace_dir
-            / f"{instance}__{label.lower().replace(' ', '_').replace('+', 'plus').replace('/', '')}.trace.tar.gz",
+            / f"{instance}__{label.lower().replace(' ', '_').replace('+', 'plus').replace('/', '').replace(':', '')}.trace.tar.gz",
         ]
         trace_bytes = None
         for c in candidates:
@@ -3247,6 +4827,1217 @@ def _regenerate_monise_curve_with_bounds(
     final_hv = round(curve[-1][1], 8)
     curve = [(round(t, 4), round(hv, 8)) for t, hv in curve]
     return curve, final_hv
+
+
+# ── Pareto-front figures (paper `{instance}_pareto_fronts.png` reconstruction) ──
+#
+# Two-row layout mirroring the PPSN figure:
+#   row 0 = GPBA-A (+PLS), row 1 = Aneja & Nair (+PLS)
+#   col a) = phase-separated, hatched HV bar chart across 5 ratios
+#           (exact-phase HV bottom / PLS-phase gain hatched top)
+#   cols b/c/d = Pareto-front scatter at ratios 100:0, 50:50, 0:100
+#
+# Data source is the trace artifacts (not the broken sims-core geodata pipeline):
+#   HV / PLS points  → eval_publication_{highs,an} traces
+#   exact-phase front → exact-method pseudo-solutions trimmed by ratio × timeout
+#     (gpbaa_2d_highs for GPBA-A, an_2d_highs for A&N)
+# The two rows are normalised against a SHARED per-instance reference (the union
+# of both experiments' bounds) so their HV bars are directly comparable — this
+# is what the two auto-computed per-experiment references failed to guarantee.
+
+# ratio → (bar label, trace slug for the PLS/hybrid part). ratio 1.0 has no
+# trace (pure exact, from pseudo seeds); 0.0 = pure PLS (default_pls trace).
+_PF_RATIOS: list[tuple[float, str]] = [
+    (1.00, "100:0"),
+    (0.80, "80:20"),
+    (0.50, "50:50"),
+    (0.20, "20:80"),
+    (0.00, "0:100"),
+]
+_PF_RATIO_TO_SLUG: dict[float, str] = {
+    0.80: "hybrid_8020",
+    0.50: "hybrid_5050",
+    0.20: "hybrid_2080",
+    0.00: "default_pls",
+}
+# Scatter panels shown (matching the paper: pure exact, balanced, pure PLS).
+_PF_SCATTER_RATIOS: list[float] = [1.00, 0.50, 0.00]
+
+# ── On-page sizing ────────────────────────────────────────────────────────────
+# The figure is included as `\includegraphics[width=\textwidth,
+# height=0.4\textheight,keepaspectratio]`, so LaTeX rescales it and every font
+# shrinks by that same factor. Sizes must be chosen *on the page*, not in the
+# figure. The old 24x12 in figure was scaled by 4.80/24 = 0.20, printing a
+# `fontsize=15` axis label at 3 pt — the reason labels look unreadable.
+#
+# Fix: build the figure at exactly its printed size, so 1 matplotlib point == 1
+# printed point and the numbers below mean what they say. This also requires
+# dropping `bbox_inches="tight"`, which silently grows the canvas past the size
+# we asked for (and therefore reintroduces an unknown shrink factor).
+_LNCS_TEXTWIDTH_IN = 122.0 / 25.4  # 4.803 in
+_LNCS_TEXTHEIGHT_IN = 193.0 / 25.4  # 7.598 in
+_PF_FIG_W = _LNCS_TEXTWIDTH_IN
+_PF_FIG_H = 0.40 * _LNCS_TEXTHEIGHT_IN  # both \includegraphics limits bind at 1:1
+
+# Printed points. LNCS body is 10 pt, captions 9 pt. Eight panels across 122 mm
+# leaves ~30 mm per panel, so caption parity is not reachable; 6.5-8 pt is the
+# usable band, and it is only reachable at all because the scatter panels share
+# axes (see below) and so pay for tick labels once per row instead of per panel.
+_PF_PANEL_LETTERS = "abcdefgh"
+_PF_TITLE_PT = 8.0
+_PF_LABEL_PT = 7.5
+_PF_TICK_PT = 6.5
+_PF_LEGEND_PT = 7.0
+
+# Ink that is not data: kept thin and grey so it recedes behind the markers.
+_PF_AXIS_GREY = "#4d4d4d"
+_PF_GRID_GREY = "#d9d9d9"
+_PF_SPINE_LW = 0.6
+_PF_GRID_LW = 0.4
+
+
+def _pf_style_axes(ax: "plt.Axes", grid_axis: str = "both") -> None:
+    """Apply the shared panel styling: despined, grid behind data, grey rules.
+
+    Top/right spines carry no information and, at 30 mm per panel, a four-sided
+    black box is the single heaviest element on the page — removing it is what
+    makes the markers read as the subject of the panel.
+    """
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    for side in ("left", "bottom"):
+        ax.spines[side].set_linewidth(_PF_SPINE_LW)
+        ax.spines[side].set_color(_PF_AXIS_GREY)
+    ax.tick_params(
+        labelsize=_PF_TICK_PT, colors=_PF_AXIS_GREY,
+        width=_PF_SPINE_LW, length=2.5, pad=1.5,
+    )
+    for lbl in ax.get_xticklabels() + ax.get_yticklabels():
+        lbl.set_color("black")  # ticks recede, but their labels must stay legible
+    ax.grid(axis=grid_axis, color=_PF_GRID_GREY, linewidth=_PF_GRID_LW, zorder=0)
+    ax.set_axisbelow(True)
+
+
+def _pf_save(fig: "plt.Figure", output_dir: "Path", stem: str) -> "Path":
+    """Write `stem` as PNG and EPS into sibling `_png` / `_eps` directories.
+
+    LaTeX wants one format and reviewers/preprints often want the other, so the
+    two are kept apart rather than interleaved in one directory — a glob for
+    figures then never has to filter by extension.
+
+    No `bbox_inches="tight"`: the canvas must stay exactly _PF_FIG_W wide so
+    `width=\\textwidth` scales it by 1.0 and the point sizes hold on the page.
+    """
+    png_dir = output_dir.with_name(output_dir.name + "_png")
+    eps_dir = output_dir.with_name(output_dir.name + "_eps")
+    png_dir.mkdir(parents=True, exist_ok=True)
+    eps_dir.mkdir(parents=True, exist_ok=True)
+    png = png_dir / f"{stem}.png"
+    fig.savefig(str(png), dpi=600)
+    fig.savefig(str(eps_dir / f"{stem}.eps"))
+    return png
+
+
+def _pf_panel_title(ax: "plt.Axes", letter: str, text: str) -> None:
+    """Left-aligned panel title with a bold letter and a regular-weight name.
+
+    Left alignment is the journal convention and, unlike a centred title, it
+    stays put as the panel width changes between the bar and scatter columns.
+    """
+    ax.set_title(
+        f"$\\bf{{{letter})}}$  {text}",
+        fontsize=_PF_TITLE_PT, loc="left", pad=5,
+    )
+
+
+def _pf_tint(hex_color: str, amount: float = 0.80) -> tuple[float, float, float]:
+    """Blend `hex_color` toward white by `amount` (1.0 == white)."""
+    r, g, b = (int(hex_color[i:i + 2], 16) / 255 for i in (1, 3, 5))
+    return tuple(c + (1.0 - c) * amount for c in (r, g, b))
+
+
+def _pf_front(
+    ax: "plt.Axes",
+    points: list[tuple[float, float]],
+    marker: str,
+    size: float,
+    color: str,
+    z: int,
+) -> None:
+    """Draw a 2-objective front as unconnected markers.
+
+    No connecting line: each point is a distinct solution, and a line between
+    them would imply intermediate solutions exist along it, which they do not.
+    """
+    ordered = sorted(points)
+    ax.scatter(
+        [x for x, _y in ordered], [y for _x, y in ordered],
+        marker=marker, s=size, c=color, linewidths=0, edgecolors="none",
+        zorder=z,
+    )
+
+
+def _pf_pareto_filter(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Non-dominated subset for a 2-objective minimisation problem."""
+    if not points:
+        return []
+    pts = sorted(set(points))  # sort by cost asc, then cloudy asc
+    front: list[tuple[float, float]] = []
+    best_y = float("inf")
+    for x, y in pts:
+        if y < best_y:
+            front.append((x, y))
+            best_y = y
+    return front
+
+
+def _pf_exact_front(
+    seeds: list[dict], exact_time: float
+) -> list[tuple[float, float]]:
+    """Non-dominated exact-phase points: pseudo seeds with timestamp ≤ exact_time."""
+    pts = [
+        (float(s["cost"]), float(s["cloudy_area"]))
+        for s in seeds
+        if s.get("timestamp_s", 0.0) <= exact_time
+    ]
+    return _pf_pareto_filter(pts)
+
+
+def _pf_exact_hv(
+    seeds: list[dict], bounds: list[list[int]], exact_time: float
+) -> float:
+    """HV of the exact-phase front — pseudo seeds cut off at exact_time — computed
+    against the same reference point as the stored final HVs (upper bound + 1)."""
+    # compute_hypervolume requires integer points (Vec<Vec<u64>>).
+    pts = [[int(x), int(y)] for x, y in _pf_exact_front(seeds, exact_time)]
+    if not pts:
+        return 0.0
+    # Reference point = the upper bound (the nadir), matching the normalisation
+    # used for the stored final HVs. Must lie within bounds, so it is b[1], not b[1]+1.
+    reference_point = [b[1] for b in bounds]
+    return sims_problem.compute_hypervolume(
+        pts, bounds, reference_point=reference_point, normalized=True
+    )
+
+
+def _pf_trace_front(
+    trace_dir: Path, instance: str, slug: str
+) -> list[tuple[float, float]]:
+    """Non-dominated points from a trace file, or [] if the trace is absent."""
+    path = trace_dir / f"{instance}__{slug}.trace.tar.gz"
+    if not path.exists():
+        return []
+    try:
+        raw = extract_all_objectives(path.read_bytes(), 2)
+    except Exception:
+        return []
+    return _pf_pareto_filter([(float(p[0]), float(p[1])) for p in raw])
+
+
+def _pf_row_data(
+    result: dict,
+    trace_dir: Path,
+    seeds: list[dict],
+    merged_bounds: list[list[int]],
+    pls_result: dict,
+    pls_dir: Path,
+    num_points: int,
+) -> dict:
+    """Assemble bar + scatter data for one method row against merged_bounds.
+
+    ``pls_result`` / ``pls_dir`` supply the pure-PLS (0:100) config, which is
+    method-independent and taken from the GPBA-A experiment (the A&N experiment
+    never ran a standalone PLS config).
+    """
+    instance = result["instance"]
+    timeout = float(result.get("timeout_s", 0.0))
+    recomputed = _recompute_result_with_bounds(
+        result, trace_dir, merged_bounds, num_points
+    )
+    cfgs = recomputed.get("configs", {})
+    orig_cfgs = result.get("configs", {})
+
+    def _avg_final(label: str) -> float:
+        """Merged-bounds 10-run MEAN final HV.
+
+        Per-run raw points exist only for run 0, so the mean cannot be recomputed
+        against merged bounds directly. Instead rescale the merged run-0 HV by the
+        stored mean/run-0 ratio (both in the experiment's own normalisation). run-0
+        tracks the mean to <0.3%, so this is a faithful correction that preserves
+        cross-row comparability of the merged reference.
+        """
+        merged_run0 = float(cfgs.get(label, {}).get("final_hv", 0.0))
+        c = orig_cfgs.get(label, {})
+        old_mean = float(c.get("final_hv", 0.0))
+        rh = c.get("run_hvs", [])
+        old_run0 = float(rh[0]) if rh else old_mean
+        if old_run0 > 0 and old_mean > 0:
+            return merged_run0 * (old_mean / old_run0)
+        return merged_run0
+
+    # Pure-PLS (0:100), merged-bounds 10-run mean via the same rescale.
+    pls_recomp = _recompute_result_with_bounds(
+        pls_result, pls_dir, merged_bounds, num_points
+    )
+    pls_merged_run0 = float(
+        pls_recomp.get("configs", {}).get("Default PLS", {}).get("final_hv", 0.0)
+    )
+    _plsc = pls_result.get("configs", {}).get("Default PLS", {})
+    _pls_old_mean = float(_plsc.get("final_hv", 0.0))
+    _pls_rh = _plsc.get("run_hvs", [])
+    _pls_old_run0 = float(_pls_rh[0]) if _pls_rh else _pls_old_mean
+    pls_final_hv = (
+        pls_merged_run0 * (_pls_old_mean / _pls_old_run0)
+        if (_pls_old_run0 > 0 and _pls_old_mean > 0)
+        else pls_merged_run0
+    )
+
+    bars: dict[float, dict] = {}
+    for ratio, _name in _PF_RATIOS:
+        if ratio == 1.00:
+            # Pure exact: deterministic seed front, no run averaging.
+            hv_p1 = _pf_exact_hv(seeds, merged_bounds, timeout)
+            bars[ratio] = dict(hv_p1=hv_p1, hv_p2=0.0, final_hv=hv_p1)
+        elif ratio == 0.00:
+            bars[ratio] = dict(hv_p1=0.0, hv_p2=pls_final_hv, final_hv=pls_final_hv)
+        else:
+            label = {0.80: "Hybrid 80:20", 0.50: "Hybrid 50:50", 0.20: "Hybrid 20:80"}[ratio]
+            final_hv = _avg_final(label)
+            if final_hv == 0.0:
+                continue
+            hv_p1 = _pf_exact_hv(seeds, merged_bounds, ratio * timeout)
+            hv_p1 = min(hv_p1, final_hv)
+            bars[ratio] = dict(
+                hv_p1=hv_p1, hv_p2=max(0.0, final_hv - hv_p1), final_hv=final_hv
+            )
+
+    # Scatter fronts (raw objective units; normalised at plot time).
+    scatter: dict[float, dict] = {}
+    for ratio in _PF_SCATTER_RATIOS:
+        exact = _pf_exact_front(seeds, (timeout if ratio == 1.0 else ratio * timeout))
+        if ratio == 1.00:
+            pls_pts: list[tuple[float, float]] = []
+        elif ratio == 0.00:
+            pls_pts = _pf_trace_front(pls_dir, instance, "default_pls")
+            exact = []
+        else:
+            pls_pts = _pf_trace_front(trace_dir, instance, _PF_RATIO_TO_SLUG[ratio])
+        scatter[ratio] = dict(exact=exact, pls=pls_pts)
+
+    return dict(bars=bars, scatter=scatter)
+
+
+# Second-phase engines, in column order. Each entry supplies the labels the
+# experiment JSON uses for that engine at each ratio: the three seeded hybrids
+# and the cold-start (0:100) run.
+#
+# Only the GPBA-A experiment ran the cold-start configs — with no exact phase
+# there is nothing method-specific about them, so the A&N row reuses the same
+# numbers rather than leaving its 0:100 bar empty. This mirrors how the front
+# figure already sources "Default PLS" for both rows.
+_EA_ENGINES: list[tuple[str, str, dict[float, str], str]] = [
+    # (column title, colour, {ratio: hybrid label}, cold-start label)
+    (
+        "PLS", "#1f77b4",
+        {0.80: "Hybrid 80:20", 0.50: "Hybrid 50:50", 0.20: "Hybrid 20:80"},
+        "Default PLS",
+    ),
+    (
+        "NSGA-II", "#2ca02c",
+        {0.80: "Hybrid NSGA-II 80:20", 0.50: "Hybrid NSGA-II 50:50",
+         0.20: "Hybrid NSGA-II 20:80"},
+        "Baseline NSGA-II",
+    ),
+    (
+        "NSGA-III", "#9467bd",
+        {0.80: "Hybrid NSGA-III 80:20", 0.50: "Hybrid NSGA-III 50:50",
+         0.20: "Hybrid NSGA-III 20:80"},
+        "Baseline NSGA-III",
+    ),
+    (
+        "MOEA/D", "#17becf",
+        {0.80: "Hybrid MOEA/D 80:20", 0.50: "Hybrid MOEA/D 50:50",
+         0.20: "Hybrid MOEA/D 20:80"},
+        "Baseline MOEA/D",
+    ),
+]
+
+
+def _ea_bar_data(
+    result: dict,
+    trace_dir: Path,
+    seeds: list[dict],
+    merged_bounds: list[list[int]],
+    cold_result: dict,
+    cold_dir: Path,
+    num_points: int,
+) -> dict[str, dict[float, dict]]:
+    """Phase-decomposed HV bars per engine per ratio, against merged bounds.
+
+    Returns {engine title: {ratio: {hv_p1, hv_p2, final_hv, std}}}. The exact
+    phase (hv_p1) is the seed front truncated at `ratio * timeout`, so it is the
+    same for every engine at a given ratio — which is the point of the figure:
+    the engines differ only in what they add on top of an identical seeding.
+    """
+    timeout = float(result.get("timeout_s", 0.0))
+    recomputed = _recompute_result_with_bounds(
+        result, trace_dir, merged_bounds, num_points
+    )
+    cfgs = recomputed.get("configs", {})
+    orig_cfgs = result.get("configs", {})
+
+    cold_recomp = _recompute_result_with_bounds(
+        cold_result, cold_dir, merged_bounds, num_points
+    )
+    cold_cfgs = cold_recomp.get("configs", {})
+    cold_orig = cold_result.get("configs", {})
+
+    def _rescaled(label: str, merged: dict, original: dict) -> tuple[float, float]:
+        """Merged-bounds 10-run mean and std for `label`.
+
+        Per-run raw points exist only for run 0, so the mean cannot be recomputed
+        against merged bounds directly; rescale the merged run-0 HV by the stored
+        mean/run-0 ratio, exactly as the front figure does. The std is carried
+        across as a *relative* spread, which the same rescale preserves.
+        """
+        merged_run0 = float(merged.get(label, {}).get("final_hv", 0.0))
+        c = original.get(label, {})
+        old_mean = float(c.get("final_hv", 0.0))
+        rh = c.get("run_hvs", [])
+        old_run0 = float(rh[0]) if rh else old_mean
+        mean = (
+            merged_run0 * (old_mean / old_run0)
+            if (old_run0 > 0 and old_mean > 0)
+            else merged_run0
+        )
+        old_std = float(c.get("final_hv_std", 0.0))
+        std = mean * (old_std / old_mean) if old_mean > 0 else 0.0
+        return mean, std
+
+    out: dict[str, dict[float, dict]] = {}
+    for title, _colour, hybrid_labels, cold_label in _EA_ENGINES:
+        bars: dict[float, dict] = {}
+        for ratio, _name in _PF_RATIOS:
+            if ratio == 1.00:
+                # Pure exact: a deterministic seed front, so no run spread.
+                hv = _pf_exact_hv(seeds, merged_bounds, timeout)
+                bars[ratio] = dict(hv_p1=hv, hv_p2=0.0, final_hv=hv, std=0.0)
+            elif ratio == 0.00:
+                mean, std = _rescaled(cold_label, cold_cfgs, cold_orig)
+                if mean == 0.0:
+                    continue
+                bars[ratio] = dict(hv_p1=0.0, hv_p2=mean, final_hv=mean, std=std)
+            else:
+                mean, std = _rescaled(hybrid_labels[ratio], cfgs, orig_cfgs)
+                if mean == 0.0:
+                    continue
+                hv_p1 = min(_pf_exact_hv(seeds, merged_bounds, ratio * timeout), mean)
+                bars[ratio] = dict(
+                    hv_p1=hv_p1, hv_p2=max(0.0, mean - hv_p1),
+                    final_hv=mean, std=std,
+                )
+        out[title] = bars
+    return out
+
+
+# Width of the parenthesised standard deviation box. The column headers are
+# padded with an empty box of exactly this width (see `generate_ea_tables`), so
+# that a right-aligned header lands over the mean rather than over the mean plus
+# its SD. Both uses must stay in lockstep, hence the shared constant — and both
+# must be set in \tiny, since `em` is relative to the current font size.
+_EA_STD_BOX = "2.9em"
+
+
+def _ea_std_tex(std: float) -> str:
+    """Render a standard deviation for the HV tables.
+
+    Several configurations are effectively deterministic across the 10 runs, and
+    at 4 decimals their SD renders as a column of `0.0000`, which reads as a
+    missing value rather than as "smaller than the displayed precision".
+    """
+    # Parentheses rather than "$\pm$", and 3 decimals: six columns of
+    # "0.9621 $\pm$ 0.0001" overflow \textwidth even at \footnotesize.
+    if std <= 0.0:
+        body = "(0.000)"
+    elif std < 5e-4:
+        body = "($<$.001)"
+    else:
+        body = f"({std:.3f})"
+    # Fixed-width box so every cell has the same trailing element. Without it a
+    # cell whose SD is absent or narrower renders shorter, and since the columns
+    # are right-aligned the *means* end up on different vertical lines.
+    return f"\\tiny{{\\makebox[{_EA_STD_BOX}][r]{{{body}}}}}"
+
+
+def _bergmann_hommel_adjust(pvals: dict[tuple, float], k: int) -> dict[tuple, float]:
+    """Bergmann-Hommel adjusted p-values for all-pairs comparisons.
+
+    Neither scipy nor statsmodels provides this. `statsmodels`' `'hommel'` is
+    Hommel's procedure over a flat family of p-values; Bergmann-Hommel is the
+    all-pairs procedure that additionally exploits the *logical* dependencies
+    between pairwise hypotheses (if A=B and B=C then A=C cannot be false), which
+    is why Garcia & Herrera (JMLR 2008) recommend it for exactly this setting.
+
+    A set of hypotheses is *exhaustive* when it is the set of all within-group
+    pairs of some partition of the k algorithms. The adjusted p-value for H_ij
+    is then
+
+        max over exhaustive E containing H_ij of  |E| * min_{h in E} p_h.
+
+    Enumerating set partitions costs Bell(k) -- 4140 for k=8, 21147 for k=9 --
+    which is why the literature caps this procedure at 9 algorithms.
+    """
+    idx = list(range(k))
+
+    def partitions(collection: list):
+        if len(collection) == 1:
+            yield [collection]
+            return
+        first, rest = collection[0], collection[1:]
+        for smaller in partitions(rest):
+            for n, subset in enumerate(smaller):
+                yield smaller[:n] + [[first] + subset] + smaller[n + 1:]
+            yield [[first]] + smaller
+
+    adjusted = {pair: 0.0 for pair in pvals}
+    for part in partitions(idx):
+        exhaustive = [
+            (min(a, b), max(a, b))
+            for block in part
+            for i, a in enumerate(block)
+            for b in block[i + 1:]
+        ]
+        if not exhaustive:
+            continue
+        min_p = min(pvals[h] for h in exhaustive)
+        candidate = len(exhaustive) * min_p
+        for h in exhaustive:
+            if candidate > adjusted[h]:
+                adjusted[h] = candidate
+    # The raw max-over-exhaustive-sets values can invert (a hypothesis with a
+    # smaller raw p ending up with a larger adjusted p). scmamp -- the reference
+    # implementation, and almost certainly the source of the paper's published
+    # ranking -- fixes this with `correctForMonotocity`: a running maximum over
+    # the p-values ordered by raw p ascending. Reproduced here so the two agree;
+    # it can only raise values, so it is the conservative direction.
+    capped = {h: min(1.0, v) for h, v in adjusted.items()}
+    running = 0.0
+    for h in sorted(capped, key=lambda h: pvals[h]):
+        running = max(running, capped[h])
+        capped[h] = running
+    return capped
+
+
+# Treatments for the Friedman test, extending the paper's Eq. 1 with the EA
+# baselines. Each entry is (label, row index into `_ea_bar_data` output, engine,
+# ratio); row 0 is GPBA-A-seeded, row 1 is Aneja & Nair-seeded.
+_FRIEDMAN_TREATMENTS: list[tuple[str, int, str, float]] = [
+    ("A\\&N+PLS", 1, "PLS", 0.50),
+    ("GPBA-A+PLS", 0, "PLS", 0.50),
+    ("A\\&N", 1, "PLS", 1.00),
+    ("GPBA-A", 0, "PLS", 1.00),
+    ("PLS", 0, "PLS", 0.00),
+    ("NSGA-II", 0, "NSGA-II", 0.00),
+    ("NSGA-III", 0, "NSGA-III", 0.00),
+    ("MOEA/D", 0, "MOEA/D", 0.00),
+]
+
+
+def run_friedman_test(
+    highs_dir: Path,
+    an_dir: Path,
+    output_dir: Path,
+    filter_regex: str | None = None,
+    num_points: int = 30,
+    alpha: float = 0.05,
+) -> None:
+    """Friedman omnibus + all-pairs post-hoc with Bergmann-Hommel correction.
+
+    Blocks are instances, treatments are algorithms, and the response is the
+    mean hypervolume. Ranks are computed within each instance, so the result is
+    invariant to any per-instance monotone rescaling -- but *only* if every
+    treatment in one block shares one normalisation, which is why the matrix is
+    built from `_ea_bar_data` against merged bounds rather than from the raw
+    per-experiment `final_hv` values (the GPBA-A and A&N experiments normalise
+    against different bounds).
+    """
+    import numpy as np
+    from scipy.stats import friedmanchisquare
+
+    gpbaa_seeds_dir = _PSEUDO_SOURCE_DIRS["gpbaa_2d_highs"]
+    an_seeds_dir = _PSEUDO_SOURCE_DIRS["an_2d_highs"]
+
+    def _load(d: Path, inst: str) -> dict | None:
+        p = d / f"{inst}.json"
+        return json.loads(p.read_text()) if p.exists() else None
+
+    def _seeds(d: Path, inst: str) -> list[dict]:
+        p = d / f"{inst}.json"
+        return json.loads(p.read_text()).get("solutions", []) if p.exists() else []
+
+    pat = re.compile(filter_regex) if filter_regex else None
+    instances = sorted(
+        p.stem
+        for p in highs_dir.glob("*.json")
+        if p.stem != "all_experiments" and (an_dir / p.name).exists()
+    )
+    if pat:
+        instances = [i for i in instances if pat.search(i)]
+
+    labels = [t[0] for t in _FRIEDMAN_TREATMENTS]
+    matrix: list[list[float]] = []
+    used: list[str] = []
+    for inst in instances:
+        highs, an = _load(highs_dir, inst), _load(an_dir, inst)
+        if highs is None or an is None:
+            continue
+        hb, ab = highs.get("shared_bounds"), an.get("shared_bounds")
+        if not hb or not ab:
+            continue
+        merged = _merge_bounds(hb, ab)
+        rows = [
+            _ea_bar_data(highs, highs_dir, _seeds(gpbaa_seeds_dir, inst),
+                         merged, highs, highs_dir, num_points),
+            _ea_bar_data(an, an_dir, _seeds(an_seeds_dir, inst),
+                         merged, highs, highs_dir, num_points),
+        ]
+        try:
+            row = [
+                rows[r][engine][ratio]["final_hv"]
+                for _lbl, r, engine, ratio in _FRIEDMAN_TREATMENTS
+            ]
+        except KeyError as exc:
+            print(f"  {inst}: missing {exc}, skipping", flush=True)
+            continue
+        if any(v <= 0 for v in row):
+            print(f"  {inst}: non-positive HV, skipping", flush=True)
+            continue
+        matrix.append(row)
+        used.append(inst)
+
+    if len(matrix) < 3:
+        print(f"Not enough complete instances ({len(matrix)})", flush=True)
+        return
+
+    data = np.asarray(matrix)  # (N instances, k treatments)
+    n, k = data.shape
+
+    # Rank within each instance, best (highest HV) = rank 1.
+    order = (-data).argsort(axis=1).argsort(axis=1) + 1.0
+    # Average tied ranks, or two algorithms with identical HV would be split
+    # arbitrarily by argsort -- and identical values are common here.
+    ranks = np.empty_like(order)
+    for i in range(n):
+        for j in range(k):
+            tied = np.isclose(data[i], data[i][j], rtol=0, atol=5e-7)
+            ranks[i][j] = order[i][tied].mean()
+    avg = ranks.mean(axis=0)
+
+    stat, p_omni = friedmanchisquare(*[data[:, j] for j in range(k)])
+
+    # Pairwise p-values from scikit-posthocs rather than hand-rolled: Conover's
+    # post-hoc for a Friedman design, unadjusted (the Bergmann-Hommel step is
+    # applied separately below).
+    import scikit_posthocs as sp
+
+    pmatrix = sp.posthoc_conover_friedman(data, p_adjust=None).values
+    pvals: dict[tuple, float] = {
+        (i, j): float(pmatrix[i][j]) for i in range(k) for j in range(i + 1, k)
+    }
+
+    adj = _bergmann_hommel_adjust(pvals, k)
+
+    print(f"\nFriedman test over {n} instances, {k} algorithms")
+    print(f"  chi2 = {stat:.4f}   p = {p_omni:.3e}"
+          f"   ({'reject' if p_omni < alpha else 'retain'} H0 at alpha={alpha})")
+    print("\nAverage ranks (1 = best):")
+    for lbl, r in sorted(zip(labels, avg), key=lambda t: t[1]):
+        print(f"  {lbl.replace(chr(92), ''):14s} {r:.2f}")
+
+    print(f"\nPairwise Bergmann-Hommel adjusted p-values (alpha={alpha}):")
+    sig: set[tuple] = set()
+    for (i, j), p in sorted(adj.items(), key=lambda kv: kv[1]):
+        mark = "*" if p < alpha else " "
+        if p < alpha:
+            sig.add((i, j))
+        print(f"  {mark} {labels[i].replace(chr(92),''):14s} vs "
+              f"{labels[j].replace(chr(92),''):14s} p = {p:.4g}")
+
+    # Chain notation, as in the paper's Eq. 1: consecutive ranked algorithms are
+    # joined by "succ" only when their difference survives the correction.
+    ordered = sorted(range(k), key=lambda j: avg[j])
+    parts = []
+    for pos, j in enumerate(ordered):
+        parts.append(f"\\text{{{labels[j]} ({avg[j]:.2f})}}")
+        if pos + 1 < len(ordered):
+            nxt = ordered[pos + 1]
+            pair = (min(j, nxt), max(j, nxt))
+            parts.append("\\succ" if pair in sig else "\\sim")
+    equation = " ".join(parts)
+    print("\nLaTeX (\\succ = significant at alpha, \\sim = not significant):")
+    print(" ", equation)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out = output_dir / "friedman_ranking.tex"
+    out.write_text(equation + "\n")
+    print(f"\n  Saved: {out}", flush=True)
+
+
+def generate_ea_tables(
+    highs_dir: Path,
+    an_dir: Path,
+    output_dir: Path,
+    filter_regex: str | None = None,
+    num_points: int = 30,
+) -> None:
+    """Emit one LaTeX longtable per exact method comparing the second-phase
+    algorithms: `ea_hv_gpbaa.tex` and `ea_hv_aneja.tex`.
+
+    Numbers come from `_ea_bar_data`, the same function that feeds the bar
+    figures, so a table cell and its bar can never disagree.
+
+    The 100:0 row is the exact phase alone -- no second-phase algorithm has run
+    yet -- so it spans the four algorithm columns instead of repeating one value
+    four times.
+    """
+    gpbaa_seeds_dir = _PSEUDO_SOURCE_DIRS["gpbaa_2d_highs"]
+    an_seeds_dir = _PSEUDO_SOURCE_DIRS["an_2d_highs"]
+    engines = [title for title, _c, _h, _cold in _EA_ENGINES]
+
+    def _load(d: Path, inst: str) -> dict | None:
+        p = d / f"{inst}.json"
+        return json.loads(p.read_text()) if p.exists() else None
+
+    def _seeds(d: Path, inst: str) -> list[dict]:
+        p = d / f"{inst}.json"
+        return json.loads(p.read_text()).get("solutions", []) if p.exists() else []
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    pat = re.compile(filter_regex) if filter_regex else None
+    instances = sorted(
+        p.stem
+        for p in highs_dir.glob("*.json")
+        if p.stem != "all_experiments" and (an_dir / p.name).exists()
+    )
+    if pat:
+        instances = [i for i in instances if pat.search(i)]
+    if not instances:
+        print(f"No shared instances found in {highs_dir} and {an_dir}", flush=True)
+        return
+
+    # row index -> (which row of `rows` to read, output filename, caption, label)
+    targets = [
+        (0, "ea_hv_gpbaa.tex", "GPBA-A", "tab:ea_hv_gpbaa"),
+        (1, "ea_hv_aneja.tex", "Anytime Aneja \\& Nair", "tab:ea_hv_aneja"),
+    ]
+    collected: list[dict[str, dict[str, dict[float, dict]]]] = []
+
+    for inst in instances:
+        highs, an = _load(highs_dir, inst), _load(an_dir, inst)
+        if highs is None or an is None:
+            continue
+        hb, ab = highs.get("shared_bounds"), an.get("shared_bounds")
+        if not hb or not ab:
+            print(f"  {inst}: missing shared_bounds, skipping", flush=True)
+            continue
+        merged = _merge_bounds(hb, ab)
+        collected.append(
+            {
+                "instance": inst,
+                "rows": [
+                    _ea_bar_data(highs, highs_dir, _seeds(gpbaa_seeds_dir, inst),
+                                 merged, highs, highs_dir, num_points),
+                    _ea_bar_data(an, an_dir, _seeds(an_seeds_dir, inst),
+                                 merged, highs, highs_dir, num_points),
+                ],
+            }
+        )
+
+    for row_idx, fname, method, label in targets:
+        lines: list[str] = []
+        ncol = len(engines)
+        colspec = "ll" + "r" * ncol
+        # Pad each algorithm header by the SD box width so its right edge lines
+        # up with the means below it, not with the SDs.
+        # \scriptsize: with the pad added, "NSGA-III" at \footnotesize becomes
+        # wider than "0.9981" plus its box, so the header — not the data — would
+        # set the column width and push the table 16pt past \textwidth.
+        pad = f"\\tiny{{\\makebox[{_EA_STD_BOX}][r]{{}}}}"
+        header = (
+            " & ".join(
+                ["\\scriptsize{Instance}", "\\scriptsize{Ratio}"]
+                + [f"\\scriptsize{{{e}}}{pad}" for e in engines]
+            )
+            + " \\\\"
+        )
+        cap = (
+            f"Hypervolume by second-phase algorithm, seeded by {method}. "
+            "Values are the mean over 10 runs, with the standard deviation in "
+            "parentheses; the best value for each instance is in bold, "
+            "normalised against bounds shared by both exact methods. The "
+            "100:0 row is the exact phase alone."
+        )
+        lines += [
+            # Six columns of "0.9621 +/- 0.0001" overflow \textwidth by ~42pt at
+            # \normalsize. The group is closed after \end{longtable}; longtable
+            # tolerates being wrapped this way as long as the font and column
+            # separation are set before it starts.
+            "\\begingroup",
+            "\\footnotesize",
+            "\\setlength{\\tabcolsep}{2.5pt}",
+            f"\\begin{{longtable}}[!htb]{{{colspec}}}",
+            f"\\caption{{{cap}}} \\label{{{label}}} \\\\",
+            "\\toprule", header, "\\midrule", "\\endfirsthead",
+            f"\\caption[]{{{cap} (cont.)}} \\\\",
+            "\\toprule", header, "\\midrule", "\\endhead",
+            "\\midrule",
+            f"\\multicolumn{{{ncol + 2}}}{{r}}{{Continued on next page}} \\\\",
+            "\\midrule", "\\endfoot",
+            "\\bottomrule", "\\endlastfoot",
+        ]
+        for rec in collected:
+            bars = rec["rows"][row_idx]
+            ratios = [r for r, _n in _PF_RATIOS if r in bars.get(engines[0], {})]
+            inst_tex = rec["instance"].replace("_", "\\_")
+            # Plain text, not \texttt: the monospace instance names are the
+            # widest column and the original tables did not use it either.
+            lines.append(f"\\multirow[t]{{{len(ratios)}}}{{*}}{{{inst_tex}}}")
+
+            # Best hypervolume anywhere in this instance's block, including the
+            # exact-only 100:0 row. Compared at the 4 decimals actually printed,
+            # so two cells that read the same are both marked rather than one
+            # winning on digits the reader cannot see.
+            best = max(
+                round(bars[e][r]["final_hv"], 4)
+                for e in engines
+                for r in ratios
+                if r in bars.get(e, {})
+            )
+
+            def _hv(engine: str, ratio: float) -> str:
+                v = bars[engine][ratio]["final_hv"]
+                txt = f"{v:.4f}"
+                return f"\\textbf{{{txt}}}" if round(v, 4) >= best else txt
+
+            for i, ratio in enumerate(ratios):
+                # "100:0" as in the figures, not "100\% : 0\%" -- the percent
+                # signs cost ~22pt of table width and the caption defines the
+                # notation anyway.
+                name = dict(_PF_RATIOS)[ratio]
+                if ratio == 1.00:
+                    cells = (
+                        f"\\multicolumn{{{ncol}}}{{c}}{{{_hv(engines[0], ratio)}}}"
+                    )
+                else:
+                    cells = " & ".join(
+                        f"{_hv(e, ratio)} {_ea_std_tex(bars[e][ratio]['std'])}"
+                        if ratio in bars.get(e, {}) else "---"
+                        for e in engines
+                    )
+                # The instance name sits in the \multirow cell emitted above, so
+                # every data row starts with an empty first column.
+                lines.append(f" & {name} & {cells} \\\\")
+            lines.append(f"\\cline{{1-{ncol + 2}}}")
+        lines += ["\\end{longtable}", "\\endgroup"]
+
+        out = output_dir / fname
+        out.write_text("\n".join(lines) + "\n")
+        print(f"  Saved: {out}  ({len(collected)} instances)", flush=True)
+
+
+def generate_ea_bar_figures(
+    highs_dir: Path,
+    an_dir: Path,
+    output_dir: Path,
+    filter_regex: str | None = None,
+    num_points: int = 30,
+) -> None:
+    """Per-instance `{instance}_ea_bars.png`: the same 2x4 layout as the front
+    figure, but with every panel a phase-decomposed HV bar chart.
+
+    Rows are the exact method that produced the seeds (GPBA-A, Aneja & Nair);
+    columns are the second-phase engine (PLS, NSGA-II, NSGA-III, MOEA/D). Every
+    panel shares one y range, so the question the figure answers -- does exact
+    seeding help the EAs the way it helps PLS? -- is read off directly by
+    comparing the hatched gain across columns.
+    """
+    from matplotlib.gridspec import GridSpec
+    from matplotlib.ticker import MaxNLocator
+
+    gpbaa_seeds_dir = _PSEUDO_SOURCE_DIRS["gpbaa_2d_highs"]
+    an_seeds_dir = _PSEUDO_SOURCE_DIRS["an_2d_highs"]
+    matplotlib.rcParams["hatch.linewidth"] = 0.5
+    _HATCH = "////"
+    # (full name for the row's y label, short name for the per-panel ratio label,
+    #  exact-phase colour)
+    _ROW_LABELS = [
+        ("GPBA-A", "GPBA-A", "#e07b00"),
+        ("Anytime Aneja & Nair", "A&N", "#d62728"),
+    ]
+
+    def _load_json(d: Path, inst: str) -> dict | None:
+        p = d / f"{inst}.json"
+        return json.loads(p.read_text()) if p.exists() else None
+
+    def _load_seeds(d: Path, inst: str) -> list[dict]:
+        p = d / f"{inst}.json"
+        if not p.exists():
+            return []
+        return json.loads(p.read_text()).get("solutions", [])
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    pat = re.compile(filter_regex) if filter_regex else None
+    instances = sorted(
+        p.stem
+        for p in highs_dir.glob("*.json")
+        if p.stem != "all_experiments" and (an_dir / p.name).exists()
+    )
+    if pat:
+        instances = [i for i in instances if pat.search(i)]
+    if not instances:
+        print(f"No shared instances found in {highs_dir} and {an_dir}", flush=True)
+        return
+
+    for inst in instances:
+        highs = _load_json(highs_dir, inst)
+        an = _load_json(an_dir, inst)
+        if highs is None or an is None:
+            continue
+        hb, ab = highs.get("shared_bounds"), an.get("shared_bounds")
+        if not hb or not ab:
+            print(f"  {inst}: missing shared_bounds, skipping", flush=True)
+            continue
+        merged = _merge_bounds(hb, ab)
+
+        rows = [
+            _ea_bar_data(highs, highs_dir, _load_seeds(gpbaa_seeds_dir, inst),
+                         merged, highs, highs_dir, num_points),
+            _ea_bar_data(an, an_dir, _load_seeds(an_seeds_dir, inst),
+                         merged, highs, highs_dir, num_points),
+        ]
+
+        # One y range over every panel in the figure. Comparing a hatched gain in
+        # the MOEA/D column against the PLS column is the whole purpose here, and
+        # per-panel autoscaling would silently defeat it.
+        vals = [b["final_hv"] for row in rows for bars in row.values()
+                for b in bars.values() if b["final_hv"] > 0]
+        floors = [b["hv_p1"] for row in rows for bars in row.values()
+                  for b in bars.values() if b["hv_p1"] > 0]
+        lo = min(floors + vals) * 0.98 if vals else 0.0
+        hi = max(vals) * 1.02 if vals else 1.0
+
+        fig = plt.figure(figsize=(_PF_FIG_W, _PF_FIG_H), layout="constrained")
+        gs = GridSpec(2, 4, figure=fig)
+
+        for r, (mlabel, mshort, mcol) in enumerate(_ROW_LABELS):
+            for ci, (title, ecol, _hy, _cold) in enumerate(_EA_ENGINES):
+                ax = fig.add_subplot(gs[r, ci])
+                bars = rows[r][title]
+                present = [(ratio, name) for ratio, name in _PF_RATIOS if ratio in bars]
+                xs = list(range(len(present)))
+                for xi, (ratio, _name) in zip(xs, present):
+                    bd = bars[ratio]
+                    if bd["hv_p1"] > 0:
+                        ax.bar(xi, bd["hv_p1"], width=0.68, color=mcol,
+                               linewidth=0, zorder=3)
+                    if bd["hv_p2"] > 0:
+                        ax.bar(xi, bd["hv_p2"], width=0.68, bottom=bd["hv_p1"],
+                               facecolor=_pf_tint(ecol), hatch=_HATCH,
+                               edgecolor=ecol, linewidth=_PF_SPINE_LW, zorder=3)
+                    if bd["std"] > 0:
+                        ax.errorbar(xi, bd["final_hv"], yerr=bd["std"], fmt="none",
+                                    ecolor=_PF_AXIS_GREY, elinewidth=0.5,
+                                    capsize=1.5, capthick=0.5, zorder=5)
+                ax.set_xticks(xs)
+                ax.set_xticklabels([name for _r, name in present],
+                                   fontsize=_PF_TICK_PT, rotation=45,
+                                   ha="right", rotation_mode="anchor")
+                # Each panel names the actual pair it plots, so the label has to
+                # be per-panel: the ratio splits the budget between *this* row's
+                # exact method and *this* column's second-phase algorithm.
+                ax.set_xlabel(f"{mshort} : {title}", fontsize=_PF_LABEL_PT)
+                _pf_panel_title(ax, _PF_PANEL_LETTERS[r * 4 + ci], title)
+                ax.set_ylim(lo, hi)
+                ax.yaxis.set_major_locator(MaxNLocator(nbins=4))
+                _pf_style_axes(ax, grid_axis="y")
+                ax.tick_params(axis="x", length=0)
+                # The shared y scale is stated once per row; repeating the tick
+                # labels four times across identical axes is noise.
+                if ci == 0:
+                    ax.set_ylabel(f"{mlabel}\nFinal HV", fontsize=_PF_LABEL_PT)
+                else:
+                    ax.tick_params(labelleft=False)
+
+        from matplotlib.lines import Line2D  # noqa: F401  (kept for parity)
+
+        handles = [
+            mpatches.Patch(facecolor=_ROW_LABELS[0][2], linewidth=0,
+                           label="GPBA-A exact phase"),
+            mpatches.Patch(facecolor=_ROW_LABELS[1][2], linewidth=0,
+                           label="Aneja & Nair exact phase"),
+        ] + [
+            mpatches.Patch(facecolor=_pf_tint(col), hatch=_HATCH, edgecolor=col,
+                           linewidth=_PF_SPINE_LW, label=f"{title} phase gain")
+            for title, col, _h, _c in _EA_ENGINES
+        ]
+        leg = fig.legend(
+            handles=handles, loc="outside lower center", ncol=3,
+            fontsize=_PF_LEGEND_PT, frameon=False, handletextpad=0.5,
+            columnspacing=1.6, labelspacing=0.35, handlelength=1.4,
+        )
+        for txt in leg.get_texts():
+            txt.set_color("black")
+
+        out = _pf_save(fig, output_dir, f"{inst}_ea_bars")
+        plt.close(fig)
+        print(f"  Saved: {out}", flush=True)
+
+
+def generate_pareto_front_figures(
+    highs_dir: Path,
+    an_dir: Path,
+    output_dir: Path,
+    filter_regex: str | None = None,
+    num_points: int = 30,
+) -> None:
+    """Reconstruct the paper's per-instance `{instance}_pareto_fronts.png` figures
+    from trace artifacts, with phase-separated + hatched HV bars.
+
+    Row 0 = GPBA-A (highs_dir + gpbaa_2d_highs pseudo seeds),
+    Row 1 = Aneja & Nair (an_dir + an_2d_highs pseudo seeds).
+    """
+    from matplotlib.gridspec import GridSpec
+    from matplotlib.ticker import MaxNLocator
+
+    gpbaa_seeds_dir = _PSEUDO_SOURCE_DIRS["gpbaa_2d_highs"]
+    an_seeds_dir = _PSEUDO_SOURCE_DIRS["an_2d_highs"]
+
+    def _load_json(d: Path, inst: str) -> dict | None:
+        p = d / f"{inst}.json"
+        return json.loads(p.read_text()) if p.exists() else None
+
+    def _load_seeds(d: Path, inst: str) -> list[dict]:
+        p = d / f"{inst}.json"
+        if not p.exists():
+            return []
+        return json.loads(p.read_text()).get("solutions", [])
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    pat = re.compile(filter_regex) if filter_regex else None
+
+    instances = sorted(
+        p.stem
+        for p in highs_dir.glob("*.json")
+        if p.stem != "all_experiments" and (an_dir / p.name).exists()
+    )
+    if pat:
+        instances = [i for i in instances if pat.search(i)]
+    if not instances:
+        print(f"No shared instances found in {highs_dir} and {an_dir}", flush=True)
+        return
+
+    # Unified colour scheme — colour encodes the *algorithm*, identically in the
+    # bars and the scatter panels:
+    #   GPBA-A = amber, Aneja & Nair = red, Pareto Local Search = blue.
+    # In panel a) the exact-phase base takes the method colour (matching that
+    # method's scatter marker) and the PLS-phase gain is drawn in the PLS blue
+    # with a hatch (matching the PLS scatter marker); texture marks the phase.
+    _PLS_COLOR = "#1f77b4"
+    # Finer, thinner hatching: "///" at 0.5 pt lines aliases badly once the
+    # figure is rasterised at page size.
+    _PLS_HATCH = "////"
+    matplotlib.rcParams["hatch.linewidth"] = 0.5
+    # Row style: (full method label, short name, exact/method colour, exact marker)
+    _ROWS = [
+        ("GPBA-A", "GPBA-A", "#e07b00", "X"),
+        ("Anytime Aneja & Nair", "Aneja & Nair", "#d62728", "X"),
+    ]
+
+    for inst in instances:
+        highs = _load_json(highs_dir, inst)
+        an = _load_json(an_dir, inst)
+        if highs is None or an is None:
+            continue
+        hb = highs.get("shared_bounds")
+        ab = an.get("shared_bounds")
+        if not hb or not ab:
+            print(f"  {inst}: missing shared_bounds, skipping", flush=True)
+            continue
+        merged = _merge_bounds(hb, ab)
+
+        gpbaa_seeds = _load_seeds(gpbaa_seeds_dir, inst)
+        an_seeds = _load_seeds(an_seeds_dir, inst)
+
+        row_data = [
+            _pf_row_data(highs, highs_dir, gpbaa_seeds, merged, highs, highs_dir, num_points),
+            _pf_row_data(an, an_dir, an_seeds, merged, highs, highs_dir, num_points),
+        ]
+
+        # Shared scatter-axis normalisation. Divide by the max over the actual
+        # plotted points (not the wide HV upper bound), so fronts fill the panel
+        # with a ~[0.5, 1.0] spread on every instance size — matching the paper.
+        _all_sx = [
+            x
+            for rd in row_data
+            for sc in rd["scatter"].values()
+            for x, _y in (sc.get("exact", []) + sc.get("pls", []))
+        ]
+        _all_sy = [
+            y
+            for rd in row_data
+            for sc in rd["scatter"].values()
+            for _x, y in (sc.get("exact", []) + sc.get("pls", []))
+        ]
+        ux = max(_all_sx) if _all_sx else 1.0
+        uy = max(_all_sy) if _all_sy else 1.0
+
+        # Shared front-panel axis limits (normalised units) so every scatter — all
+        # ratios, both rows — is on one identical scale and directly comparable.
+        _nx_lo = (min(_all_sx) / ux) if _all_sx else 0.0
+        _ny_lo = (min(_all_sy) / uy) if _all_sy else 0.0
+        _mx = (1.0 - _nx_lo) * 0.06 + 1e-6
+        _my = (1.0 - _ny_lo) * 0.06 + 1e-6
+        sc_xlim = (_nx_lo - _mx, 1.0 + _mx)
+        sc_ylim = (_ny_lo - _my, 1.0 + _my)
+
+        # Shared panel-a) y-range across both rows so the bar charts are directly
+        # comparable top-to-bottom.
+        _all_hv = [
+            bd["final_hv"] for rd in row_data for bd in rd["bars"].values()
+            if bd["final_hv"] > 0
+        ]
+        _all_p1 = [
+            bd["hv_p1"] for rd in row_data for bd in rd["bars"].values()
+            if bd["hv_p1"] > 0
+        ]
+        bar_lo = min(_all_p1 + _all_hv) * 0.98 if _all_hv else 0.0
+        bar_hi = max(_all_hv) * 1.02 if _all_hv else 1.0
+
+        fig = plt.figure(figsize=(_PF_FIG_W, _PF_FIG_H), layout="constrained")
+        # `constrained_layout` (set on the figure) sizes the gutters from the
+        # actual text extents, which is what keeps 7-8 pt labels from colliding
+        # at this width; hand-tuned hspace/wspace cannot adapt to the tick label
+        # widths, which vary per instance.
+        gs = GridSpec(2, 4, figure=fig, width_ratios=[1.3, 1, 1, 1])
+
+        for r, ((mlabel, mshort, mcol, emark), rd) in enumerate(zip(_ROWS, row_data)):
+            bottom_row = r == len(_ROWS) - 1
+            # ── Panel a) phase-separated hatched bars ──
+            # Exact-phase base = method colour (solid); PLS-phase gain = PLS blue
+            # (hatched). Colour matches the scatter markers; texture marks phase.
+            axa = fig.add_subplot(gs[r, 0])
+            bars = rd["bars"]
+            present = [(ratio, name) for ratio, name in _PF_RATIOS if ratio in bars]
+            xs = list(range(len(present)))
+            for xi, (ratio, name) in zip(xs, present):
+                bd = bars[ratio]
+                if bd["hv_p1"] > 0:
+                    axa.bar(xi, bd["hv_p1"], width=0.68, color=mcol,
+                            linewidth=0, zorder=3)
+                if bd["hv_p2"] > 0:
+                    # Hatch drawn in the method colour on a pale wash of itself,
+                    # so the stacked segment reads as "same algorithm, second
+                    # phase" rather than as a third, unrelated series.
+                    axa.bar(xi, bd["hv_p2"], width=0.68, bottom=bd["hv_p1"],
+                            facecolor=_pf_tint(_PLS_COLOR), hatch=_PLS_HATCH,
+                            edgecolor=_PLS_COLOR, linewidth=_PF_SPINE_LW,
+                            zorder=3)
+            axa.set_xticks(xs)
+            # Five "100:0"-style ratios need ~90 pt of text against a ~75 pt plot
+            # area, so they cannot be set upright at any column width that still
+            # leaves the scatter panels usable. 45 degrees with `rotation_mode=
+            # "anchor"` keeps each label's right end under its own bar.
+            axa.set_xticklabels([name for _r, name in present],
+                                fontsize=_PF_TICK_PT, rotation=45,
+                                ha="right", rotation_mode="anchor")
+            axa.set_ylabel("Final HV", fontsize=_PF_LABEL_PT)
+            axa.set_xlabel("Exact : PLS ratio", fontsize=_PF_LABEL_PT)
+            _pf_panel_title(axa, _PF_PANEL_LETTERS[r * 4], mlabel)
+            axa.set_ylim(bar_lo, bar_hi)
+            axa.yaxis.set_major_locator(MaxNLocator(nbins=4))
+            # Bars sit on a category axis: vertical gridlines would cut through
+            # them without helping anyone read a value off the chart.
+            _pf_style_axes(axa, grid_axis="y")
+            axa.tick_params(axis="x", length=0)
+
+            # ── Panels b/c/d) Pareto-front scatter ──
+            for ci, ratio in enumerate(_PF_SCATTER_RATIOS):
+                ax = fig.add_subplot(gs[r, ci + 1])
+                sc = rd["scatter"].get(ratio, {})
+                exact = sc.get("exact", [])
+                pls = sc.get("pls", [])
+                # PLS underneath: it is the denser cloud, so drawing the sparser
+                # exact front on top keeps the seeds visible where they overlap.
+                if pls:
+                    _pf_front(ax, [(x / ux, y / uy) for x, y in pls],
+                              marker="^", size=7, color=_PLS_COLOR, z=2)
+                if exact:
+                    _pf_front(ax, [(x / ux, y / uy) for x, y in exact],
+                              marker=emark, size=9, color=mcol, z=4)
+                # Same "exact:PLS" notation as the bar axis tick labels.
+                pct = f"{int(ratio * 100)}:{int((1 - ratio) * 100)}"
+                _pf_panel_title(ax, _PF_PANEL_LETTERS[r * 4 + ci + 1], pct)
+                ax.set_xlim(*sc_xlim)
+                ax.set_ylim(*sc_ylim)
+                # Every scatter panel shares one axis range (set above), so the
+                # tick labels and axis titles are drawn once per row/column
+                # instead of eight times. That reclaimed space is what pays for
+                # the larger type — the labels below are the reason this is
+                # legible at 122 mm, not the point sizes alone.
+                ax.xaxis.set_major_locator(MaxNLocator(nbins=3))
+                ax.yaxis.set_major_locator(MaxNLocator(nbins=4))
+                _pf_style_axes(ax)
+                # Both rows carry their own x axis. The rows are independent
+                # methods rather than a continuation of one scale, so making the
+                # top row borrow the bottom row's axis forced a reader to look
+                # four panels away to read a cost off panel b.
+                ax.set_xlabel("Cost", fontsize=_PF_LABEL_PT)
+                if ci == 0:
+                    ax.set_ylabel("Cloudy area", fontsize=_PF_LABEL_PT)
+                else:
+                    ax.tick_params(labelleft=False)
+
+        # One legend, placed *outside* the axes so `constrained_layout` reserves
+        # room for it. The previous pair of legends was anchored below the figure
+        # with negative bbox coordinates, which only stayed visible because of
+        # `bbox_inches="tight"` — the same crop that broke the on-page scale.
+        # Colour = algorithm throughout; marker entries name the scatter series,
+        # the hatched patch names the PLS-phase gain in the bars.
+        from matplotlib.lines import Line2D
+
+        (g_lbl, g_short, g_col, g_mk), (a_lbl, a_short, a_col, a_mk) = _ROWS
+        # Six entries in three columns. Matplotlib fills a legend column-major,
+        # so this ordering puts each algorithm in its own column: the front
+        # marker on top, the bar swatch that encodes the same algorithm below.
+        # The previous legend listed only the hatched PLS-phase patch, leaving
+        # the two solid bar colours — the largest areas of ink in panels a/e —
+        # undefined anywhere in the figure.
+        handles = [
+            Line2D([], [], marker=g_mk, color=g_col, linestyle="None",
+                   markersize=3.2, label=f"{g_lbl} front"),
+            mpatches.Patch(facecolor=g_col, linewidth=0,
+                           label=f"{g_short} exact phase"),
+            Line2D([], [], marker=a_mk, color=a_col, linestyle="None",
+                   markersize=3.2, label=f"{a_lbl} front"),
+            mpatches.Patch(facecolor=a_col, linewidth=0,
+                           label=f"{a_short} exact phase"),
+            Line2D([], [], marker="^", color=_PLS_COLOR, linestyle="None",
+                   markersize=3.0, label="Pareto Local Search front"),
+            mpatches.Patch(facecolor=_pf_tint(_PLS_COLOR), hatch=_PLS_HATCH,
+                           edgecolor=_PLS_COLOR, linewidth=_PF_SPINE_LW,
+                           label="PLS-phase HV gain"),
+        ]
+        leg = fig.legend(
+            handles=handles, loc="outside lower center", ncol=3,
+            fontsize=_PF_LEGEND_PT, frameon=False, handletextpad=0.5,
+            columnspacing=1.6, labelspacing=0.35, handlelength=1.4,
+        )
+        for txt in leg.get_texts():
+            txt.set_color("black")
+
+        out = _pf_save(fig, output_dir, f"{inst}_pareto_fronts")
+        plt.close(fig)
+        print(f"  Saved: {out}", flush=True)
 
 
 def replot_from_dir(
@@ -3717,6 +6508,418 @@ def print_paper_tables(
     print()
 
 
+# ─── Publication ranking plots ───────────────────────────────────────
+
+_DISPLAY_LABELS: dict[str, str] = {
+    "Default PLS":       "PLS",
+    "Baseline NSGA-II":  "EA (NSGA-II)",
+    "Baseline NSGA-III": "EA (NSGA-III)",
+    "Baseline MOEA/D":   "EA (MOEA/D)",
+}
+
+
+def _display_label(label: str) -> str:
+    return _DISPLAY_LABELS.get(label, label)
+
+
+def _load_ranking_data(output_dir: Path) -> "dict[str, list[float]]":
+    """Load final_hv for every config across all per-instance JSON files."""
+    data: dict[str, list[float]] = {}
+    for f in sorted(output_dir.glob("*.json")):
+        if f.stem == "all_experiments":
+            continue
+        try:
+            d = json.loads(f.read_text())
+        except Exception:
+            continue
+        for label, cfg in d.get("configs", {}).items():
+            hv = cfg.get("final_hv")
+            if hv is not None:
+                data.setdefault(label, []).append(float(hv))
+    if not data:
+        return {}
+    n = max(len(v) for v in data.values())
+    return {k: v for k, v in data.items() if len(v) == n}
+
+
+def plot_cd_diagram(output_dir: Path, output_path: "Path") -> None:
+    """Critical Difference diagram: Friedman omnibus + post-hoc Wilcoxon + Holm."""
+    if not HAS_MATPLOTLIB:
+        return
+    try:
+        import pandas as pd
+        import scikit_posthocs as sp
+        from scipy.stats import friedmanchisquare
+    except ImportError as e:
+        print(f"  Skipping CD diagram (missing dependency: {e})", flush=True)
+        return
+
+    data = _load_ranking_data(output_dir)
+    if not data:
+        print("  No data found for CD diagram.", flush=True)
+        return
+
+    n_inst = max(len(v) for v in data.values())
+    # rows = instances, cols = methods (display labels)
+    df = pd.DataFrame(
+        {_display_label(k): v for k, v in data.items() if len(v) == n_inst}
+    )
+
+    # ── Friedman omnibus test ────────────────────────────────────────────
+    stat, p_friedman = friedmanchisquare(*[df[c].values for c in df.columns])
+    print(f"  Friedman: χ²={stat:.3f}, p={p_friedman:.3e}  ({len(df.columns)} methods, "
+          f"{n_inst} instances)", flush=True)
+
+    # ── Average ranks (rank 1 = highest HV = best) ───────────────────────
+    ranks = df.rank(axis=1, ascending=False).mean().sort_values()
+
+    # Post-hoc pairwise Wilcoxon + Holm: expects long-format DataFrame
+    df_long = df.melt(var_name="method", value_name="hv")
+    p_matrix = sp.posthoc_wilcoxon(df_long, val_col="hv", group_col="method", p_adjust="holm")
+
+    # ── Draw ─────────────────────────────────────────────────────────────
+    n_methods = len(ranks)
+    fig, ax = plt.subplots(figsize=(11, max(7, n_methods * 0.44)))
+    sp.critical_difference_diagram(
+        ranks,
+        p_matrix,
+        ax=ax,
+        alpha=0.05,
+        left_only=True,
+        label_fmt_left="{label}  ({rank:.2f})",
+        label_props={"fontsize": 8.5},
+        crossbar_props={"color": "#2c7bb6", "linewidth": 2.8, "zorder": 3},
+        elbow_props={"color": "#2c7bb6", "linewidth": 1.3},
+        marker_props={"marker": "o", "s": 30, "color": "#2c7bb6", "zorder": 4},
+    )
+    ax.set_title(
+        f"Critical Difference Diagram\n"
+        f"Friedman χ²={stat:.2f}, p={p_friedman:.1e}  ·  "
+        f"Post-hoc: pairwise Wilcoxon + Holm correction, α=0.05\n"
+        f"Bars connect methods with no statistically significant difference",
+        fontsize=9,
+        fontweight="bold",
+        pad=10,
+    )
+    fig.tight_layout()
+    _save_fig(fig, output_path)
+    plt.close(fig)
+    print(f"  Saved: {output_path}", flush=True)
+
+
+def _draw_simplex_ax(
+    ax: "plt.Axes",
+    samples: "Any",  # (N, 3) array: col0=p_left (A wins), col1=p_rope, col2=p_right (B wins)
+    p_left: float,
+    p_rope: float,
+    p_right: float,
+    name_a: str,
+    name_b: str,
+    rope: float,
+) -> None:
+    """Draw a Bayesian simplex triangle with posterior sample cloud on a given Axes."""
+    import numpy as np
+
+    h = math.sqrt(3) / 2  # height of equilateral triangle
+
+    # Vertices: left=(0,0) → A wins, right=(1,0) → B wins, top=(0.5,h) → rope
+    # Barycentric → 2D: point = p_left*(0,0) + p_right*(1,0) + p_rope*(0.5,h)
+    def bary_to_2d(b):  # b: (..., 3) → (..., 2)
+        xs = b[..., 2] * 1.0 + b[..., 1] * 0.5
+        ys = b[..., 1] * h
+        return xs, ys
+
+    # ── Background region colouring ──────────────────────────────────────
+    # Divide triangle into 3 regions by the three medians meeting at centroid.
+    # Region A (left): centroid, left vertex, midpoints of left edges
+    # Use a fine mesh approach: for each pixel inside triangle, colour by dominant dim.
+    res = 200
+    xs_grid = np.linspace(0, 1, res)
+    ys_grid = np.linspace(0, h, res)
+    Xg, Yg = np.meshgrid(xs_grid, ys_grid)
+    # Back-project to barycentric
+    # y = p_rope * h  →  p_rope = y/h
+    # x = p_right + p_rope/2  →  p_right = x - p_rope/2
+    # p_left = 1 - p_right - p_rope
+    p_r_g = Yg / h
+    p_B_g = Xg - p_r_g * 0.5
+    p_A_g = 1.0 - p_B_g - p_r_g
+    inside = (p_A_g >= 0) & (p_B_g >= 0) & (p_r_g >= 0)
+    dominant = np.argmax(
+        np.stack([p_A_g, p_r_g, p_B_g], axis=-1), axis=-1
+    )  # 0=A wins, 1=rope, 2=B wins
+    # RGBA image
+    colours = np.ones((res, res, 4))  # white
+    colours[inside & (dominant == 0)] = [0.70, 0.85, 1.00, 0.45]  # blue: A
+    colours[inside & (dominant == 1)] = [0.80, 0.95, 0.80, 0.45]  # green: rope
+    colours[inside & (dominant == 2)] = [1.00, 0.80, 0.75, 0.45]  # red: B
+    colours[~inside] = [1, 1, 1, 0]  # transparent outside
+    ax.imshow(
+        colours,
+        extent=[0, 1, 0, h],
+        origin="lower",
+        aspect="auto",
+        interpolation="nearest",
+        zorder=0,
+    )
+
+    # ── Posterior sample cloud ────────────────────────────────────────────
+    sx, sy = bary_to_2d(samples)
+    ax.scatter(
+        sx, sy,
+        s=1.2, c="#333333", alpha=0.06, linewidths=0, zorder=2,
+        rasterized=True,
+    )
+
+    # ── Mean point ───────────────────────────────────────────────────────
+    mx, my = bary_to_2d(np.array([[p_left, p_rope, p_right]]))
+    ax.scatter(mx, my, s=60, c="#111111", marker="*", zorder=5)
+
+    # ── Triangle outline ─────────────────────────────────────────────────
+    tri_x = [0, 1, 0.5, 0]
+    tri_y = [0, 0, h, 0]
+    ax.plot(tri_x, tri_y, "k-", linewidth=1.0, zorder=3)
+
+    # ── Vertex labels ────────────────────────────────────────────────────
+    offset = 0.06
+    ax.text(-offset, -offset * 0.7, f"{name_a}\nwins",
+            ha="center", va="top", fontsize=7.5, color="#1a6db5", fontweight="bold")
+    ax.text(1 + offset, -offset * 0.7, f"{name_b}\nwins",
+            ha="center", va="top", fontsize=7.5, color="#c0392b", fontweight="bold")
+    ax.text(0.5, h + offset * 0.5, f"equivalent\n(ROPE ±{rope:.0%})",
+            ha="center", va="bottom", fontsize=7.0, color="#27ae60", fontweight="bold")
+
+    # ── Probability annotations ───────────────────────────────────────────
+    ax.text(0.02, 0.02, f"P={p_left:.3f}", transform=ax.transAxes,
+            fontsize=8, color="#1a6db5", fontweight="bold")
+    ax.text(0.98, 0.02, f"P={p_right:.3f}", transform=ax.transAxes,
+            ha="right", fontsize=8, color="#c0392b", fontweight="bold")
+    ax.text(0.50, 0.92, f"P={p_rope:.3f}", transform=ax.transAxes,
+            ha="center", fontsize=8, color="#27ae60", fontweight="bold")
+
+    ax.set_xlim(-0.18, 1.18)
+    ax.set_ylim(-0.18, h + 0.18)
+    ax.set_aspect("equal")
+    ax.axis("off")
+
+
+def plot_bayesian_tests(output_dir: Path, output_path: "Path") -> None:
+    """Bayesian signed-rank simplex plots (Benavoli 2014) for key comparisons."""
+    if not HAS_MATPLOTLIB:
+        return
+    try:
+        import baycomp
+        import numpy as np
+    except ImportError as e:
+        print(f"  Skipping Bayesian plots (missing: {e})", flush=True)
+        return
+
+    data = _load_ranking_data(output_dir)
+    if not data:
+        return
+
+    ROPE = 0.01  # 1 % HV difference = practically equivalent
+
+    # (title, key_a, display_a, key_b, display_b)
+    comparisons = [
+        ("Hybrid 80:20",          "Default PLS",
+         "Hybrid 80:20",          "PLS"),
+        ("Hybrid 80:20",          "Baseline NSGA-II",
+         "Hybrid 80:20",          "EA (NSGA-II)"),
+        ("Hybrid 80:20",          "Baseline MOEA/D",
+         "Hybrid 80:20",          "EA (MOEA/D)"),
+        ("Improved NSGA-II 80:20", "Baseline NSGA-II",
+         "Imp.NSGA-II 80:20",     "EA (NSGA-II)"),
+        ("Improved NSGA-III 80:20", "Baseline NSGA-III",
+         "Imp.NSGA-III 80:20",    "EA (NSGA-III)"),
+        ("Improved MOEA/D 80:20", "Baseline MOEA/D",
+         "Imp.MOEA/D 80:20",      "EA (MOEA/D)"),
+    ]
+
+    ncols = 3
+    nrows = math.ceil(len(comparisons) / ncols)
+    fig, axes = plt.subplots(
+        nrows, ncols,
+        figsize=(ncols * 4.2, nrows * 4.0),
+        squeeze=False,
+    )
+
+    for idx, (key_a, key_b, name_a, name_b) in enumerate(comparisons):
+        ax = axes[idx // ncols][idx % ncols]
+        x = np.array(data.get(key_a, []))
+        y = np.array(data.get(key_b, []))
+        if len(x) == 0 or len(y) == 0:
+            ax.set_visible(False)
+            continue
+        # Posterior samples: col0=P(x>y), col1=P(rope), col2=P(y>x)
+        samples = baycomp.SignedRankTest.sample(x, y, rope=ROPE, nsamples=50_000)
+        p_left  = float(samples[:, 0].mean())
+        p_rope  = float(samples[:, 1].mean())
+        p_right = float(samples[:, 2].mean())
+        _draw_simplex_ax(ax, samples, p_left, p_rope, p_right, name_a, name_b, ROPE)
+        ax.set_title(
+            f"{name_a}  vs  {name_b}",
+            fontsize=9, fontweight="bold", pad=4,
+        )
+
+    for j in range(len(comparisons), nrows * ncols):
+        axes[j // ncols][j % ncols].set_visible(False)
+
+    fig.suptitle(
+        f"Bayesian Signed-Rank Tests  (Benavoli et al. 2014,  ROPE = {ROPE:.0%})\n"
+        "Posterior cloud over 50 000 Dirichlet samples  ·  ★ = posterior mean  "
+        "·  blue = A wins  ·  green = equivalent  ·  red = B wins",
+        fontsize=9.5,
+        fontweight="bold",
+        y=1.02,
+    )
+    fig.tight_layout()
+    _save_fig(fig, output_path)
+    plt.close(fig)
+    print(f"  Saved: {output_path}", flush=True)
+
+
+def plot_cluster_bars(
+    output_dir: Path,
+    output_path: "Path",
+) -> None:
+    """Bar chart: top-ranked cluster vs PLS vs Baseline EAs, with Wilcoxon brackets."""
+    if not HAS_MATPLOTLIB:
+        return
+    try:
+        import numpy as np
+        from scipy.stats import wilcoxon as _wilcoxon
+    except ImportError:
+        return
+
+    data = _load_ranking_data(output_dir)
+    if not data:
+        return
+
+    # ── Define groups ────────────────────────────────────────────────────
+    TOP_CLUSTER   = ["Hybrid 80:20", "Hybrid 50:50"]
+    REFERENCE_KEYS = [
+        ("Default PLS",    "PLS",           "#4daf4a"),
+        ("Baseline NSGA-II",  "EA (NSGA-II)",  "#e41a1c"),
+        ("Baseline NSGA-III", "EA (NSGA-III)", "#ff7f00"),
+        ("Baseline MOEA/D",   "EA (MOEA/D)",   "#984ea3"),
+    ]
+    TOP_COLORS = {"Hybrid 80:20": "#2166ac", "Hybrid 50:50": "#4393c3"}
+
+    def _get_color(k: str) -> str:
+        if k in TOP_COLORS:
+            return TOP_COLORS[k]
+        for rk, _, c in REFERENCE_KEYS:
+            if rk == k:
+                return c
+        return "#999999"
+
+    all_keys    = TOP_CLUSTER + [k for k, _, _ in REFERENCE_KEYS]
+    all_labels  = [_display_label(k) for k in all_keys]
+    all_colors  = [_get_color(k) for k in all_keys]
+    present = [(k, lbl, col) for k, lbl, col in zip(all_keys, all_labels, all_colors)
+               if k in data]
+    keys_p   = [t[0] for t in present]
+    labels_p = [t[1] for t in present]
+    colors_p = [t[2] for t in present]
+
+    means = np.array([np.mean(data[k]) for k in keys_p])
+    stds  = np.array([np.std(data[k])  for k in keys_p])
+
+    fig, ax = plt.subplots(figsize=(max(8, len(present) * 1.15), 6.0))
+    x = np.arange(len(present))
+
+    ax.bar(
+        x, means, yerr=stds,
+        color=colors_p,
+        edgecolor="white",
+        linewidth=0.5,
+        width=0.58,
+        zorder=3,
+        error_kw=dict(ecolor="#333333", capsize=4,
+                      elinewidth=1.0, capthick=1.0, zorder=4),
+    )
+
+    # ── Significance brackets: Hybrid 80:20 vs each reference ────────────
+    top_key = "Hybrid 80:20"
+    bracket_base = max(means + stds) + 0.010
+    step = 0.022
+    if top_key in keys_p:
+        top_idx = keys_p.index(top_key)
+
+        for ref_i, (ref_key, _, _) in enumerate(REFERENCE_KEYS):
+            if ref_key not in keys_p:
+                continue
+            ref_idx = keys_p.index(ref_key)
+            a_vals = data[top_key]
+            b_vals = data[ref_key]
+            diffs  = [a - b for a, b in zip(a_vals, b_vals)]
+            nz     = [d for d in diffs if d != 0]
+            if len(nz) >= 2:
+                _, pval = _wilcoxon(a_vals, b_vals, alternative="two-sided")
+                sig_str = "***" if pval < 0.001 else ("**" if pval < 0.01
+                          else ("*" if pval < 0.05 else "n.s."))
+            else:
+                sig_str = "ties"
+
+            y_br = bracket_base + ref_i * step
+            bx0  = float(x[min(top_idx, ref_idx)])
+            bx1  = float(x[max(top_idx, ref_idx)])
+            ax.plot(
+                [bx0, bx0, bx1, bx1],
+                [y_br - 0.003, y_br, y_br, y_br - 0.003],
+                lw=1.0, color="#333333", zorder=5,
+            )
+            ax.text(
+                (bx0 + bx1) / 2, y_br + 0.001,
+                sig_str,
+                ha="center", va="bottom", fontsize=8.5, color="#333333", zorder=5,
+            )
+
+    # ── Vertical separator between top cluster and references ─────────────
+    sep_x = len(TOP_CLUSTER) - 0.5
+    ax.axvline(sep_x, color="#aaaaaa", linestyle="--", linewidth=0.9, zorder=2)
+
+    # Determine y limits before adding annotations
+    y_bottom = max(0.0, min(means) - 4 * max(stds) - 0.01)
+    y_ceiling = bracket_base + len(REFERENCE_KEYS) * step + 0.030
+    ax.set_ylim(y_bottom, y_ceiling)
+
+    # Label the two sections inside the plot area near the bottom
+    y_label = y_bottom + (y_ceiling - y_bottom) * 0.03
+    ax.text(sep_x - len(TOP_CLUSTER) / 2, y_label,
+            "top cluster", ha="center", va="bottom", fontsize=8,
+            color="#555555", style="italic")
+    ax.text(sep_x + (len(present) - len(TOP_CLUSTER)) / 2, y_label,
+            "reference methods", ha="center", va="bottom", fontsize=8,
+            color="#555555", style="italic")
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels_p, fontsize=9.5, rotation=18, ha="right")
+    ax.set_ylabel("Mean Normalised Hypervolume", fontsize=10)
+    ax.set_title(
+        "Top Cluster vs Reference Methods"
+        "   (mean \u00b1 std over all instances  \u00b7  brackets: Wilcoxon two-sided)",
+        fontsize=10,
+        fontweight="bold",
+    )
+    ax.yaxis.grid(True, alpha=0.25, zorder=0)
+    ax.set_axisbelow(True)
+    fig.tight_layout()
+    _save_fig(fig, output_path)
+    plt.close(fig)
+    print(f"  Saved: {output_path}", flush=True)
+
+
+def generate_ranking_plots(output_dir: Path) -> None:
+    """Generate CD diagram, Bayesian simplex plots, and cluster bar chart."""
+    print("\nGenerating ranking plots …", flush=True)
+    plot_cd_diagram(output_dir,     output_dir / "fig_cd_diagram.png")
+    plot_bayesian_tests(output_dir, output_dir / "fig_bayesian_tests.png")
+    plot_cluster_bars(output_dir,   output_dir / "fig_cluster_bars.png")
+    print("Ranking plots done.", flush=True)
+
+
 # ─── CLI ──────────────────────────────────────────────────────────────
 
 
@@ -3736,6 +6939,14 @@ def main() -> int:
         type=str,
         default=None,
         help="Regex filter on instance name",
+    )
+    parser.add_argument(
+        "--biobjective",
+        action="store_true",
+        help=(
+            "Run in 2-objective mode (min_cost + cloud_coverage) instead of "
+            "the default 4 objectives. Affects OBJECTIVES globally for this run."
+        ),
     )
     parser.add_argument(
         "--output-dir",
@@ -3796,11 +7007,24 @@ def main() -> int:
         "--pseudo-source",
         type=str,
         default="gpbaa",
-        choices=["gpbaa", "monise", "pseudo_solver_solutions"],
+        choices=[
+            "gpbaa", "monise", "gpbaa_2d", "monise_2d",
+            "gpbaa_2d_pub", "gpbaa_2d_highs", "an_2d_highs", "monise_2d_pub", "pseudo_solver_solutions",
+            "gpbaa_2d_gurobi", "an_2d_gurobi",
+        ],
         help=(
             "Source of initial-population solutions for hybrid configs. "
-            "'gpbaa' uses GPBA-A solutions (default), "
-            "'monise' uses MONISE-generated solutions."
+            "'gpbaa'/'monise' use 4D pre-recorded solutions; "
+            "'gpbaa_2d'/'monise_2d' use 2D biobjective OR-Tools solutions on test instances; "
+            "'gpbaa_2d_pub'/'monise_2d_pub' use 2D solutions on publication instances."
+        ),
+    )
+    parser.add_argument(
+        "--pub-instances",
+        action="store_true",
+        help=(
+            "Use publication-data instances (100/150/200/250 images, 5 cities) "
+            "instead of the default test instances."
         ),
     )
     parser.add_argument(
@@ -3819,15 +7043,169 @@ def main() -> int:
             "from existing JSON artifacts in --output-dir, then exit."
         ),
     )
+    parser.add_argument(
+        "--ranking-plots",
+        action="store_true",
+        help=(
+            "Generate CD diagram, Bayesian signed-rank simplex plots, and top-cluster "
+            "bar chart from existing JSON artifacts in --output-dir, then exit."
+        ),
+    )
+    parser.add_argument(
+        "--pareto-fronts",
+        action="store_true",
+        help=(
+            "Reconstruct the paper's per-instance `{instance}_pareto_fronts.png` "
+            "figures (2 rows: GPBA-A + Aneja & Nair; phase-separated hatched HV "
+            "bars + front scatters) from trace artifacts, then exit. Uses "
+            "--highs-dir and --an-dir; writes to --output-dir."
+        ),
+    )
+    parser.add_argument(
+        "--friedman",
+        action="store_true",
+        help=(
+            "Friedman test over instances with all-pairs post-hoc and "
+            "Bergmann-Hommel correction (verified against scmamp). Prints "
+            "average ranks and the adjusted p-matrix, and writes "
+            "`friedman_ranking.tex` to --output-dir, then exits."
+        ),
+    )
+    parser.add_argument(
+        "--ea-tables",
+        action="store_true",
+        help=(
+            "Emit `ea_hv_gpbaa.tex` / `ea_hv_aneja.tex`: LaTeX longtables of "
+            "hypervolume by second-phase algorithm (PLS, NSGA-II, NSGA-III, "
+            "MOEA/D), mean +/- SD over 10 runs. Same numbers as --ea-bars. "
+            "Uses --highs-dir and --an-dir; writes to --output-dir, then exits."
+        ),
+    )
+    parser.add_argument(
+        "--ea-bars",
+        action="store_true",
+        help=(
+            "Per-instance `{instance}_ea_bars.png`: same 2x4 layout as "
+            "--pareto-fronts, but every panel is a phase-decomposed HV bar "
+            "chart. Rows = exact method (GPBA-A, Aneja & Nair), columns = "
+            "second-phase engine (PLS, NSGA-II, NSGA-III, MOEA/D). Uses "
+            "--highs-dir and --an-dir; writes to --output-dir, then exits."
+        ),
+    )
+    parser.add_argument(
+        "--highs-dir",
+        type=Path,
+        default=Path("results/eval_publication_highs"),
+        help="GPBA-A trace-artifact dir for --pareto-fronts (default: results/eval_publication_highs)",
+    )
+    parser.add_argument(
+        "--an-dir",
+        type=Path,
+        default=Path("results/eval_publication_an"),
+        help="Aneja & Nair trace-artifact dir for --pareto-fronts (default: results/eval_publication_an)",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=None,
+        help="Override timeout (seconds) for all instances, ignoring the size-based schedule",
+    )
+    parser.add_argument(
+        "--runs",
+        type=int,
+        default=1,
+        help=(
+            "Number of independent runs per config for statistical error bars "
+            "(default: 1). When > 1, PLS configs run non-deterministically and "
+            "EA configs use seed=run_index. JSON output gains run_hvs, "
+            "final_hv (mean) and final_hv_std fields."
+        ),
+    )
+
     args = parser.parse_args()
+
+    # Apply timeout override globally.
+    global _timeout_override
+    _timeout_override = args.timeout
+
+    # Enable non-deterministic PLS when running multiple iterations.
+    global _force_nondeterministic
+    if args.runs > 1:
+        _force_nondeterministic = True
+        print(f"Non-deterministic mode enabled ({args.runs} runs per config)", flush=True)
+
+    # Apply biobjective mode globally (affects OBJECTIVES used by every config's
+    # .run() and by bounds/HV-curve computation throughout run_instance()).
+    global OBJECTIVES
+    if args.biobjective:
+        OBJECTIVES = ["min_cost", "cloud_coverage"]
+        print(f"Biobjective mode: OBJECTIVES = {OBJECTIVES}")
 
     # Apply pseudo-solution source globally (affects all _load_pseudo_solutions calls)
     global _PSEUDO_SOLUTIONS_SOURCE, _pseudo_cache
     _PSEUDO_SOLUTIONS_SOURCE = args.pseudo_source
     _pseudo_cache.clear()  # invalidate cache when source changes
 
-    # Filter instances and sort by size so all size-30 run before size-50, etc.
-    instances = ALL_INSTANCES
+    # Pareto-front figure reconstruction (self-contained; no instances/solves).
+    if args.pareto_fronts:
+        generate_pareto_front_figures(
+            args.highs_dir,
+            args.an_dir,
+            args.output_dir,
+            filter_regex=args.filter,
+            num_points=args.num_points,
+        )
+        return 0
+
+    if args.friedman:
+        run_friedman_test(
+            args.highs_dir,
+            args.an_dir,
+            args.output_dir,
+            filter_regex=args.filter,
+            num_points=args.num_points,
+        )
+        return 0
+
+    if args.ea_tables:
+        generate_ea_tables(
+            args.highs_dir,
+            args.an_dir,
+            args.output_dir,
+            filter_regex=args.filter,
+            num_points=args.num_points,
+        )
+        return 0
+
+    if args.ea_bars:
+        generate_ea_bar_figures(
+            args.highs_dir,
+            args.an_dir,
+            args.output_dir,
+            filter_regex=args.filter,
+            num_points=args.num_points,
+        )
+        return 0
+
+    # Override instance set for publication experiments.
+    global INSTANCES_DIR
+    if args.pub_instances:
+        INSTANCES_DIR = Path(__file__).parent.parent / "publication-data" / "experiments"
+        _pub_cities = [
+            ("lagos_nigeria", [100, 150, 200, 250]),
+            ("mexico_city", [100, 150, 200, 250]),
+            ("paris", [100, 150, 200, 250]),
+            ("rio_de_janeiro", [100, 150, 200, 250]),
+            ("tokyo_bay", [100, 150, 200, 250]),
+        ]
+        instances = [
+            (f"{city}_{size}", f"{city}_{size}/{city}_{size}.dzn", size)
+            for city, sizes in _pub_cities
+            for size in sizes
+            if (INSTANCES_DIR / f"{city}_{size}" / f"{city}_{size}.dzn").exists()
+        ]
+    else:
+        instances = ALL_INSTANCES
     if args.max_size is not None:
         instances = [(n, f, s) for n, f, s in instances if s <= args.max_size]
     if args.filter is not None:
@@ -3843,7 +7221,7 @@ def main() -> int:
     all_known_configs = CONFIGS + [
         c for c in MONISE_CONFIGS if c.label not in {x.label for x in CONFIGS}
     ]
-    default_pool = MONISE_CONFIGS if args.pseudo_source == "monise" else CONFIGS
+    default_pool = MONISE_CONFIGS if args.pseudo_source in ("monise", "monise_2d", "monise_2d_pub") else CONFIGS
 
     configs = default_pool
     if args.configs is not None:
@@ -3865,6 +7243,10 @@ def main() -> int:
         print_wilcoxon_tests(args.output_dir, monise_dir=args.compare_dir)
         return 0
 
+    if args.ranking_plots:
+        generate_ranking_plots(args.output_dir)
+        return 0
+
     if args.replot:
         replot_from_dir(
             args.output_dir,
@@ -3882,6 +7264,7 @@ def main() -> int:
         print(f"Configs (>{args.large_threshold}):  {[c.label for c in large_configs]}")
     print(f"Output:    {args.output_dir}")
     print(f"HV points: {args.num_points}")
+    print(f"Runs/config: {args.runs}")
 
     all_results: list[dict] = []
     t_start = time.time()
@@ -3898,6 +7281,7 @@ def main() -> int:
                 args.output_dir,
                 args.num_points,
                 active_configs,
+                num_runs=args.runs,
             )
             all_results.append(result)
         except Exception as e:

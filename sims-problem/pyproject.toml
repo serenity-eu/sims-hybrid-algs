@@ -12,9 +12,11 @@ classifiers = [
 ]
 dynamic = ["version"]
 dependencies = [
+    "baycomp>=1.0.3",
     "plotly>=6.3.1",
     "pymoo>=0.6.1.6",
     "rich>=14.2.0",
+    "scikit-posthocs>=0.14.0",
     "sims-solvers",
 ]
 

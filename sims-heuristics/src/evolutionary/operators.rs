@@ -26,10 +26,12 @@
 //!   covered by other selected images (most expensive first).
 
 use fixedbitset::FixedBitSet;
-use rand::rngs::SmallRng;
-use rand::seq::{IteratorRandom, SliceRandom};
 use rand::Rng;
+use rand::RngCore;
+use rand::rngs::SmallRng;
+use rand::seq::IteratorRandom;
 
+use crate::objective_tracker::{ProvenSafeTrackerArray, TrackerCollection};
 use crate::problem::SetCoverProblem;
 use crate::solution::ImageSet;
 use crate::solution_impl::bitset_encoded_solution::BitsetEncodedSolution;
@@ -46,11 +48,14 @@ use crate::solution_impl::bitset_encoded_solution::BitsetEncodedSolution;
 /// or randomly.
 ///
 /// This is the most critical operator: every crossover and most mutations call it.
-/// When the problem exposes `image_bitset()`, bulk FixedBitSet word ops replace
+/// When the problem exposes `image_bitset()`, bulk `FixedBitSet` word ops replace
 /// element-by-element iteration (O(N/64) vs O(N) for coverage updates and gain
 /// computation).
-pub fn greedy_repair<P, const D: usize>(selected: &mut FixedBitSet, problem: &P, rng: &mut SmallRng)
-where
+pub fn greedy_repair<P, const D: usize>(
+    selected: &mut FixedBitSet,
+    problem: &P,
+    trackers: &mut ProvenSafeTrackerArray<D>,
+) where
     P: SetCoverProblem<D> + Clone + Send + Sync,
 {
     // Ensure the bitset can hold all image indices (it may have been
@@ -58,6 +63,7 @@ where
     selected.grow(problem.num_images());
 
     let universe_size = problem.num_elements();
+    let num_images = problem.num_images();
 
     // Build covered-elements bitset from current selection.
     // Fast path: union_with is a SIMD word-level OR, O(universe_size/64).
@@ -72,103 +78,69 @@ where
         }
     }
 
-    if covered.count_ones(..) >= universe_size {
-        return; // already feasible
-    }
+    // Add images until every element is covered, choosing each addition with the
+    // same objective-aware ranking PLS uses: `best_unselected_images_with_trackers`
+    // prefers the cheapest scaled cost+cloud delta among images that cover a
+    // currently-uncovered element (equal weights, deterministic — no per-repair
+    // RNG, so runs stay seed-reproducible). `trackers` is kept in sync as we add.
+    while covered.count_ones(..) < universe_size {
+        // `covered` has capacity == universe_size, so its zero bits are exactly
+        // the uncovered element indices.
+        let uncovered: Vec<usize> = covered.zeroes().collect();
 
-    // Collect uncovered element indices and shuffle for unbiased repair
-    let mut uncovered: Vec<usize> = (0..universe_size)
-        .filter(|&e| !covered.contains(e))
-        .collect();
-    uncovered.shuffle(rng);
-
-    // Process uncovered elements in random order
-    let mut idx = 0;
-    while idx < uncovered.len() {
-        let elem = uncovered[idx];
-        if covered.contains(elem) {
-            idx += 1;
-            continue;
-        }
-
-        // Find the best image covering this element (max uncovered coverage).
-        // Fast path: gain = |candidate \ covered| = |candidate| - |candidate ∩ covered|
-        let mut best_image = None;
-        let mut best_gain: usize = 0;
-
-        for candidate in problem.element_images(elem) {
-            if selected.contains(candidate) {
-                continue; // already selected
-            }
-            let gain = if let Some(bs) = problem.image_bitset(candidate) {
-                bs.count_ones(..) - bs.intersection_count(&covered)
-            } else {
+        let chosen = BitsetEncodedSolution::<P, D>::best_unselected_images_with_trackers(
+            selected, trackers, &uncovered, problem, true,
+        )
+        .and_then(|imgs| imgs.into_iter().next())
+        .or_else(|| {
+            // Fallback: any unselected image covering some uncovered element.
+            uncovered.iter().find_map(|&e| {
                 problem
-                    .image_elements(candidate)
-                    .filter(|&e| !covered.contains(e))
-                    .count()
-            };
-            if gain > best_gain {
-                best_gain = gain;
-                best_image = Some(candidate);
-            }
-        }
+                    .element_images(e)
+                    .find(|&c| c < num_images && !selected.contains(c))
+            })
+        });
 
-        if let Some(img) = best_image {
-            selected.insert(img);
-            if let Some(bs) = problem.image_bitset(img) {
-                covered.union_with(bs);
-            } else {
-                for e in problem.image_elements(img) {
-                    covered.insert(e);
-                }
-            }
+        let Some(img) = chosen else {
+            break; // remaining elements are uncoverable (malformed instance)
+        };
+
+        selected.insert(img);
+        trackers.track_image_addition(img, problem);
+        if let Some(bs) = problem.image_bitset(img) {
+            covered.union_with(bs);
         } else {
-            // Fallback: pick any unselected image covering the element
-            if let Some(img) = problem
-                .element_images(elem)
-                .find(|&c| !selected.contains(c))
-            {
-                selected.insert(img);
-                if let Some(bs) = problem.image_bitset(img) {
-                    covered.union_with(bs);
-                } else {
-                    for e in problem.image_elements(img) {
-                        covered.insert(e);
-                    }
-                }
+            for elem in problem.image_elements(img) {
+                covered.insert(elem);
             }
-            // If still no image found the element is simply uncoverable (shouldn't happen
-            // on well-formed instances).
         }
-
-        idx += 1;
     }
 }
 
-/// Remove redundant images from the selection (most-expensive-first heuristic).
+/// Remove redundant images, worst-objective-first.
 ///
 /// An image is *redundant* if every element it covers is also covered by at least
 /// one other selected image. Removing redundant images improves cost-related
 /// objectives without violating feasibility.
 ///
+/// Redundant images are dropped in the order given by PLS's objective-aware
+/// `worst_selected_images_with_trackers` ranking (least scaled cost+cloud value
+/// per covered element first), so the least useful images go first. `trackers`
+/// is kept in sync with each removal.
+///
 /// Fast path (when `image_bitset` is available): the redundancy check uses a
-/// `doubly_covered` FixedBitSet and `is_subset`, replacing the per-element count
+/// `doubly_covered` `FixedBitSet` and `is_subset`, replacing the per-element count
 /// loop with a single O(universe/64) bitset scan.
 pub fn remove_redundant_images<P, const D: usize>(
     selected: &mut FixedBitSet,
     problem: &P,
-    rng: &mut SmallRng,
+    trackers: &mut ProvenSafeTrackerArray<D>,
 ) where
     P: SetCoverProblem<D> + Clone + Send + Sync,
 {
     selected.grow(problem.num_images());
 
     let universe_size = problem.num_elements();
-
-    // Collect selected images, shuffle for tie-breaking diversity.
-    let mut candidates: Vec<usize> = selected.ones().collect();
-    candidates.shuffle(rng);
 
     // Build per-element coverage counts and a doubly_covered bitset.
     // doubly_covered[e] = true iff element e is covered by ≥2 selected images.
@@ -177,7 +149,7 @@ pub fn remove_redundant_images<P, const D: usize>(
     let mut coverage_count = vec![0u32; universe_size];
     let mut doubly_covered = FixedBitSet::with_capacity(universe_size);
 
-    for &img in &candidates {
+    for img in selected.ones() {
         if let Some(bs) = problem.image_bitset(img) {
             for elem in bs.ones() {
                 coverage_count[elem] += 1;
@@ -195,14 +167,17 @@ pub fn remove_redundant_images<P, const D: usize>(
         }
     }
 
-    // Sort ascending by element count (fewest-covering images removed first).
-    // Fast path: bs.count_ones() replaces iterator count.
-    candidates.sort_by_key(|&img| {
-        problem.image_bitset(img).map_or_else(
-            || problem.image_elements(img).count(),
-            |bs| bs.count_ones(..),
-        )
-    });
+    // Worst-first objective order over all currently selected images (equal weights,
+    // deterministic). Computed once; coverage_count is updated as removals happen so
+    // later redundancy checks see the shrinking selection.
+    let num_selected = selected.count_ones(..);
+    let candidates = BitsetEncodedSolution::<P, D>::worst_selected_images_with_trackers(
+        selected,
+        trackers,
+        problem,
+        true,
+        num_selected,
+    );
 
     for img in candidates {
         if !selected.contains(img) {
@@ -221,6 +196,7 @@ pub fn remove_redundant_images<P, const D: usize>(
 
         if is_redundant {
             selected.toggle(img);
+            trackers.track_image_removal(img, problem);
             // Update coverage_count and doubly_covered for the removed image.
             if let Some(bs) = problem.image_bitset(img) {
                 for elem in bs.ones() {
@@ -241,16 +217,31 @@ pub fn remove_redundant_images<P, const D: usize>(
     }
 }
 
-/// Full repair pipeline: greedy cover then redundancy removal.
+/// Full repair pipeline: objective-aware greedy cover then worst-first redundancy
+/// removal.
+///
+/// Builds one tracker synced to `selected` and threads it through both
+/// phases, so they reuse PLS's exact image-ranking primitives
+/// (`best_unselected_images_with_trackers` / `worst_selected_images_with_trackers`).
+///
+/// Repair is deterministic given the selection (equal objective weights, no RNG),
+/// so the `_rng` argument is retained only for signature compatibility with the
+/// many crossover/mutation call sites.
+/// Returns the final objective values of the repaired selection (from the synced
+/// tracker), so callers can build the solution without a second
+/// `recalculate_objectives` pass.
 pub fn repair_and_prune<P, const D: usize>(
     selected: &mut FixedBitSet,
     problem: &P,
-    rng: &mut SmallRng,
-) where
+    _rng: &mut SmallRng,
+) -> [u64; D]
+where
     P: SetCoverProblem<D> + Clone + Send + Sync,
 {
-    greedy_repair::<P, D>(selected, problem, rng);
-    remove_redundant_images::<P, D>(selected, problem, rng);
+    let mut trackers = BitsetEncodedSolution::<P, D>::synced_trackers(selected, problem);
+    greedy_repair::<P, D>(selected, problem, &mut trackers);
+    remove_redundant_images::<P, D>(selected, problem, &mut trackers);
+    trackers.values()
 }
 
 // ---------------------------------------------------------------------------
@@ -269,28 +260,39 @@ where
     P: SetCoverProblem<D> + Clone + Send + Sync,
 {
     let num_images = problem.num_images();
-    let mut child_selected = FixedBitSet::with_capacity(num_images);
+    let a = &parent_a.selected_images;
+    let b = &parent_b.selected_images;
 
-    for img in 0..num_images {
-        let in_a = parent_a.is_image_selected(img);
-        let in_b = parent_b.is_image_selected(img);
-        let include = match (in_a, in_b) {
-            (true, true) => true,
-            (false, false) => false,
-            _ => rng.random_bool(0.5),
-        };
-        if include {
-            child_selected.insert(img);
-        }
-    }
+    // Random mask: one RNG word per block (vs one `random_bool` per differing
+    // image in the scalar version). `next_u64` avoids any distribution bound.
+    let num_blocks = a.as_slice().len();
+    let mask = FixedBitSet::with_capacity_and_blocks(
+        num_images,
+        (0..num_blocks).map(|_| rng.next_u64() as usize),
+    );
 
-    repair_and_prune::<P, D>(&mut child_selected, problem, rng);
+    // Vectorised uniform crossover via FixedBitSet's (SIMD-accelerated) bitwise
+    // operators — four binary ops:
+    //   child = (a & b) | ((a ^ b) & mask)
+    // Bits where the parents agree are inherited directly; each differing bit is
+    // taken from the random mask (50/50), matching the per-image semantics.
+    // Both parents have their unused trailing bits cleared, so `(a ^ b) & mask`
+    // is 0 in the tail regardless of the mask — the child stays valid even
+    // though `mask`'s final block may hold random high bits.
+    let mut child_selected = &(a & b) | &(&(a ^ b) & &mask);
 
-    let selected_vec: Vec<usize> = child_selected.ones().collect();
-    BitsetEncodedSolution::from_selected_images(&selected_vec, problem)
+    let objectives = repair_and_prune::<P, D>(&mut child_selected, problem, rng);
+
+    BitsetEncodedSolution::from_selected_ones_with_objectives(
+        child_selected.ones(),
+        objectives,
+        problem,
+    )
 }
 
-/// Coverage-biased crossover: builds offspring by first taking the *intersection*
+/// Coverage-biased crossover.
+///
+/// Builds offspring by first taking the *intersection*
 /// of both parents (images selected in both), then greedily adding images from
 /// the *symmetric difference* (images in exactly one parent) to cover the remaining
 /// elements, preferring images that cover more uncovered elements.
@@ -357,10 +359,13 @@ where
     }
 
     // Repair anything still uncovered (could happen if parents together don't cover)
-    repair_and_prune::<P, D>(&mut child_selected, problem, rng);
+    let objectives = repair_and_prune::<P, D>(&mut child_selected, problem, rng);
 
-    let selected_vec: Vec<usize> = child_selected.ones().collect();
-    BitsetEncodedSolution::from_selected_images(&selected_vec, problem)
+    BitsetEncodedSolution::from_selected_ones_with_objectives(
+        child_selected.ones(),
+        objectives,
+        problem,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -399,10 +404,13 @@ where
         child_selected.toggle(img_to_remove);
     }
 
-    repair_and_prune::<P, D>(&mut child_selected, problem, rng);
+    let objectives = repair_and_prune::<P, D>(&mut child_selected, problem, rng);
 
-    let selected_vec: Vec<usize> = child_selected.ones().collect();
-    BitsetEncodedSolution::from_selected_images(&selected_vec, problem)
+    BitsetEncodedSolution::from_selected_ones_with_objectives(
+        child_selected.ones(),
+        objectives,
+        problem,
+    )
 }
 
 /// Multi-swap mutation: removes `k` random images and re-repairs.
@@ -436,10 +444,13 @@ where
         child_selected.toggle(img);
     }
 
-    repair_and_prune::<P, D>(&mut child_selected, problem, rng);
+    let objectives = repair_and_prune::<P, D>(&mut child_selected, problem, rng);
 
-    let selected_vec: Vec<usize> = child_selected.ones().collect();
-    BitsetEncodedSolution::from_selected_images(&selected_vec, problem)
+    BitsetEncodedSolution::from_selected_ones_with_objectives(
+        child_selected.ones(),
+        objectives,
+        problem,
+    )
 }
 
 /// Add-then-prune mutation: adds a random unselected image, then removes any
@@ -466,13 +477,20 @@ where
         child_selected.insert(img_to_add);
     }
 
-    remove_redundant_images::<P, D>(&mut child_selected, problem, rng);
+    let mut trackers = BitsetEncodedSolution::<P, D>::synced_trackers(&child_selected, problem);
+    remove_redundant_images::<P, D>(&mut child_selected, problem, &mut trackers);
+    let objectives = trackers.values();
 
-    let selected_vec: Vec<usize> = child_selected.ones().collect();
-    BitsetEncodedSolution::from_selected_images(&selected_vec, problem)
+    BitsetEncodedSolution::from_selected_ones_with_objectives(
+        child_selected.ones(),
+        objectives,
+        problem,
+    )
 }
 
-/// Coverage-guided shift mutation: removes a randomly chosen selected image and
+/// Coverage-guided shift mutation.
+///
+/// Removes a randomly chosen selected image and
 /// replaces it with the unselected image that covers the most elements that would
 /// become exposed (uncovered) by the removal, while also covering the most
 /// additional *already-covered* elements (to maximize overlap and enable further
@@ -483,7 +501,7 @@ where
 /// redundant due to the new image's coverage, effectively "shifting" the solution
 /// in objective space.
 ///
-/// Fast path: `exposed_elements` is a FixedBitSet, and candidate scoring uses
+/// Fast path: `exposed_elements` is a `FixedBitSet`, and candidate scoring uses
 /// `intersection_count` + `count_ones` instead of linear `Vec::contains` search.
 pub fn shift_mutation<P, const D: usize>(
     solution: &BitsetEncodedSolution<P, D>,
@@ -506,9 +524,8 @@ where
     }
 
     // Pick a random selected image to remove
-    let img_to_remove = match child_selected.ones().choose(rng) {
-        Some(img) => img,
-        None => return solution.clone(),
+    let Some(img_to_remove) = child_selected.ones().choose(rng) else {
+        return solution.clone();
     };
 
     // Collect elements that would become exposed (uncovered) if we remove this image.
@@ -556,19 +573,20 @@ where
             continue;
         }
 
-        let (exposed_coverage, total_coverage) = if let Some(bs) = problem.image_bitset(candidate) {
-            (bs.intersection_count(&exposed_elements), bs.count_ones(..))
-        } else {
-            let mut exp = 0usize;
-            let mut tot = 0usize;
-            for elem in problem.image_elements(candidate) {
-                tot += 1;
-                if exposed_elements.contains(elem) {
-                    exp += 1;
+        let (exposed_coverage, total_coverage) = problem.image_bitset(candidate).map_or_else(
+            || {
+                let mut exp = 0usize;
+                let mut tot = 0usize;
+                for elem in problem.image_elements(candidate) {
+                    tot += 1;
+                    if exposed_elements.contains(elem) {
+                        exp += 1;
+                    }
                 }
-            }
-            (exp, tot)
-        };
+                (exp, tot)
+            },
+            |bs| (bs.intersection_count(&exposed_elements), bs.count_ones(..)),
+        );
 
         if exposed_coverage > best_exposed_coverage
             || (exposed_coverage == best_exposed_coverage && total_coverage > best_total_coverage)
@@ -584,10 +602,13 @@ where
     }
 
     // Repair and prune to ensure feasibility and leanness
-    repair_and_prune::<P, D>(&mut child_selected, problem, rng);
+    let objectives = repair_and_prune::<P, D>(&mut child_selected, problem, rng);
 
-    let selected_vec: Vec<usize> = child_selected.ones().collect();
-    BitsetEncodedSolution::from_selected_images(&selected_vec, problem)
+    BitsetEncodedSolution::from_selected_ones_with_objectives(
+        child_selected.ones(),
+        objectives,
+        problem,
+    )
 }
 
 /// Ensures at least one mutation is applied. If `mutated` is identical to `original`
@@ -623,25 +644,55 @@ where
     P: SetCoverProblem<D> + Clone + Send + Sync,
 {
     let num_images = problem.num_images();
+
+    // Nothing can flip — return the original untouched (keeps cached objectives).
+    if per_bit_rate <= 0.0 || num_images == 0 {
+        return solution.clone();
+    }
+
     let mut child_selected = solution.selected_images.clone();
     child_selected.grow(num_images);
 
-    let mut any_flip = false;
-    for img in 0..num_images {
-        if rng.random_bool(per_bit_rate) {
+    let any_flip = if per_bit_rate >= 1.0 {
+        for img in 0..num_images {
             child_selected.toggle(img);
-            any_flip = true;
         }
-    }
+        num_images > 0
+    } else {
+        // Geometric skip-sampling. Each image flips independently with probability
+        // `per_bit_rate`, so the number of images kept before the next flip is
+        // Geometric(p): for u ~ Uniform(0,1], gap = floor(ln(u) / ln(1-p)). We jump
+        // straight to each flipped image, using one RNG draw per *flip* (≈ N·p in
+        // expectation) instead of one Bernoulli draw per image.
+        let log_keep = (1.0 - per_bit_rate).ln(); // < 0 for 0 < p < 1
+        let mut pos: usize = 0;
+        let mut flipped = false;
+        loop {
+            // u ∈ (0, 1] avoids ln(0) = -inf (random::<f64>() yields [0, 1)).
+            let u = 1.0 - rng.random::<f64>();
+            let gap = (u.ln() / log_keep).floor() as usize;
+            pos = pos.saturating_add(gap);
+            if pos >= num_images {
+                break;
+            }
+            child_selected.toggle(pos);
+            flipped = true;
+            pos += 1;
+        }
+        flipped
+    };
 
     if !any_flip {
         return solution.clone();
     }
 
-    repair_and_prune::<P, D>(&mut child_selected, problem, rng);
+    let objectives = repair_and_prune::<P, D>(&mut child_selected, problem, rng);
 
-    let selected_vec: Vec<usize> = child_selected.ones().collect();
-    BitsetEncodedSolution::from_selected_images(&selected_vec, problem)
+    BitsetEncodedSolution::from_selected_ones_with_objectives(
+        child_selected.ones(),
+        objectives,
+        problem,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -675,6 +726,7 @@ where
 /// front index of solution `i` (0 = first Pareto front, 1 = second, …).
 ///
 /// Uses the standard fast non-dominated sorting from Deb et al. (2002).
+#[must_use]
 pub fn fast_non_dominated_sort<P, const D: usize>(
     population: &[BitsetEncodedSolution<P, D>],
 ) -> Vec<Vec<usize>>
@@ -727,6 +779,7 @@ where
 ///
 /// Returns a `Vec<f64>` of the same length as `front`, giving the crowding distance
 /// for each solution in the front. Boundary solutions receive `f64::INFINITY`.
+#[must_use]
 pub fn crowding_distance<P, const D: usize>(
     population: &[BitsetEncodedSolution<P, D>],
     front: &[usize],
@@ -780,6 +833,7 @@ where
 /// `tchebycheff(x, w, z*) = max_i { w_i * |f_i(x) - z*_i| }`
 ///
 /// Lower is better.
+#[must_use]
 pub fn tchebycheff_value<const D: usize>(
     objectives: &[u64; D],
     weight: &[f64; D],
@@ -804,6 +858,7 @@ pub fn tchebycheff_value<const D: usize>(
 /// `ws(x, w) = sum_i { w_i * f_i(x) }`
 ///
 /// Lower is better (all objectives are minimization).
+#[must_use]
 pub fn weighted_sum_value<const D: usize>(objectives: &[u64; D], weight: &[f64; D]) -> f64 {
     let mut sum = 0.0f64;
     for i in 0..D {
@@ -819,6 +874,7 @@ pub fn weighted_sum_value<const D: usize>(objectives: &[u64; D], weight: &[f64; 
 /// For D>=3 it produces points on the (D-1)-simplex with `n` divisions per axis.
 ///
 /// The number of generated vectors equals C(n + D - 1, D - 1).
+#[must_use]
 pub fn generate_weight_vectors<const D: usize>(num_divisions: usize) -> Vec<[f64; D]> {
     let mut weights: Vec<[f64; D]> = Vec::new();
     let mut current = [0.0f64; D];
@@ -846,6 +902,7 @@ fn generate_weights_recursive<const D: usize>(
 }
 
 /// Compute the ideal point (component-wise minimum) from a population.
+#[must_use]
 pub fn compute_ideal_point<P, const D: usize>(
     population: &[BitsetEncodedSolution<P, D>],
 ) -> [f64; D]
@@ -856,10 +913,10 @@ where
 
     let mut ideal = [f64::INFINITY; D];
     for sol in population {
-        for i in 0..D {
-            let val = sol.objectives()[i] as f64;
-            if val < ideal[i] {
-                ideal[i] = val;
+        for (ideal_i, &obj) in ideal.iter_mut().zip(sol.objectives().iter()) {
+            let val = obj as f64;
+            if val < *ideal_i {
+                *ideal_i = val;
             }
         }
     }
@@ -894,6 +951,7 @@ pub fn binary_tournament(
 
 /// Compute per-solution rank array from the front structure returned by
 /// `fast_non_dominated_sort`.
+#[must_use]
 pub fn ranks_from_fronts(fronts: &[Vec<usize>], pop_size: usize) -> Vec<usize> {
     let mut ranks = vec![0usize; pop_size];
     for (rank, front) in fronts.iter().enumerate() {
@@ -905,6 +963,7 @@ pub fn ranks_from_fronts(fronts: &[Vec<usize>], pop_size: usize) -> Vec<usize> {
 }
 
 /// Compute per-solution crowding distance array from the front structure.
+#[must_use]
 pub fn crowding_from_fronts<P, const D: usize>(
     population: &[BitsetEncodedSolution<P, D>],
     fronts: &[Vec<usize>],
@@ -924,6 +983,7 @@ where
 }
 
 /// Euclidean distance between two weight vectors (used for MOEA/D neighbourhood).
+#[must_use]
 pub fn weight_distance<const D: usize>(a: &[f64; D], b: &[f64; D]) -> f64 {
     let mut sum = 0.0f64;
     for i in 0..D {
@@ -934,6 +994,11 @@ pub fn weight_distance<const D: usize>(a: &[f64; D], b: &[f64; D]) -> f64 {
 }
 
 /// For each weight vector, compute the indices of its `T` closest neighbours.
+///
+/// # Panics
+///
+/// Panics if any pairwise weight distance is NaN (weights are expected finite).
+#[must_use]
 pub fn compute_neighbourhoods<const D: usize>(
     weights: &[[f64; D]],
     neighbourhood_size: usize,

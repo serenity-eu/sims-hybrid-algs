@@ -1,10 +1,10 @@
 //! SIMD-optimized objective tracker implementation.
 //!
 //! Key optimizations:
-//! 1. Separate count arrays for two-level MinResolution (c0, c1)
+//! 1. Separate count arrays for two-level `MinResolution` (c0, c1)
 //! 2. Branchless delta computation with lookup tables
 //! 3. Software prefetching for CSR element iteration
-//! 4. SIMD vectorization using portable_simd (when available)
+//! 4. SIMD vectorization using `portable_simd` (when available)
 
 use fixedbitset::FixedBitSet;
 use std::cell::RefCell;
@@ -73,7 +73,8 @@ fn assert_interval_bounds(
         assert!(
             end <= target_len,
             "[{label}] interval start={} len={} -> end={end} OOB for target len={target_len} (image_index={image_index})",
-            iv.start, iv.len
+            iv.start,
+            iv.len
         );
     }
 }
@@ -94,7 +95,7 @@ fn build_intervals(elements: &[u32], offsets: &[usize]) -> (Vec<Interval>, Vec<u
     let mut intervals = Vec::with_capacity(elements.len() / 4); // Expect ~4x compression
     let mut interval_offsets = Vec::with_capacity(num_images + 1);
     interval_offsets.push(0);
-    
+
     for img in 0..num_images {
         let start = offsets[img];
         let end = offsets[img + 1];
@@ -102,24 +103,30 @@ fn build_intervals(elements: &[u32], offsets: &[usize]) -> (Vec<Interval>, Vec<u
             interval_offsets.push(intervals.len());
             continue;
         }
-        
+
         let img_elements = &elements[start..end];
         let mut run_start = img_elements[0];
         let mut run_len = 1u32;
-        
+
         for &e in &img_elements[1..] {
             if e == run_start + run_len {
                 run_len += 1;
             } else {
-                intervals.push(Interval { start: run_start, len: run_len });
+                intervals.push(Interval {
+                    start: run_start,
+                    len: run_len,
+                });
                 run_start = e;
                 run_len = 1;
             }
         }
-        intervals.push(Interval { start: run_start, len: run_len });
+        intervals.push(Interval {
+            start: run_start,
+            len: run_len,
+        });
         interval_offsets.push(intervals.len());
     }
-    
+
     (intervals, interval_offsets)
 }
 
@@ -146,9 +153,41 @@ pub struct SimdTrackerSharedData {
     pub clear_intervals_offsets: Arc<Vec<usize>>,
 }
 
-pub(super) fn simd_shared_data<const D: usize>(problem: &impl SetCoverProblem<D>) -> Arc<SimdTrackerSharedData> {
-    #[allow(clippy::ref_as_ptr)]
-    let key = problem as *const _ as usize;
+/// Flat CSR (`elements`, `offsets`) plus its interval-compressed
+/// (`intervals`, `interval offsets`) representation of image element coverage.
+type ImageElementCsr = (Arc<Vec<u32>>, Arc<Vec<usize>>, Vec<Interval>, Vec<usize>);
+
+/// Build the flat CSR representation of per-image element coverage plus its
+/// interval-compressed form, returning both wrapped for shared ownership.
+fn build_image_element_csr<const D: usize>(
+    problem: &impl SetCoverProblem<D>,
+    num_images: usize,
+) -> ImageElementCsr {
+    let mut image_elements = Vec::with_capacity(num_images * 20);
+    let mut image_elements_offsets = Vec::with_capacity(num_images + 1);
+    image_elements_offsets.push(0);
+    for img in 0..num_images {
+        for e in problem.image_elements(img) {
+            image_elements.push(e as u32);
+        }
+        image_elements_offsets.push(image_elements.len());
+    }
+
+    let (image_intervals, image_intervals_offsets) =
+        build_intervals(&image_elements, &image_elements_offsets);
+
+    (
+        Arc::new(image_elements),
+        Arc::new(image_elements_offsets),
+        image_intervals,
+        image_intervals_offsets,
+    )
+}
+
+pub(super) fn simd_shared_data<const D: usize>(
+    problem: &impl SetCoverProblem<D>,
+) -> Arc<SimdTrackerSharedData> {
+    let key = std::ptr::from_ref(problem) as usize;
 
     thread_local! {
         static CACHE: RefCell<HashMap<usize, Arc<SimdTrackerSharedData>>> = RefCell::new(HashMap::new());
@@ -160,22 +199,8 @@ pub(super) fn simd_shared_data<const D: usize>(problem: &impl SetCoverProblem<D>
 
     let num_images = problem.num_images();
 
-    // Build Image Elements CSR
-    let mut image_elements = Vec::with_capacity(num_images * 20);
-    let mut image_elements_offsets = Vec::with_capacity(num_images + 1);
-    image_elements_offsets.push(0);
-    for img in 0..num_images {
-        for e in problem.image_elements(img) {
-            image_elements.push(e as u32);
-        }
-        image_elements_offsets.push(image_elements.len());
-    }
-    
-    // Build interval-compressed image elements
-    let (image_intervals, image_intervals_offsets) = build_intervals(&image_elements, &image_elements_offsets);
-    
-    let image_elements = Arc::new(image_elements);
-    let image_elements_offsets = Arc::new(image_elements_offsets);
+    let (image_elements, image_elements_offsets, image_intervals, image_intervals_offsets) =
+        build_image_element_csr(problem, num_images);
 
     let mut image_costs: Option<Arc<Vec<u64>>> = None;
     let mut element_areas: Option<Arc<Vec<u64>>> = None;
@@ -202,18 +227,18 @@ pub(super) fn simd_shared_data<const D: usize>(problem: &impl SetCoverProblem<D>
                 let mut ce = Vec::with_capacity(num_images * 20);
                 let mut ce_offsets = Vec::with_capacity(num_images + 1);
                 ce_offsets.push(0);
-                for bits in clear_images.iter() {
+                for bits in clear_images {
                     for e in bits.ones() {
                         ce.push(e as u32);
                     }
                     ce_offsets.push(ce.len());
                 }
                 // Build interval-compressed clear elements
-                let (ci, ci_offsets) = build_intervals(&ce, &ce_offsets);
+                let (intervals, interval_offsets) = build_intervals(&ce, &ce_offsets);
                 clear_elements = Some(Arc::new(ce));
                 clear_elements_offsets = Some(Arc::new(ce_offsets));
-                clear_intervals = Some(Arc::new(ci));
-                clear_intervals_offsets = Some(Arc::new(ci_offsets));
+                clear_intervals = Some(Arc::new(intervals));
+                clear_intervals_offsets = Some(Arc::new(interval_offsets));
             }
             crate::objectives::ObjectiveState::MinResolution { resolutions, .. } => {
                 let mut levels = resolutions.clone();
@@ -226,7 +251,9 @@ pub(super) fn simd_shared_data<const D: usize>(problem: &impl SetCoverProblem<D>
                 resolution_levels = Some(Arc::new(levels));
                 image_resolution_level = Some(Arc::new(image_levels));
             }
-            crate::objectives::ObjectiveState::MaxIncidenceAngle { incidence_angles, .. } => {
+            crate::objectives::ObjectiveState::MaxIncidenceAngle {
+                incidence_angles, ..
+            } => {
                 let mut levels = incidence_angles.clone();
                 levels.sort_unstable();
                 levels.dedup();
@@ -274,24 +301,34 @@ pub struct SimdTotalCostState {
 }
 
 impl<const D: usize> ObjectiveTracker<D> for SimdTotalCostState {
-    #[inline(always)]
-    fn peek_removal_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+    #[inline]
+    fn peek_removal_delta(
+        &self,
+        image_index: usize,
+        _p: &impl SetCoverProblem<D>,
+        _s: &impl ImageSet<D>,
+    ) -> i64 {
         -(self.image_costs[image_index] as i64)
     }
 
-    #[inline(always)]
-    fn peek_addition_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+    #[inline]
+    fn peek_addition_delta(
+        &self,
+        image_index: usize,
+        _p: &impl SetCoverProblem<D>,
+        _s: &impl ImageSet<D>,
+    ) -> i64 {
         self.image_costs[image_index] as i64
     }
 
-    #[inline(always)]
+    #[inline]
     fn track_image_removal(&mut self, image_index: usize, _p: &impl SetCoverProblem<D>) -> i64 {
         let cost = self.image_costs[image_index];
         self.current_cost -= cost;
         -(cost as i64)
     }
 
-    #[inline(always)]
+    #[inline]
     fn track_image_addition(&mut self, image_index: usize, _p: &impl SetCoverProblem<D>) -> i64 {
         let cost = self.image_costs[image_index];
         self.current_cost += cost;
@@ -323,9 +360,20 @@ pub struct SimdCloudyAreaState {
 }
 
 impl<const D: usize> ObjectiveTracker<D> for SimdCloudyAreaState {
-    fn peek_removal_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+    fn peek_removal_delta(
+        &self,
+        image_index: usize,
+        _p: &impl SetCoverProblem<D>,
+        _s: &impl ImageSet<D>,
+    ) -> i64 {
         #[cfg(feature = "bounds_check")]
-        assert_csr_bounds("CloudyArea::peek_removal", image_index, &self.clear_elements_offsets, &self.clear_elements, self.counts.len());
+        assert_csr_bounds(
+            "CloudyArea::peek_removal",
+            image_index,
+            &self.clear_elements_offsets,
+            &self.clear_elements,
+            self.counts.len(),
+        );
         let start = unsafe { *self.clear_elements_offsets.get_unchecked(image_index) };
         let end = unsafe { *self.clear_elements_offsets.get_unchecked(image_index + 1) };
         let clear_elements = unsafe { self.clear_elements.get_unchecked(start..end) };
@@ -334,16 +382,27 @@ impl<const D: usize> ObjectiveTracker<D> for SimdCloudyAreaState {
         for &element_u32 in clear_elements {
             let idx = element_u32 as usize;
             unsafe {
-                let is_last = (*self.counts.get_unchecked(idx) == 1) as i64;
+                let is_last = i64::from(*self.counts.get_unchecked(idx) == 1);
                 delta += is_last * (*self.element_areas.get_unchecked(idx) as i64);
             }
         }
         delta
     }
 
-    fn peek_addition_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+    fn peek_addition_delta(
+        &self,
+        image_index: usize,
+        _p: &impl SetCoverProblem<D>,
+        _s: &impl ImageSet<D>,
+    ) -> i64 {
         #[cfg(feature = "bounds_check")]
-        assert_csr_bounds("CloudyArea::peek_addition", image_index, &self.clear_elements_offsets, &self.clear_elements, self.counts.len());
+        assert_csr_bounds(
+            "CloudyArea::peek_addition",
+            image_index,
+            &self.clear_elements_offsets,
+            &self.clear_elements,
+            self.counts.len(),
+        );
         let start = unsafe { *self.clear_elements_offsets.get_unchecked(image_index) };
         let end = unsafe { *self.clear_elements_offsets.get_unchecked(image_index + 1) };
         let clear_elements = unsafe { self.clear_elements.get_unchecked(start..end) };
@@ -352,7 +411,7 @@ impl<const D: usize> ObjectiveTracker<D> for SimdCloudyAreaState {
         for &element_u32 in clear_elements {
             let idx = element_u32 as usize;
             unsafe {
-                let is_first = (*self.counts.get_unchecked(idx) == 0) as i64;
+                let is_first = i64::from(*self.counts.get_unchecked(idx) == 0);
                 delta -= is_first * (*self.element_areas.get_unchecked(idx) as i64);
             }
         }
@@ -361,7 +420,13 @@ impl<const D: usize> ObjectiveTracker<D> for SimdCloudyAreaState {
 
     fn track_image_removal(&mut self, image_index: usize, _p: &impl SetCoverProblem<D>) -> i64 {
         #[cfg(feature = "bounds_check")]
-        assert_csr_bounds("CloudyArea::track_removal", image_index, &self.clear_elements_offsets, &self.clear_elements, self.counts.len());
+        assert_csr_bounds(
+            "CloudyArea::track_removal",
+            image_index,
+            &self.clear_elements_offsets,
+            &self.clear_elements,
+            self.counts.len(),
+        );
         let start = unsafe { *self.clear_elements_offsets.get_unchecked(image_index) };
         let end = unsafe { *self.clear_elements_offsets.get_unchecked(image_index + 1) };
 
@@ -373,7 +438,7 @@ impl<const D: usize> ObjectiveTracker<D> for SimdCloudyAreaState {
         let unrolled = len / 4;
         let remainder = len % 4;
         let mut total_add = 0u64;
-        
+
         // Unrolled loop (4 at a time)
         for chunk in 0..unrolled {
             let base = start + chunk * 4;
@@ -382,43 +447,64 @@ impl<const D: usize> ObjectiveTracker<D> for SimdCloudyAreaState {
                 let idx1 = *clear_ptr.add(base + 1) as usize;
                 let idx2 = *clear_ptr.add(base + 2) as usize;
                 let idx3 = *clear_ptr.add(base + 3) as usize;
-                
+
                 let count0 = counts_ptr.add(idx0);
-                *count0 = count0.read().checked_sub(1).expect("track_image_removal: count underflow");
-                total_add += ((*count0 == 0) as u64) * *areas_ptr.add(idx0);
-                
+                *count0 = count0
+                    .read()
+                    .checked_sub(1)
+                    .expect("track_image_removal: count underflow");
+                total_add += u64::from(*count0 == 0) * *areas_ptr.add(idx0);
+
                 let count1 = counts_ptr.add(idx1);
-                *count1 = count1.read().checked_sub(1).expect("track_image_removal: count underflow");
-                total_add += ((*count1 == 0) as u64) * *areas_ptr.add(idx1);
-                
+                *count1 = count1
+                    .read()
+                    .checked_sub(1)
+                    .expect("track_image_removal: count underflow");
+                total_add += u64::from(*count1 == 0) * *areas_ptr.add(idx1);
+
                 let count2 = counts_ptr.add(idx2);
-                *count2 = count2.read().checked_sub(1).expect("track_image_removal: count underflow");
-                total_add += ((*count2 == 0) as u64) * *areas_ptr.add(idx2);
-                
+                *count2 = count2
+                    .read()
+                    .checked_sub(1)
+                    .expect("track_image_removal: count underflow");
+                total_add += u64::from(*count2 == 0) * *areas_ptr.add(idx2);
+
                 let count3 = counts_ptr.add(idx3);
-                *count3 = count3.read().checked_sub(1).expect("track_image_removal: count underflow");
-                total_add += ((*count3 == 0) as u64) * *areas_ptr.add(idx3);
+                *count3 = count3
+                    .read()
+                    .checked_sub(1)
+                    .expect("track_image_removal: count underflow");
+                total_add += u64::from(*count3 == 0) * *areas_ptr.add(idx3);
             }
         }
-        
+
         // Handle remainder
         for i in (start + unrolled * 4)..(start + unrolled * 4 + remainder) {
             let idx = unsafe { *clear_ptr.add(i) } as usize;
             unsafe {
                 let area = *areas_ptr.add(idx);
                 let count = counts_ptr.add(idx);
-                *count = count.read().checked_sub(1).expect("track_image_removal: count underflow");
-                total_add += ((*count == 0) as u64) * area;
+                *count = count
+                    .read()
+                    .checked_sub(1)
+                    .expect("track_image_removal: count underflow");
+                total_add += u64::from(*count == 0) * area;
             }
         }
-        
+
         self.current_area += total_add;
         total_add as i64
     }
 
     fn track_image_addition(&mut self, image_index: usize, _p: &impl SetCoverProblem<D>) -> i64 {
         #[cfg(feature = "bounds_check")]
-        assert_csr_bounds("CloudyArea::track_addition", image_index, &self.clear_elements_offsets, &self.clear_elements, self.counts.len());
+        assert_csr_bounds(
+            "CloudyArea::track_addition",
+            image_index,
+            &self.clear_elements_offsets,
+            &self.clear_elements,
+            self.counts.len(),
+        );
         let start = unsafe { *self.clear_elements_offsets.get_unchecked(image_index) };
         let end = unsafe { *self.clear_elements_offsets.get_unchecked(image_index + 1) };
 
@@ -430,7 +516,7 @@ impl<const D: usize> ObjectiveTracker<D> for SimdCloudyAreaState {
         let unrolled = len / 4;
         let remainder = len % 4;
         let mut total_sub = 0u64;
-        
+
         // Unrolled loop (4 at a time)
         for chunk in 0..unrolled {
             let base = start + chunk * 4;
@@ -439,38 +525,39 @@ impl<const D: usize> ObjectiveTracker<D> for SimdCloudyAreaState {
                 let idx1 = *clear_ptr.add(base + 1) as usize;
                 let idx2 = *clear_ptr.add(base + 2) as usize;
                 let idx3 = *clear_ptr.add(base + 3) as usize;
-                
+
                 let count0 = counts_ptr.add(idx0);
-                total_sub += ((*count0 == 0) as u64) * *areas_ptr.add(idx0);
+                total_sub += u64::from(*count0 == 0) * *areas_ptr.add(idx0);
                 *count0 += 1;
-                
+
                 let count1 = counts_ptr.add(idx1);
-                total_sub += ((*count1 == 0) as u64) * *areas_ptr.add(idx1);
+                total_sub += u64::from(*count1 == 0) * *areas_ptr.add(idx1);
                 *count1 += 1;
-                
+
                 let count2 = counts_ptr.add(idx2);
-                total_sub += ((*count2 == 0) as u64) * *areas_ptr.add(idx2);
+                total_sub += u64::from(*count2 == 0) * *areas_ptr.add(idx2);
                 *count2 += 1;
-                
+
                 let count3 = counts_ptr.add(idx3);
-                total_sub += ((*count3 == 0) as u64) * *areas_ptr.add(idx3);
+                total_sub += u64::from(*count3 == 0) * *areas_ptr.add(idx3);
                 *count3 += 1;
             }
         }
-        
+
         // Handle remainder
         for i in (start + unrolled * 4)..(start + unrolled * 4 + remainder) {
             let idx = unsafe { *clear_ptr.add(i) } as usize;
             unsafe {
                 let area = *areas_ptr.add(idx);
                 let count = counts_ptr.add(idx);
-                total_sub += ((*count == 0) as u64) * area;
+                total_sub += u64::from(*count == 0) * area;
                 *count += 1;
             }
         }
-        
+
         // Use checked subtraction to catch underflow bugs
-        self.current_area = self.current_area
+        self.current_area = self
+            .current_area
             .checked_sub(total_sub)
             .expect("CloudyArea underflow: total_sub > current_area");
         -(total_sub as i64)
@@ -503,7 +590,7 @@ pub struct SimdMinResolutionState {
     pub high_val: u64,
     pub diff: i64,
     pub current_sum: u64,
-    // Fall-back for >2 levels  
+    // Fall-back for >2 levels
     pub two_level: bool,
     pub element_packed_small: Vec<u64>,
     pub element_level_counts: Vec<u16>,
@@ -525,18 +612,35 @@ impl SimdMinResolutionState {
         } else {
             self.element_min_level.len()
         };
-        assert_csr_bounds(label, image_index, &self.image_elements_offsets, &self.image_elements, target);
+        assert_csr_bounds(
+            label,
+            image_index,
+            &self.image_elements_offsets,
+            &self.image_elements,
+            target,
+        );
     }
 
     #[cfg(feature = "bounds_check")]
     fn assert_interval_bounds_for(&self, label: &str, image_index: usize) {
         let target = self.packed_counts.len();
-        assert_interval_bounds(label, image_index, &self.image_intervals_offsets, &self.image_intervals, target);
+        assert_interval_bounds(
+            label,
+            image_index,
+            &self.image_intervals_offsets,
+            &self.image_intervals,
+            target,
+        );
     }
 }
 
 impl<const D: usize> ObjectiveTracker<D> for SimdMinResolutionState {
-    fn peek_removal_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+    fn peek_removal_delta(
+        &self,
+        image_index: usize,
+        _p: &impl SetCoverProblem<D>,
+        _s: &impl ImageSet<D>,
+    ) -> i64 {
         #[cfg(feature = "bounds_check")]
         self.assert_element_bounds("MinRes::peek_removal", image_index);
         let img_level = self.image_resolution_level[image_index] as usize;
@@ -555,7 +659,12 @@ impl<const D: usize> ObjectiveTracker<D> for SimdMinResolutionState {
         self.peek_removal_general(img_level, elements)
     }
 
-    fn peek_addition_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+    fn peek_addition_delta(
+        &self,
+        image_index: usize,
+        _p: &impl SetCoverProblem<D>,
+        _s: &impl ImageSet<D>,
+    ) -> i64 {
         #[cfg(feature = "bounds_check")]
         self.assert_element_bounds("MinRes::peek_addition", image_index);
         let img_level = self.image_resolution_level[image_index] as usize;
@@ -644,7 +753,12 @@ impl SimdMinResolutionState {
     // =========================================================================
 
     #[inline]
-    fn track_removal_two_level_intervals(&mut self, img_level: usize, int_start: usize, int_end: usize) -> i64 {
+    fn track_removal_two_level_intervals(
+        &mut self,
+        img_level: usize,
+        int_start: usize,
+        int_end: usize,
+    ) -> i64 {
         let low_val = self.low_val as i64;
         let high_val = self.high_val as i64;
         let diff = self.diff;
@@ -657,7 +771,7 @@ impl SimdMinResolutionState {
                 let interval = unsafe { *self.image_intervals.get_unchecked(int_idx) };
                 let start = interval.start as usize;
                 let end = start + interval.len as usize;
-                
+
                 // This range loop can be autovectorized by the compiler
                 for idx in start..end {
                     unsafe {
@@ -665,9 +779,9 @@ impl SimdMinResolutionState {
                         let packed = *slot;
                         let c0 = (packed & 0xFFFF) as u16;
                         let c1 = (packed >> 16) as u16;
-                        *slot = (c0.saturating_sub(1) as u32) | ((c1 as u32) << 16);
-                        let was_one = (c0 == 1) as i64;
-                        let has_backup = (c1 > 0) as i64;
+                        *slot = u32::from(c0.saturating_sub(1)) | (u32::from(c1) << 16);
+                        let was_one = i64::from(c0 == 1);
+                        let has_backup = i64::from(c1 > 0);
                         delta += was_one * (has_backup * (diff + low_val) - low_val);
                     }
                 }
@@ -678,26 +792,31 @@ impl SimdMinResolutionState {
                 let interval = unsafe { *self.image_intervals.get_unchecked(int_idx) };
                 let start = interval.start as usize;
                 let end = start + interval.len as usize;
-                
+
                 for idx in start..end {
                     unsafe {
                         let slot = packed_ptr.add(idx);
                         let packed = *slot;
                         let c0 = (packed & 0xFFFF) as u16;
                         let c1 = (packed >> 16) as u16;
-                        *slot = (c0 as u32) | ((c1.saturating_sub(1) as u32) << 16);
-                        delta -= ((c1 == 1) as i64) * ((c0 == 0) as i64) * high_val;
+                        *slot = u32::from(c0) | (u32::from(c1.saturating_sub(1)) << 16);
+                        delta -= i64::from(c1 == 1) * i64::from(c0 == 0) * high_val;
                     }
                 }
             }
         }
-        
+
         self.current_sum = (self.current_sum as i64 + delta) as u64;
         delta
     }
 
     #[inline]
-    fn track_addition_two_level_intervals(&mut self, img_level: usize, int_start: usize, int_end: usize) -> i64 {
+    fn track_addition_two_level_intervals(
+        &mut self,
+        img_level: usize,
+        int_start: usize,
+        int_end: usize,
+    ) -> i64 {
         let low_val = self.low_val as i64;
         let high_val = self.high_val as i64;
         let diff = self.diff;
@@ -710,17 +829,17 @@ impl SimdMinResolutionState {
                 let interval = unsafe { *self.image_intervals.get_unchecked(int_idx) };
                 let start = interval.start as usize;
                 let end = start + interval.len as usize;
-                
+
                 for idx in start..end {
                     unsafe {
                         let slot = packed_ptr.add(idx);
                         let packed = *slot;
                         let c0 = (packed & 0xFFFF) as u16;
                         let c1 = (packed >> 16) as u16;
-                        let was_zero = (c0 == 0) as i64;
-                        let has_backup = (c1 > 0) as i64;
+                        let was_zero = i64::from(c0 == 0);
+                        let has_backup = i64::from(c1 > 0);
                         delta += was_zero * (low_val - has_backup * (diff + low_val));
-                        *slot = ((c0 + 1) as u32) | ((c1 as u32) << 16);
+                        *slot = u32::from(c0 + 1) | (u32::from(c1) << 16);
                     }
                 }
             }
@@ -730,18 +849,18 @@ impl SimdMinResolutionState {
                 let interval = unsafe { *self.image_intervals.get_unchecked(int_idx) };
                 let start = interval.start as usize;
                 let end = start + interval.len as usize;
-                
+
                 for idx in start..end {
                     unsafe {
                         let slot = packed_ptr.add(idx);
                         let packed = *slot;
-                        delta += (packed == 0) as i64 * high_val;
+                        delta += i64::from(packed == 0) * high_val;
                         *slot = packed + 0x10000;
                     }
                 }
             }
         }
-        
+
         self.current_sum = (self.current_sum as i64 + delta) as u64;
         delta
     }
@@ -768,9 +887,9 @@ impl SimdMinResolutionState {
                     let c1 = (packed >> 16) as u16;
                     if c0 == 1 {
                         if c1 > 0 {
-                            delta += diff;  // Switch to high-res
+                            delta += diff; // Switch to high-res
                         } else {
-                            delta -= low_val;  // Becomes uncovered
+                            delta -= low_val; // Becomes uncovered
                         }
                     }
                 }
@@ -784,7 +903,7 @@ impl SimdMinResolutionState {
                     let c0 = (packed & 0xFFFF) as u16;
                     let c1 = (packed >> 16) as u16;
                     if c1 == 1 && c0 == 0 {
-                        delta -= high_val;  // Becomes uncovered
+                        delta -= high_val; // Becomes uncovered
                     }
                 }
             }
@@ -809,9 +928,9 @@ impl SimdMinResolutionState {
                     let c1 = (packed >> 16) as u16;
                     if c0 == 0 {
                         if c1 > 0 {
-                            delta -= diff;  // Switch from high to low
+                            delta -= diff; // Switch from high to low
                         } else {
-                            delta += low_val;  // First cover
+                            delta += low_val; // First cover
                         }
                     }
                 }
@@ -823,7 +942,7 @@ impl SimdMinResolutionState {
                 unsafe {
                     let packed = *self.packed_counts.get_unchecked(idx);
                     if packed == 0 {
-                        delta += high_val;  // First cover (high)
+                        delta += high_val; // First cover (high)
                     }
                 }
             }
@@ -834,19 +953,33 @@ impl SimdMinResolutionState {
     // Legacy CSR-based methods kept for reference and potential fallback
     #[allow(dead_code)]
     #[inline]
-    fn track_removal_two_level_inline(&mut self, img_level: usize, start: usize, end: usize) -> i64 {
+    fn track_removal_two_level_inline(
+        &mut self,
+        img_level: usize,
+        start: usize,
+        end: usize,
+    ) -> i64 {
         // Use interval-based iteration for better vectorization
-        let int_start = unsafe { *self.image_intervals_offsets.get_unchecked(start / self.image_elements.len().max(1)) };
-        let int_end = unsafe { *self.image_intervals_offsets.get_unchecked((end / self.image_elements.len().max(1)).min(self.image_intervals_offsets.len() - 1)) };
-        
+        let int_start = unsafe {
+            *self
+                .image_intervals_offsets
+                .get_unchecked(start / self.image_elements.len().max(1))
+        };
+        let int_end = unsafe {
+            *self.image_intervals_offsets.get_unchecked(
+                (end / self.image_elements.len().max(1))
+                    .min(self.image_intervals_offsets.len() - 1),
+            )
+        };
+
         // Fall back to CSR if intervals not properly set up
         if int_start >= int_end || self.image_intervals.is_empty() {
             return self.track_removal_two_level_csr(img_level, start, end);
         }
-        
+
         self.track_removal_two_level_intervals(img_level, int_start, int_end)
     }
-    
+
     #[allow(dead_code)]
     #[inline]
     fn track_removal_two_level_csr(&mut self, img_level: usize, start: usize, end: usize) -> i64 {
@@ -854,11 +987,11 @@ impl SimdMinResolutionState {
         let high_val = self.high_val as i64;
         let diff = self.diff;
         let mut delta = 0i64;
-        
+
         // Raw pointers for packed counts
         let elements_ptr = self.image_elements.as_ptr();
         let packed_ptr = self.packed_counts.as_mut_ptr();
-        
+
         if img_level == 0 {
             // Removing low-resolution - unrolled branchless
             for i in start..end {
@@ -868,9 +1001,9 @@ impl SimdMinResolutionState {
                     let packed = *slot;
                     let c0 = (packed & 0xFFFF) as u16;
                     let c1 = (packed >> 16) as u16;
-                    *slot = (c0.saturating_sub(1) as u32) | ((c1 as u32) << 16);
-                    let was_one = (c0 == 1) as i64;
-                    let has_backup = (c1 > 0) as i64;
+                    *slot = u32::from(c0.saturating_sub(1)) | (u32::from(c1) << 16);
+                    let was_one = i64::from(c0 == 1);
+                    let has_backup = i64::from(c1 > 0);
                     delta += was_one * (has_backup * (diff + low_val) - low_val);
                 }
             }
@@ -883,19 +1016,24 @@ impl SimdMinResolutionState {
                     let packed = *slot;
                     let c0 = (packed & 0xFFFF) as u16;
                     let c1 = (packed >> 16) as u16;
-                    *slot = (c0 as u32) | ((c1.saturating_sub(1) as u32) << 16);
-                    delta -= ((c1 == 1) as i64) * ((c0 == 0) as i64) * high_val;
+                    *slot = u32::from(c0) | (u32::from(c1.saturating_sub(1)) << 16);
+                    delta -= i64::from(c1 == 1) * i64::from(c0 == 0) * high_val;
                 }
             }
         }
-        
+
         self.current_sum = (self.current_sum as i64 + delta) as u64;
         delta
     }
 
     #[allow(dead_code)]
     #[inline]
-    fn track_addition_two_level_inline(&mut self, img_level: usize, start: usize, end: usize) -> i64 {
+    fn track_addition_two_level_inline(
+        &mut self,
+        img_level: usize,
+        start: usize,
+        end: usize,
+    ) -> i64 {
         let low_val = self.low_val as i64;
         let high_val = self.high_val as i64;
         let diff = self.diff;
@@ -913,10 +1051,10 @@ impl SimdMinResolutionState {
                     let packed = *slot;
                     let c0 = (packed & 0xFFFF) as u16;
                     let c1 = (packed >> 16) as u16;
-                    let was_zero = (c0 == 0) as i64;
-                    let has_backup = (c1 > 0) as i64;
+                    let was_zero = i64::from(c0 == 0);
+                    let has_backup = i64::from(c1 > 0);
                     delta += was_zero * (low_val - has_backup * (diff + low_val));
-                    *slot = ((c0 + 1) as u32) | ((c1 as u32) << 16);
+                    *slot = u32::from(c0 + 1) | (u32::from(c1) << 16);
                 }
             }
         } else {
@@ -926,18 +1064,23 @@ impl SimdMinResolutionState {
                 unsafe {
                     let slot = packed_ptr.add(idx);
                     let packed = *slot;
-                    delta += (packed == 0) as i64 * high_val;
+                    delta += i64::from(packed == 0) * high_val;
                     *slot = packed + 0x10000;
                 }
             }
         }
-        
+
         self.current_sum = (self.current_sum as i64 + delta) as u64;
         delta
     }
 
     #[inline]
-    fn track_removal_packed_small_inline(&mut self, img_level: usize, start: usize, end: usize) -> i64 {
+    fn track_removal_packed_small_inline(
+        &mut self,
+        img_level: usize,
+        start: usize,
+        end: usize,
+    ) -> i64 {
         let resolution_levels = &self.resolution_levels;
         let mut delta = 0i64;
         let shift = img_level * 8;
@@ -972,7 +1115,12 @@ impl SimdMinResolutionState {
     }
 
     #[inline]
-    fn track_addition_packed_small_inline(&mut self, img_level: usize, start: usize, end: usize) -> i64 {
+    fn track_addition_packed_small_inline(
+        &mut self,
+        img_level: usize,
+        start: usize,
+        end: usize,
+    ) -> i64 {
         let resolution_levels = &self.resolution_levels;
         let mut delta = 0i64;
         let shift = img_level * 8;
@@ -1019,34 +1167,55 @@ impl SimdMinResolutionState {
             let e = unsafe { *elements_ptr.add(i) };
             let idx = e as usize;
             let base = idx * num_levels;
-            let count_slot = unsafe { self.element_level_counts.get_unchecked_mut(base + img_level) };
-            if *count_slot == 0 { continue; }
+            let count_slot = unsafe {
+                self.element_level_counts
+                    .get_unchecked_mut(base + img_level)
+            };
+            if *count_slot == 0 {
+                continue;
+            }
             *count_slot -= 1;
 
-            if *count_slot > 0 { continue; }
+            if *count_slot > 0 {
+                continue;
+            }
 
             // Update mask
             let word_idx = img_level / 64;
             let bit_idx = img_level % 64;
             unsafe {
-                let m = self.element_level_masks.get_unchecked_mut(idx * mask_words + word_idx);
+                let m = self
+                    .element_level_masks
+                    .get_unchecked_mut(idx * mask_words + word_idx);
                 *m &= !(1u64 << bit_idx);
             }
 
             let current_min_level = unsafe { *self.element_min_level.get_unchecked(idx) };
-            if (img_level as u8) > current_min_level { continue; }
+            if (img_level as u8) > current_min_level {
+                continue;
+            }
 
             let next_level = if mask_words == 1 {
                 let mask = unsafe { *self.element_level_masks.get_unchecked(idx) };
-                if mask == 0 { u8::MAX } else { mask.trailing_zeros() as u8 }
+                if mask == 0 {
+                    u8::MAX
+                } else {
+                    mask.trailing_zeros() as u8
+                }
             } else {
                 self.find_next_level_from_word(idx, word_idx, mask_words)
             };
 
             let current_val = resolution_levels[current_min_level as usize];
-            let next_val = if next_level == u8::MAX { 0 } else { resolution_levels[next_level as usize] };
+            let next_val = if next_level == u8::MAX {
+                0
+            } else {
+                resolution_levels[next_level as usize]
+            };
 
-            unsafe { *self.element_min_level.get_unchecked_mut(idx) = next_level; }
+            unsafe {
+                *self.element_min_level.get_unchecked_mut(idx) = next_level;
+            }
             self.current_sum = self.current_sum - current_val + next_val;
             delta += (next_val as i64) - (current_val as i64);
         }
@@ -1067,25 +1236,33 @@ impl SimdMinResolutionState {
             let idx = e as usize;
             let base = idx * num_levels;
             unsafe {
-                let slot = self.element_level_counts.get_unchecked_mut(base + img_level);
+                let slot = self
+                    .element_level_counts
+                    .get_unchecked_mut(base + img_level);
                 let was_zero = *slot == 0;
                 *slot += 1;
                 if was_zero {
                     let word_idx = img_level / 64;
                     let bit_idx = img_level % 64;
-                    let m = self.element_level_masks.get_unchecked_mut(idx * mask_words + word_idx);
+                    let m = self
+                        .element_level_masks
+                        .get_unchecked_mut(idx * mask_words + word_idx);
                     *m |= 1u64 << bit_idx;
                 }
             }
 
             let current_min_level = unsafe { *self.element_min_level.get_unchecked(idx) };
             if current_min_level == u8::MAX {
-                unsafe { *self.element_min_level.get_unchecked_mut(idx) = img_level as u8; }
+                unsafe {
+                    *self.element_min_level.get_unchecked_mut(idx) = img_level as u8;
+                }
                 self.current_sum += img_val;
                 delta += img_val as i64;
             } else if img_level < current_min_level as usize {
                 let current_val = resolution_levels[current_min_level as usize];
-                unsafe { *self.element_min_level.get_unchecked_mut(idx) = img_level as u8; }
+                unsafe {
+                    *self.element_min_level.get_unchecked_mut(idx) = img_level as u8;
+                }
                 self.current_sum = self.current_sum - current_val + img_val;
                 delta += (img_val as i64) - (current_val as i64);
             }
@@ -1171,13 +1348,21 @@ impl SimdMinResolutionState {
             let next_level = if mask_words == 1 {
                 let mask = unsafe { *self.element_level_masks.get_unchecked(idx) };
                 let new_mask = mask & !(1u64 << img_level);
-                if new_mask == 0 { u8::MAX } else { new_mask.trailing_zeros() as u8 }
+                if new_mask == 0 {
+                    u8::MAX
+                } else {
+                    new_mask.trailing_zeros() as u8
+                }
             } else {
                 self.find_next_level_multi_word(idx, img_level, mask_words)
             };
 
             let current_val = resolution_levels[current_min_level as usize];
-            let next_val = if next_level == u8::MAX { 0 } else { resolution_levels[next_level as usize] };
+            let next_val = if next_level == u8::MAX {
+                0
+            } else {
+                resolution_levels[next_level as usize]
+            };
             delta += (next_val as i64) - (current_val as i64);
         }
         delta
@@ -1211,34 +1396,55 @@ impl SimdMinResolutionState {
         for &e in elements {
             let idx = e as usize;
             let base = idx * num_levels;
-            let count_slot = unsafe { self.element_level_counts.get_unchecked_mut(base + img_level) };
-            if *count_slot == 0 { continue; }
+            let count_slot = unsafe {
+                self.element_level_counts
+                    .get_unchecked_mut(base + img_level)
+            };
+            if *count_slot == 0 {
+                continue;
+            }
             *count_slot -= 1;
 
-            if *count_slot > 0 { continue; }
+            if *count_slot > 0 {
+                continue;
+            }
 
             // Update mask
             let word_idx = img_level / 64;
             let bit_idx = img_level % 64;
             unsafe {
-                let m = self.element_level_masks.get_unchecked_mut(idx * mask_words + word_idx);
+                let m = self
+                    .element_level_masks
+                    .get_unchecked_mut(idx * mask_words + word_idx);
                 *m &= !(1u64 << bit_idx);
             }
 
             let current_min_level = unsafe { *self.element_min_level.get_unchecked(idx) };
-            if (img_level as u8) > current_min_level { continue; }
+            if (img_level as u8) > current_min_level {
+                continue;
+            }
 
             let next_level = if mask_words == 1 {
                 let mask = unsafe { *self.element_level_masks.get_unchecked(idx) };
-                if mask == 0 { u8::MAX } else { mask.trailing_zeros() as u8 }
+                if mask == 0 {
+                    u8::MAX
+                } else {
+                    mask.trailing_zeros() as u8
+                }
             } else {
                 self.find_next_level_from_word(idx, word_idx, mask_words)
             };
 
             let current_val = resolution_levels[current_min_level as usize];
-            let next_val = if next_level == u8::MAX { 0 } else { resolution_levels[next_level as usize] };
+            let next_val = if next_level == u8::MAX {
+                0
+            } else {
+                resolution_levels[next_level as usize]
+            };
 
-            unsafe { *self.element_min_level.get_unchecked_mut(idx) = next_level; }
+            unsafe {
+                *self.element_min_level.get_unchecked_mut(idx) = next_level;
+            }
             self.current_sum = self.current_sum - current_val + next_val;
             delta += (next_val as i64) - (current_val as i64);
         }
@@ -1257,25 +1463,33 @@ impl SimdMinResolutionState {
             let idx = e as usize;
             let base = idx * num_levels;
             unsafe {
-                let slot = self.element_level_counts.get_unchecked_mut(base + img_level);
+                let slot = self
+                    .element_level_counts
+                    .get_unchecked_mut(base + img_level);
                 let was_zero = *slot == 0;
                 *slot += 1;
                 if was_zero {
                     let word_idx = img_level / 64;
                     let bit_idx = img_level % 64;
-                    let m = self.element_level_masks.get_unchecked_mut(idx * mask_words + word_idx);
+                    let m = self
+                        .element_level_masks
+                        .get_unchecked_mut(idx * mask_words + word_idx);
                     *m |= 1u64 << bit_idx;
                 }
             }
 
             let current_min_level = unsafe { *self.element_min_level.get_unchecked(idx) };
             if current_min_level == u8::MAX {
-                unsafe { *self.element_min_level.get_unchecked_mut(idx) = img_level as u8; }
+                unsafe {
+                    *self.element_min_level.get_unchecked_mut(idx) = img_level as u8;
+                }
                 self.current_sum += img_val;
                 delta += img_val as i64;
             } else if img_level < current_min_level as usize {
                 let current_val = resolution_levels[current_min_level as usize];
-                unsafe { *self.element_min_level.get_unchecked_mut(idx) = img_level as u8; }
+                unsafe {
+                    *self.element_min_level.get_unchecked_mut(idx) = img_level as u8;
+                }
                 self.current_sum = self.current_sum - current_val + img_val;
                 delta += (img_val as i64) - (current_val as i64);
             }
@@ -1289,7 +1503,8 @@ impl SimdMinResolutionState {
         let word_idx = img_level / 64;
         let bit_idx = img_level % 64;
 
-        let first_word = unsafe { *self.element_level_masks.get_unchecked(base + word_idx) } & !(1u64 << bit_idx);
+        let first_word = unsafe { *self.element_level_masks.get_unchecked(base + word_idx) }
+            & !(1u64 << bit_idx);
         if first_word != 0 {
             return (word_idx * 64 + first_word.trailing_zeros() as usize) as u8;
         }
@@ -1330,21 +1545,36 @@ pub struct SimdMaxIncidenceAngleState {
 }
 
 impl<const D: usize> ObjectiveTracker<D> for SimdMaxIncidenceAngleState {
-    fn peek_removal_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+    fn peek_removal_delta(
+        &self,
+        image_index: usize,
+        _p: &impl SetCoverProblem<D>,
+        _s: &impl ImageSet<D>,
+    ) -> i64 {
         #[cfg(feature = "bounds_check")]
         {
-            assert!(image_index < self.image_incidence_level.len(),
-                "[MaxAngle::peek_removal] image_index={image_index} OOB for image_incidence_level len={}", self.image_incidence_level.len());
+            assert!(
+                image_index < self.image_incidence_level.len(),
+                "[MaxAngle::peek_removal] image_index={image_index} OOB for image_incidence_level len={}",
+                self.image_incidence_level.len()
+            );
             let lvl = self.image_incidence_level[image_index] as usize;
-            assert!(lvl < self.level_counts.len(),
-                "[MaxAngle::peek_removal] level={lvl} OOB for level_counts len={}", self.level_counts.len());
+            assert!(
+                lvl < self.level_counts.len(),
+                "[MaxAngle::peek_removal] level={lvl} OOB for level_counts len={}",
+                self.level_counts.len()
+            );
         }
         let img_level = self.image_incidence_level[image_index];
         if self.current_max_level == u8::MAX || img_level < self.current_max_level {
             return 0;
         }
 
-        let count = unsafe { *self.level_counts.get_unchecked(self.current_max_level as usize) };
+        let count = unsafe {
+            *self
+                .level_counts
+                .get_unchecked(self.current_max_level as usize)
+        };
         if count > 1 {
             return 0;
         }
@@ -1361,14 +1591,25 @@ impl<const D: usize> ObjectiveTracker<D> for SimdMaxIncidenceAngleState {
         -(self.current_max as i64)
     }
 
-    fn peek_addition_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+    fn peek_addition_delta(
+        &self,
+        image_index: usize,
+        _p: &impl SetCoverProblem<D>,
+        _s: &impl ImageSet<D>,
+    ) -> i64 {
         #[cfg(feature = "bounds_check")]
         {
-            assert!(image_index < self.image_incidence_level.len(),
-                "[MaxAngle::peek_addition] image_index={image_index} OOB for image_incidence_level len={}", self.image_incidence_level.len());
+            assert!(
+                image_index < self.image_incidence_level.len(),
+                "[MaxAngle::peek_addition] image_index={image_index} OOB for image_incidence_level len={}",
+                self.image_incidence_level.len()
+            );
             let lvl = self.image_incidence_level[image_index] as usize;
-            assert!(lvl < self.incidence_levels.len(),
-                "[MaxAngle::peek_addition] level={lvl} OOB for incidence_levels len={}", self.incidence_levels.len());
+            assert!(
+                lvl < self.incidence_levels.len(),
+                "[MaxAngle::peek_addition] level={lvl} OOB for incidence_levels len={}",
+                self.incidence_levels.len()
+            );
         }
         let img_level = self.image_incidence_level[image_index];
         if self.current_max_level == u8::MAX || img_level > self.current_max_level {
@@ -1382,18 +1623,26 @@ impl<const D: usize> ObjectiveTracker<D> for SimdMaxIncidenceAngleState {
     fn track_image_removal(&mut self, image_index: usize, _p: &impl SetCoverProblem<D>) -> i64 {
         #[cfg(feature = "bounds_check")]
         {
-            assert!(image_index < self.image_incidence_level.len(),
-                "[MaxAngle::track_removal] image_index={image_index} OOB for image_incidence_level len={}", self.image_incidence_level.len());
+            assert!(
+                image_index < self.image_incidence_level.len(),
+                "[MaxAngle::track_removal] image_index={image_index} OOB for image_incidence_level len={}",
+                self.image_incidence_level.len()
+            );
             let lvl = self.image_incidence_level[image_index] as usize;
-            assert!(lvl < self.level_counts.len(),
-                "[MaxAngle::track_removal] level={lvl} OOB for level_counts len={}", self.level_counts.len());
+            assert!(
+                lvl < self.level_counts.len(),
+                "[MaxAngle::track_removal] level={lvl} OOB for level_counts len={}",
+                self.level_counts.len()
+            );
         }
         let img_level = self.image_incidence_level[image_index] as usize;
         let old_max = self.current_max;
 
         unsafe {
             let slot = self.level_counts.get_unchecked_mut(img_level);
-            if *slot != 0 { *slot -= 1; }
+            if *slot != 0 {
+                *slot -= 1;
+            }
         }
 
         if self.current_max_level != u8::MAX && img_level as u8 == self.current_max_level {
@@ -1403,7 +1652,8 @@ impl<const D: usize> ObjectiveTracker<D> for SimdMaxIncidenceAngleState {
                 while next >= 0 {
                     if unsafe { *self.level_counts.get_unchecked(next as usize) } != 0 {
                         self.current_max_level = next as u8;
-                        self.current_max = unsafe { *self.incidence_levels.get_unchecked(next as usize) };
+                        self.current_max =
+                            unsafe { *self.incidence_levels.get_unchecked(next as usize) };
                         return (self.current_max as i64) - (old_max as i64);
                     }
                     next -= 1;
@@ -1418,16 +1668,24 @@ impl<const D: usize> ObjectiveTracker<D> for SimdMaxIncidenceAngleState {
     fn track_image_addition(&mut self, image_index: usize, _p: &impl SetCoverProblem<D>) -> i64 {
         #[cfg(feature = "bounds_check")]
         {
-            assert!(image_index < self.image_incidence_level.len(),
-                "[MaxAngle::track_addition] image_index={image_index} OOB for image_incidence_level len={}", self.image_incidence_level.len());
+            assert!(
+                image_index < self.image_incidence_level.len(),
+                "[MaxAngle::track_addition] image_index={image_index} OOB for image_incidence_level len={}",
+                self.image_incidence_level.len()
+            );
             let lvl = self.image_incidence_level[image_index] as usize;
-            assert!(lvl < self.level_counts.len(),
-                "[MaxAngle::track_addition] level={lvl} OOB for level_counts len={}", self.level_counts.len());
+            assert!(
+                lvl < self.level_counts.len(),
+                "[MaxAngle::track_addition] level={lvl} OOB for level_counts len={}",
+                self.level_counts.len()
+            );
         }
         let img_level = self.image_incidence_level[image_index];
         let old_max = self.current_max;
 
-        unsafe { *self.level_counts.get_unchecked_mut(img_level as usize) += 1; }
+        unsafe {
+            *self.level_counts.get_unchecked_mut(img_level as usize) += 1;
+        }
 
         if self.current_max_level == u8::MAX || img_level > self.current_max_level {
             self.current_max_level = img_level;
@@ -1466,7 +1724,12 @@ impl SimdTracker {
 }
 
 impl<const D: usize> ObjectiveTracker<D> for SimdTracker {
-    fn peek_addition_delta(&self, image_index: usize, problem: &impl SetCoverProblem<D>, solution: &impl ImageSet<D>) -> i64 {
+    fn peek_addition_delta(
+        &self,
+        image_index: usize,
+        problem: &impl SetCoverProblem<D>,
+        solution: &impl ImageSet<D>,
+    ) -> i64 {
         match self {
             Self::TotalCost(s) => s.peek_addition_delta(image_index, problem, solution),
             Self::CloudyArea(s) => s.peek_addition_delta(image_index, problem, solution),
@@ -1475,7 +1738,12 @@ impl<const D: usize> ObjectiveTracker<D> for SimdTracker {
         }
     }
 
-    fn peek_removal_delta(&self, image_index: usize, problem: &impl SetCoverProblem<D>, solution: &impl ImageSet<D>) -> i64 {
+    fn peek_removal_delta(
+        &self,
+        image_index: usize,
+        problem: &impl SetCoverProblem<D>,
+        solution: &impl ImageSet<D>,
+    ) -> i64 {
         match self {
             Self::TotalCost(s) => s.peek_removal_delta(image_index, problem, solution),
             Self::CloudyArea(s) => s.peek_removal_delta(image_index, problem, solution),
@@ -1484,7 +1752,11 @@ impl<const D: usize> ObjectiveTracker<D> for SimdTracker {
         }
     }
 
-    fn track_image_addition(&mut self, image_index: usize, problem: &impl SetCoverProblem<D>) -> i64 {
+    fn track_image_addition(
+        &mut self,
+        image_index: usize,
+        problem: &impl SetCoverProblem<D>,
+    ) -> i64 {
         match self {
             Self::TotalCost(s) => s.track_image_addition(image_index, problem),
             Self::CloudyArea(s) => s.track_image_addition(image_index, problem),
@@ -1493,7 +1765,11 @@ impl<const D: usize> ObjectiveTracker<D> for SimdTracker {
         }
     }
 
-    fn track_image_removal(&mut self, image_index: usize, problem: &impl SetCoverProblem<D>) -> i64 {
+    fn track_image_removal(
+        &mut self,
+        image_index: usize,
+        problem: &impl SetCoverProblem<D>,
+    ) -> i64 {
         match self {
             Self::TotalCost(s) => s.track_image_removal(image_index, problem),
             Self::CloudyArea(s) => s.track_image_removal(image_index, problem),
@@ -1566,17 +1842,41 @@ impl<const D: usize> TrackerCollection<D> for SimdTrackerArray<D> {
                     image_intervals: Arc::clone(&shared.image_intervals),
                     image_intervals_offsets: Arc::clone(&shared.image_intervals_offsets),
                     // Packed counts: c0 in low 16 bits, c1 in high 16 bits
-                    packed_counts: if two_level { vec![0; problem.num_elements()] } else { Vec::new() },
+                    packed_counts: if two_level {
+                        vec![0; problem.num_elements()]
+                    } else {
+                        Vec::new()
+                    },
                     low_val,
                     high_val,
                     diff: (high_val - low_val) as i64,
                     current_sum: 0,
                     two_level,
-                    element_packed_small: if small_level { vec![0; problem.num_elements()] } else { Vec::new() },
-                    element_level_counts: if two_level || small_level { Vec::new() } else { vec![0; problem.num_elements() * num_levels] },
-                    element_level_masks: if two_level || small_level { Vec::new() } else { vec![0; problem.num_elements() * mask_words] },
-                    mask_words: if two_level || small_level { 0 } else { mask_words as u8 },
-                    element_min_level: if two_level || small_level { Vec::new() } else { vec![u8::MAX; problem.num_elements()] },
+                    element_packed_small: if small_level {
+                        vec![0; problem.num_elements()]
+                    } else {
+                        Vec::new()
+                    },
+                    element_level_counts: if two_level || small_level {
+                        Vec::new()
+                    } else {
+                        vec![0; problem.num_elements() * num_levels]
+                    },
+                    element_level_masks: if two_level || small_level {
+                        Vec::new()
+                    } else {
+                        vec![0; problem.num_elements() * mask_words]
+                    },
+                    mask_words: if two_level || small_level {
+                        0
+                    } else {
+                        mask_words as u8
+                    },
+                    element_min_level: if two_level || small_level {
+                        Vec::new()
+                    } else {
+                        vec![u8::MAX; problem.num_elements()]
+                    },
                     // Legacy arrays (kept for compatibility but not used in 2-level)
                     c0_counts: Vec::new(),
                     c1_counts: Vec::new(),
@@ -1600,19 +1900,39 @@ impl<const D: usize> TrackerCollection<D> for SimdTrackerArray<D> {
         std::array::from_fn(|i| self.trackers[i].value())
     }
 
-    fn peek_removal_delta(&self, image_index: usize, problem: &impl SetCoverProblem<D>, solution: &impl ImageSet<D>) -> [i64; D] {
+    fn peek_removal_delta(
+        &self,
+        image_index: usize,
+        problem: &impl SetCoverProblem<D>,
+        solution: &impl ImageSet<D>,
+    ) -> [i64; D] {
         std::array::from_fn(|i| self.trackers[i].peek_removal_delta(image_index, problem, solution))
     }
 
-    fn peek_addition_delta(&self, image_index: usize, problem: &impl SetCoverProblem<D>, solution: &impl ImageSet<D>) -> [i64; D] {
-        std::array::from_fn(|i| self.trackers[i].peek_addition_delta(image_index, problem, solution))
+    fn peek_addition_delta(
+        &self,
+        image_index: usize,
+        problem: &impl SetCoverProblem<D>,
+        solution: &impl ImageSet<D>,
+    ) -> [i64; D] {
+        std::array::from_fn(|i| {
+            self.trackers[i].peek_addition_delta(image_index, problem, solution)
+        })
     }
 
-    fn track_image_removal(&mut self, image_index: usize, problem: &impl SetCoverProblem<D>) -> [i64; D] {
+    fn track_image_removal(
+        &mut self,
+        image_index: usize,
+        problem: &impl SetCoverProblem<D>,
+    ) -> [i64; D] {
         std::array::from_fn(|i| self.trackers[i].track_image_removal(image_index, problem))
     }
 
-    fn track_image_addition(&mut self, image_index: usize, problem: &impl SetCoverProblem<D>) -> [i64; D] {
+    fn track_image_addition(
+        &mut self,
+        image_index: usize,
+        problem: &impl SetCoverProblem<D>,
+    ) -> [i64; D] {
         std::array::from_fn(|i| self.trackers[i].track_image_addition(image_index, problem))
     }
 

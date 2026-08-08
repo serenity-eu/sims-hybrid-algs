@@ -85,7 +85,7 @@ where
 }
 
 /// Result of a branch-and-bound scalarized query.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScalarizedQueryStats {
     pub visited_nodes: usize,
     pub pruned_nodes: usize,
@@ -98,6 +98,21 @@ pub struct ScalarizedQueryResult<'a, T> {
     pub solution: &'a T,
     pub score: f64,
     pub stats: ScalarizedQueryStats,
+}
+
+/// Immutable closures driving a scalarized branch-and-bound query, threaded
+/// through the recursion so [`NDTree::scalarized_query_node`] stays low-arity.
+struct ScalarizedQueryCtx<'f, Accept, NodeLowerBound, SolutionScore> {
+    accept: &'f mut Accept,
+    node_lower_bound: &'f NodeLowerBound,
+    solution_score: &'f SolutionScore,
+}
+
+/// Mutable accumulators for a scalarized branch-and-bound query.
+struct ScalarizedQueryState<'a, T> {
+    best_solution: Option<&'a T>,
+    best_score: f64,
+    stats: ScalarizedQueryStats,
 }
 
 /// The whole tree, storing nodes in an arena Vec and pointing to root by index.
@@ -316,39 +331,35 @@ where
     fn scalarized_query_node<'a, Accept, NodeLowerBound, SolutionScore>(
         &'a self,
         node_key: DefaultKey,
-        accept: &mut Accept,
-        node_lower_bound: &NodeLowerBound,
-        solution_score: &SolutionScore,
-        best_solution: &mut Option<&'a T>,
-        best_score: &mut f64,
-        stats: &mut ScalarizedQueryStats,
+        ctx: &mut ScalarizedQueryCtx<'_, Accept, NodeLowerBound, SolutionScore>,
+        state: &mut ScalarizedQueryState<'a, T>,
     ) where
         Accept: FnMut(&T) -> bool,
         NodeLowerBound: Fn(&Objectives<D>) -> f64,
         SolutionScore: Fn(&T) -> f64,
     {
-        stats.visited_nodes += 1;
+        state.stats.visited_nodes += 1;
 
         match &self.arena[node_key] {
             Node::Leaf {
                 solutions, ideal, ..
             } => {
-                let lower_bound = node_lower_bound(ideal);
-                if lower_bound >= *best_score {
-                    stats.pruned_nodes += 1;
+                let lower_bound = (ctx.node_lower_bound)(ideal);
+                if lower_bound >= state.best_score {
+                    state.stats.pruned_nodes += 1;
                     return;
                 }
 
                 for solution in solutions {
-                    if !accept(solution) {
+                    if !(ctx.accept)(solution) {
                         continue;
                     }
 
-                    stats.evaluated_solutions += 1;
-                    let score = solution_score(solution);
-                    if score < *best_score {
-                        *best_score = score;
-                        *best_solution = Some(solution);
+                    state.stats.evaluated_solutions += 1;
+                    let score = (ctx.solution_score)(solution);
+                    if score < state.best_score {
+                        state.best_score = score;
+                        state.best_solution = Some(solution);
                     }
                 }
             }
@@ -359,7 +370,7 @@ where
                     let child_ideal = match &self.arena[child_key] {
                         Node::Leaf { ideal, .. } | Node::Internal { ideal, .. } => ideal,
                     };
-                    let lower_bound = node_lower_bound(child_ideal);
+                    let lower_bound = (ctx.node_lower_bound)(child_ideal);
                     child_bounds.push((child_key, lower_bound));
                 }
 
@@ -367,20 +378,12 @@ where
                     .sort_by(|(_, lhs), (_, rhs)| lhs.partial_cmp(rhs).unwrap_or(Ordering::Equal));
 
                 for (child_key, lower_bound) in child_bounds {
-                    if lower_bound >= *best_score {
-                        stats.pruned_nodes += 1;
+                    if lower_bound >= state.best_score {
+                        state.stats.pruned_nodes += 1;
                         continue;
                     }
 
-                    self.scalarized_query_node(
-                        child_key,
-                        accept,
-                        node_lower_bound,
-                        solution_score,
-                        best_solution,
-                        best_score,
-                        stats,
-                    );
+                    self.scalarized_query_node(child_key, ctx, state);
                 }
             }
         }
@@ -405,28 +408,27 @@ where
         SolutionScore: Fn(&T) -> f64,
     {
         let root_key = self.root?;
-        let mut best_solution = None;
-        let mut best_score = f64::INFINITY;
-        let mut stats = ScalarizedQueryStats {
-            visited_nodes: 0,
-            pruned_nodes: 0,
-            evaluated_solutions: 0,
+        let mut ctx = ScalarizedQueryCtx {
+            accept: &mut accept,
+            node_lower_bound: &node_lower_bound,
+            solution_score: &solution_score,
+        };
+        let mut state = ScalarizedQueryState {
+            best_solution: None,
+            best_score: f64::INFINITY,
+            stats: ScalarizedQueryStats {
+                visited_nodes: 0,
+                pruned_nodes: 0,
+                evaluated_solutions: 0,
+            },
         };
 
-        self.scalarized_query_node(
-            root_key,
-            &mut accept,
-            &node_lower_bound,
-            &solution_score,
-            &mut best_solution,
-            &mut best_score,
-            &mut stats,
-        );
+        self.scalarized_query_node(root_key, &mut ctx, &mut state);
 
-        best_solution.map(|solution| ScalarizedQueryResult {
+        state.best_solution.map(|solution| ScalarizedQueryResult {
             solution,
-            score: best_score,
-            stats,
+            score: state.best_score,
+            stats: state.stats,
         })
     }
 

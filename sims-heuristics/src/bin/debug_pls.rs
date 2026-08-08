@@ -1,6 +1,6 @@
 //! Debug PLS run with composite tracker validation.
 //!
-//! Runs PLS on a specified instance with CompositeDebugTrackerArray to validate
+//! Runs PLS on a specified instance with `CompositeDebugTrackerArray` to validate
 //! that Standard and Simd tracker implementations produce identical results.
 //!
 //! Uses the same JSON files as the pseudo-solver for initial population.
@@ -64,7 +64,7 @@ struct PseudoSolverData {
 #[command(name = "debug-pls")]
 #[command(about = "Debug PLS run with tracker validation")]
 struct Args {
-    /// Instance name (e.g., lagos_nigeria_100, paris_50)
+    /// Instance name (e.g., `lagos_nigeria_100`, `paris_50`)
     #[arg(short, long, default_value = "lagos_nigeria_30")]
     instance: String,
 
@@ -88,7 +88,10 @@ fn load_pseudo_solver_solutions(instance_name: &str) -> Option<PseudoSolverData>
         .join(format!("{instance_name}.json"));
 
     if !json_path.exists() {
-        println!("Warning: No pseudo-solver JSON found at {}", json_path.display());
+        println!(
+            "Warning: No pseudo-solver JSON found at {}",
+            json_path.display()
+        );
         return None;
     }
 
@@ -161,7 +164,10 @@ fn main() {
                 initial_population.len()
             );
         } else {
-            println!("Falling back to random initial population of {} solutions...", args.population);
+            println!(
+                "Falling back to random initial population of {} solutions...",
+                args.population
+            );
             for i in 0..args.population {
                 let solution = BitsetEncodedSolution::random_with_seed(&problem, i as u64);
                 initial_population.try_insert(&solution);
@@ -177,8 +183,13 @@ fn main() {
 
     // Run PLS
     let is_deterministic = true;
-    let mut pareto_local_search =
-        ParetoLocalSearch::new(&problem, &initial_population, 1..=5, is_deterministic, PlsOptimizations::default());
+    let mut pareto_local_search = ParetoLocalSearch::new(
+        &problem,
+        &initial_population,
+        1..=5,
+        is_deterministic,
+        PlsOptimizations::default(),
+    );
 
     let max_iterations = usize::MAX;
     let timeout = Duration::from_secs(args.timeout);

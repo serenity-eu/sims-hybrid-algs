@@ -1,10 +1,11 @@
 // Module declarations
 pub mod conversion;
+pub mod hypervolume;
+pub mod igd;
 pub mod problem;
 pub mod solution;
 pub mod solver;
 pub mod trace;
-pub mod hypervolume;
 
 // Re-export the main types
 pub use problem::SimsDiscreteProblem;
@@ -41,9 +42,18 @@ fn sims_problem(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(solver::solve_with_nsga2_baseline, m)?)?;
     m.add_function(wrap_pyfunction!(solver::solve_with_nsga3_baseline, m)?)?;
     m.add_function(wrap_pyfunction!(solver::solve_with_moead_baseline, m)?)?;
-    m.add_function(wrap_pyfunction!(solver::solve_with_pseudo_seeded_nsga2_baseline, m)?)?;
-    m.add_function(wrap_pyfunction!(solver::solve_with_pseudo_seeded_nsga3_baseline, m)?)?;
-    m.add_function(wrap_pyfunction!(solver::solve_with_pseudo_seeded_moead_baseline, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        solver::solve_with_pseudo_seeded_nsga2_baseline,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        solver::solve_with_pseudo_seeded_nsga3_baseline,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        solver::solve_with_pseudo_seeded_moead_baseline,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(solver::solve_with_pseudo_seeded_nsga2, m)?)?;
     m.add_function(wrap_pyfunction!(solver::solve_with_pseudo_seeded_nsga3, m)?)?;
     m.add_function(wrap_pyfunction!(solver::solve_with_pseudo_seeded_moead, m)?)?;
@@ -56,6 +66,9 @@ fn sims_problem(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Add hypervolume function
     m.add_function(wrap_pyfunction!(hypervolume::compute_hypervolume, m)?)?;
+
+    // IGD / IGD+ / GD / GD+ performance indicators (companion to hypervolume)
+    m.add_function(wrap_pyfunction!(igd::compute_igd, m)?)?;
 
     // Add trace generation function
     m.add_function(wrap_pyfunction!(trace::generate_trace, m)?)?;

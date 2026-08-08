@@ -92,6 +92,10 @@ RUST_LOG=debug cargo test -- --nocapture
 
 # sims-heuristics feature-gated tests
 cargo test --features parallel --test test_concurrent_pls
+
+# external_solvers requires the moors patch to be applied first (after a
+# fresh clone or `cargo clean`, target/patch/ won't exist yet):
+cd sims-heuristics && cargo patch-crate && cd ..
 cargo test --features external_solvers --test test_external_solvers
 
 # nd-tree / pareto (from their directories)
@@ -120,7 +124,19 @@ Python linting uses `ruff` (dev dependency in root `pyproject.toml`).
 **Feature flags** (sims-heuristics):
 - `bitmaps` — BitSet-based solution encoding (in default)
 - `parallel` — ConcurrentPLS with crossbeam channels
-- `external_solvers` — moors/optirustic integration
+- `external_solvers` — moors/optirustic integration. Both are patched via
+  `cargo patch-crate`:
+  - `moors` (`patches/moors+0.2.10.patch`) adds `GeneticAlgorithm::run_with_deadline`
+    — upstream has no wall-clock stopping condition at all.
+  - `optirustic` (`patches/optirustic+1.2.2.patch`) fixes a real upstream bug:
+    `is_stopping_condition_met` checked `Instant::now().elapsed()` (always ~0)
+    instead of `self.start_time().elapsed()`, so `MaxDurationAsMinutes`/
+    `MaxDurationAsHours` never actually fired — any `StoppingCondition::Any`
+    combining a duration with `MaxGeneration` silently ran to the generation
+    cap regardless of elapsed time. **Always wrap optirustic/moors test runs in
+    a shell-level `timeout` as a safety net even after this fix.**
+  Run `cargo patch-crate` from `sims-heuristics/` once after a fresh clone or
+  `cargo clean` before building with this feature.
 - `probabilistic_probing` — experimental probing
 - `scalarized_selection` — Chebycheff-based archive queries
 

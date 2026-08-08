@@ -1,9 +1,11 @@
+pub mod proven_safe_trackers;
+pub mod simd_trackers;
 pub mod standard_trackers;
 pub mod tracker_trace;
-pub mod simd_trackers;
-pub mod proven_safe_trackers;
 
-// Core trackers (always compiled)
+// Debug utility that cross-checks the composite tracker against the SIMD
+// tracker; only referenced from its own unit test.
+#[cfg(test)]
 mod composite_debug_trackers;
 
 // Additional tracker implementations (compiled only with "additional_trackers" feature)

@@ -31,15 +31,15 @@
 //!     ..Default::default()
 //! };
 //!
-//! let result = MemeticAlgorithm::run(&problem, config, timeout, seed);
+//! let result = MemeticAlgorithm::run(&problem, &config, timeout);
 //! ```
 
 use std::time::{Duration, Instant};
 
 use crate::PlsOptimizations;
 use pareto::{HasObjectives, MoSolution};
-use rand::rngs::SmallRng;
 use rand::SeedableRng;
+use rand::rngs::SmallRng;
 use tracing::info;
 
 use crate::explored_solutions_data::ExploredSolutionsData;
@@ -196,7 +196,7 @@ impl MemeticAlgorithm {
     /// 3. Archive merging (if enabled)
     pub fn run<P, const D: usize>(
         problem: &P,
-        config: MemeticConfig,
+        config: &MemeticConfig,
         max_duration: Duration,
     ) -> MemeticResult<P, D>
     where
@@ -222,7 +222,7 @@ impl MemeticAlgorithm {
         // ─── Phase 1: PLS ───────────────────────────────────────────────
         let pls_start = Instant::now();
         let (pls_archive_solutions, pls_explored) =
-            Self::run_pls_phase(problem, &config, pls_budget);
+            Self::run_pls_phase(problem, config, pls_budget);
         let pls_duration = pls_start.elapsed();
         let pls_archive_size = pls_archive_solutions.len();
 
@@ -246,15 +246,14 @@ impl MemeticAlgorithm {
 
         // ─── Phase 2: EA ────────────────────────────────────────────────
         let elapsed_so_far = overall_start.elapsed();
-        let ea_budget = if elapsed_so_far < max_duration {
-            max_duration - elapsed_so_far
-        } else {
-            Duration::from_millis(100) // minimum EA time
-        };
+        let ea_budget = max_duration
+            .checked_sub(elapsed_so_far)
+            .filter(|remaining| *remaining > Duration::ZERO)
+            .unwrap_or_else(|| Duration::from_millis(100)); // minimum EA time
 
         let ea_start = Instant::now();
         let (ea_archive_solutions, ea_explored) =
-            Self::run_ea_phase(problem, &config, ea_seed, ea_budget);
+            Self::run_ea_phase(problem, config, ea_seed, ea_budget);
         let ea_duration = ea_start.elapsed();
         let ea_archive_size = ea_archive_solutions.len();
 
@@ -265,7 +264,7 @@ impl MemeticAlgorithm {
 
         // ─── Merge archives ─────────────────────────────────────────────
         let final_archive = if config.merge_pls_archive {
-            Self::merge_archives(pls_archive_solutions.clone(), ea_archive_solutions)
+            Self::merge_archives(pls_archive_solutions, ea_archive_solutions)
         } else {
             ea_archive_solutions
         };
@@ -308,7 +307,7 @@ impl MemeticAlgorithm {
     /// population (e.g. GPBA-A results) instead of running PLS first.
     pub fn run_from_seed<P, const D: usize>(
         problem: &P,
-        config: MemeticConfig,
+        config: &MemeticConfig,
         seed_population: Vec<BitsetEncodedSolution<P, D>>,
         max_duration: Duration,
     ) -> MemeticResult<P, D>
@@ -326,7 +325,7 @@ impl MemeticAlgorithm {
         );
 
         let (ea_archive_solutions, ea_explored) =
-            Self::run_ea_phase(problem, &config, seed_population, max_duration);
+            Self::run_ea_phase(problem, config, seed_population, max_duration);
         let ea_archive_size = ea_archive_solutions.len();
         let ea_duration = overall_start.elapsed();
 
@@ -576,11 +575,7 @@ impl MemeticAlgorithm {
         let obj_range: Vec<f64> = (0..D)
             .map(|d| {
                 let r = obj_max[d] - obj_min[d];
-                if r < f64::EPSILON {
-                    1.0
-                } else {
-                    r
-                }
+                if r < f64::EPSILON { 1.0 } else { r }
             })
             .collect();
 
@@ -729,7 +724,7 @@ where
         ..MemeticConfig::default()
     };
 
-    MemeticAlgorithm::run(problem, config, timeout)
+    MemeticAlgorithm::run(problem, &config, timeout)
 }
 
 /// Run the memetic hybrid with NSGA-III backend using default configuration.
@@ -750,7 +745,7 @@ where
         ..MemeticConfig::default()
     };
 
-    MemeticAlgorithm::run(problem, config, timeout)
+    MemeticAlgorithm::run(problem, &config, timeout)
 }
 
 /// Run the memetic hybrid with MOEA/D backend using default configuration.
@@ -770,7 +765,7 @@ where
         ..MemeticConfig::default()
     };
 
-    MemeticAlgorithm::run(problem, config, timeout)
+    MemeticAlgorithm::run(problem, &config, timeout)
 }
 
 // ---------------------------------------------------------------------------
@@ -816,12 +811,9 @@ mod tests {
 
     #[test]
     fn test_memetic_nsga2_runs_and_produces_solutions() {
-        let problem = match make_test_problem() {
-            Some(p) => p,
-            None => {
-                eprintln!("Skipping test: no test instance found");
-                return;
-            }
+        let Some(problem) = make_test_problem() else {
+            eprintln!("Skipping test: no test instance found");
+            return;
         };
 
         let result = run_memetic_nsga2(
@@ -861,9 +853,7 @@ mod tests {
                 if i != j {
                     assert!(
                         !a.dominates(b.objectives()),
-                        "Archive should contain no dominated solutions: {} dominates {}",
-                        i,
-                        j,
+                        "Archive should contain no dominated solutions: {i} dominates {j}",
                     );
                 }
             }
@@ -881,12 +871,9 @@ mod tests {
 
     #[test]
     fn test_memetic_moead_runs_and_produces_solutions() {
-        let problem = match make_test_problem() {
-            Some(p) => p,
-            None => {
-                eprintln!("Skipping test: no test instance found");
-                return;
-            }
+        let Some(problem) = make_test_problem() else {
+            eprintln!("Skipping test: no test instance found");
+            return;
         };
 
         let config = MemeticConfig {
@@ -904,7 +891,7 @@ mod tests {
 
         let result = MemeticAlgorithm::run::<ProblemBitset<NUM_OBJECTIVES>, NUM_OBJECTIVES>(
             &problem,
-            config,
+            &config,
             Duration::from_secs(3),
         );
 
@@ -933,12 +920,9 @@ mod tests {
 
     #[test]
     fn test_memetic_with_high_pls_fraction() {
-        let problem = match make_test_problem() {
-            Some(p) => p,
-            None => {
-                eprintln!("Skipping test: no test instance found");
-                return;
-            }
+        let Some(problem) = make_test_problem() else {
+            eprintln!("Skipping test: no test instance found");
+            return;
         };
 
         // Give 80% to PLS, only 20% to EA
@@ -958,12 +942,9 @@ mod tests {
 
     #[test]
     fn test_farthest_point_sampling() {
-        let problem = match make_test_problem() {
-            Some(p) => p,
-            None => {
-                eprintln!("Skipping test: no test instance found");
-                return;
-            }
+        let Some(problem) = make_test_problem() else {
+            eprintln!("Skipping test: no test instance found");
+            return;
         };
 
         // Generate a bunch of random solutions
@@ -991,12 +972,9 @@ mod tests {
 
     #[test]
     fn test_merge_archives_removes_dominated() {
-        let problem = match make_test_problem() {
-            Some(p) => p,
-            None => {
-                eprintln!("Skipping test: no test instance found");
-                return;
-            }
+        let Some(problem) = make_test_problem() else {
+            eprintln!("Skipping test: no test instance found");
+            return;
         };
 
         let archive_a: Vec<BitsetEncodedSolution<ProblemBitset<NUM_OBJECTIVES>, NUM_OBJECTIVES>> =
@@ -1025,12 +1003,9 @@ mod tests {
 
     #[test]
     fn test_memetic_no_merge_option() {
-        let problem = match make_test_problem() {
-            Some(p) => p,
-            None => {
-                eprintln!("Skipping test: no test instance found");
-                return;
-            }
+        let Some(problem) = make_test_problem() else {
+            eprintln!("Skipping test: no test instance found");
+            return;
         };
 
         let config = MemeticConfig {
@@ -1048,7 +1023,7 @@ mod tests {
 
         let result = MemeticAlgorithm::run::<ProblemBitset<NUM_OBJECTIVES>, NUM_OBJECTIVES>(
             &problem,
-            config,
+            &config,
             Duration::from_secs(2),
         );
 
@@ -1067,12 +1042,9 @@ mod tests {
 
     #[test]
     fn test_select_seed_population_no_cap() {
-        let problem = match make_test_problem() {
-            Some(p) => p,
-            None => {
-                eprintln!("Skipping test: no test instance found");
-                return;
-            }
+        let Some(problem) = make_test_problem() else {
+            eprintln!("Skipping test: no test instance found");
+            return;
         };
 
         let archive: Vec<BitsetEncodedSolution<ProblemBitset<NUM_OBJECTIVES>, NUM_OBJECTIVES>> = (0
@@ -1091,12 +1063,9 @@ mod tests {
 
     #[test]
     fn test_select_seed_population_with_cap() {
-        let problem = match make_test_problem() {
-            Some(p) => p,
-            None => {
-                eprintln!("Skipping test: no test instance found");
-                return;
-            }
+        let Some(problem) = make_test_problem() else {
+            eprintln!("Skipping test: no test instance found");
+            return;
         };
 
         let archive: Vec<BitsetEncodedSolution<ProblemBitset<NUM_OBJECTIVES>, NUM_OBJECTIVES>> = (0

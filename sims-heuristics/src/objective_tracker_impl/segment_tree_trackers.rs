@@ -47,20 +47,25 @@ impl MinResNode {
         for i in 0..9 {
             hist[i] = left.hist[i] + right.hist[i];
         }
-        Self { hist, lazy_c0: 0, lazy_c1: 0 }
+        Self {
+            hist,
+            lazy_c0: 0,
+            lazy_c1: 0,
+        }
     }
 
-    /// Compute objective contribution: low_val * (elements with c0>0) + 
+    /// Compute objective contribution: low_val * (elements with c0>0) +
     /// (high_val - low_val) * (elements with c0==0 && c1>0)
     #[inline]
     fn objective_value(&self, low_val: u64, high_val: u64) -> u64 {
         // Elements with c0 > 0: columns 1,2 for all c1 rows
         // hist indices where c0_state ∈ {1, 2} are: 1,2, 4,5, 7,8
-        let c0_positive = self.hist[1] + self.hist[2] + self.hist[4] + self.hist[5] + self.hist[7] + self.hist[8];
-        
+        let c0_positive =
+            self.hist[1] + self.hist[2] + self.hist[4] + self.hist[5] + self.hist[7] + self.hist[8];
+
         // Elements with c0 == 0 && c1 > 0: hist[0][1] + hist[0][2] = indices 3, 6
         let c0_zero_c1_positive = self.hist[3] + self.hist[6];
-        
+
         (c0_positive as u64) * low_val + (c0_zero_c1_positive as u64) * high_val
     }
 }
@@ -82,18 +87,23 @@ impl MinResSegmentTree {
         // Round up to power of 2
         let n = universe_size.next_power_of_two();
         let mut nodes = vec![MinResNode::default(); 2 * n];
-        
+
         // Initialize leaves: each element starts in state (0, 0)
         for i in 0..universe_size {
             nodes[n + i].hist[0] = 1; // hist[0][0] = 1
         }
-        
+
         // Build tree bottom-up
         for i in (1..n).rev() {
             nodes[i] = MinResNode::merge(&nodes[2 * i], &nodes[2 * i + 1]);
         }
-        
-        Self { nodes, n, low_val, high_val }
+
+        Self {
+            nodes,
+            n,
+            low_val,
+            high_val,
+        }
     }
 
     /// Push lazy tags from parent to children
@@ -102,10 +112,10 @@ impl MinResSegmentTree {
         if node >= self.n {
             return; // Leaf node
         }
-        
+
         let lazy_c0 = self.nodes[node].lazy_c0;
         let lazy_c1 = self.nodes[node].lazy_c1;
-        
+
         if lazy_c0 != 0 || lazy_c1 != 0 {
             // Apply to children
             self.apply_lazy(2 * node, lazy_c0, lazy_c1);
@@ -119,7 +129,7 @@ impl MinResSegmentTree {
     #[inline]
     fn apply_lazy(&mut self, node: usize, delta_c0: i8, delta_c1: i8) {
         let n = &mut self.nodes[node];
-        
+
         // Shift histogram based on deltas
         if delta_c0 == 1 {
             // c0 += 1: shift columns right (0->1, 1->2, 2->2)
@@ -139,7 +149,7 @@ impl MinResSegmentTree {
             }
             n.hist = new_hist;
         }
-        
+
         if delta_c1 == 1 {
             // c1 += 1: shift rows down (0->1, 1->2, 2->2)
             let mut new_hist = [0u32; 9];
@@ -157,7 +167,7 @@ impl MinResSegmentTree {
             }
             n.hist = new_hist;
         }
-        
+
         // Accumulate lazy tags
         n.lazy_c0 = (n.lazy_c0 + delta_c0).clamp(-1, 1);
         n.lazy_c1 = (n.lazy_c1 + delta_c1).clamp(-1, 1);
@@ -182,19 +192,19 @@ impl MinResSegmentTree {
         if r <= node_l || node_r <= l {
             return; // No overlap
         }
-        
+
         if l <= node_l && node_r <= r {
             // Fully covered - apply lazy update
             self.apply_lazy(node, delta_c0, delta_c1);
             return;
         }
-        
+
         // Partial overlap - push down and recurse
         self.push_down(node);
         let mid = (node_l + node_r) / 2;
         self.range_update_impl(2 * node, node_l, mid, l, r, delta_c0, delta_c1);
         self.range_update_impl(2 * node + 1, mid, node_r, l, r, delta_c0, delta_c1);
-        
+
         // Merge children back
         self.nodes[node] = MinResNode::merge(&self.nodes[2 * node], &self.nodes[2 * node + 1]);
     }
@@ -207,12 +217,8 @@ impl MinResSegmentTree {
 
     /// Update for intervals: apply delta to c0 or c1 based on resolution level
     pub fn update_intervals(&mut self, intervals: &[Interval], level: usize, delta: i8) {
-        let (delta_c0, delta_c1) = if level == 0 {
-            (delta, 0)
-        } else {
-            (0, delta)
-        };
-        
+        let (delta_c0, delta_c1) = if level == 0 { (delta, 0) } else { (0, delta) };
+
         for interval in intervals {
             let start = interval.start as usize;
             let end = start + interval.len as usize;
@@ -275,19 +281,23 @@ impl CloudySegmentTree {
         let universe_size = element_areas.len();
         let n = universe_size.next_power_of_two();
         let mut nodes = vec![CloudyNode::default(); 2 * n];
-        
+
         // Initialize leaves: each element starts with count=0
         for i in 0..universe_size {
             nodes[n + i].count[0] = 1;
             nodes[n + i].area_sum[0] = element_areas[i];
         }
-        
+
         // Build tree bottom-up
         for i in (1..n).rev() {
             nodes[i] = CloudyNode::merge(&nodes[2 * i], &nodes[2 * i + 1]);
         }
-        
-        Self { nodes, n, element_areas: element_areas.to_vec() }
+
+        Self {
+            nodes,
+            n,
+            element_areas: element_areas.to_vec(),
+        }
     }
 
     #[inline]
@@ -295,7 +305,7 @@ impl CloudySegmentTree {
         if node >= self.n {
             return;
         }
-        
+
         let lazy = self.nodes[node].lazy;
         if lazy != 0 {
             self.apply_lazy(2 * node, lazy);
@@ -307,7 +317,7 @@ impl CloudySegmentTree {
     #[inline]
     fn apply_lazy(&mut self, node: usize, delta: i8) {
         let n = &mut self.nodes[node];
-        
+
         if delta == 1 {
             // count += 1: shift states right (0->1, 1->2, 2->2)
             let new_count = [0, n.count[0], n.count[1] + n.count[2]];
@@ -321,7 +331,7 @@ impl CloudySegmentTree {
             n.count = new_count;
             n.area_sum = new_area;
         }
-        
+
         n.lazy = (n.lazy + delta).clamp(-1, 1);
     }
 
@@ -341,12 +351,12 @@ impl CloudySegmentTree {
         if r <= node_l || node_r <= l {
             return;
         }
-        
+
         if l <= node_l && node_r <= r {
             self.apply_lazy(node, delta);
             return;
         }
-        
+
         self.push_down(node);
         let mid = (node_l + node_r) / 2;
         self.range_update_impl(2 * node, node_l, mid, l, r, delta);
@@ -382,12 +392,17 @@ pub struct SegTreeMinResolutionState {
 }
 
 impl<const D: usize> ObjectiveTracker<D> for SegTreeMinResolutionState {
-    fn peek_removal_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+    fn peek_removal_delta(
+        &self,
+        image_index: usize,
+        _p: &impl SetCoverProblem<D>,
+        _s: &impl ImageSet<D>,
+    ) -> i64 {
         // For peek, we need to compute the delta without modifying
         // This is expensive with lazy segment trees - we'd need to clone
         // For now, use a simpler approach: compute from scratch
         let old_val = self.tree.value();
-        
+
         // Clone tree and apply update
         let mut tree_copy = MinResSegmentTree {
             nodes: self.tree.nodes.clone(),
@@ -395,59 +410,64 @@ impl<const D: usize> ObjectiveTracker<D> for SegTreeMinResolutionState {
             low_val: self.tree.low_val,
             high_val: self.tree.high_val,
         };
-        
+
         let int_start = self.image_intervals_offsets[image_index];
         let int_end = self.image_intervals_offsets[image_index + 1];
         let intervals = &self.image_intervals[int_start..int_end];
         let level = self.image_resolution_level[image_index] as usize;
         tree_copy.update_intervals(intervals, level, -1);
-        
+
         let new_val = tree_copy.value();
         new_val as i64 - old_val as i64
     }
 
-    fn peek_addition_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+    fn peek_addition_delta(
+        &self,
+        image_index: usize,
+        _p: &impl SetCoverProblem<D>,
+        _s: &impl ImageSet<D>,
+    ) -> i64 {
         let old_val = self.tree.value();
-        
+
         let mut tree_copy = MinResSegmentTree {
             nodes: self.tree.nodes.clone(),
             n: self.tree.n,
             low_val: self.tree.low_val,
             high_val: self.tree.high_val,
         };
-        
+
         let int_start = self.image_intervals_offsets[image_index];
         let int_end = self.image_intervals_offsets[image_index + 1];
         let intervals = &self.image_intervals[int_start..int_end];
         let level = self.image_resolution_level[image_index] as usize;
         tree_copy.update_intervals(intervals, level, 1);
-        
+
         let new_val = tree_copy.value();
         new_val as i64 - old_val as i64
     }
 
     fn track_image_removal(&mut self, image_index: usize, _p: &impl SetCoverProblem<D>) -> i64 {
         let old_val = self.tree.value();
-        
+
         let int_start = self.image_intervals_offsets[image_index];
         let int_end = self.image_intervals_offsets[image_index + 1];
         let intervals = &self.image_intervals[int_start..int_end];
         let level = self.image_resolution_level[image_index] as usize;
         self.tree.update_intervals(intervals, level, -1);
-        
+
         let new_val = self.tree.value();
         new_val as i64 - old_val as i64
     }
 
     fn track_image_addition(&mut self, image_index: usize, _p: &impl SetCoverProblem<D>) -> i64 {
         let old_val = self.tree.value();
-        
+
         let int_start = self.image_intervals_offsets[image_index];
         let int_end = self.image_intervals_offsets[image_index + 1];
         let intervals = &self.image_intervals[int_start..int_end];
         let level = self.image_resolution_level[image_index] as usize;
         self.tree.update_intervals(intervals, level, 1);
-        
+
         let new_val = self.tree.value();
         new_val as i64 - old_val as i64
     }
@@ -466,62 +486,72 @@ pub struct SegTreeCloudyAreaState {
 }
 
 impl<const D: usize> ObjectiveTracker<D> for SegTreeCloudyAreaState {
-    fn peek_removal_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+    fn peek_removal_delta(
+        &self,
+        image_index: usize,
+        _p: &impl SetCoverProblem<D>,
+        _s: &impl ImageSet<D>,
+    ) -> i64 {
         let old_val = self.tree.cloudy_area();
-        
+
         let mut tree_copy = CloudySegmentTree {
             nodes: self.tree.nodes.clone(),
             n: self.tree.n,
             element_areas: self.tree.element_areas.clone(),
         };
-        
+
         let int_start = self.clear_intervals_offsets[image_index];
         let int_end = self.clear_intervals_offsets[image_index + 1];
         let intervals = &self.clear_intervals[int_start..int_end];
         tree_copy.update_intervals(intervals, -1);
-        
+
         let new_val = tree_copy.cloudy_area();
         new_val as i64 - old_val as i64
     }
 
-    fn peek_addition_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+    fn peek_addition_delta(
+        &self,
+        image_index: usize,
+        _p: &impl SetCoverProblem<D>,
+        _s: &impl ImageSet<D>,
+    ) -> i64 {
         let old_val = self.tree.cloudy_area();
-        
+
         let mut tree_copy = CloudySegmentTree {
             nodes: self.tree.nodes.clone(),
             n: self.tree.n,
             element_areas: self.tree.element_areas.clone(),
         };
-        
+
         let int_start = self.clear_intervals_offsets[image_index];
         let int_end = self.clear_intervals_offsets[image_index + 1];
         let intervals = &self.clear_intervals[int_start..int_end];
         tree_copy.update_intervals(intervals, 1);
-        
+
         let new_val = tree_copy.cloudy_area();
         new_val as i64 - old_val as i64
     }
 
     fn track_image_removal(&mut self, image_index: usize, _p: &impl SetCoverProblem<D>) -> i64 {
         let old_val = self.tree.cloudy_area();
-        
+
         let int_start = self.clear_intervals_offsets[image_index];
         let int_end = self.clear_intervals_offsets[image_index + 1];
         let intervals = &self.clear_intervals[int_start..int_end];
         self.tree.update_intervals(intervals, -1);
-        
+
         let new_val = self.tree.cloudy_area();
         new_val as i64 - old_val as i64
     }
 
     fn track_image_addition(&mut self, image_index: usize, _p: &impl SetCoverProblem<D>) -> i64 {
         let old_val = self.tree.cloudy_area();
-        
+
         let int_start = self.clear_intervals_offsets[image_index];
         let int_end = self.clear_intervals_offsets[image_index + 1];
         let intervals = &self.clear_intervals[int_start..int_end];
         self.tree.update_intervals(intervals, 1);
-        
+
         let new_val = self.tree.cloudy_area();
         new_val as i64 - old_val as i64
     }

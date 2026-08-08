@@ -56,7 +56,7 @@ pub trait SetCoverProblem<const D: usize> {
     /// Get images that cover a specific element
     fn element_images(&self, element_index: usize) -> impl Iterator<Item = usize> + '_;
 
-    /// Get the FixedBitSet representation of an image's covered elements.
+    /// Get the `FixedBitSet` representation of an image's covered elements.
     ///
     /// Returns `Some(&bitset)` for implementations that store images as bitsets
     /// (e.g., `ProblemBitset`), enabling O(N/64) SIMD-accelerated bulk operations

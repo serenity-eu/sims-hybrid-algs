@@ -1229,40 +1229,6 @@ fn merge_binary_data(first: &[u8], second: &[u8]) -> Vec<u8> {
     result
 }
 
-/// Merges dominated indices with proper offset for the second trace
-fn merge_dominated_indices(
-    first: &[u8],
-    second: &[u8],
-    first_trace_solution_count: usize,
-) -> Vec<u8> {
-    let mut result = Vec::with_capacity(first.len() + second.len());
-
-    // Add first trace dominated indices as-is
-    result.extend_from_slice(first);
-
-    // Add second trace dominated indices with offset
-    // Each dominated index is u32 LE (4 bytes)
-    let dominated_count = second.len() / 4;
-    for i in 0..dominated_count {
-        let start_idx = i * 4;
-        let dominated_bytes = &second[start_idx..start_idx + 4];
-        let original_dominated = u32::from_le_bytes(dominated_bytes.try_into().unwrap());
-
-        // Adjust dominated index to account for first trace solutions
-        let adjusted_dominated = if original_dominated == u32::MAX {
-            // Never dominated - keep as u32::MAX
-            u32::MAX
-        } else {
-            // Add offset to point to correct solution in merged trace
-            original_dominated + first_trace_solution_count as u32
-        };
-
-        result.extend_from_slice(&adjusted_dominated.to_le_bytes());
-    }
-
-    result
-}
-
 fn parse_objectives_from_binary(
     objectives_data: &[u8],
     num_objectives: usize,

@@ -1,6 +1,6 @@
 use log::debug;
 use pls::objectives::ObjectiveType;
-use pls::problem::{SIMSProblemInstanceRaw};
+use pls::problem::SIMSProblemInstanceRaw;
 use pls::problem_bitset::ProblemBitset;
 use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::{

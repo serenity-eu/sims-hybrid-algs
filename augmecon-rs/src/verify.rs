@@ -1,28 +1,41 @@
-//! Lightweight runtime counters to verify which AUGMECON-family techniques are
-//! actually executed on the live GPBA call graph (not merely present in source).
-//! Enabled by the `GPBA_VERIFY` env var; zero cost otherwise (atomic adds only).
+//! Lightweight runtime counters for the AUGMECON-family solve.
+//!
+//! These verify which techniques are actually executed on the live GPBA call
+//! graph (not merely present in source). Enabled by the `GPBA_VERIFY` env var;
+//! zero cost otherwise (atomic adds only).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-pub static SLACK_SOLVES: AtomicU64 = AtomicU64::new(0); // #1/#2/#3 augmentation+slack ε-solve
-pub static AUGMENTATION_BUILT: AtomicU64 = AtomicU64::new(0); // #1 augmented objective assembled
-pub static INTERVAL_REMOVALS: AtomicU64 = AtomicU64::new(0); // #4/#5 bypass / bouncing
-pub static RELAXATION_REUSE: AtomicU64 = AtomicU64::new(0); // #6 SAUGMECON Lemma 1 (feasible reuse)
-pub static INFEASIBLE_PROP: AtomicU64 = AtomicU64::new(0); // #6/#7 SAUGMECON Lemma 2 (infeasible skip)
-pub static CASCADE_EXITS: AtomicU64 = AtomicU64::new(0); // #7 early exit / dimension cascade
+/// #1/#2/#3 augmentation+slack ε-solve count.
+pub static SLACK_SOLVES: AtomicU64 = AtomicU64::new(0);
+/// #1 augmented objective assembled count.
+pub static AUGMENTATION_BUILT: AtomicU64 = AtomicU64::new(0);
+/// #4/#5 bypass / bouncing interval removals.
+pub static INTERVAL_REMOVALS: AtomicU64 = AtomicU64::new(0);
+/// #6 SAUGMECON Lemma 1 (feasible relaxation reuse).
+pub static RELAXATION_REUSE: AtomicU64 = AtomicU64::new(0);
+/// #6/#7 SAUGMECON Lemma 2 (infeasible skip propagation).
+pub static INFEASIBLE_PROP: AtomicU64 = AtomicU64::new(0);
+/// #7 early exit / dimension cascade count.
+pub static CASCADE_EXITS: AtomicU64 = AtomicU64::new(0);
 
 // ── Phase timers (nanoseconds accumulated across the solve) ──────────────────
-pub static PAYOFF_NS: AtomicU64 = AtomicU64::new(0); // ideal-bounds / payoff-table solves
-pub static EPS_CALL_NS: AtomicU64 = AtomicU64::new(0); // full ε-subproblem call (build + MILP solve)
-pub static SOLVE_NS: AtomicU64 = AtomicU64::new(0); // just the MILP `model.solve()`
-pub static TOTAL_NS: AtomicU64 = AtomicU64::new(0); // whole generate_representation
+/// Ideal-bounds / payoff-table solve time (ns).
+pub static PAYOFF_NS: AtomicU64 = AtomicU64::new(0);
+/// Full ε-subproblem call time — model build + MILP solve (ns).
+pub static EPS_CALL_NS: AtomicU64 = AtomicU64::new(0);
+/// Just the MILP `model.solve()` time (ns).
+pub static SOLVE_NS: AtomicU64 = AtomicU64::new(0);
+/// Whole `generate_representation` time (ns).
+pub static TOTAL_NS: AtomicU64 = AtomicU64::new(0);
 
 #[inline]
 fn on() -> bool {
     std::env::var_os("GPBA_VERIFY").is_some()
 }
 
+/// Increment a counter by one when `GPBA_VERIFY` is set.
 #[inline]
 pub fn bump(c: &AtomicU64) {
     if on() {
@@ -30,13 +43,23 @@ pub fn bump(c: &AtomicU64) {
     }
 }
 
+/// Add a duration (in nanoseconds) to a timer when `GPBA_VERIFY` is set.
 #[inline]
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "nanosecond totals for a single solve stay far below u64::MAX"
+)]
 pub fn add_ns(c: &AtomicU64, d: Duration) {
     if on() {
         c.fetch_add(d.as_nanos() as u64, Ordering::Relaxed);
     }
 }
 
+/// Print the technique-execution counters and time breakdown to stderr.
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "ns/percentage figures are display-only diagnostics; f64 rounding is irrelevant"
+)]
 pub fn report() {
     if std::env::var_os("GPBA_VERIFY").is_none() {
         return;

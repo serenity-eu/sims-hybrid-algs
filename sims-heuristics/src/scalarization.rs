@@ -55,7 +55,7 @@ pub fn weighted_chebycheff_score<const D: usize>(
         sum_term += weighted;
     }
 
-    max_term + rho * sum_term
+    rho.mul_add(sum_term, max_term)
 }
 
 /// Precomputed coefficients for repeated weighted Chebycheff scoring.
@@ -102,7 +102,7 @@ impl<const D: usize> WeightedChebycheffCoeffs<D> {
             sum_term += weighted;
         }
 
-        max_term + self.rho * sum_term
+        self.rho.mul_add(sum_term, max_term)
     }
 }
 

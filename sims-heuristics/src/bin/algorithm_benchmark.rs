@@ -327,7 +327,7 @@ fn run_memetic_nsga2(
     };
 
     let start = Instant::now();
-    let result = MemeticAlgorithm::run::<Problem, NUM_OBJECTIVES>(problem, config, timeout);
+    let result = MemeticAlgorithm::run::<Problem, NUM_OBJECTIVES>(problem, &config, timeout);
     let wall = start.elapsed();
 
     let objectives: Vec<[u64; NUM_OBJECTIVES]> =
@@ -361,7 +361,7 @@ fn run_memetic_moead(
     };
 
     let start = Instant::now();
-    let result = MemeticAlgorithm::run::<Problem, NUM_OBJECTIVES>(problem, config, timeout);
+    let result = MemeticAlgorithm::run::<Problem, NUM_OBJECTIVES>(problem, &config, timeout);
     let wall = start.elapsed();
 
     let objectives: Vec<[u64; NUM_OBJECTIVES]> =

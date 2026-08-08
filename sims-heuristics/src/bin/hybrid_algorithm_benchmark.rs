@@ -278,7 +278,13 @@ fn run_exhaustive_pls(
     set_runtime_probing_budget(PROBING_BUDGET_EXHAUSTIVE);
 
     let start = Instant::now();
-    let mut pls = ParetoLocalSearch::new(problem, initial_pop, NEIGHBORHOOD_RANGE, false, PlsOptimizations::default());
+    let mut pls = ParetoLocalSearch::new(
+        problem,
+        initial_pop,
+        NEIGHBORHOOD_RANGE,
+        false,
+        PlsOptimizations::default(),
+    );
     let archive = pls.run(usize::MAX, timeout);
     let wall = start.elapsed();
     (archive, wall)
@@ -294,7 +300,13 @@ fn run_probabilistic_pls(
     set_runtime_probing_budget(budget);
 
     let start = Instant::now();
-    let mut pls = ParetoLocalSearch::new(problem, initial_pop, NEIGHBORHOOD_RANGE, false, PlsOptimizations::default());
+    let mut pls = ParetoLocalSearch::new(
+        problem,
+        initial_pop,
+        NEIGHBORHOOD_RANGE,
+        false,
+        PlsOptimizations::default(),
+    );
     let archive = pls.run(usize::MAX, timeout);
     let wall = start.elapsed();
     (archive, wall)

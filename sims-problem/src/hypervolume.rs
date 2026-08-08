@@ -1,11 +1,19 @@
+use crate::solution::Solution;
 use pareto::{HasObjectives, Objectives};
 use pyo3::prelude::*;
-use crate::solution::Solution;
-use std::ops::{Sub, Mul, Add};
 use std::cmp::PartialOrd;
+use std::ops::{Add, Mul, Sub};
 
 /// Trait for numeric types that can be used in hypervolume computation
-pub trait HVNumeric: Copy + PartialOrd + Sub<Output = Self> + Mul<Output = Self> + Add<Output = Self> + From<u8> + std::fmt::Debug {
+pub trait HVNumeric:
+    Copy
+    + PartialOrd
+    + Sub<Output = Self>
+    + Mul<Output = Self>
+    + Add<Output = Self>
+    + From<u8>
+    + std::fmt::Debug
+{
     const ZERO: Self;
     const ONE: Self;
     fn to_f64(self) -> f64;
@@ -15,15 +23,23 @@ pub trait HVNumeric: Copy + PartialOrd + Sub<Output = Self> + Mul<Output = Self>
 impl HVNumeric for u64 {
     const ZERO: Self = 0;
     const ONE: Self = 1;
-    fn to_f64(self) -> f64 { self as f64 }
-    fn from_f64(val: f64) -> Self { val as u64 }
+    fn to_f64(self) -> f64 {
+        self as f64
+    }
+    fn from_f64(val: f64) -> Self {
+        val as u64
+    }
 }
 
 impl HVNumeric for f64 {
     const ZERO: Self = 0.0;
     const ONE: Self = 1.0;
-    fn to_f64(self) -> f64 { self }
-    fn from_f64(val: f64) -> Self { val }
+    fn to_f64(self) -> f64 {
+        self
+    }
+    fn from_f64(val: f64) -> Self {
+        val
+    }
 }
 
 /// Compute hypervolume for 4D minimization front.
@@ -156,8 +172,11 @@ where
     }
 
     // Sort ascending by x (dim-1).  Ties broken by y ascending.
-    points.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap()
-        .then_with(|| a[1].partial_cmp(&b[1]).unwrap()));
+    points.sort_by(|a, b| {
+        a[0].partial_cmp(&b[0])
+            .unwrap()
+            .then_with(|| a[1].partial_cmp(&b[1]).unwrap())
+    });
 
     let mut total = T::ZERO;
     let mut min_y = reference[1]; // running minimum y
@@ -215,33 +234,50 @@ where
 }
 
 /// Compute hypervolume for generic structure implementing HasObjectives
-pub fn compute<const D: usize, T: HasObjectives<D>>(pareto_front: Vec<T>, reference_point: Objectives<D>) -> u128 {
+pub fn compute<const D: usize, T: HasObjectives<D>>(
+    pareto_front: Vec<T>,
+    reference_point: Objectives<D>,
+) -> u128 {
     match D {
         2 => {
-            let mut points_vec: Vec<Vec<u64>> = pareto_front.iter().map(|s| {
-                let objectives = *s.objectives();
-                vec![objectives[0], objectives[1]]
-            }).collect();
+            let mut points_vec: Vec<Vec<u64>> = pareto_front
+                .iter()
+                .map(|s| {
+                    let objectives = *s.objectives();
+                    vec![objectives[0], objectives[1]]
+                })
+                .collect();
             let reference_vec = vec![reference_point[0], reference_point[1]];
             hypervolume_2d_min_generic(&mut points_vec, &reference_vec) as u128
         }
         3 => {
-            let mut points_vec: Vec<Vec<u64>> = pareto_front.iter().map(|s| {
-                let objectives = *s.objectives();
-                vec![objectives[0], objectives[1], objectives[2]]
-            }).collect();
+            let mut points_vec: Vec<Vec<u64>> = pareto_front
+                .iter()
+                .map(|s| {
+                    let objectives = *s.objectives();
+                    vec![objectives[0], objectives[1], objectives[2]]
+                })
+                .collect();
             let reference_vec = vec![reference_point[0], reference_point[1], reference_point[2]];
             hypervolume_3d_min_generic(&mut points_vec, &reference_vec) as u128
         }
         4 => {
-            let mut points_vec: Vec<Vec<u64>> = pareto_front.iter().map(|s| {
-                let objectives = *s.objectives();
-                vec![objectives[0], objectives[1], objectives[2], objectives[3]]
-            }).collect();
-            let reference_vec = vec![reference_point[0], reference_point[1], reference_point[2], reference_point[3]];
+            let mut points_vec: Vec<Vec<u64>> = pareto_front
+                .iter()
+                .map(|s| {
+                    let objectives = *s.objectives();
+                    vec![objectives[0], objectives[1], objectives[2], objectives[3]]
+                })
+                .collect();
+            let reference_vec = vec![
+                reference_point[0],
+                reference_point[1],
+                reference_point[2],
+                reference_point[3],
+            ];
             hypervolume_4d_min_generic(&mut points_vec, &reference_vec) as u128
         }
-        _ => 0
+        _ => 0,
     }
 }
 
@@ -282,7 +318,7 @@ pub fn compute_hypervolume(
     data: &Bound<'_, pyo3::PyAny>,
     objective_bounds: Vec<Vec<u64>>,
     reference_point: Option<Vec<u64>>,
-    normalized: bool
+    normalized: bool,
 ) -> PyResult<f64> {
     // Validate objective bounds first
     let dimension = objective_bounds.len();
@@ -294,7 +330,8 @@ pub fn compute_hypervolume(
         if ref_point.len() != dimension {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "Reference point must have {} dimensions to match objective bounds, but got {}",
-                dimension, ref_point.len()
+                dimension,
+                ref_point.len()
             )));
         }
         ref_point
@@ -335,7 +372,8 @@ pub fn compute_hypervolume(
     // Compute hypervolume based on normalization mode
     let result = if normalized {
         // Normalize to [0,1] range like pymoo
-        let (normalized_points, normalized_reference) = normalize_points_to_unit_range(&points, &reference_point, &objective_bounds);
+        let (normalized_points, normalized_reference) =
+            normalize_points_to_unit_range(&points, &reference_point, &objective_bounds);
 
         match dimension {
             2 => {
@@ -361,18 +399,29 @@ pub fn compute_hypervolume(
         // Use generic u64 implementation
         let result = match dimension {
             2 => {
-                let mut points_vec: Vec<Vec<u64>> = points.iter().map(|p| vec![p[0], p[1]]).collect();
+                let mut points_vec: Vec<Vec<u64>> =
+                    points.iter().map(|p| vec![p[0], p[1]]).collect();
                 let reference_vec = vec![reference_point[0], reference_point[1]];
                 hypervolume_2d_min_generic(&mut points_vec, &reference_vec)
             }
             3 => {
-                let mut points_vec: Vec<Vec<u64>> = points.iter().map(|p| vec![p[0], p[1], p[2]]).collect();
-                let reference_vec = vec![reference_point[0], reference_point[1], reference_point[2]];
+                let mut points_vec: Vec<Vec<u64>> =
+                    points.iter().map(|p| vec![p[0], p[1], p[2]]).collect();
+                let reference_vec =
+                    vec![reference_point[0], reference_point[1], reference_point[2]];
                 hypervolume_3d_min_generic(&mut points_vec, &reference_vec)
             }
             4 => {
-                let mut points_vec: Vec<Vec<u64>> = points.iter().map(|p| vec![p[0], p[1], p[2], p[3]]).collect();
-                let reference_vec = vec![reference_point[0], reference_point[1], reference_point[2], reference_point[3]];
+                let mut points_vec: Vec<Vec<u64>> = points
+                    .iter()
+                    .map(|p| vec![p[0], p[1], p[2], p[3]])
+                    .collect();
+                let reference_vec = vec![
+                    reference_point[0],
+                    reference_point[1],
+                    reference_point[2],
+                    reference_point[3],
+                ];
                 hypervolume_4d_min_generic(&mut points_vec, &reference_vec)
             }
             _ => {
@@ -388,11 +437,23 @@ pub fn compute_hypervolume(
     // Assert hypervolume bounds based on normalization mode
     if normalized {
         // For normalized hypervolume, values should be in [0,1] range
-        assert!(result >= 0.0, "Normalized hypervolume must be non-negative, got: {}", result);
-        assert!(result <= 1.0, "Normalized hypervolume must be <= 1.0, got: {}", result);
+        assert!(
+            result >= 0.0,
+            "Normalized hypervolume must be non-negative, got: {}",
+            result
+        );
+        assert!(
+            result <= 1.0,
+            "Normalized hypervolume must be <= 1.0, got: {}",
+            result
+        );
     } else {
         // For non-normalized hypervolume, values should still be non-negative
-        assert!(result >= 0.0, "Hypervolume must be non-negative, got: {}", result);
+        assert!(
+            result >= 0.0,
+            "Hypervolume must be non-negative, got: {}",
+            result
+        );
     }
 
     Ok(result)
@@ -403,7 +464,8 @@ fn validate_objective_bounds(bounds: &[Vec<u64>], dimension: usize) -> PyResult<
     if bounds.len() != dimension {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
             "Objective bounds dimension mismatch: expected {}, but got {}",
-            dimension, bounds.len()
+            dimension,
+            bounds.len()
         )));
     }
 
@@ -411,7 +473,8 @@ fn validate_objective_bounds(bounds: &[Vec<u64>], dimension: usize) -> PyResult<
         if bound.len() != 2 {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "Each bound must have exactly 2 values [min, max], but dimension {} has {} values",
-                i, bound.len()
+                i,
+                bound.len()
             )));
         }
 
@@ -426,44 +489,62 @@ fn validate_objective_bounds(bounds: &[Vec<u64>], dimension: usize) -> PyResult<
     Ok(())
 }
 
-
 /// Normalize points to [0,1] unit range for pymoo compatibility
 fn normalize_points_to_unit_range(
     points: &[Vec<u64>],
     reference_point: &[u64],
-    bounds: &[Vec<u64>]
+    bounds: &[Vec<u64>],
 ) -> (Vec<Vec<f64>>, Vec<f64>) {
     // Calculate ranges for each dimension
-    let ranges: Vec<f64> = bounds.iter().map(|bound| {
-        let range = bound[1] - bound[0];
-        if range > 0 { range as f64 } else { 1.0 }
-    }).collect();
+    let ranges: Vec<f64> = bounds
+        .iter()
+        .map(|bound| {
+            let range = bound[1] - bound[0];
+            if range > 0 {
+                range as f64
+            } else {
+                1.0
+            }
+        })
+        .collect();
 
     // Normalize points to [0, 1] range - panic if values are outside bounds
-    let normalized_points: Vec<Vec<f64>> = points.iter().enumerate().map(|(point_idx, point)| {
-        point.iter().enumerate().map(|(i, &val)| {
+    let normalized_points: Vec<Vec<f64>> = points
+        .iter()
+        .enumerate()
+        .map(|(point_idx, point)| {
+            point
+                .iter()
+                .enumerate()
+                .map(|(i, &val)| {
+                    if val < bounds[i][0] || val > bounds[i][1] {
+                        panic!(
+                            "Point {} objective {} value {} is outside bounds [{}, {}]",
+                            point_idx, i, val, bounds[i][0], bounds[i][1]
+                        );
+                    }
+                    let min_bound = bounds[i][0] as f64;
+                    (val as f64 - min_bound) / ranges[i]
+                })
+                .collect()
+        })
+        .collect();
+
+    // Normalize reference point
+    let normalized_reference: Vec<f64> = reference_point
+        .iter()
+        .enumerate()
+        .map(|(i, &val)| {
             if val < bounds[i][0] || val > bounds[i][1] {
                 panic!(
-                    "Point {} objective {} value {} is outside bounds [{}, {}]",
-                    point_idx, i, val, bounds[i][0], bounds[i][1]
+                    "Reference point objective {} value {} is outside bounds [{}, {}]",
+                    i, val, bounds[i][0], bounds[i][1]
                 );
             }
             let min_bound = bounds[i][0] as f64;
             (val as f64 - min_bound) / ranges[i]
-        }).collect()
-    }).collect();
-
-    // Normalize reference point
-    let normalized_reference: Vec<f64> = reference_point.iter().enumerate().map(|(i, &val)| {
-        if val < bounds[i][0] || val > bounds[i][1] {
-            panic!(
-                "Reference point objective {} value {} is outside bounds [{}, {}]",
-                i, val, bounds[i][0], bounds[i][1]
-            );
-        }
-        let min_bound = bounds[i][0] as f64;
-        (val as f64 - min_bound) / ranges[i]
-    }).collect();
+        })
+        .collect();
 
     (normalized_points, normalized_reference)
 }
@@ -475,17 +556,18 @@ fn solutions_to_points(solutions: &[Solution], dimension: usize) -> Vec<Vec<u64>
         return Vec::new();
     }
 
-    solutions.iter().map(|s| {
-        match dimension {
-            2 => s.objectives_2d().to_vec(),
-            3 => s.objectives_3d().to_vec(),
-            4 => s.objectives_4d().to_vec(),
-            _ => unreachable!(), // We only handle 2, 3, 4 dimensions
-        }
-    }).collect()
+    solutions
+        .iter()
+        .map(|s| {
+            match dimension {
+                2 => s.objectives_2d().to_vec(),
+                3 => s.objectives_3d().to_vec(),
+                4 => s.objectives_4d().to_vec(),
+                _ => unreachable!(), // We only handle 2, 3, 4 dimensions
+            }
+        })
+        .collect()
 }
-
-
 
 #[cfg(test)]
 mod tests {

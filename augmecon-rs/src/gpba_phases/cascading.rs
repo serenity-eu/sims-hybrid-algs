@@ -111,7 +111,10 @@ pub fn apply_cascading(
             rwv[i] = ideal_max[constraint_idx];
 
             // Reinitialize interval for this dimension
-            #[allow(clippy::cast_possible_truncation, reason = "Converting nadir/ideal bounds to i64 for interval management - truncation acceptable for GPBA integer-valued constraints")]
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "Converting nadir/ideal bounds to i64 for interval management - truncation acceptable for GPBA integer-valued constraints"
+            )]
             {
                 ef_intervals[i] = IntervalManager::new(
                     nadir_max[constraint_idx] as i64,
@@ -131,13 +134,25 @@ pub fn apply_cascading(
             let _sol_prev = last_solution_objectives.map(|objs| objs[prev_constraint_idx]);
 
             // Convert f64 to i64 for epsilon adjustment function
-            #[allow(clippy::cast_possible_truncation, reason = "Converting epsilon/objective values to i64 for interval management - truncation acceptable for GPBA integer-valued constraints")]
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "Converting epsilon/objective values to i64 for interval management - truncation acceptable for GPBA integer-valued constraints"
+            )]
             let mut ef_array_i64: Vec<i64> = ef_array.iter().map(|&x| x as i64).collect();
-            #[allow(clippy::cast_possible_truncation, reason = "Converting objective values to i64 for interval management - truncation acceptable for GPBA integer-valued constraints")]
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "Converting objective values to i64 for interval management - truncation acceptable for GPBA integer-valued constraints"
+            )]
             let obj_k_at_ef_k_i64 = obj_k_at_ef_k[prev_id].map(|x| x as i64);
-            #[allow(clippy::cast_possible_truncation, reason = "Converting ideal/nadir bounds to i64 for interval management - truncation acceptable for GPBA integer-valued constraints")]
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "Converting ideal/nadir bounds to i64 for interval management - truncation acceptable for GPBA integer-valued constraints"
+            )]
             let ideal_max_i64: Vec<i64> = ideal_max.iter().map(|&x| x as i64).collect();
-            #[allow(clippy::cast_possible_truncation, reason = "Converting ideal/nadir bounds to i64 for interval management - truncation acceptable for GPBA integer-valued constraints")]
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "Converting ideal/nadir bounds to i64 for interval management - truncation acceptable for GPBA integer-valued constraints"
+            )]
             let nadir_max_i64: Vec<i64> = nadir_max.iter().map(|&x| x as i64).collect();
 
             // Apply epsilon adjustment to previous dimension
@@ -153,7 +168,10 @@ pub fn apply_cascading(
             );
 
             // Convert back to f64
-            #[allow(clippy::cast_precision_loss, reason = "Converting i64 back to f64 after interval operations - precision loss acceptable for GPBA epsilon values")]
+            #[allow(
+                clippy::cast_precision_loss,
+                reason = "Converting i64 back to f64 after interval operations - precision loss acceptable for GPBA epsilon values"
+            )]
             {
                 ef_array = ef_array_i64.iter().map(|&x| x as f64).collect();
             }
@@ -265,14 +283,20 @@ mod tests {
         assert!(!result.converged);
 
         // Second dimension reset to nadir
-        #[allow(clippy::float_cmp, reason = "Test comparing exact reset value to nadir constant")]
+        #[allow(
+            clippy::float_cmp,
+            reason = "Test comparing exact reset value to nadir constant"
+        )]
         {
             assert_eq!(result.ef_array[1], -15.0);
         }
 
         // First dimension should be updated (will find largest interval)
         // Exact value depends on interval logic, just verify it changed
-        #[allow(clippy::float_cmp, reason = "Test verifying dimension was updated from initial value")]
+        #[allow(
+            clippy::float_cmp,
+            reason = "Test verifying dimension was updated from initial value"
+        )]
         {
             assert_ne!(result.ef_array[0], -5.0);
         }
@@ -339,13 +363,19 @@ mod tests {
         assert_eq!(result.dimensions_reset, vec![2]);
 
         // Dimension 2 should be reset to nadir
-        #[allow(clippy::float_cmp, reason = "Test comparing exact reset value to nadir constant")]
+        #[allow(
+            clippy::float_cmp,
+            reason = "Test comparing exact reset value to nadir constant"
+        )]
         {
             assert_eq!(result.ef_array[2], -20.0);
         }
 
         // Dimension 1 should be updated
-        #[allow(clippy::float_cmp, reason = "Test verifying dimension was updated from initial value")]
+        #[allow(
+            clippy::float_cmp,
+            reason = "Test verifying dimension was updated from initial value"
+        )]
         {
             assert_ne!(result.ef_array[1], -2.5);
         }
@@ -379,7 +409,10 @@ mod tests {
         );
 
         // RWV[0] should be updated to ideal when dimension 1 cascades
-        #[allow(clippy::float_cmp, reason = "Test comparing exact RWV update to ideal constant")]
+        #[allow(
+            clippy::float_cmp,
+            reason = "Test comparing exact RWV update to ideal constant"
+        )]
         {
             assert_eq!(result.rwv[0], -2.0);
         }

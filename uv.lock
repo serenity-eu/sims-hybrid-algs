@@ -158,6 +158,17 @@ wheels = [
 ]
 
 [[package]]
+name = "baycomp"
+version = "1.0.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "matplotlib" },
+    { name = "numpy" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e9/5f/c9ae9b86de6681401a2a57510eb581fd593d0897e7e43b4b1c1eede87b20/baycomp-1.0.3.tar.gz", hash = "sha256:32b25ad7b16d5b251ddb9f6110a32d7b3953b987096da1d25ef277935d25daec", size = 15918 }
+
+[[package]]
 name = "certifi"
 version = "2025.8.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1809,7 +1820,7 @@ wheels = [
 
 [[package]]
 name = "scikit-posthocs"
-version = "0.11.4"
+version = "0.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "matplotlib" },
@@ -1819,9 +1830,9 @@ dependencies = [
     { name = "seaborn" },
     { name = "statsmodels" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/10/eb/512cd5da1cad0405ddec797629e2c832ec526ac142d32c760d664ff8d048/scikit_posthocs-0.11.4.tar.gz", hash = "sha256:ecb5a80bfecd38884f100c01dcfc1014ad4d6a0da9eeb779381782d9ea43311d", size = 37515 }
+sdist = { url = "https://files.pythonhosted.org/packages/15/88/1a1758a6b68079cc58dd38b291cd194a29f9018a0eb5397342c5156009e5/scikit_posthocs-0.14.0.tar.gz", hash = "sha256:3b9f9273fc9037ee967d11b6a15aef1c6c0ed33a1936ff8879d6f5fb0a181227", size = 40554 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d6/21/506f0ab734ad73f9215b09e04a05b393170c391349778f0c676a7b88cb7a/scikit_posthocs-0.11.4-py3-none-any.whl", hash = "sha256:9c8447c2983c36cb943d6798ba0aab03fe76c16b36d966bd8c14f2e5b29d90cc", size = 33393 },
+    { url = "https://files.pythonhosted.org/packages/75/50/975860099ee9f1288f030374386d110c54d58cd1dc71df023135aa79633d/scikit_posthocs-0.14.0-py3-none-any.whl", hash = "sha256:9e2ecd5828cb783c42c1923e223eab202f529b03ab97de587647ab30f6e88333", size = 36836 },
 ]
 
 [[package]]
@@ -2051,14 +2062,17 @@ provides-extras = ["dev"]
 name = "sims-problem"
 source = { editable = "sims-problem" }
 dependencies = [
+    { name = "baycomp" },
     { name = "plotly" },
     { name = "pymoo" },
     { name = "rich" },
+    { name = "scikit-posthocs" },
     { name = "sims-solvers" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "baycomp", specifier = ">=1.0.3" },
     { name = "black", marker = "extra == 'dev'" },
     { name = "plotly", specifier = ">=6.3.1" },
     { name = "pymoo", specifier = ">=0.6.1.6" },
@@ -2068,6 +2082,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=7.0.0" },
     { name = "rich", specifier = ">=14.2.0" },
     { name = "ruff", marker = "extra == 'dev'" },
+    { name = "scikit-posthocs", specifier = ">=0.14.0" },
     { name = "sims-solvers", editable = "sims-solvers" },
 ]
 provides-extras = ["dev", "test"]

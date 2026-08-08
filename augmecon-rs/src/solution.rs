@@ -1066,6 +1066,13 @@ impl<'a> IntoIterator for &'a ParetoFront {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::float_cmp,
+        clippy::unreadable_literal,
+        clippy::needless_collect,
+        clippy::cast_lossless,
+        reason = "test assertions: exact float compares, literal readability, and infallible casts are acceptable in tests"
+    )]
     use super::*;
     use crate::model::ObjectiveDirection;
     use std::collections::HashMap;

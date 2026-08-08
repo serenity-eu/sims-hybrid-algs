@@ -8,19 +8,19 @@ use pareto::{HasObjectives, MoSolution, Random};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 use rand::{Rng, seq::IteratorRandom};
-use std::{collections::BinaryHeap, fmt::Debug, hash::Hash, time::Duration};
+use std::{fmt::Debug, hash::Hash, time::Duration};
 
 use crate::objective_tracker::{ObjectiveTracker, TrackerCollection};
 use crate::objective_tracker_impl::proven_safe_trackers::ProvenSafeTrackerArray;
+use crate::pls_config::PlsOptimizations;
 use crate::problem::{ComparableImage, ImageObjectiveDeltas, ScaledObjectiveDeltas};
 use crate::residual_problem::ResidualProblem;
 use crate::residual_solution::ResidualSolution;
-use crate::pls_config::PlsOptimizations;
 use crate::solution::{ImageSet, MergeableWithResidual, SIMSCore, SIMSModifiable, SIMSSolution};
 use crate::solution_set_impl::NdTreeSolutionSet;
 use crate::timer::Timer;
-use nd_tree::nd_tree::NDTreeSolutionIntoIterator;
 use crate::{SetCoverProblem, objectives};
+use nd_tree::nd_tree::NDTreeSolutionIntoIterator;
 
 use itertools::Itertools;
 
@@ -34,9 +34,11 @@ pub struct UndercoveredSolution<const D: usize> {
     pub partial_trackers: ProvenSafeTrackerArray<D>,
 }
 
-/// Lightweight view for `ImageSet` operations - only used for tracker `peek_delta` calls
-struct ImageSetView<'a> {
-    selected_images: &'a FixedBitSet,
+/// Lightweight view for `ImageSet` operations - only used for tracker `peek_delta` calls.
+/// `pub(crate)` so the EA repair (which works on a bare `FixedBitSet`) can build a
+/// synced tracker and reuse the same best/worst image-selection primitives as PLS.
+pub(crate) struct ImageSetView<'a> {
+    pub(crate) selected_images: &'a FixedBitSet,
 }
 
 impl<const D: usize> crate::solution::ImageSet<D> for ImageSetView<'_> {
@@ -248,7 +250,10 @@ where
             "  Selected images before removal: {:?}",
             self.selected_images.ones().collect::<Vec<_>>()
         );
-        log::debug!("  Image {image_index} IS selected: {}", self.selected_images[image_index]);
+        log::debug!(
+            "  Image {image_index} IS selected: {}",
+            self.selected_images[image_index]
+        );
 
         // Use trackers for delta calculation and state update
         let deltas = trackers.track_image_removal(image_index, problem);
@@ -403,7 +408,14 @@ where
     where
         Self: 'a,
     {
-        Box::new(self.neighborhood_iter_impl(trackers, k, problem, timer, is_deterministic, optimizations))
+        Box::new(self.neighborhood_iter_impl(
+            trackers,
+            k,
+            problem,
+            timer,
+            is_deterministic,
+            optimizations,
+        ))
     }
 
     fn is_valid(&self, problem: &P) -> bool {
@@ -454,16 +466,64 @@ where
     /// Creates a `BitsetEncodedSolution` from a list of selected image indices.
     #[must_use]
     pub fn from_selected_images(selected_images_vec: &[usize], problem: &P) -> Self {
-        let objectives = [0u64; D];
+        Self::from_selected_ones(selected_images_vec.iter().copied(), problem)
+    }
 
+    /// Construct from an iterator of selected image indices, collecting straight
+    /// into the `FixedBitSet` with no intermediate `Vec`. Produces the identical
+    /// solution to `from_selected_images(&iter.collect::<Vec<_>>())` — the EA
+    /// operators use this to avoid a `FixedBitSet -> Vec -> FixedBitSet` round-trip
+    /// (they already hold the child as a bitset).
+    pub fn from_selected_ones<I: IntoIterator<Item = usize>>(
+        selected_ones: I,
+        problem: &P,
+    ) -> Self {
         let mut solution = Self {
-            selected_images: selected_images_vec.iter().copied().collect::<FixedBitSet>(),
-            objectives,
+            selected_images: selected_ones.into_iter().collect::<FixedBitSet>(),
+            objectives: [0u64; D],
             timestamp: Duration::new(0, 0),
             _phantom: std::marker::PhantomData,
         };
 
         solution.recalculate_objectives(problem);
+
+        solution
+    }
+
+    /// Construct with already-known objective values, skipping the O(selected ×
+    /// elements) `recalculate_objectives`. Used by the EA operators, whose repair
+    /// pipeline maintains a `ProvenSafeTrackerArray` synced to the final selection
+    /// — its `values()` equal the recalculated objectives by the tracker's proven
+    /// invariant (the same one PLS relies on).
+    ///
+    /// A `debug_assert` re-derives the objectives and checks equality, so any
+    /// tracker/recalculation divergence fails tests immediately; release builds
+    /// trust the precomputed values and skip the work.
+    #[must_use]
+    pub fn from_selected_ones_with_objectives<I: IntoIterator<Item = usize>>(
+        selected_ones: I,
+        objectives: [u64; D],
+        problem: &P,
+    ) -> Self {
+        let solution = Self {
+            selected_images: selected_ones.into_iter().collect::<FixedBitSet>(),
+            objectives,
+            timestamp: Duration::new(0, 0),
+            _phantom: std::marker::PhantomData,
+        };
+
+        #[cfg(debug_assertions)]
+        {
+            let mut recomputed = solution.clone();
+            recomputed.recalculate_objectives(problem);
+            debug_assert_eq!(
+                solution.objectives, recomputed.objectives,
+                "precomputed objectives diverged from recalculate_objectives \
+                 (tracker/recalculation mismatch)"
+            );
+        }
+        #[cfg(not(debug_assertions))]
+        let _ = problem;
 
         solution
     }
@@ -535,8 +595,8 @@ where
         let image_values: Vec<[f64; D]> = (0..num_images)
             .map(|img| {
                 let mut values = [0.0f64; D];
-                for obj_idx in 0..D {
-                    values[obj_idx] = match problem.objective(obj_idx) {
+                for (obj_idx, value) in values.iter_mut().enumerate() {
+                    *value = match problem.objective(obj_idx) {
                         ObjectiveState::TotalCost { costs, .. } => costs[img] as f64,
                         ObjectiveState::CloudyArea { clear_images, .. } => {
                             // Proxy: count of elements this image covers but does NOT
@@ -656,7 +716,6 @@ where
     pub fn unselected_images(&self) -> BitsetUnselectedImagesIter<'_> {
         self.selected_images.zeroes()
     }
-
 
     /// Check whether image at index i can be replaced by another image(s)
     #[must_use]
@@ -788,7 +847,9 @@ where
             },
         );
 
-        let image_set_view = ImageSetView { selected_images: partial_selected_images };
+        let image_set_view = ImageSetView {
+            selected_images: partial_selected_images,
+        };
 
         // Compute peek_addition_delta only for images that cover at least one uncovered element.
         //
@@ -804,11 +865,8 @@ where
             partial_selected_images
                 .zeroes()
                 .map(|image_index| {
-                    let raw_deltas = partial_trackers.peek_addition_delta(
-                        image_index,
-                        problem,
-                        &image_set_view,
-                    );
+                    let raw_deltas =
+                        partial_trackers.peek_addition_delta(image_index, problem, &image_set_view);
                     let mut scaled_deltas = [0.0f32; D];
                     for i in 0..D {
                         scaled_deltas[i] = raw_deltas[i].abs() as f32 / normalization_ranges[i];
@@ -839,11 +897,8 @@ where
             candidate_unselected
                 .ones()
                 .map(|image_index| {
-                    let raw_deltas = partial_trackers.peek_addition_delta(
-                        image_index,
-                        problem,
-                        &image_set_view,
-                    );
+                    let raw_deltas =
+                        partial_trackers.peek_addition_delta(image_index, problem, &image_set_view);
                     let mut scaled_deltas = [0.0f32; D];
                     for i in 0..D {
                         scaled_deltas[i] = raw_deltas[i].abs() as f32 / normalization_ranges[i];
@@ -917,38 +972,102 @@ where
         trackers: &ProvenSafeTrackerArray<D>,
         limit: usize,
     ) -> Vec<usize> {
+        Self::worst_selected_images_with_trackers(
+            &self.selected_images,
+            trackers,
+            problem,
+            is_deterministic,
+            limit,
+        )
+    }
+
+    /// Static "worst selected images" primitive shared by PLS
+    /// ([`worst_selected_images_n`](Self::worst_selected_images_n)) and the EA
+    /// repair. Ranks selected images by scaled objective-delta-on-removal per
+    /// covered element (least valuable first) and returns the `limit` worst.
+    ///
+    /// Mirrors [`best_unselected_images_with_trackers`](Self::best_unselected_images_with_trackers):
+    /// operates on a bare `FixedBitSet` + trackers (no full solution needed), and
+    /// selects the true worst `limit` via `select_nth_unstable_by_key` rather than
+    /// `BinaryHeap::iter().take` (whose iteration order is unspecified, so the old
+    /// code returned an essentially arbitrary subset).
+    #[must_use]
+    pub fn worst_selected_images_with_trackers(
+        selected_images: &FixedBitSet,
+        trackers: &ProvenSafeTrackerArray<D>,
+        problem: &P,
+        is_deterministic: bool,
+        limit: usize,
+    ) -> Vec<usize> {
         let weights: [f32; D] = if is_deterministic {
-            // For deterministic mode, use equal weights
             let equal_weight = 1.0 / D as f32;
             [equal_weight; D]
         } else {
-            self.generate_weights()
+            objectives::generate_weights::<D>()
         };
 
-        let comparable_selected_images: BinaryHeap<ComparableImage> = self
-            .scaled_image_objective_deltas_impl(self.selected_images(), problem, trackers)
-            .into_iter()
-            .map(|scaled_image_deltas| {
-                let covered_elements_count = problem
-                    .image_elements(scaled_image_deltas.image_index)
-                    .count();
+        let normalization_ranges: Vec<f32> = problem.objective_bounds().as_ref().map_or_else(
+            || {
+                problem
+                    .max_objectives()
+                    .iter()
+                    .map(|&max_val| if max_val > 0 { max_val as f32 } else { 1.0 })
+                    .collect()
+            },
+            |bounds| {
+                bounds
+                    .iter()
+                    .map(|bound| {
+                        let range = bound[1] as f32 - bound[0] as f32;
+                        if range > 0.0 { range } else { 1.0 }
+                    })
+                    .collect()
+            },
+        );
 
-                let comparision_heur_key =
-                    objectives::weighted_sum_f32(&scaled_image_deltas.scaled_deltas, &weights)
-                        / covered_elements_count as f32;
-                return ComparableImage {
-                    index: scaled_image_deltas.image_index,
-                    key: (100_000.0 * comparision_heur_key) as usize,
-                };
+        let image_set_view = ImageSetView { selected_images };
+        let mut comparable_selected_images: Vec<ComparableImage> = selected_images
+            .ones()
+            .map(|image_index| {
+                let raw_deltas = trackers.peek_removal_delta(image_index, problem, &image_set_view);
+                let mut scaled_deltas = [0.0f32; D];
+                for i in 0..D {
+                    scaled_deltas[i] = raw_deltas[i].abs() as f32 / normalization_ranges[i];
+                }
+                // Least value per covered element = worst to keep.
+                let covered = problem.image_elements(image_index).count().max(1);
+                let key = objectives::weighted_sum_f32(&scaled_deltas, &weights) / covered as f32;
+                ComparableImage {
+                    index: image_index,
+                    key: (100_000.0 * key) as usize,
+                }
             })
             .collect();
 
-        let worst_selected_images = comparable_selected_images
-            .iter()
-            .take(limit)
-            .map(|comparable_image| comparable_image.index)
-            .collect::<Vec<usize>>();
-        return worst_selected_images;
+        if comparable_selected_images.len() > limit {
+            comparable_selected_images.select_nth_unstable_by_key(limit, |ci| ci.key);
+            comparable_selected_images.truncate(limit);
+        }
+        // Return worst-first (smallest value-per-element key first): callers that
+        // iterate (e.g. the EA redundancy prune) drop the least useful images first.
+        comparable_selected_images.sort_unstable_by_key(|ci| ci.key);
+        comparable_selected_images
+            .into_iter()
+            .map(|ci| ci.index)
+            .collect()
+    }
+
+    /// Build a [`ProvenSafeTrackerArray`] synced to an arbitrary selection, so the
+    /// EA repair (which holds only a `FixedBitSet`) can call the same objective-aware
+    /// best/worst primitives PLS uses. Cost is one objective recomputation.
+    #[must_use]
+    pub fn synced_trackers(
+        selected_images: &FixedBitSet,
+        problem: &P,
+    ) -> ProvenSafeTrackerArray<D> {
+        let mut trackers = ProvenSafeTrackerArray::new(problem);
+        trackers.initialize_from(&ImageSetView { selected_images }, problem);
+        trackers
     }
 
     #[must_use]
@@ -1250,10 +1369,8 @@ where
                 )
             } else {
                 // Exhaustive iteration for k=1: try every replaceable selected image
-                let all_selected: Vec<usize> = self.selected_images().collect();
                 Box::new(
-                    all_selected
-                        .into_iter()
+                    self.selected_images()
                         .filter(|&img| self.is_replaceable(img, problem))
                         .map(|img| vec![img]),
                 )
@@ -1316,12 +1433,12 @@ where
 
     is_deterministic: bool,
 
-    /// Checkpoint of the S_base tracker state (before any removals).
+    /// Checkpoint of the `S_base` tracker state (before any removals).
     /// Used to bulk-restore when transitioning between removal combinations.
     base_checkpoint: ProvenSafeTrackerArray<D>,
 
     /// Pre-allocated checkpoint of the tracker state saved after image removals
-    /// (the "S_removed" state). Used to bulk-restore trackers after each merge
+    /// (the "`S_removed`" state). Used to bulk-restore trackers after each merge
     /// instead of undoing individual `track_image_removal` calls.
     checkpoint: ProvenSafeTrackerArray<D>,
 
@@ -1336,6 +1453,28 @@ where
 
     /// Counter of neighbors yielded so far (compared against `neighborhood_budget`).
     neighbors_yielded: usize,
+}
+
+impl<P, const D: usize> BitsetNeighborhoodIter<'_, P, D>
+where
+    P: SetCoverProblem<D> + Clone + Send + Sync,
+{
+    /// Finish the current removal combination: drop its residual problem and
+    /// restore the trackers to the base-solution state (`S_base`), either via a
+    /// bulk checkpoint memcpy or by re-adding each removed image individually.
+    fn finish_current_residual(&mut self) {
+        self.current_residual_problem = None;
+        self.filtered_residual_iter = None;
+        if self.use_checkpoint {
+            self.base_checkpoint
+                .snapshot_mutable_state_into(self.trackers);
+        } else {
+            for &removal_candidate in &self.current_removal_candidates {
+                self.trackers
+                    .track_image_addition(removal_candidate, self.problem);
+            }
+        }
+    }
 }
 
 impl<P, const D: usize> Iterator for BitsetNeighborhoodIter<'_, P, D>
@@ -1355,14 +1494,18 @@ where
             }
 
             // Check neighborhood budget
-            if let Some(budget) = self.neighborhood_budget {
-                if self.neighbors_yielded >= budget {
-                    return None;
-                }
+            if let Some(budget) = self.neighborhood_budget
+                && self.neighbors_yielded >= budget
+            {
+                return None;
             }
 
             // 1. If we have a non-exhausted iterator of non-dominated residual solutions, yield from it
-            if let Some(residual_solution) = self.filtered_residual_iter.as_mut().and_then(|it| it.next()) {
+            if let Some(residual_solution) = self
+                .filtered_residual_iter
+                .as_mut()
+                .and_then(std::iter::Iterator::next)
+            {
                 let residual_problem = self
                     .current_residual_problem
                     .as_ref()
@@ -1398,17 +1541,7 @@ where
 
             // 2. Iterator exhausted. If we had a residual problem, we've drained it -- clean up.
             if self.current_residual_problem.is_some() {
-                self.current_residual_problem = None;
-                self.filtered_residual_iter = None;
-                // Restore trackers to original solution state (S_base).
-                if self.use_checkpoint {
-                    self.base_checkpoint.snapshot_mutable_state_into(self.trackers);
-                } else {
-                    for &removal_candidate in &self.current_removal_candidates {
-                        self.trackers
-                            .track_image_addition(removal_candidate, self.problem);
-                    }
-                }
+                self.finish_current_residual();
             }
 
             // 3. Get next removal candidate and create a new residual problem
@@ -1416,20 +1549,19 @@ where
                 let removal_candidates = self.removal_candidates_iter.next()?;
 
                 // Create residual problem (this will modify trackers — applies removals)
-                if let Some(mut residual_problem) =
-                    self.original_solution.create_residual_problem(
-                        removal_candidates.clone(),
-                        self.problem,
-                        self.is_deterministic,
-                        self.trackers,
-                    )
-                {
+                if let Some(mut residual_problem) = self.original_solution.create_residual_problem(
+                    removal_candidates.clone(),
+                    self.problem,
+                    self.is_deterministic,
+                    self.trackers,
+                ) {
                     self.current_removal_candidates = removal_candidates;
 
                     // Save checkpoint of the S_removed tracker state. All residual
                     // solutions for this removal combination will restore to this
                     // state after merge via snapshot_mutable_state_into.
-                    self.trackers.snapshot_mutable_state_into(&mut self.checkpoint);
+                    self.trackers
+                        .snapshot_mutable_state_into(&mut self.checkpoint);
 
                     // 4. Enumerate ALL valid residual solutions, fix non-additive objectives,
                     //    and filter through Pareto front.
@@ -1438,9 +1570,10 @@ where
                     //    - MinResolution: neutralize to 0 (unsound in residual space,
                     //      so we disable it for filtering; the global archive still
                     //      filters on full merged objectives)
-                    let min_res_obj_idx = self.problem.objective_types().iter().position(
-                        |t| matches!(t, crate::objectives::ObjectiveType::MinResolution),
-                    );
+                    let min_res_obj_idx =
+                        self.problem.objective_types().iter().position(|t| {
+                            matches!(t, crate::objectives::ObjectiveType::MinResolution)
+                        });
 
                     let mut nd_set: NdTreeSolutionSet<ResidualSolution<D>, D> =
                         NdTreeSolutionSet::default();
@@ -1473,7 +1606,8 @@ where
 
                 // Restore trackers to original solution state (S_base)
                 if self.use_checkpoint {
-                    self.base_checkpoint.snapshot_mutable_state_into(self.trackers);
+                    self.base_checkpoint
+                        .snapshot_mutable_state_into(self.trackers);
                 } else {
                     for &removal_candidate in &removal_candidates {
                         self.trackers
@@ -1503,11 +1637,8 @@ mod tests {
     ];
 
     fn make_test_problem() -> ProblemBitset<NUM_OBJECTIVES> {
-        ProblemBitset::from_minizinc_datafile(
-            "tests/data/lagos_nigeria_30.dzn",
-            OBJECTIVE_TYPES,
-        )
-        .expect("failed to load tests/data/lagos_nigeria_30.dzn")
+        ProblemBitset::from_minizinc_datafile("tests/data/lagos_nigeria_30.dzn", OBJECTIVE_TYPES)
+            .expect("failed to load tests/data/lagos_nigeria_30.dzn")
     }
 
     #[test]
@@ -1547,9 +1678,11 @@ mod tests {
         let greedy_solutions =
             BitsetEncodedSolution::<ProblemBitset<NUM_OBJECTIVES>, NUM_OBJECTIVES>::greedy_initial_solutions(&problem);
 
-        let pseudo_path = PathBuf::from("../sims-core/tests/data/pseudo_solver_solutions/lagos_nigeria_30.json");
-        let pseudo_json = std::fs::read_to_string(&pseudo_path)
-            .expect("failed to read ../sims-core/tests/data/pseudo_solver_solutions/lagos_nigeria_30.json");
+        let pseudo_path =
+            PathBuf::from("../sims-core/tests/data/pseudo_solver_solutions/lagos_nigeria_30.json");
+        let pseudo_json = std::fs::read_to_string(&pseudo_path).expect(
+            "failed to read ../sims-core/tests/data/pseudo_solver_solutions/lagos_nigeria_30.json",
+        );
         let pseudo_data: serde_json::Value =
             serde_json::from_str(&pseudo_json).expect("failed to parse pseudo solver json");
         let pseudo_solutions = pseudo_data["solutions"]
@@ -1594,5 +1727,4 @@ mod tests {
             }
         }
     }
-
 }

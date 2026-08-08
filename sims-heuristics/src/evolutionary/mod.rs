@@ -61,20 +61,20 @@ pub mod optirustic_adapter;
 
 // Re-export main algorithm entry points
 pub use memetic::{
-    run_memetic_moead, run_memetic_nsga2, run_memetic_nsga3, EaBackend, MemeticAlgorithm,
-    MemeticConfig, MemeticResult,
+    EaBackend, MemeticAlgorithm, MemeticConfig, MemeticResult, run_memetic_moead,
+    run_memetic_nsga2, run_memetic_nsga3,
 };
 pub use moead::Moead;
-pub use moead_baseline::{run_moead_baseline, MoeadBaseline, MoeadBaselineConfig};
+pub use moead_baseline::{MoeadBaseline, MoeadBaselineConfig, run_moead_baseline};
 pub use nsga2::Nsga2;
-pub use nsga2_baseline::{run_nsga2_baseline, Nsga2Baseline, Nsga2BaselineConfig};
+pub use nsga2_baseline::{Nsga2Baseline, Nsga2BaselineConfig, run_nsga2_baseline};
 pub use nsga3::{Nsga3, Nsga3Config};
-pub use nsga3_baseline::{run_nsga3_baseline, Nsga3Baseline, Nsga3BaselineConfig};
+pub use nsga3_baseline::{Nsga3Baseline, Nsga3BaselineConfig, run_nsga3_baseline};
 
 // Re-export external adapter entry points when the feature is enabled
 #[cfg(feature = "external_solvers")]
 pub use moors_adapter::{
-    run_moors_age_moea, run_moors_nsga2, run_moors_spea2, MoorsConfig, MoorsCrossoverType,
+    MoorsConfig, MoorsCrossoverType, run_moors_age_moea, run_moors_nsga2, run_moors_spea2,
 };
 #[cfg(feature = "external_solvers")]
-pub use optirustic_adapter::{run_optirustic_nsga2, run_optirustic_nsga3, OptirusticConfig};
+pub use optirustic_adapter::{OptirusticConfig, run_optirustic_nsga2, run_optirustic_nsga3};

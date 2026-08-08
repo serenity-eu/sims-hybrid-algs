@@ -17,8 +17,10 @@ use crate::objective_tracker::{ObjectiveTracker, TrackerCollection};
 use crate::problem::SetCoverProblem;
 use crate::solution::ImageSet;
 
-use super::simd_trackers::{simd_shared_data, Interval, SimdTrackerSharedData, 
-    SimdTotalCostState, SimdMaxIncidenceAngleState};
+use super::simd_trackers::{
+    Interval, SimdMaxIncidenceAngleState, SimdTotalCostState, SimdTrackerSharedData,
+    simd_shared_data,
+};
 
 // =============================================================================
 // Saturating Counter MinResolution Tracker
@@ -48,24 +50,24 @@ impl SaturatingMinResState {
         let low_val = self.low_val as i64;
         let diff = self.diff;
         let mut delta = 0i64;
-        
+
         let c0_ptr = self.c0_counts.as_mut_ptr();
         let c1_ptr = self.c1_counts.as_ptr();
-        
+
         for int_idx in int_start..int_end {
             let interval = unsafe { *self.image_intervals.get_unchecked(int_idx) };
             let start = interval.start as usize;
             let end = start + interval.len as usize;
-            
+
             for idx in start..end {
                 unsafe {
                     let c0_slot = c0_ptr.add(idx);
                     let c0 = *c0_slot;
                     let c1 = *c1_ptr.add(idx);
-                    
+
                     // Saturating decrement
                     *c0_slot = c0.saturating_sub(1);
-                    
+
                     // Delta computation
                     if c0 == 1 {
                         if c1 > 0 {
@@ -77,34 +79,34 @@ impl SaturatingMinResState {
                 }
             }
         }
-        
+
         self.current_sum = (self.current_sum as i64 + delta) as u64;
         delta
     }
-    
+
     /// Track removal for level 1 using saturating u8 counters.
     #[inline]
     fn track_removal_level1(&mut self, int_start: usize, int_end: usize) -> i64 {
         let high_val = self.high_val as i64;
         let mut delta = 0i64;
-        
+
         let c0_ptr = self.c0_counts.as_ptr();
         let c1_ptr = self.c1_counts.as_mut_ptr();
-        
+
         for int_idx in int_start..int_end {
             let interval = unsafe { *self.image_intervals.get_unchecked(int_idx) };
             let start = interval.start as usize;
             let end = start + interval.len as usize;
-            
+
             for idx in start..end {
                 unsafe {
                     let c1_slot = c1_ptr.add(idx);
                     let c0 = *c0_ptr.add(idx);
                     let c1 = *c1_slot;
-                    
+
                     // Saturating decrement
                     *c1_slot = c1.saturating_sub(1);
-                    
+
                     // Delta: if c1 was 1 and c0 is 0, element becomes uncovered
                     if c1 == 1 && c0 == 0 {
                         delta -= high_val;
@@ -112,32 +114,32 @@ impl SaturatingMinResState {
                 }
             }
         }
-        
+
         self.current_sum = (self.current_sum as i64 + delta) as u64;
         delta
     }
-    
+
     /// Track addition for level 0.
     #[inline]
     fn track_addition_level0(&mut self, int_start: usize, int_end: usize) -> i64 {
         let low_val = self.low_val as i64;
         let diff = self.diff;
         let mut delta = 0i64;
-        
+
         let c0_ptr = self.c0_counts.as_mut_ptr();
         let c1_ptr = self.c1_counts.as_ptr();
-        
+
         for int_idx in int_start..int_end {
             let interval = unsafe { *self.image_intervals.get_unchecked(int_idx) };
             let start = interval.start as usize;
             let end = start + interval.len as usize;
-            
+
             for idx in start..end {
                 unsafe {
                     let c0_slot = c0_ptr.add(idx);
                     let c0 = *c0_slot;
                     let c1 = *c1_ptr.add(idx);
-                    
+
                     // Delta computation before update
                     if c0 == 0 {
                         if c1 > 0 {
@@ -146,69 +148,69 @@ impl SaturatingMinResState {
                             delta += low_val; // First coverage
                         }
                     }
-                    
+
                     // Saturating increment (cap at 254 to avoid overflow issues)
                     *c0_slot = c0.saturating_add(1).min(254);
                 }
             }
         }
-        
+
         self.current_sum = (self.current_sum as i64 + delta) as u64;
         delta
     }
-    
+
     /// Track addition for level 1.
     #[inline]
     fn track_addition_level1(&mut self, int_start: usize, int_end: usize) -> i64 {
         let high_val = self.high_val as i64;
         let mut delta = 0i64;
-        
+
         let c0_ptr = self.c0_counts.as_ptr();
         let c1_ptr = self.c1_counts.as_mut_ptr();
-        
+
         for int_idx in int_start..int_end {
             let interval = unsafe { *self.image_intervals.get_unchecked(int_idx) };
             let start = interval.start as usize;
             let end = start + interval.len as usize;
-            
+
             for idx in start..end {
                 unsafe {
                     let c1_slot = c1_ptr.add(idx);
                     let c0 = *c0_ptr.add(idx);
                     let c1 = *c1_slot;
-                    
+
                     // Delta: if both c0 and c1 are 0, element gets first coverage
                     if c0 == 0 && c1 == 0 {
                         delta += high_val;
                     }
-                    
+
                     // Saturating increment
                     *c1_slot = c1.saturating_add(1).min(254);
                 }
             }
         }
-        
+
         self.current_sum = (self.current_sum as i64 + delta) as u64;
         delta
     }
-    
+
     /// Peek removal for level 0 (read-only).
     #[inline]
     fn peek_removal_level0(&self, int_start: usize, int_end: usize) -> i64 {
         let low_val = self.low_val as i64;
         let diff = self.diff;
         let mut delta = 0i64;
-        
+
         for int_idx in int_start..int_end {
             let interval = unsafe { *self.image_intervals.get_unchecked(int_idx) };
             let start = interval.start as usize;
             let end = start + interval.len as usize;
-            
+
             for idx in start..end {
                 unsafe {
                     let c0 = *self.c0_counts.get_unchecked(idx);
                     let c1 = *self.c1_counts.get_unchecked(idx);
-                    
+
                     if c0 == 1 {
                         if c1 > 0 {
                             delta += diff;
@@ -219,53 +221,53 @@ impl SaturatingMinResState {
                 }
             }
         }
-        
+
         delta
     }
-    
+
     /// Peek removal for level 1 (read-only).
     #[inline]
     fn peek_removal_level1(&self, int_start: usize, int_end: usize) -> i64 {
         let high_val = self.high_val as i64;
         let mut delta = 0i64;
-        
+
         for int_idx in int_start..int_end {
             let interval = unsafe { *self.image_intervals.get_unchecked(int_idx) };
             let start = interval.start as usize;
             let end = start + interval.len as usize;
-            
+
             for idx in start..end {
                 unsafe {
                     let c0 = *self.c0_counts.get_unchecked(idx);
                     let c1 = *self.c1_counts.get_unchecked(idx);
-                    
+
                     if c1 == 1 && c0 == 0 {
                         delta -= high_val;
                     }
                 }
             }
         }
-        
+
         delta
     }
-    
+
     /// Peek addition for level 0 (read-only).
     #[inline]
     fn peek_addition_level0(&self, int_start: usize, int_end: usize) -> i64 {
         let low_val = self.low_val as i64;
         let diff = self.diff;
         let mut delta = 0i64;
-        
+
         for int_idx in int_start..int_end {
             let interval = unsafe { *self.image_intervals.get_unchecked(int_idx) };
             let start = interval.start as usize;
             let end = start + interval.len as usize;
-            
+
             for idx in start..end {
                 unsafe {
                     let c0 = *self.c0_counts.get_unchecked(idx);
                     let c1 = *self.c1_counts.get_unchecked(idx);
-                    
+
                     if c0 == 0 {
                         if c1 > 0 {
                             delta -= diff;
@@ -276,43 +278,48 @@ impl SaturatingMinResState {
                 }
             }
         }
-        
+
         delta
     }
-    
+
     /// Peek addition for level 1 (read-only).
     #[inline]
     fn peek_addition_level1(&self, int_start: usize, int_end: usize) -> i64 {
         let high_val = self.high_val as i64;
         let mut delta = 0i64;
-        
+
         for int_idx in int_start..int_end {
             let interval = unsafe { *self.image_intervals.get_unchecked(int_idx) };
             let start = interval.start as usize;
             let end = start + interval.len as usize;
-            
+
             for idx in start..end {
                 unsafe {
                     let c0 = *self.c0_counts.get_unchecked(idx);
                     let c1 = *self.c1_counts.get_unchecked(idx);
-                    
+
                     if c0 == 0 && c1 == 0 {
                         delta += high_val;
                     }
                 }
             }
         }
-        
+
         delta
     }
 }
 
 impl<const D: usize> ObjectiveTracker<D> for SaturatingMinResState {
-    fn peek_removal_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+    fn peek_removal_delta(
+        &self,
+        image_index: usize,
+        _p: &impl SetCoverProblem<D>,
+        _s: &impl ImageSet<D>,
+    ) -> i64 {
         let img_level = self.image_resolution_level[image_index] as usize;
         let int_start = unsafe { *self.image_intervals_offsets.get_unchecked(image_index) };
         let int_end = unsafe { *self.image_intervals_offsets.get_unchecked(image_index + 1) };
-        
+
         if img_level == 0 {
             self.peek_removal_level0(int_start, int_end)
         } else {
@@ -320,11 +327,16 @@ impl<const D: usize> ObjectiveTracker<D> for SaturatingMinResState {
         }
     }
 
-    fn peek_addition_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+    fn peek_addition_delta(
+        &self,
+        image_index: usize,
+        _p: &impl SetCoverProblem<D>,
+        _s: &impl ImageSet<D>,
+    ) -> i64 {
         let img_level = self.image_resolution_level[image_index] as usize;
         let int_start = unsafe { *self.image_intervals_offsets.get_unchecked(image_index) };
         let int_end = unsafe { *self.image_intervals_offsets.get_unchecked(image_index + 1) };
-        
+
         if img_level == 0 {
             self.peek_addition_level0(int_start, int_end)
         } else {
@@ -336,7 +348,7 @@ impl<const D: usize> ObjectiveTracker<D> for SaturatingMinResState {
         let img_level = self.image_resolution_level[image_index] as usize;
         let int_start = unsafe { *self.image_intervals_offsets.get_unchecked(image_index) };
         let int_end = unsafe { *self.image_intervals_offsets.get_unchecked(image_index + 1) };
-        
+
         if img_level == 0 {
             self.track_removal_level0(int_start, int_end)
         } else {
@@ -348,7 +360,7 @@ impl<const D: usize> ObjectiveTracker<D> for SaturatingMinResState {
         let img_level = self.image_resolution_level[image_index] as usize;
         let int_start = unsafe { *self.image_intervals_offsets.get_unchecked(image_index) };
         let int_end = unsafe { *self.image_intervals_offsets.get_unchecked(image_index + 1) };
-        
+
         if img_level == 0 {
             self.track_addition_level0(int_start, int_end)
         } else {
@@ -377,17 +389,22 @@ pub struct SaturatingCloudyAreaState {
 }
 
 impl<const D: usize> ObjectiveTracker<D> for SaturatingCloudyAreaState {
-    fn peek_removal_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+    fn peek_removal_delta(
+        &self,
+        image_index: usize,
+        _p: &impl SetCoverProblem<D>,
+        _s: &impl ImageSet<D>,
+    ) -> i64 {
         let int_start = unsafe { *self.clear_intervals_offsets.get_unchecked(image_index) };
         let int_end = unsafe { *self.clear_intervals_offsets.get_unchecked(image_index + 1) };
-        
+
         let mut delta_area = 0u64;
-        
+
         for int_idx in int_start..int_end {
             let interval = unsafe { *self.clear_intervals.get_unchecked(int_idx) };
             let start = interval.start as usize;
             let end = start + interval.len as usize;
-            
+
             for idx in start..end {
                 unsafe {
                     if *self.counts.get_unchecked(idx) == 1 {
@@ -396,21 +413,26 @@ impl<const D: usize> ObjectiveTracker<D> for SaturatingCloudyAreaState {
                 }
             }
         }
-        
+
         delta_area as i64
     }
 
-    fn peek_addition_delta(&self, image_index: usize, _p: &impl SetCoverProblem<D>, _s: &impl ImageSet<D>) -> i64 {
+    fn peek_addition_delta(
+        &self,
+        image_index: usize,
+        _p: &impl SetCoverProblem<D>,
+        _s: &impl ImageSet<D>,
+    ) -> i64 {
         let int_start = unsafe { *self.clear_intervals_offsets.get_unchecked(image_index) };
         let int_end = unsafe { *self.clear_intervals_offsets.get_unchecked(image_index + 1) };
-        
+
         let mut delta_area = 0u64;
-        
+
         for int_idx in int_start..int_end {
             let interval = unsafe { *self.clear_intervals.get_unchecked(int_idx) };
             let start = interval.start as usize;
             let end = start + interval.len as usize;
-            
+
             for idx in start..end {
                 unsafe {
                     if *self.counts.get_unchecked(idx) == 0 {
@@ -419,23 +441,23 @@ impl<const D: usize> ObjectiveTracker<D> for SaturatingCloudyAreaState {
                 }
             }
         }
-        
+
         -(delta_area as i64)
     }
 
     fn track_image_removal(&mut self, image_index: usize, _p: &impl SetCoverProblem<D>) -> i64 {
         let int_start = unsafe { *self.clear_intervals_offsets.get_unchecked(image_index) };
         let int_end = unsafe { *self.clear_intervals_offsets.get_unchecked(image_index + 1) };
-        
+
         let mut delta_area = 0u64;
         let counts_ptr = self.counts.as_mut_ptr();
         let areas_ptr = self.element_areas.as_ptr();
-        
+
         for int_idx in int_start..int_end {
             let interval = unsafe { *self.clear_intervals.get_unchecked(int_idx) };
             let start = interval.start as usize;
             let end = start + interval.len as usize;
-            
+
             for idx in start..end {
                 unsafe {
                     let count_slot = counts_ptr.add(idx);
@@ -447,7 +469,7 @@ impl<const D: usize> ObjectiveTracker<D> for SaturatingCloudyAreaState {
                 }
             }
         }
-        
+
         self.current_area += delta_area;
         delta_area as i64
     }
@@ -455,16 +477,16 @@ impl<const D: usize> ObjectiveTracker<D> for SaturatingCloudyAreaState {
     fn track_image_addition(&mut self, image_index: usize, _p: &impl SetCoverProblem<D>) -> i64 {
         let int_start = unsafe { *self.clear_intervals_offsets.get_unchecked(image_index) };
         let int_end = unsafe { *self.clear_intervals_offsets.get_unchecked(image_index + 1) };
-        
+
         let mut delta_area = 0u64;
         let counts_ptr = self.counts.as_mut_ptr();
         let areas_ptr = self.element_areas.as_ptr();
-        
+
         for int_idx in int_start..int_end {
             let interval = unsafe { *self.clear_intervals.get_unchecked(int_idx) };
             let start = interval.start as usize;
             let end = start + interval.len as usize;
-            
+
             for idx in start..end {
                 unsafe {
                     let count_slot = counts_ptr.add(idx);
@@ -476,7 +498,7 @@ impl<const D: usize> ObjectiveTracker<D> for SaturatingCloudyAreaState {
                 }
             }
         }
-        
+
         self.current_area -= delta_area;
         -(delta_area as i64)
     }
@@ -512,7 +534,12 @@ impl SaturatingTracker {
 }
 
 impl<const D: usize> ObjectiveTracker<D> for SaturatingTracker {
-    fn peek_removal_delta(&self, image_index: usize, problem: &impl SetCoverProblem<D>, solution: &impl ImageSet<D>) -> i64 {
+    fn peek_removal_delta(
+        &self,
+        image_index: usize,
+        problem: &impl SetCoverProblem<D>,
+        solution: &impl ImageSet<D>,
+    ) -> i64 {
         match self {
             Self::TotalCost(s) => s.peek_removal_delta(image_index, problem, solution),
             Self::CloudyArea(s) => s.peek_removal_delta(image_index, problem, solution),
@@ -521,7 +548,12 @@ impl<const D: usize> ObjectiveTracker<D> for SaturatingTracker {
         }
     }
 
-    fn peek_addition_delta(&self, image_index: usize, problem: &impl SetCoverProblem<D>, solution: &impl ImageSet<D>) -> i64 {
+    fn peek_addition_delta(
+        &self,
+        image_index: usize,
+        problem: &impl SetCoverProblem<D>,
+        solution: &impl ImageSet<D>,
+    ) -> i64 {
         match self {
             Self::TotalCost(s) => s.peek_addition_delta(image_index, problem, solution),
             Self::CloudyArea(s) => s.peek_addition_delta(image_index, problem, solution),
@@ -530,7 +562,11 @@ impl<const D: usize> ObjectiveTracker<D> for SaturatingTracker {
         }
     }
 
-    fn track_image_removal(&mut self, image_index: usize, problem: &impl SetCoverProblem<D>) -> i64 {
+    fn track_image_removal(
+        &mut self,
+        image_index: usize,
+        problem: &impl SetCoverProblem<D>,
+    ) -> i64 {
         match self {
             Self::TotalCost(s) => s.track_image_removal(image_index, problem),
             Self::CloudyArea(s) => s.track_image_removal(image_index, problem),
@@ -539,7 +575,11 @@ impl<const D: usize> ObjectiveTracker<D> for SaturatingTracker {
         }
     }
 
-    fn track_image_addition(&mut self, image_index: usize, problem: &impl SetCoverProblem<D>) -> i64 {
+    fn track_image_addition(
+        &mut self,
+        image_index: usize,
+        problem: &impl SetCoverProblem<D>,
+    ) -> i64 {
         match self {
             Self::TotalCost(s) => s.track_image_addition(image_index, problem),
             Self::CloudyArea(s) => s.track_image_addition(image_index, problem),
@@ -626,19 +666,39 @@ impl<const D: usize> TrackerCollection<D> for SaturatingTrackerArray<D> {
         std::array::from_fn(|i| self.trackers[i].value())
     }
 
-    fn peek_removal_delta(&self, image_index: usize, problem: &impl SetCoverProblem<D>, solution: &impl ImageSet<D>) -> [i64; D] {
+    fn peek_removal_delta(
+        &self,
+        image_index: usize,
+        problem: &impl SetCoverProblem<D>,
+        solution: &impl ImageSet<D>,
+    ) -> [i64; D] {
         std::array::from_fn(|i| self.trackers[i].peek_removal_delta(image_index, problem, solution))
     }
 
-    fn peek_addition_delta(&self, image_index: usize, problem: &impl SetCoverProblem<D>, solution: &impl ImageSet<D>) -> [i64; D] {
-        std::array::from_fn(|i| self.trackers[i].peek_addition_delta(image_index, problem, solution))
+    fn peek_addition_delta(
+        &self,
+        image_index: usize,
+        problem: &impl SetCoverProblem<D>,
+        solution: &impl ImageSet<D>,
+    ) -> [i64; D] {
+        std::array::from_fn(|i| {
+            self.trackers[i].peek_addition_delta(image_index, problem, solution)
+        })
     }
 
-    fn track_image_removal(&mut self, image_index: usize, problem: &impl SetCoverProblem<D>) -> [i64; D] {
+    fn track_image_removal(
+        &mut self,
+        image_index: usize,
+        problem: &impl SetCoverProblem<D>,
+    ) -> [i64; D] {
         std::array::from_fn(|i| self.trackers[i].track_image_removal(image_index, problem))
     }
 
-    fn track_image_addition(&mut self, image_index: usize, problem: &impl SetCoverProblem<D>) -> [i64; D] {
+    fn track_image_addition(
+        &mut self,
+        image_index: usize,
+        problem: &impl SetCoverProblem<D>,
+    ) -> [i64; D] {
         std::array::from_fn(|i| self.trackers[i].track_image_addition(image_index, problem))
     }
 

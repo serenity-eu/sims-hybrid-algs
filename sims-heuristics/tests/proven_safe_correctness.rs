@@ -1,6 +1,6 @@
-//! Correctness test for ProvenSafeTrackerArray against StandardTrackerArray.
+//! Correctness test for `ProvenSafeTrackerArray` against `StandardTrackerArray`.
 //!
-//! Replays the same trace data used by the objective_tracker_bench benchmark through
+//! Replays the same trace data used by the `objective_tracker_bench` benchmark through
 //! both implementations simultaneously, asserting that deltas and objective values
 //! match after every single operation.
 
@@ -95,10 +95,10 @@ fn decode_record(record: u16) -> TraceEvent {
 }
 
 fn load_trace_events() -> Vec<TraceEvent> {
-    let bytes = std::fs::read(TRACE_PATH)
-        .unwrap_or_else(|e| panic!("failed to read {TRACE_PATH}: {e}"));
+    let bytes =
+        std::fs::read(TRACE_PATH).unwrap_or_else(|e| panic!("failed to read {TRACE_PATH}: {e}"));
     assert!(
-        bytes.len() % 2 == 0,
+        bytes.len().is_multiple_of(2),
         "trace file must have even byte length"
     );
     bytes
@@ -118,8 +118,117 @@ fn load_problem() -> ProblemBitset<4> {
 // Main correctness test
 // ---------------------------------------------------------------------------
 
-/// Replays every trace event through both StandardTrackerArray and
-/// ProvenSafeTrackerArray, asserting identical deltas and objective values
+/// Replay a single trace event through both trackers, asserting identical
+/// deltas and objective values. Reset/guard cases rebuild both trackers and the
+/// solution in lock-step (bumping `resets`) so the two stay comparable.
+fn replay_event(
+    event: TraceEvent,
+    problem: &ProblemBitset<4>,
+    std_tracker: &mut StandardTrackerArray<4>,
+    proven_tracker: &mut ProvenSafeTrackerArray<4>,
+    solution: &mut TestSolution,
+    step: u64,
+    resets: &mut u64,
+) {
+    let image_index = event.image_index as usize;
+
+    match event.op {
+        Op::Reset => {
+            *std_tracker = StandardTrackerArray::<4>::new(problem);
+            *proven_tracker = ProvenSafeTrackerArray::<4>::new(problem);
+            *solution = TestSolution::new(problem.num_images());
+            *resets += 1;
+
+            assert_eq!(
+                std_tracker.values(),
+                proven_tracker.values(),
+                "values diverged after Reset at step {step} (reset #{resets})"
+            );
+        }
+        Op::TrackAdd => {
+            // Guard: if already selected, reset (same logic as benchmark).
+            if solution.selected.contains(image_index) {
+                *std_tracker = StandardTrackerArray::<4>::new(problem);
+                *proven_tracker = ProvenSafeTrackerArray::<4>::new(problem);
+                *solution = TestSolution::new(problem.num_images());
+                *resets += 1;
+            }
+
+            let std_deltas = std_tracker.track_image_addition(image_index, problem);
+            let proven_deltas = proven_tracker.track_image_addition(image_index, problem);
+            solution.selected.set(image_index, true);
+
+            assert_eq!(
+                std_deltas, proven_deltas,
+                "TrackAdd delta mismatch at step {step}, image {image_index}\n  \
+                 standard: {std_deltas:?}\n  proven:   {proven_deltas:?}"
+            );
+            assert_eq!(
+                std_tracker.values(),
+                proven_tracker.values(),
+                "values diverged after TrackAdd at step {step}, image {image_index}"
+            );
+        }
+        Op::TrackRem => {
+            // Guard: if not selected, reset (same logic as benchmark).
+            if !solution.selected.contains(image_index) {
+                *std_tracker = StandardTrackerArray::<4>::new(problem);
+                *proven_tracker = ProvenSafeTrackerArray::<4>::new(problem);
+                *solution = TestSolution::new(problem.num_images());
+                *resets += 1;
+            }
+
+            let std_deltas = std_tracker.track_image_removal(image_index, problem);
+            let proven_deltas = proven_tracker.track_image_removal(image_index, problem);
+            solution.selected.set(image_index, false);
+
+            assert_eq!(
+                std_deltas, proven_deltas,
+                "TrackRem delta mismatch at step {step}, image {image_index}\n  \
+                 standard: {std_deltas:?}\n  proven:   {proven_deltas:?}"
+            );
+            assert_eq!(
+                std_tracker.values(),
+                proven_tracker.values(),
+                "values diverged after TrackRem at step {step}, image {image_index}"
+            );
+        }
+        Op::PeekAdd => {
+            let std_deltas = std_tracker.peek_addition_delta(image_index, problem, solution);
+            let proven_deltas = proven_tracker.peek_addition_delta(image_index, problem, solution);
+
+            assert_eq!(
+                std_deltas, proven_deltas,
+                "PeekAdd delta mismatch at step {step}, image {image_index}\n  \
+                 standard: {std_deltas:?}\n  proven:   {proven_deltas:?}"
+            );
+            // Peek operations do not change state, but verify anyway.
+            assert_eq!(
+                std_tracker.values(),
+                proven_tracker.values(),
+                "values diverged after PeekAdd at step {step}, image {image_index}"
+            );
+        }
+        Op::PeekRem => {
+            let std_deltas = std_tracker.peek_removal_delta(image_index, problem, solution);
+            let proven_deltas = proven_tracker.peek_removal_delta(image_index, problem, solution);
+
+            assert_eq!(
+                std_deltas, proven_deltas,
+                "PeekRem delta mismatch at step {step}, image {image_index}\n  \
+                 standard: {std_deltas:?}\n  proven:   {proven_deltas:?}"
+            );
+            assert_eq!(
+                std_tracker.values(),
+                proven_tracker.values(),
+                "values diverged after PeekRem at step {step}, image {image_index}"
+            );
+        }
+    }
+}
+
+/// Replays every trace event through both `StandardTrackerArray` and
+/// `ProvenSafeTrackerArray`, asserting identical deltas and objective values
 /// after every single operation.
 #[test]
 fn proven_safe_matches_standard_on_full_trace() {
@@ -146,106 +255,15 @@ fn proven_safe_matches_standard_on_full_trace() {
     let mut resets: u64 = 0;
 
     for &event in &events {
-        let image_index = event.image_index as usize;
-
-        match event.op {
-            Op::Reset => {
-                std_tracker = StandardTrackerArray::<4>::new(&problem);
-                proven_tracker = ProvenSafeTrackerArray::<4>::new(&problem);
-                solution = TestSolution::new(problem.num_images());
-                resets += 1;
-
-                assert_eq!(
-                    std_tracker.values(),
-                    proven_tracker.values(),
-                    "values diverged after Reset at step {step} (reset #{resets})"
-                );
-            }
-            Op::TrackAdd => {
-                // Guard: if already selected, reset (same logic as benchmark).
-                if solution.selected.contains(image_index) {
-                    std_tracker = StandardTrackerArray::<4>::new(&problem);
-                    proven_tracker = ProvenSafeTrackerArray::<4>::new(&problem);
-                    solution = TestSolution::new(problem.num_images());
-                    resets += 1;
-                }
-
-                let std_deltas = std_tracker.track_image_addition(image_index, &problem);
-                let proven_deltas = proven_tracker.track_image_addition(image_index, &problem);
-                solution.selected.set(image_index, true);
-
-                assert_eq!(
-                    std_deltas, proven_deltas,
-                    "TrackAdd delta mismatch at step {step}, image {image_index}\n  \
-                     standard: {std_deltas:?}\n  proven:   {proven_deltas:?}"
-                );
-                assert_eq!(
-                    std_tracker.values(),
-                    proven_tracker.values(),
-                    "values diverged after TrackAdd at step {step}, image {image_index}"
-                );
-            }
-            Op::TrackRem => {
-                // Guard: if not selected, reset (same logic as benchmark).
-                if !solution.selected.contains(image_index) {
-                    std_tracker = StandardTrackerArray::<4>::new(&problem);
-                    proven_tracker = ProvenSafeTrackerArray::<4>::new(&problem);
-                    solution = TestSolution::new(problem.num_images());
-                    resets += 1;
-                }
-
-                let std_deltas = std_tracker.track_image_removal(image_index, &problem);
-                let proven_deltas = proven_tracker.track_image_removal(image_index, &problem);
-                solution.selected.set(image_index, false);
-
-                assert_eq!(
-                    std_deltas, proven_deltas,
-                    "TrackRem delta mismatch at step {step}, image {image_index}\n  \
-                     standard: {std_deltas:?}\n  proven:   {proven_deltas:?}"
-                );
-                assert_eq!(
-                    std_tracker.values(),
-                    proven_tracker.values(),
-                    "values diverged after TrackRem at step {step}, image {image_index}"
-                );
-            }
-            Op::PeekAdd => {
-                let std_deltas =
-                    std_tracker.peek_addition_delta(image_index, &problem, &solution);
-                let proven_deltas =
-                    proven_tracker.peek_addition_delta(image_index, &problem, &solution);
-
-                assert_eq!(
-                    std_deltas, proven_deltas,
-                    "PeekAdd delta mismatch at step {step}, image {image_index}\n  \
-                     standard: {std_deltas:?}\n  proven:   {proven_deltas:?}"
-                );
-                // Peek operations do not change state, but verify anyway.
-                assert_eq!(
-                    std_tracker.values(),
-                    proven_tracker.values(),
-                    "values diverged after PeekAdd at step {step}, image {image_index}"
-                );
-            }
-            Op::PeekRem => {
-                let std_deltas =
-                    std_tracker.peek_removal_delta(image_index, &problem, &solution);
-                let proven_deltas =
-                    proven_tracker.peek_removal_delta(image_index, &problem, &solution);
-
-                assert_eq!(
-                    std_deltas, proven_deltas,
-                    "PeekRem delta mismatch at step {step}, image {image_index}\n  \
-                     standard: {std_deltas:?}\n  proven:   {proven_deltas:?}"
-                );
-                assert_eq!(
-                    std_tracker.values(),
-                    proven_tracker.values(),
-                    "values diverged after PeekRem at step {step}, image {image_index}"
-                );
-            }
-        }
-
+        replay_event(
+            event,
+            &problem,
+            &mut std_tracker,
+            &mut proven_tracker,
+            &mut solution,
+            step,
+            &mut resets,
+        );
         step += 1;
     }
 

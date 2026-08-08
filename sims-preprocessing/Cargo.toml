@@ -6,15 +6,51 @@ edition = "2024"
 [features]
 default = []
 pyo3-bindings = ["dep:pyo3"]
+# Optional reference/cross-check backend built on system libgeos (GEOS >= 3.14).
+# The default `fragmentize` is pure Rust (geo + i_overlay) and needs no libgeos.
+geos = ["dep:geos"]
+# OmniCloudMask cloud-mask inference via ONNX Runtime (`ort`) + PNG decode.
+# Provides `cloud_ocm` (the finetuned detector). Not wired into the pipeline.
+ocm = ["dep:ort", "dep:image"]
 
 [dependencies]
-geo = "0.32"
-geos = { version = "11", features = ["geo", "json"] }
+geo = "0.33"
+geos = { version = "11", features = ["geo", "json", "v3_14_0"], optional = true }
+# allow_multithreading enables i_overlay's parallel segment sort used by the
+# slice/overlay. It's otherwise only pulled in transitively via geo's default
+# `multithreading` feature — declare it here so we keep it even if a consumer
+# builds geo with default-features = false.
+i_overlay = { version = "4.4", features = ["allow_multithreading"] }
 rstar = "0.12"
-rand = "0.9"
+rayon = "1"
+fixedbitset = "0.5.7"
+rand = { version = "0.9", features = ["small_rng"] }
 thiserror = "2"
+serde_json = "1"
 pyo3 = { version = "0.27", features = ["extension-module"], optional = true }
+# `ocm` feature: cloud-mask inference. ort links ONNX Runtime (download-binaries).
+ort = { version = "=2.0.0-rc.13", features = ["download-binaries"], optional = true }
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+contour = "0.13"
 
 [dev-dependencies]
 tempfile = "3"
-serde_json = "1"
+
+[[example]]
+name = "cloud_ocm_demo"
+required-features = ["ocm"]
+
+[[example]]
+name = "bench_cloud_fragmentize"
+required-features = ["ocm"]
+
+[[example]]
+name = "dump_cloud_diagram"
+required-features = ["ocm"]
+
+[[example]]
+name = "mask_instances"
+required-features = ["ocm"]
+
+[[example]]
+name = "fold_instance"

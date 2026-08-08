@@ -526,8 +526,8 @@ where
     Cross: moors::operators::CrossoverOperator + 'static,
 {
     use moors::{
-        operators::BitFlipMutation, ExactDuplicatesCleaner, NoConstraints, Nsga2Builder,
-        RandomSamplingBinary,
+        ExactDuplicatesCleaner, NoConstraints, Nsga2Builder, RandomSamplingBinary,
+        operators::BitFlipMutation,
     };
 
     let build_result = Nsga2Builder::default()
@@ -686,8 +686,8 @@ where
     Cross: moors::operators::CrossoverOperator + 'static,
 {
     use moors::{
-        operators::BitFlipMutation, ExactDuplicatesCleaner, NoConstraints, RandomSamplingBinary,
-        Spea2Builder,
+        ExactDuplicatesCleaner, NoConstraints, RandomSamplingBinary, Spea2Builder,
+        operators::BitFlipMutation,
     };
 
     let build_result = Spea2Builder::default()
@@ -817,8 +817,8 @@ where
     Cross: moors::operators::CrossoverOperator + 'static,
 {
     use moors::{
-        operators::BitFlipMutation, AgeMoeaBuilder, ExactDuplicatesCleaner, NoConstraints,
-        RandomSamplingBinary,
+        AgeMoeaBuilder, ExactDuplicatesCleaner, NoConstraints, RandomSamplingBinary,
+        operators::BitFlipMutation,
     };
 
     let build_result = AgeMoeaBuilder::default()

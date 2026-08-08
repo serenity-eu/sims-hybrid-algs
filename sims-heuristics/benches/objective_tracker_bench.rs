@@ -8,9 +8,9 @@ use criterion::{
 };
 use fixedbitset::FixedBitSet;
 use pls::objective_tracker::{
-    AltTrackerArray, SimdTrackerArray, StandardTrackerArray, TrackerCollection,
-    ExplicitSimdTrackerArray, SaturatingTrackerArray, SafeTrackerArray, SimpleTrackerArray,
-    ProvenSafeTrackerArray,
+    AltTrackerArray, ExplicitSimdTrackerArray, ProvenSafeTrackerArray, SafeTrackerArray,
+    SaturatingTrackerArray, SimdTrackerArray, SimpleTrackerArray, StandardTrackerArray,
+    TrackerCollection,
 };
 use pls::objectives::ObjectiveType;
 use pls::problem_bitset::ProblemBitset;
@@ -141,7 +141,6 @@ fn trace_limit_records() -> usize {
         Err(e) => panic!("failed reading SIMS_TRACKER_BENCH_TRACE_LIMIT: {e}"),
     }
 }
-
 
 fn replay_trace<const D: usize, T: TrackerCollection<D>>(
     mut trackers: T,

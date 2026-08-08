@@ -10,12 +10,12 @@ use crate::{
         config::ConcurrentPLSConfig,
         decomposition::{assign_to_regions, belongs_to_region, build_regions},
         snapshot::{
-            fingerprint, GlobalFrontSnapshot, GlobalFrontSlot, ObjectiveSnapshot, SnapshotSlot,
+            GlobalFrontSlot, GlobalFrontSnapshot, ObjectiveSnapshot, SnapshotSlot, fingerprint,
         },
         worker::{
-            bounds_from_ideal_nadir, compute_ideal, compute_ideal_from_front, compute_nadir,
-            compute_nadir_from_front, merge_snapshots_to_front, RegionResult, RegionStats,
-            RegionWorker,
+            RegionResult, RegionStats, RegionWorker, bounds_from_ideal_nadir, compute_ideal,
+            compute_ideal_from_front, compute_nadir, compute_nadir_from_front,
+            merge_snapshots_to_front,
         },
     },
     pareto_local_search::ParetoLocalSearch,
@@ -63,10 +63,8 @@ impl<'prob, T, P, const D: usize> ConcurrentPLS<'prob, T, P, D>
 where
     T: ImageSet<D> + EncodedSolution<P, D> + std::hash::Hash + Send + Sync + Clone + 'prob,
     P: SetCoverProblem<D> + Send + Sync + 'prob,
-    NdTreeSolutionSet<T, D>: ParetoFront<'prob, T>
-        + Clone
-        + FromIterator<T>
-        + IntoIterator<Item = T>,
+    NdTreeSolutionSet<T, D>:
+        ParetoFront<'prob, T> + Clone + FromIterator<T> + IntoIterator<Item = T>,
 {
     pub fn new(problem: &'prob P, config: ConcurrentPLSConfig) -> Self {
         Self {
@@ -83,10 +81,7 @@ where
     ///
     /// # Returns
     /// `ConcurrentPLSResult` containing the merged Pareto front and per-region diagnostics.
-    pub fn solve(
-        &self,
-        initial_population: &NdTreeSolutionSet<T, D>,
-    ) -> ConcurrentPLSResult<T, D>
+    pub fn solve(&self, initial_population: &NdTreeSolutionSet<T, D>) -> ConcurrentPLSResult<T, D>
     where
         T: std::fmt::Debug,
     {
@@ -142,16 +137,12 @@ where
         // 1. Build regions (weight vectors only; normalization bounds are
         //    derived dynamically from the global front's ideal/nadir).
         // -------------------------------------------------------------------
-        let regions = build_regions::<D>(
-            num_threads,
-            self.config.das_dennis_h,
-        );
+        let regions = build_regions::<D>(num_threads, self.config.das_dennis_h);
 
         let actual_num_threads = regions.len();
         info!(
             "ConcurrentPLS: {} threads, {} Das-Dennis regions",
-            actual_num_threads,
-            actual_num_threads
+            actual_num_threads, actual_num_threads
         );
 
         // -------------------------------------------------------------------
@@ -172,27 +163,26 @@ where
         // -------------------------------------------------------------------
         // 3. Distribute the warmed-up population across regions
         // -------------------------------------------------------------------
-        let region_pops = self.distribute_initial_population(
-            &warmed_pop,
-            &regions,
-            &ideal,
-            &initial_bounds,
-        );
+        let region_pops =
+            self.distribute_initial_population(&warmed_pop, &regions, &ideal, &initial_bounds);
 
         // -------------------------------------------------------------------
         // 4. Create shared snapshot slots
         // -------------------------------------------------------------------
         let snapshot_slots: Vec<SnapshotSlot<T, D>> = (0..actual_num_threads)
-            .map(|_| Arc::new(ArcSwap::new(Arc::new(Vec::<ObjectiveSnapshot<T, D>>::new()))))
+            .map(|_| {
+                Arc::new(ArcSwap::new(
+                    Arc::new(Vec::<ObjectiveSnapshot<T, D>>::new()),
+                ))
+            })
             .collect();
 
-        let global_front_slot: GlobalFrontSlot<T, D> = Arc::new(ArcSwap::new(Arc::new(
-            GlobalFrontSnapshot {
+        let global_front_slot: GlobalFrontSlot<T, D> =
+            Arc::new(ArcSwap::new(Arc::new(GlobalFrontSnapshot {
                 front: initial_snapshots.into_iter().collect(),
                 ideal_point: ideal,
                 nadir_point: nadir,
-            },
-        )));
+            })));
 
         // -------------------------------------------------------------------
         // 5. Spawn all threads (workers + 1 background merger)
@@ -204,14 +194,13 @@ where
         let merger_global_slot = global_front_slot.clone();
         let merge_interval = self.config.merge_interval;
 
-        let mut region_results: Vec<RegionResult<T, D>> =
-            {
-                let _threads_span = tracing::info_span!(
-                    "concurrent_pls::run_threads",
-                    num_threads = actual_num_threads,
-                )
-                .entered();
-                std::thread::scope(|scope| {
+        let mut region_results: Vec<RegionResult<T, D>> = {
+            let _threads_span = tracing::info_span!(
+                "concurrent_pls::run_threads",
+                num_threads = actual_num_threads,
+            )
+            .entered();
+            std::thread::scope(|scope| {
                 // Spawn merger thread
                 let merger_handle = scope.spawn(move || {
                     merger_loop(merger_slots, merger_global_slot, done_rx, merge_interval);
@@ -221,10 +210,7 @@ where
                 let mut worker_handles = Vec::new();
                 // Adjust worker timeout to account for warm-up time spent
                 let warmup_elapsed = total_start.elapsed();
-                let remaining = self
-                    .config
-                    .max_duration
-                    .saturating_sub(warmup_elapsed);
+                let remaining = self.config.max_duration.saturating_sub(warmup_elapsed);
                 for i in 0..actual_num_threads {
                     let region = regions[i].clone();
                     let all_regions = regions.clone();
@@ -267,7 +253,7 @@ where
 
                 raw
             })
-            };
+        };
 
         // -------------------------------------------------------------------
         // 6. Compute out_of_region_count for each region + log stats
@@ -357,10 +343,8 @@ where
         // -------------------------------------------------------------------
         // 7. Final global merge: combine all region archives, dedup & prune
         // -------------------------------------------------------------------
-        let _final_merge_span =
-            tracing::debug_span!("concurrent_pls::final_merge").entered();
-        let mut final_archive: NdTreeSolutionSet<T, D> =
-            NdTreeSolutionSet::new("final_concurrent");
+        let _final_merge_span = tracing::debug_span!("concurrent_pls::final_merge").entered();
+        let mut final_archive: NdTreeSolutionSet<T, D> = NdTreeSolutionSet::new("final_concurrent");
         let total_iterations = total_stats.iterations_completed;
         let num_regions = actual_num_threads;
 
@@ -438,8 +422,7 @@ fn merger_loop<T, const D: usize>(
     global_front_slot: GlobalFrontSlot<T, D>,
     done_rx: crossbeam_channel::Receiver<()>,
     merge_interval: std::time::Duration,
-)
-where
+) where
     T: Clone + ImageSet<D>,
 {
     let mut merge_count = 0u64;
@@ -481,16 +464,13 @@ where
 fn do_merge<T, const D: usize>(
     snapshot_slots: &[SnapshotSlot<T, D>],
     global_front_slot: &GlobalFrontSlot<T, D>,
-)
-where
+) where
     T: Clone + ImageSet<D>,
 {
     let _merge_span = tracing::debug_span!("merger::do_merge").entered();
     let t0 = std::time::Instant::now();
-    let snapshot_arcs: Vec<Arc<Vec<ObjectiveSnapshot<T, D>>>> = snapshot_slots
-        .iter()
-        .map(|slot| slot.load_full())
-        .collect();
+    let snapshot_arcs: Vec<Arc<Vec<ObjectiveSnapshot<T, D>>>> =
+        snapshot_slots.iter().map(|slot| slot.load_full()).collect();
 
     // Build slice-of-slices for merge_snapshots_to_front
     let snapshot_slices: Vec<&[ObjectiveSnapshot<T, D>]> =

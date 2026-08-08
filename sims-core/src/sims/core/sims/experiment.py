@@ -21,6 +21,7 @@ from ..image_set import PreprocessedData
 from . import solver
 from .geodata import Geodata
 from .problem import ProblemInstance, SimsProblem
+from .solvers.pseudo_solver import PseudoSolver
 from .solver_config import SolverConfig, TwoPhaseSolverConfig
 from .solver_result import Solution, TwoPhaseSolverResult
 
@@ -575,6 +576,12 @@ class Experiment:
 
         ratios = [(ratio, 100 - ratio) for ratio in range(100, -1, -solver_config.ratio_step)]
 
+        pseudo_solver = (
+            PseudoSolver(solver_config.pseudo_solver_dir)
+            if solver_config.pseudo_solver_dir is not None
+            else None
+        )
+
         for ratio in ratios:
             log.info(
                 f"~~ Solving the instance {self._problem_instance.name} with ratio {ratio[0]}%:{ratio[1]}%, timeout {solver_config.timeout_s} sec ~~"
@@ -584,6 +591,7 @@ class Experiment:
                 solver_config.front_strategy,
                 timeout_s=solver_config.timeout_s,
                 ratio=ratio,
+                phase2_solver_type=solver_config.phase2_solver_type,
             )
 
             for i in range(iter_count):
@@ -600,6 +608,7 @@ class Experiment:
                         two_phase_solver_config,
                         objectives=["min_cost", "cloud_coverage", "min_max_incidence_angle"],
                         dry_run=dry_run,
+                        exact_solver_fn=pseudo_solver.solve_exact if pseudo_solver is not None else None,
                     )
                 except Exception as e:
                     log.exception(

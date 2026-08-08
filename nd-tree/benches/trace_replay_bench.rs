@@ -1,7 +1,7 @@
 //! Benchmark Pareto archive implementations using real PLS trace data.
 //!
 //! Loads objective vectors from binary `.bin` files (u64 LE, D values per solution)
-//! and replays them into Vec, LinkedList, and ND-Tree archives.
+//! and replays them into Vec, `LinkedList`, and ND-Tree archives.
 //!
 //! Trace files are extracted `objectives.bin` from optimization trace archives,
 //! renamed to `<instance_name>.bin` and placed in `benches/data/`.
@@ -15,10 +15,6 @@
 #![feature(adt_const_params)]
 #![feature(linked_list_cursors)]
 #![feature(linked_list_retain)]
-#![expect(
-    clippy::cast_precision_loss,
-    reason = "Benchmark code, precision loss acceptable"
-)]
 
 use criterion::{
     criterion_group, criterion_main, BenchmarkId, Criterion, PlotConfiguration, Throughput,
@@ -33,7 +29,7 @@ use fronts::linkedlist_pareto_front::LinkedListParetoFront;
 use fronts::nd_tree_pareto_front::NdTreeParetoFront;
 use fronts::vec_pareto_front::VecParetoFront;
 
-/// Test solution for benchmarking Vec and LinkedList implementations
+/// Test solution for benchmarking Vec and `LinkedList` implementations
 #[derive(Debug, Clone, PartialEq)]
 struct BenchSolution<const D: usize> {
     objectives: [u64; D],
@@ -94,11 +90,14 @@ fn discover_trace_files() -> Vec<String> {
     dir.push("benches/data");
 
     let mut files: Vec<String> = fs::read_dir(&dir)
-        .unwrap_or_else(|e| panic!("Failed to read benches/data directory: {}", e))
+        .unwrap_or_else(|e| panic!("Failed to read benches/data directory: {e}"))
         .filter_map(|entry| {
             let entry = entry.ok()?;
             let name = entry.file_name().into_string().ok()?;
-            if name.ends_with(".bin") {
+            if std::path::Path::new(&name)
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("bin"))
+            {
                 Some(name)
             } else {
                 None

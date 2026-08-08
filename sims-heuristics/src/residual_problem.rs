@@ -28,7 +28,7 @@ struct CombSliceIter {
 
 impl CombSliceIter {
     #[inline]
-    fn new(n: usize, max_k: usize) -> Self {
+    const fn new(n: usize, max_k: usize) -> Self {
         Self {
             n,
             max_k,
@@ -41,7 +41,7 @@ impl CombSliceIter {
     /// Fill `buf[0..k]` with the next combination and return `Some(k)`, or `None` when all
     /// subsets of `{0..n}` with sizes `0..=max_k` have been produced.
     ///
-    /// `indices[i]` is guaranteed to be in `0..n` and `indices[] is strictly increasing.
+    /// `indices[i]` is guaranteed to be in `0..n` and `indices` is strictly increasing.
     #[inline]
     fn next_into(&mut self, buf: &mut [usize; 6]) -> Option<usize> {
         loop {
@@ -74,7 +74,6 @@ impl CombSliceIter {
             // Advance to the next k-combination in lexicographic order.
             // Position i may hold values in 0..=(n-k+i), i.e. the condition to increment is
             // `indices[i] < n - k + i`.
-            let mut incremented = false;
             for i in (0..k).rev() {
                 if self.indices[i] < self.n - k + i {
                     self.indices[i] += 1;
@@ -82,15 +81,13 @@ impl CombSliceIter {
                         self.indices[j] = self.indices[j - 1] + 1;
                     }
                     buf[..k].copy_from_slice(&self.indices[..k]);
-                    incremented = true;
                     return Some(k);
                 }
             }
-            if !incremented {
-                // Exhausted all k-combinations; move to size k+1.
-                self.k += 1;
-                self.first_in_k = true;
-            }
+            // Reaching here means no position could advance: all k-combinations
+            // are exhausted, so move to size k+1.
+            self.k += 1;
+            self.first_in_k = true;
         }
     }
 }
@@ -427,7 +424,7 @@ impl CombIter {
     /// Construct an exhaustive iterator (used when `probabilistic_probing` is disabled).
     #[cfg(not(feature = "probabilistic_probing"))]
     #[inline]
-    fn exhaustive(n: usize, max_k: usize) -> Self {
+    const fn exhaustive(n: usize, max_k: usize) -> Self {
         Self::Exhaustive(CombSliceIter::new(n, max_k))
     }
 
@@ -457,61 +454,6 @@ impl CombIter {
             #[cfg(feature = "probabilistic_probing")]
             Self::Probabilistic(inner) => inner.next_into(buf),
         }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod comb_iter_tests {
-    use super::CombSliceIter;
-
-    fn collect_all(n: usize, max_k: usize) -> Vec<Vec<usize>> {
-        let mut iter = CombSliceIter::new(n, max_k);
-        let mut buf = [0usize; 6];
-        let mut out = Vec::new();
-        while let Some(k) = iter.next_into(&mut buf) {
-            out.push(buf[..k].to_vec());
-        }
-        out
-    }
-
-    #[test]
-    fn test_empty_n() {
-        // n=0: only the empty combination
-        assert_eq!(collect_all(0, 5), vec![Vec::<usize>::new()]);
-    }
-
-    #[test]
-    fn test_k0() {
-        // max_k=0: only the empty combination
-        assert_eq!(collect_all(3, 0), vec![Vec::<usize>::new()]);
-    }
-
-    #[test]
-    fn test_small() {
-        // n=3, max_k=2: 1 + 3 + 3 = 7 combinations
-        let got = collect_all(3, 2);
-        let expected: Vec<Vec<usize>> = vec![
-            vec![],
-            vec![0],
-            vec![1],
-            vec![2],
-            vec![0, 1],
-            vec![0, 2],
-            vec![1, 2],
-        ];
-        assert_eq!(got, expected);
-    }
-
-    #[test]
-    fn test_matches_itertools() {
-        use itertools::Itertools;
-        let n = 7;
-        let expected: Vec<Vec<usize>> = (0..=5).flat_map(|k| (0..n).combinations(k)).collect();
-        assert_eq!(collect_all(n, 5), expected);
     }
 }
 
@@ -639,6 +581,7 @@ use crate::{
 };
 
 /// A flat 2D bit matrix: `nrows` rows of `ncols` bits stored in a single `Vec<usize>`.
+///
 /// Row `i` occupies words `i * wpr .. (i+1) * wpr`.  A single allocation replaces
 /// `nrows` separate `FixedBitSet` heap allocations.
 pub struct FlatBitMatrix {
@@ -650,6 +593,7 @@ pub struct FlatBitMatrix {
 }
 
 impl FlatBitMatrix {
+    #[must_use]
     pub fn new(nrows: usize, ncols: usize) -> Self {
         let wpr = ncols.div_ceil(usize::BITS as usize);
         Self {
@@ -661,6 +605,7 @@ impl FlatBitMatrix {
     }
 
     #[inline]
+    #[must_use]
     pub fn row(&self, i: usize) -> &[usize] {
         let s = i * self.wpr;
         &self.data[s..s + self.wpr]
@@ -681,6 +626,7 @@ impl FlatBitMatrix {
     }
 
     #[inline]
+    #[must_use]
     pub fn contains(&self, row: usize, bit: usize) -> bool {
         let w = bit / usize::BITS as usize;
         let b = bit % usize::BITS as usize;
@@ -706,6 +652,7 @@ impl FlatBitMatrix {
     }
 
     /// Check whether the first `ncols` bits (taken from `data`) are all set.
+    #[must_use]
     pub fn is_full_slice(data: &[usize], ncols: usize) -> bool {
         if ncols == 0 {
             return true;
@@ -732,17 +679,17 @@ impl Iterator for BitIter {
     }
 }
 
-/// Precomputed data for efficiently computing merged CloudyArea objectives
+/// Precomputed data for efficiently computing merged `CloudyArea` objectives
 /// on residual solutions, without materializing the full merged solution.
 pub struct CloudyAreaData {
-    /// Index of the CloudyArea objective in the objectives array
+    /// Index of the `CloudyArea` objective in the objectives array
     pub objective_index: usize,
     /// Total cloudy area of the base solution (S \ R)
     pub base_cloudy_area: u64,
     /// Per candidate image (indexed by condensed image index):
     /// bitset of which *cloudy* elements this image covers clearly.
     /// Only elements that are cloudy in the base are tracked.
-    /// Stored as a flat bit matrix (single allocation instead of m separate FixedBitSets).
+    /// Stored as a flat bit matrix (single allocation instead of m separate `FixedBitSets`).
     pub condensed_clear_parts: FlatBitMatrix,
     /// Areas of the cloudy elements, indexed by condensed cloudy-element index
     pub condensed_areas: Vec<u64>,
@@ -767,9 +714,9 @@ where
     /// Map from condensed element index to original element index
     pub element_map_condensed_to_original: Vec<usize>,
     /// Condensed images as bitsets (each bitset represents which condensed elements the image covers).
-    /// Stored as a flat bit matrix (single allocation instead of m separate FixedBitSets).
+    /// Stored as a flat bit matrix (single allocation instead of m separate `FixedBitSets`).
     condensed_images: FlatBitMatrix,
-    /// Precomputed data for merged CloudyArea computation (None if no CloudyArea objective)
+    /// Precomputed data for merged `CloudyArea` computation (None if no `CloudyArea` objective)
     pub cloudy_area_data: Option<CloudyAreaData>,
     /// Combination iterator over subsets of the condensed image indices.
     ///
@@ -786,19 +733,19 @@ where
     probing_seed: u64,
     /// Phantom data to use P type parameter
     _phantom: std::marker::PhantomData<P>,
-    /// Scratch FixedBitSet for is_set_cover_mut — avoids per-call heap allocation (capacity =
+    /// Scratch `FixedBitSet` for `is_set_cover_mut` — avoids per-call heap allocation (capacity =
     /// num condensed elements, cleared before each use).
     scratch_covered: FixedBitSet,
-    /// Scratch FixedBitSet for CloudyArea fast objective computation (capacity = num cloudy
+    /// Scratch `FixedBitSet` for `CloudyArea` fast objective computation (capacity = num cloudy
     /// elements).
     scratch_patch_clear: FixedBitSet,
-    /// Scratch buffer for MinResolution fast objective computation, indexed by condensed element
+    /// Scratch buffer for `MinResolution` fast objective computation, indexed by condensed element
     /// index.  Pre-filled with `u64::MAX`; dirty entries are reset to `u64::MAX` after each use
     /// so the buffer is always in a clean state between calls.
     element_mins_scratch: Vec<u64>,
 }
 
-/// Compute the CloudyArea objective value for a patch (set of condensed image indices) using
+/// Compute the `CloudyArea` objective value for a patch (set of condensed image indices) using
 /// precomputed `CloudyAreaData`.  Takes a mutable scratch `FixedBitSet` to avoid allocating
 /// a new one on each call — caller is responsible for ensuring the capacity covers
 /// `data.condensed_areas.len()`.
@@ -825,6 +772,36 @@ where
     R: MergeableWithResidual<P, D> + Clone,
     P: SetCoverProblem<D>,
 {
+    /// Build the condensed image→element coverage as a single flat bit matrix,
+    /// using a flat O(1) reverse element map (`original_element_idx → condensed`).
+    /// The reverse map is universe-sized (~17 KB for typical SIMS instances), so
+    /// it stays in L1 and beats per-element binary search.
+    fn build_condensed_images(
+        image_map_condensed_to_original: &[usize],
+        element_map_condensed_to_original: &[usize],
+        problem: &P,
+    ) -> FlatBitMatrix {
+        let num_condensed_elements = element_map_condensed_to_original.len();
+        let mut condensed_images = FlatBitMatrix::new(
+            image_map_condensed_to_original.len(),
+            num_condensed_elements,
+        );
+        let universe_size = problem.universe_size();
+        let mut element_reverse = vec![u32::MAX; universe_size];
+        for (ci, &orig) in element_map_condensed_to_original.iter().enumerate() {
+            element_reverse[orig] = ci as u32;
+        }
+        for (img_idx, &original_img_idx) in image_map_condensed_to_original.iter().enumerate() {
+            for original_elem_idx in problem.image_elements(original_img_idx) {
+                let ce = element_reverse[original_elem_idx];
+                if ce != u32::MAX {
+                    condensed_images.set(img_idx, ce as usize);
+                }
+            }
+        }
+        condensed_images
+    }
+
     /// Creates a new residual problem from a solution with removed images.
     ///
     /// # Panics
@@ -847,6 +824,7 @@ where
 
         // Build element index map (condensed -> original)
         let element_map_condensed_to_original = uncovered_elements_indices;
+        let num_condensed_elements = element_map_condensed_to_original.len();
 
         // Create reverse map (original -> condensed) for fast lookup.
         // NOTE: element_map_condensed_to_original is sorted (ascending) because
@@ -909,27 +887,11 @@ where
             .collect::<FixedBitSet>();
 
         // Build condensed images as a flat bit matrix (single allocation instead of m FixedBitSets)
-        let num_condensed_elements = element_map_condensed_to_original.len();
-        let mut condensed_images = FlatBitMatrix::new(
-            image_map_condensed_to_original.len(),
-            num_condensed_elements,
+        let condensed_images = Self::build_condensed_images(
+            &image_map_condensed_to_original,
+            &element_map_condensed_to_original,
+            problem,
         );
-        // Build a flat O(1) reverse map: original_element_idx -> condensed_idx.
-        // universe_size is ~4421 for typical SIMS instances, so this is ~17 KB —
-        // fits in L1 cache and is far cheaper than O(log n) binary search per element.
-        let universe_size = problem.universe_size();
-        let mut element_reverse = vec![u32::MAX; universe_size];
-        for (ci, &orig) in element_map_condensed_to_original.iter().enumerate() {
-            element_reverse[orig] = ci as u32;
-        }
-        for (img_idx, &original_img_idx) in image_map_condensed_to_original.iter().enumerate() {
-            for original_elem_idx in problem.image_elements(original_img_idx) {
-                let ce = element_reverse[original_elem_idx];
-                if ce != u32::MAX {
-                    condensed_images.set(img_idx, ce as usize);
-                }
-            }
-        }
 
         // Build CloudyAreaData if the problem has a CloudyArea objective
         let cloudy_area_data = Self::build_cloudy_area_data(
@@ -984,7 +946,7 @@ where
         }
     }
 
-    /// Build CloudyAreaData by computing base clear coverage and condensing
+    /// Build `CloudyAreaData` by computing base clear coverage and condensing
     /// the clear parts of candidate images down to only the cloudy elements.
     fn build_cloudy_area_data(
         unmodified_solution: &R,
@@ -1063,7 +1025,7 @@ where
         })
     }
 
-    /// Compute the merged CloudyArea objective for a residual solution.
+    /// Compute the merged `CloudyArea` objective for a residual solution.
     /// Returns the cloudy area of (base union patch), using precomputed condensed data.
     /// The residual solution stores condensed image indices.
     pub fn compute_merged_cloudy_area(
@@ -1119,24 +1081,7 @@ where
             .collect()
     }
 
-    /// Like `is_set_cover` but reuses `self.scratch_covered` to avoid a heap allocation on
-    /// every call.  The scratch buffer is cleared before use so state never leaks between calls.
-    #[must_use]
-    fn is_set_cover_mut(&mut self, selected_images: &FixedBitSet) -> bool {
-        self.scratch_covered.clear();
-        for img_idx in selected_images.ones() {
-            {
-                let scratch = self.scratch_covered.as_mut_slice();
-                self.condensed_images.or_row_into(img_idx, scratch);
-            }
-            if self.scratch_covered.is_full() {
-                return true;
-            }
-        }
-        self.scratch_covered.is_full()
-    }
-
-    /// Variant of `is_set_cover_mut` that accepts a sorted **slice** of condensed image indices
+    /// Variant of `is_set_cover` that accepts a sorted **slice** of condensed image indices
     /// instead of a `FixedBitSet`.  Avoids heap-allocating a `FixedBitSet` on every call inside
     /// the hot combination enumeration loop.  Includes an early-exit once all elements are
     /// covered so that longer combinations (k=4,5) short-circuit quickly.
@@ -1666,5 +1611,60 @@ where
             &mut self.partial_trackers,
         );
         return Some(new_solution);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod comb_iter_tests {
+    use super::CombSliceIter;
+
+    fn collect_all(n: usize, max_k: usize) -> Vec<Vec<usize>> {
+        let mut iter = CombSliceIter::new(n, max_k);
+        let mut buf = [0usize; 6];
+        let mut out = Vec::new();
+        while let Some(k) = iter.next_into(&mut buf) {
+            out.push(buf[..k].to_vec());
+        }
+        out
+    }
+
+    #[test]
+    fn test_empty_n() {
+        // n=0: only the empty combination
+        assert_eq!(collect_all(0, 5), vec![Vec::<usize>::new()]);
+    }
+
+    #[test]
+    fn test_k0() {
+        // max_k=0: only the empty combination
+        assert_eq!(collect_all(3, 0), vec![Vec::<usize>::new()]);
+    }
+
+    #[test]
+    fn test_small() {
+        // n=3, max_k=2: 1 + 3 + 3 = 7 combinations
+        let got = collect_all(3, 2);
+        let expected: Vec<Vec<usize>> = vec![
+            vec![],
+            vec![0],
+            vec![1],
+            vec![2],
+            vec![0, 1],
+            vec![0, 2],
+            vec![1, 2],
+        ];
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn test_matches_itertools() {
+        use itertools::Itertools;
+        let n = 7;
+        let expected: Vec<Vec<usize>> = (0..=5).flat_map(|k| (0..n).combinations(k)).collect();
+        assert_eq!(collect_all(n, 5), expected);
     }
 }

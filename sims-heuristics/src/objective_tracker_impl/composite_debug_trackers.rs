@@ -11,7 +11,7 @@ use crate::objective_tracker_impl::standard_trackers::{StandardTracker, Standard
 use crate::problem::SetCoverProblem;
 use crate::solution::ImageSet;
 
-/// A composite tracker that runs StandardTrackerArray and SimdTrackerArray in parallel,
+/// A composite tracker that runs `StandardTrackerArray` and `SimdTrackerArray` in parallel,
 /// asserting that all results match.
 #[derive(Clone, Debug)]
 pub struct CompositeDebugTrackerArray<const D: usize> {
@@ -53,7 +53,9 @@ impl<const D: usize> TrackerCollection<D> for CompositeDebugTrackerArray<D> {
         problem: &impl SetCoverProblem<D>,
         solution: &impl ImageSet<D>,
     ) -> [i64; D] {
-        let standard_result = self.standard.peek_removal_delta(image_index, problem, solution);
+        let standard_result = self
+            .standard
+            .peek_removal_delta(image_index, problem, solution);
         let simd_result = self.simd.peek_removal_delta(image_index, problem, solution);
         assert_eq!(
             standard_result, simd_result,
@@ -68,8 +70,12 @@ impl<const D: usize> TrackerCollection<D> for CompositeDebugTrackerArray<D> {
         problem: &impl SetCoverProblem<D>,
         solution: &impl ImageSet<D>,
     ) -> [i64; D] {
-        let standard_result = self.standard.peek_addition_delta(image_index, problem, solution);
-        let simd_result = self.simd.peek_addition_delta(image_index, problem, solution);
+        let standard_result = self
+            .standard
+            .peek_addition_delta(image_index, problem, solution);
+        let simd_result = self
+            .simd
+            .peek_addition_delta(image_index, problem, solution);
         assert_eq!(
             standard_result, simd_result,
             "peek_addition_delta mismatch for image {image_index}: standard={standard_result:?}, simd={simd_result:?}"
@@ -173,8 +179,12 @@ impl<const D: usize> TrackerCollection<D> for StandardSimpleDebugTrackerArray<D>
         problem: &impl SetCoverProblem<D>,
         solution: &impl ImageSet<D>,
     ) -> [i64; D] {
-        let standard_result = self.standard.peek_removal_delta(image_index, problem, solution);
-        let simple_result = self.simple.peek_removal_delta(image_index, problem, solution);
+        let standard_result = self
+            .standard
+            .peek_removal_delta(image_index, problem, solution);
+        let simple_result = self
+            .simple
+            .peek_removal_delta(image_index, problem, solution);
         assert_eq!(
             standard_result, simple_result,
             "peek_removal_delta mismatch for image {image_index}: standard={standard_result:?}, simple={simple_result:?}"
@@ -188,8 +198,12 @@ impl<const D: usize> TrackerCollection<D> for StandardSimpleDebugTrackerArray<D>
         problem: &impl SetCoverProblem<D>,
         solution: &impl ImageSet<D>,
     ) -> [i64; D] {
-        let standard_result = self.standard.peek_addition_delta(image_index, problem, solution);
-        let simple_result = self.simple.peek_addition_delta(image_index, problem, solution);
+        let standard_result = self
+            .standard
+            .peek_addition_delta(image_index, problem, solution);
+        let simple_result = self
+            .simple
+            .peek_addition_delta(image_index, problem, solution);
         assert_eq!(
             standard_result, simple_result,
             "peek_addition_delta mismatch for image {image_index}: standard={standard_result:?}, simple={simple_result:?}"

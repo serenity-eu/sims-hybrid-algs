@@ -277,8 +277,8 @@ fn nsga2_determinism_with_same_seed() {
 
     let mut objs_a: Vec<_> = archive_a.iter().map(|s| *s.objectives()).collect();
     let mut objs_b: Vec<_> = archive_b.iter().map(|s| *s.objectives()).collect();
-    objs_a.sort();
-    objs_b.sort();
+    objs_a.sort_unstable();
+    objs_b.sort_unstable();
     assert_eq!(
         objs_a, objs_b,
         "deterministic runs should yield same objectives"
@@ -490,8 +490,8 @@ fn moead_determinism_with_same_seed() {
 
     let mut objs_a: Vec<_> = archive_a.iter().map(|s| *s.objectives()).collect();
     let mut objs_b: Vec<_> = archive_b.iter().map(|s| *s.objectives()).collect();
-    objs_a.sort();
-    objs_b.sort();
+    objs_a.sort_unstable();
+    objs_b.sort_unstable();
     assert_eq!(
         objs_a, objs_b,
         "deterministic runs should yield same objectives"

@@ -9,11 +9,11 @@
 //! Each record is a little-endian u16: `(op << 12) | image_index`
 //!
 //! Op codes:
-//! - 0: TrackAdd - track_image_addition called
-//! - 1: TrackRem - track_image_removal called  
-//! - 2: PeekAdd - peek_addition_delta called
-//! - 3: PeekRem - peek_removal_delta called
-//! - 4: Reset - new() or initialize_from() called
+//! - 0: `TrackAdd` - `track_image_addition` called
+//! - 1: `TrackRem` - `track_image_removal` called  
+//! - 2: `PeekAdd` - `peek_addition_delta` called
+//! - 3: `PeekRem` - `peek_removal_delta` called
+//! - 4: Reset - `new()` or `initialize_from()` called
 //!
 //! # Usage
 //!
@@ -70,7 +70,7 @@ pub fn init<P: AsRef<Path>>(path: P) -> std::io::Result<()> {
 #[inline]
 #[must_use]
 pub fn is_active() -> bool {
-    TRACE_WRITER.with_borrow(|w| w.is_some())
+    TRACE_WRITER.with_borrow(std::option::Option::is_some)
 }
 
 /// Record a trace event.
@@ -154,11 +154,11 @@ mod tests {
             .map(|c| u16::from_le_bytes([c[0], c[1]]))
             .collect();
 
-        assert_eq!(records[0], (4 << 12) | 0); // Reset, index 0
-        assert_eq!(records[1], (0 << 12) | 42); // TrackAdd, index 42
-        assert_eq!(records[2], (3 << 12) | 100); // PeekRem, index 100
-        assert_eq!(records[3], (1 << 12) | 255); // TrackRem, index 255
-        assert_eq!(records[4], (2 << 12) | 4095); // PeekAdd, index 4095
+        assert_eq!(records[0], 4 << 12); // Reset, index 0
+        assert_eq!(records[1], 42); // TrackAdd, index 42
+        assert_eq!(records[2], (3 << 12) | 0x64); // PeekRem, index 100
+        assert_eq!(records[3], (1 << 12) | 0xFF); // TrackRem, index 255
+        assert_eq!(records[4], (2 << 12) | 0x0FFF); // PeekAdd, index 4095
 
         // Cleanup
         let _ = std::fs::remove_file(&trace_path);
