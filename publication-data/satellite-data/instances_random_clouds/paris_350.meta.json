@@ -1,0 +1,12 @@
+{
+  "N": 350,
+  "backbone_size": 2,
+  "cloudy_assignments": 550180,
+  "cost_sum": 192279991,
+  "coverage_pct": 100.0,
+  "grid_cells": 1925,
+  "name": "paris",
+  "seed": 5169346672403913348,
+  "sel_cloud_mean": 11.088672649496033,
+  "universe": 41717
+}
