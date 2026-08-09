@@ -518,9 +518,9 @@ where
             #[cfg(feature = "scalarized_selection")]
             SolutionSelectionMode::ScalarizedChebycheff => Self::select_scalarized_parents(
                 population_vec,
-                approximated_pareto_set,
-                explored_solutions,
-                neighborhood_structure,
+                _approximated_pareto_set,
+                _explored_solutions,
+                _neighborhood_structure,
                 optimizations,
                 iteration_seed,
             ),
@@ -539,9 +539,9 @@ where
 
                 Self::select_scalarized_parents(
                     &prefiltered,
-                    approximated_pareto_set,
-                    explored_solutions,
-                    neighborhood_structure,
+                    _approximated_pareto_set,
+                    _explored_solutions,
+                    _neighborhood_structure,
                     optimizations,
                     iteration_seed,
                 )
