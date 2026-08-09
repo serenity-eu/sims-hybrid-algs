@@ -218,3 +218,8 @@ publication-data/satellite-data/instances_random_clouds/*.dzn
 # Local vendored good_lp fork for the native Gurobi backend (large checkout;
 # set up locally with a [patch] on good_lp — see augmecon-rs/Cargo.toml).
 /vendor/
+
+# Gurobi runtime fetched by scripts/fetch-gurobi.sh, and the machine-specific
+# cargo config it generates (absolute GUROBI_HOME / rpath).
+/.gurobi/
+/.cargo/config.toml
