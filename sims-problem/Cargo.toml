@@ -12,6 +12,10 @@ crate-type = ["cdylib"]
 default = ["bounds_check", "parallel"]
 plotting = ["pls/plotting"]
 milp = ["augmecon", "augmecon/coin_cbc", "augmecon/highs"]
+# Native Gurobi backend (grb linked-library, via the good_lp fork's `gurobi`
+# branch). Opt-in on top of milp: building it needs a licensed Gurobi install
+# (set up GUROBI_HOME with scripts/fetch-gurobi.sh) and a valid license to solve.
+gurobi = ["milp", "augmecon/gurobi"]
 bounds_check = ["pls/bounds_check"]
 parallel = ["pls/parallel"]
 scalarized_selection = ["pls/scalarized_selection"]

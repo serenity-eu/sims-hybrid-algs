@@ -1934,10 +1934,14 @@ pub fn solve_with_milp(
         "coin_cbc" => Solver::CoinCbc,
         "highs" => Solver::HiGHS,
         "scip" => Solver::SCIP,
+        // Native Gurobi (grb) backend. The enum variant always exists; the
+        // augmecon dispatch returns UnsupportedSolver at solve time unless
+        // sims-problem was built with `--features gurobi`.
+        "gurobi" => Solver::Gurobi,
         _ => {
             error!("Unknown solver_name '{}'", solver_name);
             return Err(PyValueError::new_err(format!(
-                "Unknown solver_name '{}'. Valid options are: default, coin_cbc, highs, scip",
+                "Unknown solver_name '{}'. Valid options are: default, coin_cbc, highs, scip, gurobi",
                 solver_name
             )));
         }
