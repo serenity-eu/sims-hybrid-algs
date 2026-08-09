@@ -189,7 +189,7 @@ Single-point front (both extremes coincide) → return it, no gaps. All-supporte
 | Weight normalisation + tie-break | ~30 lines |
 | `FirstPhaseSolver` trait (optional) | ~15 lines |
 | PyO3 `method` arg + dispatch | ~40 lines |
-| A&N pseudo-dataset generator flag + regen | reuse `generate_highs_pseudo.py` + `--method` |
+| A&N pseudo-dataset generator flag + regen | reuse `generate_pseudo.py` + `--method` |
 | Tests | ~150 lines |
 
 **Sequence:** `solve_weighted_sum` → driver → unit tests → PyO3 wiring → cross-check vs GPBA on 2–3 small instances → generate `an_2d_highs` → wire `--pseudo-source an_2d_highs` into the experiment harness → run `A&N` and `A&N+PLS` under the paper's protocol.
