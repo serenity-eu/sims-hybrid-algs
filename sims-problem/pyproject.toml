@@ -41,7 +41,7 @@ config-settings = { build-args = '--profile=dev'}
 sims-solvers = { path = "../sims-solvers", editable = true }
 
 [tool.maturin]
-features = ["pyo3/extension-module", "milp", "scalarized_selection"]
+features = ["pyo3/extension-module", "milp", "scalarized_selection", "gurobi"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
