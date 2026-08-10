@@ -130,7 +130,7 @@ pub enum StepStatus {
 /// per step (so an empty auxiliary population does not imply exhaustion of
 /// the current neighborhood structure).
 #[cfg(feature = "scalarized_selection")]
-fn is_scalarized_selection_mode(mode: SolutionSelectionMode) -> bool {
+const fn is_scalarized_selection_mode(mode: SolutionSelectionMode) -> bool {
     matches!(
         mode,
         SolutionSelectionMode::ScalarizedChebycheff
@@ -565,191 +565,211 @@ where
         let weights = sample_weight_vectors::<D>(weight_samples, iteration_seed);
 
         match optimizations.scalarized_selection_source {
-            ScalarizedSelectionSource::Population => {
-                let candidate_pool: Vec<T> = population_vec
-                    .iter()
-                    .filter(|solution| {
-                        explored_solutions.explored_neighborhood_size(solution)
-                            < neighborhood_structure
-                    })
-                    .cloned()
-                    .collect();
+            ScalarizedSelectionSource::Population => Self::select_scalarized_from_population(
+                population_vec,
+                explored_solutions,
+                neighborhood_structure,
+                optimizations,
+                &weights,
+                weight_samples,
+            ),
+            ScalarizedSelectionSource::Archive => Self::select_scalarized_from_archive(
+                approximated_pareto_set,
+                explored_solutions,
+                neighborhood_structure,
+                optimizations,
+                &weights,
+                weight_samples,
+            ),
+        }
+    }
 
-                if candidate_pool.is_empty() {
-                    return Vec::new();
-                }
+    /// Scalarized parent selection over the current population subset (candidates
+    /// whose explored-neighborhood size is below `neighborhood_structure`).
+    #[cfg(feature = "scalarized_selection")]
+    fn select_scalarized_from_population(
+        population_vec: &[T],
+        explored_solutions: &mut ExploredSolutionsData<D>,
+        neighborhood_structure: u32,
+        optimizations: &PlsOptimizations,
+        weights: &[[f64; D]],
+        weight_samples: usize,
+    ) -> Vec<T> {
+        let candidate_pool: Vec<T> = population_vec
+            .iter()
+            .filter(|solution| {
+                explored_solutions.explored_neighborhood_size(solution) < neighborhood_structure
+            })
+            .cloned()
+            .collect();
 
-                let ideal =
-                    compute_ideal_from_objectives(candidate_pool.iter().map(|s| *s.objectives()));
-                let nadir =
-                    compute_nadir_from_objectives(candidate_pool.iter().map(|s| *s.objectives()));
-                let bounds = bounds_from_ideal_nadir(&ideal, &nadir);
+        if candidate_pool.is_empty() {
+            return Vec::new();
+        }
 
-                let mut selected_indices = Vec::new();
-                let mut seen = HashSet::new();
+        let ideal = compute_ideal_from_objectives(candidate_pool.iter().map(|s| *s.objectives()));
+        let nadir = compute_nadir_from_objectives(candidate_pool.iter().map(|s| *s.objectives()));
+        let bounds = bounds_from_ideal_nadir(&ideal, &nadir);
 
-                for weight in &weights {
-                    let coeffs = WeightedChebycheffCoeffs::new(
-                        weight,
-                        &bounds,
-                        optimizations.scalarized_rho,
-                    );
+        let mut selected_indices = Vec::new();
+        let mut seen = HashSet::new();
 
-                    let best = candidate_pool
-                        .iter()
-                        .enumerate()
-                        .min_by(|(_, a), (_, b)| {
-                            let score_a = coeffs.score(a.objectives(), &ideal);
-                            let score_b = coeffs.score(b.objectives(), &ideal);
-                            score_a
-                                .partial_cmp(&score_b)
-                                .unwrap_or(std::cmp::Ordering::Equal)
-                        })
-                        .map(|(idx, _)| idx);
+        for weight in weights {
+            let coeffs =
+                WeightedChebycheffCoeffs::new(weight, &bounds, optimizations.scalarized_rho);
 
-                    if let Some(idx) = best
-                        && seen.insert(idx)
-                    {
-                        selected_indices.push(idx);
-                    }
-                }
+            let best = candidate_pool
+                .iter()
+                .enumerate()
+                .min_by(|(_, a), (_, b)| {
+                    let score_a = coeffs.score(a.objectives(), &ideal);
+                    let score_b = coeffs.score(b.objectives(), &ideal);
+                    score_a
+                        .partial_cmp(&score_b)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map(|(idx, _)| idx);
 
-                if selected_indices.is_empty() {
-                    selected_indices.push(0);
-                }
-
-                let mut selected: Vec<T> = selected_indices
-                    .into_iter()
-                    .map(|idx| candidate_pool[idx].clone())
-                    .collect();
-
-                if let Some(parent_budget) = optimizations.scalarized_parent_budget {
-                    selected.truncate(parent_budget);
-                }
-
-                tracing::info!(
-                    candidate_pool_size = candidate_pool.len(),
-                    selected_parent_count = selected.len(),
-                    weight_samples = weight_samples,
-                    source = ?optimizations.scalarized_selection_source,
-                    accelerated_archive_query = false,
-                    "Using scalarized parent selection for population exploration"
-                );
-
-                selected
-            }
-            ScalarizedSelectionSource::Archive => {
-                let eligible_archive: Vec<&T> = approximated_pareto_set
-                    .iter()
-                    .filter(|solution| {
-                        explored_solutions.explored_neighborhood_size(solution)
-                            < neighborhood_structure
-                    })
-                    .collect();
-
-                if eligible_archive.is_empty() {
-                    return Vec::new();
-                }
-
-                let ideal =
-                    compute_ideal_from_objectives(eligible_archive.iter().map(|s| *s.objectives()));
-                let nadir =
-                    compute_nadir_from_objectives(eligible_archive.iter().map(|s| *s.objectives()));
-                let bounds = bounds_from_ideal_nadir(&ideal, &nadir);
-
-                let mut selected: Vec<T> = Vec::new();
-                let mut seen_objectives: HashSet<[u64; D]> = HashSet::new();
-
-                let accelerated = optimizations.use_nd_tree_scalarized_query;
-
-                if accelerated {
-                    for weight in &weights {
-                        let coeffs = WeightedChebycheffCoeffs::new(
-                            weight,
-                            &bounds,
-                            optimizations.scalarized_rho,
-                        );
-
-                        if let Some((best, _score)) = approximated_pareto_set
-                            .find_best_with_pruning(
-                                |solution: &T| {
-                                    explored_solutions.explored_neighborhood_size(solution)
-                                        < neighborhood_structure
-                                        && !seen_objectives.contains(solution.objectives())
-                                },
-                                |node_ideal| coeffs.score(node_ideal, &ideal),
-                                |solution: &T| coeffs.score(solution.objectives(), &ideal),
-                            )
-                        {
-                            if seen_objectives.insert(*best.objectives()) {
-                                selected.push(best.clone());
-                            }
-                        }
-
-                        if let Some(parent_budget) = optimizations.scalarized_parent_budget
-                            && selected.len() >= parent_budget
-                        {
-                            break;
-                        }
-                    }
-                }
-
-                if selected.is_empty() {
-                    for weight in &weights {
-                        let coeffs = WeightedChebycheffCoeffs::new(
-                            weight,
-                            &bounds,
-                            optimizations.scalarized_rho,
-                        );
-
-                        let best = eligible_archive
-                            .iter()
-                            .copied()
-                            .filter(|solution| !seen_objectives.contains(solution.objectives()))
-                            .min_by(|a, b| {
-                                let score_a = coeffs.score(a.objectives(), &ideal);
-                                let score_b = coeffs.score(b.objectives(), &ideal);
-                                score_a
-                                    .partial_cmp(&score_b)
-                                    .unwrap_or(std::cmp::Ordering::Equal)
-                            });
-
-                        if let Some(best) = best
-                            && seen_objectives.insert(*best.objectives())
-                        {
-                            selected.push(best.clone());
-                        }
-
-                        if let Some(parent_budget) = optimizations.scalarized_parent_budget
-                            && selected.len() >= parent_budget
-                        {
-                            break;
-                        }
-                    }
-                }
-
-                if selected.is_empty()
-                    && let Some(first) = eligible_archive.first()
-                {
-                    selected.push((**first).clone());
-                }
-
-                if let Some(parent_budget) = optimizations.scalarized_parent_budget {
-                    selected.truncate(parent_budget);
-                }
-
-                tracing::info!(
-                    candidate_pool_size = eligible_archive.len(),
-                    selected_parent_count = selected.len(),
-                    weight_samples = weight_samples,
-                    source = ?optimizations.scalarized_selection_source,
-                    accelerated_archive_query = accelerated,
-                    "Using scalarized parent selection for archive exploration"
-                );
-
-                selected
+            if let Some(idx) = best
+                && seen.insert(idx)
+            {
+                selected_indices.push(idx);
             }
         }
+
+        if selected_indices.is_empty() {
+            selected_indices.push(0);
+        }
+
+        let mut selected: Vec<T> = selected_indices
+            .into_iter()
+            .map(|idx| candidate_pool[idx].clone())
+            .collect();
+
+        if let Some(parent_budget) = optimizations.scalarized_parent_budget {
+            selected.truncate(parent_budget);
+        }
+
+        tracing::info!(
+            candidate_pool_size = candidate_pool.len(),
+            selected_parent_count = selected.len(),
+            weight_samples = weight_samples,
+            source = ?optimizations.scalarized_selection_source,
+            accelerated_archive_query = false,
+            "Using scalarized parent selection for population exploration"
+        );
+
+        selected
+    }
+
+    /// Scalarized parent selection over the external Pareto archive, optionally
+    /// using the ND-tree accelerated best-with-pruning query.
+    #[cfg(feature = "scalarized_selection")]
+    fn select_scalarized_from_archive(
+        approximated_pareto_set: &S,
+        explored_solutions: &mut ExploredSolutionsData<D>,
+        neighborhood_structure: u32,
+        optimizations: &PlsOptimizations,
+        weights: &[[f64; D]],
+        weight_samples: usize,
+    ) -> Vec<T> {
+        let eligible_archive: Vec<&T> = approximated_pareto_set
+            .iter()
+            .filter(|solution| {
+                explored_solutions.explored_neighborhood_size(solution) < neighborhood_structure
+            })
+            .collect();
+
+        if eligible_archive.is_empty() {
+            return Vec::new();
+        }
+
+        let ideal = compute_ideal_from_objectives(eligible_archive.iter().map(|s| *s.objectives()));
+        let nadir = compute_nadir_from_objectives(eligible_archive.iter().map(|s| *s.objectives()));
+        let bounds = bounds_from_ideal_nadir(&ideal, &nadir);
+
+        let mut selected: Vec<T> = Vec::new();
+        let mut seen_objectives: HashSet<[u64; D]> = HashSet::new();
+
+        let accelerated = optimizations.use_nd_tree_scalarized_query;
+
+        if accelerated {
+            for weight in weights {
+                let coeffs =
+                    WeightedChebycheffCoeffs::new(weight, &bounds, optimizations.scalarized_rho);
+
+                if let Some((best, _score)) = approximated_pareto_set.find_best_with_pruning(
+                    |solution: &T| {
+                        explored_solutions.explored_neighborhood_size(solution)
+                            < neighborhood_structure
+                            && !seen_objectives.contains(solution.objectives())
+                    },
+                    |node_ideal| coeffs.score(node_ideal, &ideal),
+                    |solution: &T| coeffs.score(solution.objectives(), &ideal),
+                ) && seen_objectives.insert(*best.objectives())
+                {
+                    selected.push(best.clone());
+                }
+
+                if let Some(parent_budget) = optimizations.scalarized_parent_budget
+                    && selected.len() >= parent_budget
+                {
+                    break;
+                }
+            }
+        }
+
+        if selected.is_empty() {
+            for weight in weights {
+                let coeffs =
+                    WeightedChebycheffCoeffs::new(weight, &bounds, optimizations.scalarized_rho);
+
+                let best = eligible_archive
+                    .iter()
+                    .copied()
+                    .filter(|solution| !seen_objectives.contains(solution.objectives()))
+                    .min_by(|a, b| {
+                        let score_a = coeffs.score(a.objectives(), &ideal);
+                        let score_b = coeffs.score(b.objectives(), &ideal);
+                        score_a
+                            .partial_cmp(&score_b)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
+
+                if let Some(best) = best
+                    && seen_objectives.insert(*best.objectives())
+                {
+                    selected.push(best.clone());
+                }
+
+                if let Some(parent_budget) = optimizations.scalarized_parent_budget
+                    && selected.len() >= parent_budget
+                {
+                    break;
+                }
+            }
+        }
+
+        if selected.is_empty()
+            && let Some(first) = eligible_archive.first()
+        {
+            selected.push((**first).clone());
+        }
+
+        if let Some(parent_budget) = optimizations.scalarized_parent_budget {
+            selected.truncate(parent_budget);
+        }
+
+        tracing::info!(
+            candidate_pool_size = eligible_archive.len(),
+            selected_parent_count = selected.len(),
+            weight_samples = weight_samples,
+            source = ?optimizations.scalarized_selection_source,
+            accelerated_archive_query = accelerated,
+            "Using scalarized parent selection for archive exploration"
+        );
+
+        selected
     }
 
     #[instrument(level = "debug", skip(self, step_time, step_stats), fields(
