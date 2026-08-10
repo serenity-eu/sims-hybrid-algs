@@ -409,8 +409,11 @@ where
         let population_vec: Vec<_> = population.into_iter().collect();
         let selected_parents = Self::select_parents_for_exploration(
             &population_vec,
+            #[cfg(feature = "scalarized_selection")]
             approximated_pareto_set,
+            #[cfg(feature = "scalarized_selection")]
             explored_solutions,
+            #[cfg(feature = "scalarized_selection")]
             neighborhood_structure,
             optimizations,
             iteration as u64,
@@ -474,9 +477,9 @@ where
 
     fn select_parents_for_exploration(
         population_vec: &[T],
-        _approximated_pareto_set: &S,
-        _explored_solutions: &mut ExploredSolutionsData<D>,
-        _neighborhood_structure: u32,
+        #[cfg(feature = "scalarized_selection")] approximated_pareto_set: &S,
+        #[cfg(feature = "scalarized_selection")] explored_solutions: &mut ExploredSolutionsData<D>,
+        #[cfg(feature = "scalarized_selection")] neighborhood_structure: u32,
         optimizations: &PlsOptimizations,
         iteration_seed: u64,
         is_deterministic: bool,
@@ -518,9 +521,9 @@ where
             #[cfg(feature = "scalarized_selection")]
             SolutionSelectionMode::ScalarizedChebycheff => Self::select_scalarized_parents(
                 population_vec,
-                _approximated_pareto_set,
-                _explored_solutions,
-                _neighborhood_structure,
+                approximated_pareto_set,
+                explored_solutions,
+                neighborhood_structure,
                 optimizations,
                 iteration_seed,
             ),
@@ -539,9 +542,9 @@ where
 
                 Self::select_scalarized_parents(
                     &prefiltered,
-                    _approximated_pareto_set,
-                    _explored_solutions,
-                    _neighborhood_structure,
+                    approximated_pareto_set,
+                    explored_solutions,
+                    neighborhood_structure,
                     optimizations,
                     iteration_seed,
                 )
