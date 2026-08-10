@@ -28,7 +28,7 @@ use pls::{
     },
     objectives::ObjectiveType,
     pareto_local_search::ParetoLocalSearch,
-    pls_config::SolutionSelectionMode,
+    pls_config::{PlsFlags, SolutionSelectionMode},
     problem_bitset::ProblemBitset,
     solution_impl::bitset_encoded_solution::BitsetEncodedSolution,
     solution_set_impl::NdTreeSolutionSet,
@@ -221,7 +221,10 @@ fn run_pls(
         optimizations.solution_selection_mode = selection_mode;
     }
 
-    optimizations.use_diverse_probing = matches!(mode, CliPlsAblationMode::DiverseProbe);
+    optimizations.flags.set(
+        PlsFlags::USE_DIVERSE_PROBING,
+        matches!(mode, CliPlsAblationMode::DiverseProbe),
+    );
     optimizations.diverse_probe_budget = diverse_probe_budget;
 
     #[cfg(feature = "scalarized_selection")]

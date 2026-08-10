@@ -12,7 +12,7 @@ use std::{fmt::Debug, hash::Hash, time::Duration};
 
 use crate::objective_tracker::{ObjectiveTracker, TrackerCollection};
 use crate::objective_tracker_impl::proven_safe_trackers::ProvenSafeTrackerArray;
-use crate::pls_config::PlsOptimizations;
+use crate::pls_config::{PlsFlags, PlsOptimizations};
 use crate::problem::{ComparableImage, ImageObjectiveDeltas, ScaledObjectiveDeltas};
 use crate::residual_problem::ResidualProblem;
 use crate::residual_solution::ResidualSolution;
@@ -1351,7 +1351,10 @@ where
         let _guard = candidates_span.enter();
 
         let removal_candidates_iter: Box<dyn Iterator<Item = Vec<usize>> + 'a> = if k == 1 {
-            if optimizations.use_ranked_candidates {
+            if optimizations
+                .flags
+                .contains(PlsFlags::USE_RANKED_CANDIDATES)
+            {
                 // Ranked iteration for k=1: use worst_selected_images-style scoring
                 // to prioritise the most promising removal candidates and limit their
                 // count, avoiding exhaustive exploration on large instances.
@@ -1403,7 +1406,7 @@ where
             is_deterministic,
             base_checkpoint,
             checkpoint,
-            use_checkpoint: optimizations.use_checkpoint,
+            use_checkpoint: optimizations.flags.contains(PlsFlags::USE_CHECKPOINT),
             neighborhood_budget: optimizations.neighborhood_budget,
             neighbors_yielded: 0,
         }
