@@ -511,6 +511,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
+name = "cstr-enum"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64cf55825ac0b0e8120bdd2cd8f4849ff8f59d049e6808168a4c0853cc3813fe"
+dependencies = [
+ "cstr-enum-derive",
+]
+
+[[package]]
+name = "cstr-enum-derive"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea5208e0c141483a14e4a1844b2859a410cef6a00a6c5fbf58bd1e791e31144e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
 name = "csv"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1187,12 +1207,52 @@ checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 [[package]]
 name = "good_lp"
 version = "1.14.0"
-source = "git+https://github.com/hlvlad/good_lp?branch=main#42351ee82b1e67addda2336081f548c7e9a4e757"
+source = "git+https://github.com/hlvlad/good_lp?branch=gurobi#7a3163043b711d3383ee28be804544d85a2f813b"
 dependencies = [
  "coin_cbc",
  "fnv",
+ "grb",
  "highs",
  "lp-solvers",
+]
+
+[[package]]
+name = "grb"
+version = "3.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9834f67c380d91552cfaa9ac309dde5b53c0d783254992ac37e4bcc12cfa2518"
+dependencies = [
+ "anyhow",
+ "cfg-if",
+ "cstr-enum",
+ "csv",
+ "fnv",
+ "grb-macro",
+ "grb-sys2",
+ "proc-macro2",
+ "quote",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "grb-macro"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70071e86d36b20a3f2280ef419a0efe9aa8c85b79c318b28a2b707e1ed52b0d0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
+name = "grb-sys2"
+version = "12.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae602a07b509e70fed9e88acc4b157087e310a1741ee674fe51e7e4aef06c92a"
+dependencies = [
+ "anyhow",
 ]
 
 [[package]]
@@ -2536,6 +2596,7 @@ version = "0.1.0"
 dependencies = [
  "arc-swap",
  "arrayvec",
+ "bitflags 2.13.0",
  "chrono",
  "clap",
  "crossbeam-channel",

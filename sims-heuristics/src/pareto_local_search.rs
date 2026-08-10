@@ -17,7 +17,7 @@ use crate::{
     diverse_probe_iter::diverse_probe_iter,
     explored_solutions_data::{ExploredSolutionsData, SolutionFingerprint},
     objective_tracker::TrackerCollection,
-    pls_config::{PlsOptimizations, SolutionSelectionMode},
+    pls_config::{PlsFlags, PlsOptimizations, SolutionSelectionMode},
     problem::SetCoverProblem,
     solution::{EncodedSolution, ImageSet},
     timer::Timer,
@@ -280,7 +280,10 @@ where
         });
 
         // Add greedy-constructed solutions targeting each objective individually.
-        if optimizations.use_greedy_initial_population {
+        if optimizations
+            .flags
+            .contains(PlsFlags::USE_GREEDY_INITIAL_POPULATION)
+        {
             let greedy_solutions = T::greedy_initial_solutions(problem);
             info!(
                 "Generated {} greedy initial solutions",
@@ -484,7 +487,7 @@ where
         iteration_seed: u64,
         is_deterministic: bool,
     ) -> Vec<T> {
-        let effective_mode = if optimizations.use_diverse_probing {
+        let effective_mode = if optimizations.flags.contains(PlsFlags::USE_DIVERSE_PROBING) {
             SolutionSelectionMode::DiverseProbe
         } else {
             optimizations.solution_selection_mode
@@ -691,7 +694,9 @@ where
         let mut selected: Vec<T> = Vec::new();
         let mut seen_objectives: HashSet<[u64; D]> = HashSet::new();
 
-        let accelerated = optimizations.use_nd_tree_scalarized_query;
+        let accelerated = optimizations
+            .flags
+            .contains(PlsFlags::USE_ND_TREE_SCALARIZED_QUERY);
 
         if accelerated {
             for weight in weights {
@@ -904,7 +909,11 @@ where
 
         // Perturbation restart: inject perturbed archive solutions before
         // resorting to expensive higher-k neighborhoods.
-        if self.optimizations.use_perturbation_restart {
+        if self
+            .optimizations
+            .flags
+            .contains(PlsFlags::USE_PERTURBATION_RESTART)
+        {
             let injected = self.inject_perturbed_archive_solutions(2);
             if injected > 0 {
                 info!(

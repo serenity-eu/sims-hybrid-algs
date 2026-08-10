@@ -14,8 +14,10 @@ use std::{
 use pareto::{ParetoFront, RandomCollection};
 use pls::solution_set_impl::BTreeSolutionSet;
 use pls::{
-    PlsOptimizations, objectives::ObjectiveType, pareto_local_search::ParetoLocalSearch,
-    pls_config::SolutionSelectionMode,
+    PlsOptimizations,
+    objectives::ObjectiveType,
+    pareto_local_search::ParetoLocalSearch,
+    pls_config::{PlsFlags, SolutionSelectionMode},
 };
 use pls::{
     problem_bitset::ProblemBitset, solution_impl::bitset_encoded_solution::BitsetEncodedSolution,
@@ -293,15 +295,9 @@ fn main() {
         debug!("Initial solution: {solution:?}");
     }
 
-    let optimizations = PlsOptimizations {
+    let mut optimizations = PlsOptimizations {
         solution_selection_mode: args.solution_selection.to_runtime(),
-        use_diverse_probing: matches!(
-            args.solution_selection,
-            CliSolutionSelectionMode::DiverseProbe
-        ),
         diverse_probe_budget: args.diverse_probe_budget,
-        #[cfg(feature = "scalarized_selection")]
-        use_nd_tree_scalarized_query: args.use_nd_tree_scalarized_query,
         #[cfg(feature = "scalarized_selection")]
         scalarized_selection_source: args.scalarized_selection_source.to_runtime(),
         #[cfg(feature = "scalarized_selection")]
@@ -312,6 +308,18 @@ fn main() {
         scalarized_rho: args.scalarized_rho,
         ..Default::default()
     };
+    optimizations.flags.set(
+        PlsFlags::USE_DIVERSE_PROBING,
+        matches!(
+            args.solution_selection,
+            CliSolutionSelectionMode::DiverseProbe
+        ),
+    );
+    #[cfg(feature = "scalarized_selection")]
+    optimizations.flags.set(
+        PlsFlags::USE_ND_TREE_SCALARIZED_QUERY,
+        args.use_nd_tree_scalarized_query,
+    );
 
     let mut pareto_local_search = ParetoLocalSearch::new(
         &sims_problem_instance,

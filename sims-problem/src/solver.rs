@@ -7,7 +7,7 @@ use log::{debug, error, info};
 use pareto::ParetoFront;
 use pls::explored_solutions_data::SolutionFingerprint;
 use pls::pareto_local_search::ParetoLocalSearch;
-use pls::pls_config::PlsOptimizations;
+use pls::pls_config::{PlsFlags, PlsOptimizations};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 #[cfg(feature = "milp")]
@@ -483,15 +483,23 @@ pub fn solve_with_pls(
                     // Create and run 2D PLS
                     let mut optimizations = PlsOptimizations {
                         neighborhood_budget,
-                        use_checkpoint,
-                        use_ranked_candidates,
+                        flags: PlsFlags::from_pairs([
+                            (PlsFlags::USE_CHECKPOINT, use_checkpoint),
+                            (PlsFlags::USE_RANKED_CANDIDATES, use_ranked_candidates),
+                            (
+                                PlsFlags::USE_GREEDY_INITIAL_POPULATION,
+                                use_greedy_initial_population,
+                            ),
+                            (PlsFlags::USE_PERTURBATION_RESTART, use_perturbation_restart),
+                            (PlsFlags::USE_DIVERSE_PROBING, use_diverse_probing),
+                            (
+                                PlsFlags::USE_ND_TREE_SCALARIZED_QUERY,
+                                use_nd_tree_scalarized_query,
+                            ),
+                        ]),
                         max_k1_candidates,
                         probing_budget,
-                        use_greedy_initial_population,
-                        use_perturbation_restart,
-                        use_diverse_probing,
                         diverse_probe_budget,
-                        use_nd_tree_scalarized_query,
                         ..PlsOptimizations::default()
                     };
 
@@ -911,15 +919,23 @@ pub fn solve_with_pls(
                     // Create and run 3D PLS
                     let mut optimizations = PlsOptimizations {
                         neighborhood_budget,
-                        use_checkpoint,
-                        use_ranked_candidates,
+                        flags: PlsFlags::from_pairs([
+                            (PlsFlags::USE_CHECKPOINT, use_checkpoint),
+                            (PlsFlags::USE_RANKED_CANDIDATES, use_ranked_candidates),
+                            (
+                                PlsFlags::USE_GREEDY_INITIAL_POPULATION,
+                                use_greedy_initial_population,
+                            ),
+                            (PlsFlags::USE_PERTURBATION_RESTART, use_perturbation_restart),
+                            (PlsFlags::USE_DIVERSE_PROBING, use_diverse_probing),
+                            (
+                                PlsFlags::USE_ND_TREE_SCALARIZED_QUERY,
+                                use_nd_tree_scalarized_query,
+                            ),
+                        ]),
                         max_k1_candidates,
                         probing_budget,
-                        use_greedy_initial_population,
-                        use_perturbation_restart,
-                        use_diverse_probing,
                         diverse_probe_budget,
-                        use_nd_tree_scalarized_query,
                         ..PlsOptimizations::default()
                     };
 
@@ -1339,15 +1355,23 @@ pub fn solve_with_pls(
                     // Create and run 4D PLS
                     let mut optimizations = PlsOptimizations {
                         neighborhood_budget,
-                        use_checkpoint,
-                        use_ranked_candidates,
+                        flags: PlsFlags::from_pairs([
+                            (PlsFlags::USE_CHECKPOINT, use_checkpoint),
+                            (PlsFlags::USE_RANKED_CANDIDATES, use_ranked_candidates),
+                            (
+                                PlsFlags::USE_GREEDY_INITIAL_POPULATION,
+                                use_greedy_initial_population,
+                            ),
+                            (PlsFlags::USE_PERTURBATION_RESTART, use_perturbation_restart),
+                            (PlsFlags::USE_DIVERSE_PROBING, use_diverse_probing),
+                            (
+                                PlsFlags::USE_ND_TREE_SCALARIZED_QUERY,
+                                use_nd_tree_scalarized_query,
+                            ),
+                        ]),
                         max_k1_candidates,
                         probing_budget,
-                        use_greedy_initial_population,
-                        use_perturbation_restart,
-                        use_diverse_probing,
                         diverse_probe_budget,
-                        use_nd_tree_scalarized_query,
                         ..PlsOptimizations::default()
                     };
 

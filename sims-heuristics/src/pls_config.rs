@@ -7,6 +7,41 @@
 //! archive queries when both the build-time feature and this runtime
 //! toggle are enabled.
 
+use bitflags::bitflags;
+
+bitflags! {
+    /// Independent boolean PLS optimization toggles, packed into one field so
+    /// the config struct stays flat. Each flag gates a single technique.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct PlsFlags: u8 {
+        /// Bulk checkpoint/restore of tracker state instead of per-image undo.
+        const USE_CHECKPOINT = 1 << 0;
+        /// Rank k=1 removal candidates "worst first" and cap at `max_k1_candidates`.
+        const USE_RANKED_CANDIDATES = 1 << 1;
+        /// Seed the initial population with greedy set-cover solutions.
+        const USE_GREEDY_INITIAL_POPULATION = 1 << 2;
+        /// Inject perturbed archive solutions when the auxiliary is empty.
+        const USE_PERTURBATION_RESTART = 1 << 3;
+        /// Explore a diverse population subset via farthest-point sampling.
+        const USE_DIVERSE_PROBING = 1 << 4;
+        /// Allow ND-tree accelerated queries for scalarized archive selection.
+        const USE_ND_TREE_SCALARIZED_QUERY = 1 << 5;
+    }
+}
+
+impl PlsFlags {
+    /// Build a flag set from `(flag, enabled)` pairs, keeping only the enabled
+    /// ones. Lets callers map individual boolean toggles (e.g. the public Python
+    /// `solve_*` keyword arguments) onto flags without a wide boolean signature.
+    #[must_use]
+    pub fn from_pairs<I: IntoIterator<Item = (Self, bool)>>(pairs: I) -> Self {
+        pairs
+            .into_iter()
+            .filter_map(|(flag, enabled)| enabled.then_some(flag))
+            .fold(Self::empty(), |acc, flag| acc | flag)
+    }
+}
+
 /// How parent solutions are selected for neighborhood exploration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SolutionSelectionMode {
@@ -36,18 +71,14 @@ pub enum ScalarizedSelectionSource {
 /// Runtime-toggleable PLS optimization switches.
 #[derive(Debug, Clone)]
 pub struct PlsOptimizations {
-    /// Use bulk checkpoint/restore for tracker state instead of per-image
-    /// undo operations after each merge. Pure performance win — same
-    /// algorithmic behaviour, fewer tracker operations.
-    pub use_checkpoint: bool,
-
-    /// For k=1 neighborhoods, rank removal candidates by "worst first"
-    /// heuristic and limit to the top `max_k1_candidates` instead of
-    /// exhaustively trying every replaceable selected image.
-    pub use_ranked_candidates: bool,
+    /// Independent boolean optimization toggles (see [`PlsFlags`]):
+    /// `USE_CHECKPOINT`, `USE_RANKED_CANDIDATES`, `USE_GREEDY_INITIAL_POPULATION`,
+    /// `USE_PERTURBATION_RESTART`, `USE_DIVERSE_PROBING`,
+    /// `USE_ND_TREE_SCALARIZED_QUERY`.
+    pub flags: PlsFlags,
 
     /// Maximum removal candidates to evaluate for k=1 when
-    /// `use_ranked_candidates` is true. Ignored when false.
+    /// `USE_RANKED_CANDIDATES` is set. Ignored when unset.
     pub max_k1_candidates: usize,
 
     /// Use probabilistic GRASP-based residual probing instead of
@@ -60,43 +91,12 @@ pub struct PlsOptimizations {
     /// `None` = unlimited (explore full neighborhood).
     pub neighborhood_budget: Option<usize>,
 
-    /// When true, includes greedy-constructed solutions in the initial population.
-    /// These are built by greedy set cover heuristics targeting each objective
-    /// individually, providing better initial coverage of the objective space.
-    pub use_greedy_initial_population: bool,
-
-    /// When true, inject perturbed copies of archive solutions into the
-    /// population when the auxiliary is empty before increasing k.
-    /// This avoids expensive higher-k neighborhoods by restarting search
-    /// from slightly modified Pareto-optimal solutions.
-    pub use_perturbation_restart: bool,
-
-    /// Select a diverse subset of the population to explore via farthest-point
-    /// sampling in normalised objective space, instead of exploring all members.
-    /// Each selected solution receives proportionally more neighbourhood
-    /// evaluation time within the same budget.
-    ///
-    /// Deprecated in favour of `solution_selection_mode = DiverseProbe`, but
-    /// retained for backward compatibility with existing callers.
-    pub use_diverse_probing: bool,
-
-    /// Number of solutions to probe per step when `use_diverse_probing` is true.
+    /// Number of solutions to probe per step when `USE_DIVERSE_PROBING` is set.
     /// `None` = auto-select `2 * D * sqrt(N)` where N is the population size.
     pub diverse_probe_budget: Option<usize>,
 
     /// Policy used to choose parent solutions for neighborhood exploration.
     pub solution_selection_mode: SolutionSelectionMode,
-
-    /// When true, scalarized archive selection may use ND-tree accelerated
-    /// branch-and-bound queries instead of linear archive scans.
-    ///
-    /// This toggle only has an effect when:
-    /// - scalarized selection is enabled at build time, and
-    /// - the selected source is `ScalarizedSelectionSource::Archive`.
-    ///
-    /// When false, scalarized archive selection falls back to a linear scan,
-    /// which is useful for ablation and correctness comparisons.
-    pub use_nd_tree_scalarized_query: bool,
 
     /// Source pool used by scalarized parent selection.
     #[cfg(feature = "scalarized_selection")]
@@ -120,17 +120,17 @@ pub struct PlsOptimizations {
 impl Default for PlsOptimizations {
     fn default() -> Self {
         Self {
-            use_checkpoint: true,
-            use_ranked_candidates: true,
+            // All optimizations on except diverse probing (deprecated default-off).
+            flags: PlsFlags::USE_CHECKPOINT
+                | PlsFlags::USE_RANKED_CANDIDATES
+                | PlsFlags::USE_GREEDY_INITIAL_POPULATION
+                | PlsFlags::USE_PERTURBATION_RESTART
+                | PlsFlags::USE_ND_TREE_SCALARIZED_QUERY,
             max_k1_candidates: 15,
             probing_budget: None,
             neighborhood_budget: None,
-            use_greedy_initial_population: true,
-            use_perturbation_restart: true,
-            use_diverse_probing: false,
             diverse_probe_budget: None,
             solution_selection_mode: SolutionSelectionMode::RandomShuffle,
-            use_nd_tree_scalarized_query: true,
             #[cfg(feature = "scalarized_selection")]
             scalarized_selection_source: ScalarizedSelectionSource::Population,
             #[cfg(feature = "scalarized_selection")]
@@ -149,17 +149,12 @@ impl PlsOptimizations {
     #[must_use]
     pub const fn baseline() -> Self {
         Self {
-            use_checkpoint: false,
-            use_ranked_candidates: false,
+            flags: PlsFlags::empty(),
             max_k1_candidates: usize::MAX,
             probing_budget: None,
             neighborhood_budget: None,
-            use_greedy_initial_population: false,
-            use_perturbation_restart: false,
-            use_diverse_probing: false,
             diverse_probe_budget: None,
             solution_selection_mode: SolutionSelectionMode::RandomShuffle,
-            use_nd_tree_scalarized_query: false,
             #[cfg(feature = "scalarized_selection")]
             scalarized_selection_source: ScalarizedSelectionSource::Population,
             #[cfg(feature = "scalarized_selection")]
