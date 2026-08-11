@@ -23,16 +23,20 @@
 #   ./run_gurobi_pseudo.sh                 # both methods, all 20 instances
 #   ./run_gurobi_pseudo.sh tokyo           # regex filter on instance name
 #   METHODS="gpba" ./run_gurobi_pseudo.sh  # just GPBA-A (or "aneja")
-#   TIMEOUT=900 MAX_CONCURRENT=2 ./run_gurobi_pseudo.sh
+#   TIMEOUT=900 ./run_gurobi_pseudo.sh     # only raise MAX_CONCURRENT if the
+#                                           # box has cores to spare (see below)
 # =============================================================================
 set -uo pipefail
 cd "$(dirname "$0")"
 
 FILTER="${1:-}"
 TIMEOUT="${TIMEOUT:-600}"                 # 10 minutes per instance
-# Gurobi solves are multi-threaded and may be license-seat limited, so default
-# to a lower fan-out than the HiGHS scripts (which run 8-wide).
-MAX_CONCURRENT="${MAX_CONCURRENT:-4}"
+# Gurobi solves are unbounded-thread by default (no Threads cap is set), so
+# concurrent solves oversubscribe the box's cores badly — observed wall-clock
+# blowups of several multiples of --timeout on an 8-core server at
+# MAX_CONCURRENT=4. Default to serial (1) until Gurobi's own thread usage is
+# capped; raise deliberately only if you know the box has cores to spare.
+MAX_CONCURRENT="${MAX_CONCURRENT:-1}"
 METHODS="${METHODS:-gpba aneja}"
 LOG_DIR="${LOG_DIR:-logs/gurobi_gen}"
 mkdir -p "$LOG_DIR"
