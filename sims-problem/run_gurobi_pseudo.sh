@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
 # =============================================================================
 # Generate BOTH exact-front pseudo datasets with the native Gurobi backend at a
-# 10-minute (600 s) per-instance budget, for all 20 publication instances:
+# 10-minute (600 s) per-instance budget, for either instance set:
 #
-#   GPBA-A      -> sims-core/tests/data/gpbaa_2d_gurobi/
-#   Aneja & Nair-> sims-core/tests/data/an_2d_gurobi/
+#   publication    (default): 5 cities x 100-250        -> sims-core/tests/data/{gpbaa,an}_2d_gurobi/
+#   random-clouds            : 5 cities x 100-500 step 50 -> sims-core/tests/data/{gpbaa,an}_2d_gurobi_rc/
 #
 # These replace the 120 s CSV-converted sets (convert_gurobi_pseudo.py) with
 # freshly solved 600 s fronts. Both are produced by the SAME solver front-end
-# (generate_pseudo.py --solver gurobi); this wrapper just fans the two
-# methods × 20 instances out with a robust PID-polling semaphore.
+# (generate_pseudo.py --solver gurobi); this wrapper just fans the jobs
+# (methods x instances) out with a robust PID-polling semaphore.
 #
 # PREREQUISITES (one-time):
 #   * Build sims-problem with the Gurobi backend:
 #       scripts/fetch-gurobi.sh            # provisions GUROBI_HOME + rpath
-#       uv pip install -e sims-problem --reinstall-package sims-problem \
-#         --config-settings=build-args="--release --features gurobi"
+#       uv sync                            # "gurobi" is in [tool.maturin] features
 #   * A valid Gurobi license reachable at runtime (named-user/WLS/academic;
 #     the pip license is rejected by the C API).
 #
 # Usage:
-#   ./run_gurobi_pseudo.sh                 # both methods, all 20 instances
-#   ./run_gurobi_pseudo.sh tokyo           # regex filter on instance name
-#   METHODS="gpba" ./run_gurobi_pseudo.sh  # just GPBA-A (or "aneja")
+#   ./run_gurobi_pseudo.sh                             # publication set, both methods
+#   ./run_gurobi_pseudo.sh tokyo                        # regex filter on instance name
+#   METHODS="gpba" ./run_gurobi_pseudo.sh               # just GPBA-A (or "aneja")
+#   INSTANCE_SET=random-clouds ./run_gurobi_pseudo.sh   # the 100-500 benchmark set
 #   TIMEOUT=900 ./run_gurobi_pseudo.sh     # only raise MAX_CONCURRENT if the
 #                                           # box has cores to spare (see below)
 # =============================================================================
@@ -38,17 +38,23 @@ TIMEOUT="${TIMEOUT:-600}"                 # 10 minutes per instance
 # capped; raise deliberately only if you know the box has cores to spare.
 MAX_CONCURRENT="${MAX_CONCURRENT:-1}"
 METHODS="${METHODS:-gpba aneja}"
+INSTANCE_SET="${INSTANCE_SET:-publication}"
 LOG_DIR="${LOG_DIR:-logs/gurobi_gen}"
 mkdir -p "$LOG_DIR"
 
 CITIES=(lagos_nigeria mexico_city paris rio_de_janeiro tokyo_bay)
-SIZES=(100 150 200 250)
+case "$INSTANCE_SET" in
+    publication)    SIZES=(100 150 200 250) ;;
+    random-clouds)  SIZES=(100 150 200 250 300 350 400 450 500) ;;
+    *) echo "error: INSTANCE_SET must be publication or random-clouds (got '$INSTANCE_SET')" >&2; exit 2 ;;
+esac
 
-# Build the (method, instance) job list. 250s first so the long tail doesn't
-# dominate wall-clock.
+# Build the (method, instance) job list, largest size first so the long tail
+# doesn't dominate wall-clock.
+SIZES_DESC=($(printf '%s\n' "${SIZES[@]}" | sort -rn))
 JOBS=()
 for method in $METHODS; do
-    for size in 250 200 150 100; do
+    for size in "${SIZES_DESC[@]}"; do
         for city in "${CITIES[@]}"; do
             inst="${city}_${size}"
             [[ -n "$FILTER" ]] && ! echo "$inst" | grep -qE "$FILTER" && continue
@@ -57,7 +63,7 @@ for method in $METHODS; do
     done
 done
 
-echo "Gurobi pseudo-generation: ${#JOBS[@]} jobs (methods: $METHODS)"
+echo "Gurobi pseudo-generation: ${#JOBS[@]} jobs (methods: $METHODS, instance-set: $INSTANCE_SET)"
 echo "  timeout: ${TIMEOUT}s   concurrency: $MAX_CONCURRENT   logs: $LOG_DIR/"
 echo ""
 
@@ -79,6 +85,7 @@ for job in "${JOBS[@]}"; do
     RUST_LOG=off uv run python generate_pseudo.py \
         --solver gurobi \
         --method "$method" \
+        --instance-set "$INSTANCE_SET" \
         --timeout "$TIMEOUT" \
         --filter "$inst" \
         > "$LOG_DIR/${method}_${inst}.log" 2>&1 &
@@ -90,9 +97,11 @@ echo "Launched ${#PIDS[@]} jobs. Waiting…"
 FAILED=0
 for pid in "${PIDS[@]}"; do wait "$pid" || FAILED=$((FAILED+1)); done
 
+OUT_SUFFIX=""
+[[ "$INSTANCE_SET" == "random-clouds" ]] && OUT_SUFFIX="_rc"
 echo ""
 if [[ $FAILED -eq 0 ]]; then
-    echo "GUROBI_GEN_DONE — gpbaa_2d_gurobi/ and an_2d_gurobi/ regenerated at ${TIMEOUT}s."
+    echo "GUROBI_GEN_DONE — gpbaa_2d_gurobi${OUT_SUFFIX}/ and an_2d_gurobi${OUT_SUFFIX}/ regenerated at ${TIMEOUT}s."
 else
     echo "GUROBI_GEN_DONE — $FAILED job(s) failed. Check $LOG_DIR/*.log"
     exit 1
