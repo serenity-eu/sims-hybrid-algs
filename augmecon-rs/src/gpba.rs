@@ -292,7 +292,6 @@ impl GpbaA {
         options: &Options,
     ) -> Result<ParetoFront> {
         const MAX_ITERATIONS: usize = 10000; // Prevent infinite loops
-        const MAX_CONSECUTIVE_DUPLICATES: usize = 10; // Safety valve (lowered from 20)
 
         log::info!("=== GPBA-A: Starting generate_representation ===");
         log::info!("Number of objectives: {}", problem.num_objectives());
@@ -385,7 +384,6 @@ impl GpbaA {
         ]);
 
         let mut iteration = 0;
-        let mut consecutive_duplicates = 0;
         let mut relaxation_reuses: usize = 0;
         // Track explored epsilon configurations to avoid exact re-solves
         let mut explored_epsilons: std::collections::HashSet<Vec<i64>> =
@@ -411,14 +409,6 @@ impl GpbaA {
                 }
             }
 
-            // Safety: too many consecutive duplicates means we're stuck
-            if consecutive_duplicates >= MAX_CONSECUTIVE_DUPLICATES {
-                log::warn!(
-                    "Stopping after {consecutive_duplicates} consecutive duplicate solutions — search space likely exhausted"
-                );
-                break;
-            }
-
             log::info!("╔═══════════════════════════════════════════════════════════╗");
             log::info!(
                 "║ ITERATION {iteration:5}  (front size: {:4})                     ║",
@@ -435,7 +425,6 @@ impl GpbaA {
             let ef_key: Vec<i64> = ef_array.iter().map(|&v| v as i64).collect();
             if !explored_epsilons.insert(ef_key) {
                 log::info!("⊘ Epsilon configuration already explored, skipping solve");
-                consecutive_duplicates += 1;
 
                 // Force advancement: try to move to next interval in last dimension
                 let last_dim = constraint_indices.len() - 1;
@@ -586,13 +575,11 @@ impl GpbaA {
                         "➕ NEW solution added to Pareto front: {:?}",
                         solution.objective_values
                     );
-                    consecutive_duplicates = 0;
                 } else {
                     log::info!(
                         "⊗ DUPLICATE solution (already in Pareto front): {:?}",
                         solution.objective_values
                     );
-                    consecutive_duplicates += 1;
                 }
 
                 let mut pareto_solution = Solution::new(
