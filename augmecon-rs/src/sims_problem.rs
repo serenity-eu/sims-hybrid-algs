@@ -33,8 +33,10 @@ use crate::{
     model::{MultiObjectiveProblem, VariableType},
     ObjectiveDirection,
 };
-use good_lp::{constraint, Expression};
-use std::collections::HashSet;
+use fixedbitset::FixedBitSet;
+use good_lp::{constraint, Expression, Variable};
+use rayon::prelude::*;
+use std::collections::{HashMap, HashSet};
 
 /// Objectives available for the SIMS problem
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -100,6 +102,121 @@ impl SimsInstance {
             cloud_areas: vec![1.0; universe_size],
             resolution: vec![1.0; num_images],
             incidence_angle: vec![0.0; num_images],
+        }
+    }
+
+    /// Build a `SimsInstance` directly from raw parsed `.dzn`-shaped arrays
+    /// (e.g. from `sims_dzn::RawSimsData`).
+    ///
+    /// `clouds[i]` follows the raw `.dzn` convention: the fragments that are
+    /// cloudy *in image `i` itself* (a subset of `images[i]`) — not the
+    /// "which fragments can image `i` substitute a cloud with" relation that
+    /// this computes into [`SimsInstance::image_clouds`].
+    ///
+    /// Fragment membership tests use [`FixedBitSet`] rather than
+    /// `HashSet<usize>` — with universe sizes up to ~100k fragments, a
+    /// per-image bitset is only a few KB (comfortably cache-resident) and a
+    /// membership test is a single indexed load, versus a `HashSet` lookup's
+    /// hash computation and bucket probe. The per-image `image_clouds` entry
+    /// depends only on that image's own coverage/cloud bitsets plus the
+    /// shared "cloudy somewhere" bitset, so the whole computation is
+    /// embarrassingly parallel across images (via `rayon`).
+    #[must_use]
+    pub fn from_raw_refs(
+        images: &[Vec<usize>],
+        clouds: &[Vec<usize>],
+        costs: &[i64],
+        areas: &[i64],
+        resolution: &[i64],
+        incidence_angle: &[i64],
+        universe_size: usize,
+        max_cloud_area: i64,
+    ) -> Self {
+        let num_images = images.len();
+
+        let to_bitset = |members: &Vec<usize>| {
+            let mut bs = FixedBitSet::with_capacity(universe_size);
+            for &f in members {
+                bs.insert(f);
+            }
+            bs
+        };
+        let image_bitsets: Vec<FixedBitSet> = images.par_iter().map(to_bitset).collect();
+        let cloud_bitsets: Vec<FixedBitSet> = clouds.par_iter().map(to_bitset).collect();
+
+        // Fragments cloudy in *some* image: the union of every image's own
+        // cloud bitset. Shared read-only across the parallel step below.
+        let mut all_cloudy = FixedBitSet::with_capacity(universe_size);
+        for bs in &cloud_bitsets {
+            all_cloudy.union_with(bs);
+        }
+
+        // image_clouds[j]: fragments cloudy somewhere, covered by j, and
+        // clear in j — independent per image, hence parallelizable.
+        let image_clouds: Vec<HashSet<usize>> = images
+            .par_iter()
+            .zip(cloud_bitsets.par_iter())
+            .map(|(image, j_clouds)| {
+                image
+                    .iter()
+                    .copied()
+                    .filter(|&f| all_cloudy.contains(f) && !j_clouds.contains(f))
+                    .collect()
+            })
+            .collect();
+
+        let cloud_ids: Vec<usize> = all_cloudy.ones().collect();
+        let mut cloud_areas = vec![0.0_f64; universe_size];
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "Fragment areas fit comfortably in f64's 52-bit mantissa for this problem's scale"
+        )]
+        for &c in &cloud_ids {
+            cloud_areas[c] = areas.get(c).copied().unwrap_or(0) as f64;
+        }
+
+        let images_hashsets: Vec<HashSet<usize>> = image_bitsets
+            .into_par_iter()
+            .map(|bs| bs.ones().collect())
+            .collect();
+
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "Cost/resolution/incidence-angle values fit comfortably in f64's 52-bit mantissa"
+        )]
+        let (costs_f64, resolution_f64, incidence_angle_f64): (
+            Vec<f64>,
+            Vec<f64>,
+            Vec<f64>,
+        ) = (
+            costs.iter().map(|&c| c as f64).collect(),
+            resolution.iter().map(|&r| r as f64).collect(),
+            incidence_angle.iter().map(|&a| a as f64).collect(),
+        );
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "Fragment areas fit comfortably in f64's 52-bit mantissa for this problem's scale"
+        )]
+        let areas_f64: Vec<f64> = areas.iter().map(|&a| a as f64).collect();
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "max_cloud_area is a threshold well within i32 range for this problem's scale"
+        )]
+        let max_cloud_area_i32 = max_cloud_area as i32;
+
+        Self {
+            num_images,
+            universe_size,
+            num_clouds: cloud_ids.len(),
+            max_cloud_area: max_cloud_area_i32,
+            images: images_hashsets,
+            image_clouds,
+            cloud_ids,
+            costs: costs_f64,
+            areas: areas_f64,
+            cloud_areas,
+            resolution: resolution_f64,
+            incidence_angle: incidence_angle_f64,
         }
     }
 
@@ -201,85 +318,107 @@ impl SimsInstance {
     /// - `x_i` (image selection) and `y_c` (cloud coverage) are always created
     ///
     /// When `objectives` is `None` all variables are created (backwards-compatible).
+    ///
+    /// Returns the created `Variable` handles directly (alongside populating
+    /// `problem.var_map` for name-based lookup/introspection), so downstream
+    /// constraint-building never needs to reconstruct a variable's name with
+    /// `format!` and re-look it up in a string-keyed map — on a model with
+    /// hundreds of thousands of variables, that `format!` + `HashMap<String, _>`
+    /// round trip inside a hot loop dominates construction time far more than
+    /// the algorithmic complexity of the loops themselves.
     fn create_variables(
         &self,
         problem: &mut MultiObjectiveProblem,
         objectives: Option<&HashSet<SimsObjective>>,
-    ) -> Vec<HashSet<usize>> {
+    ) -> CreatedVariables {
         let needs_resolution =
             objectives.is_none_or(|set| set.contains(&SimsObjective::MinResolution));
         let needs_incidence_angle =
             objectives.is_none_or(|set| set.contains(&SimsObjective::MaxIncidenceAngle));
 
         // x_i: binary variables for each image (equation 8)
-        for i in 0..self.num_images {
-            let var_name = format!("x_{i}");
-            problem.add_variable(var_name, VariableType::Binary);
-        }
+        let x_vars: Vec<Variable> = (0..self.num_images)
+            .map(|i| problem.add_variable(format!("x_{i}"), VariableType::Binary))
+            .collect();
 
         // y_c: binary variables for cloud coverage (equations 14-15)
         // Use actual cloud IDs (universe element indices) as variable indices
-        for &cloud_id in &self.cloud_ids {
-            let var_name = format!("y_{cloud_id}");
-            problem.add_variable(var_name, VariableType::Binary);
-        }
+        let y_vars: HashMap<usize, Variable> = self
+            .cloud_ids
+            .iter()
+            .map(|&cloud_id| {
+                let var = problem.add_variable(format!("y_{cloud_id}"), VariableType::Binary);
+                (cloud_id, var)
+            })
+            .collect();
 
-        // Pre-compute point-to-image mapping (needed for resolution variables and returned)
-        let point_images = self.get_universe_point_images();
+        // r_k and z_{kj}: only needed for MinResolution objective. Only pay
+        // for `get_universe_point_images` (O(universe_size * num_images))
+        // when it's actually going to be used.
+        let (point_images, r_vars, z_vars) = if needs_resolution {
+            let point_images = self.get_universe_point_images();
 
-        // r_k and z_{kj}: only needed for MinResolution objective
-        if needs_resolution {
             // r_k: auxiliary variables for minimum resolution of each universe point (equations 11-12)
             let max_resolution = self.resolution.iter().fold(0.0_f64, |acc, &x| acc.max(x));
-            for k in 0..self.universe_size {
-                let var_name = format!("r_{k}");
-                problem.add_variable(
-                    var_name,
-                    VariableType::Continuous {
-                        min: Some(0.0),
-                        max: Some(max_resolution),
-                    },
-                );
-            }
+            let r_vars: Vec<Variable> = (0..self.universe_size)
+                .map(|k| {
+                    problem.add_variable(
+                        format!("r_{k}"),
+                        VariableType::Continuous {
+                            min: Some(0.0),
+                            max: Some(max_resolution),
+                        },
+                    )
+                })
+                .collect();
 
             // z_{kj}: auxiliary binary variables for resolution constraints (equation 10)
-            for (k, image_set) in point_images.iter().enumerate() {
-                for &j in image_set {
-                    let var_name = format!("z_{k}_{j}");
-                    problem.add_variable(var_name, VariableType::Binary);
-                }
-            }
+            let z_vars: Vec<HashMap<usize, Variable>> = point_images
+                .iter()
+                .enumerate()
+                .map(|(k, image_set)| {
+                    image_set
+                        .iter()
+                        .map(|&j| {
+                            let var =
+                                problem.add_variable(format!("z_{k}_{j}"), VariableType::Binary);
+                            (j, var)
+                        })
+                        .collect()
+                })
+                .collect();
 
             log::debug!(
                 "Created resolution variables: {} r_k + {} z_{{k,j}}",
                 self.universe_size,
                 point_images.iter().map(HashSet::len).sum::<usize>()
             );
+            (point_images, r_vars, z_vars)
         } else {
             log::info!(
-                "Skipping resolution variables (r_k, z_{{k,j}}): MinResolution not in objectives — \
-                 saving {} continuous + {} binary variables",
-                self.universe_size,
-                point_images.iter().map(HashSet::len).sum::<usize>()
+                "Skipping resolution variables (r_k, z_{{k,j}}) and the O(universe*images) \
+                 point-images precompute: MinResolution not in objectives"
             );
-        }
+            (Vec::new(), Vec::new(), Vec::new())
+        };
 
         // maxf: only needed for MaxIncidenceAngle objective
-        if needs_incidence_angle {
+        let maxf_var = if needs_incidence_angle {
             let max_incidence = self
                 .incidence_angle
                 .iter()
                 .fold(0.0_f64, |acc, &x| acc.max(x));
-            problem.add_variable(
+            Some(problem.add_variable(
                 "maxf".to_string(),
                 VariableType::Continuous {
                     min: Some(0.0),
                     max: Some(max_incidence),
                 },
-            );
+            ))
         } else {
             log::info!("Skipping maxf variable: MaxIncidenceAngle not in objectives");
-        }
+            None
+        };
 
         log::info!(
             "Model variables: {} total ({} x_i, {} y_c{}{})",
@@ -289,36 +428,64 @@ impl SimsInstance {
             if needs_resolution {
                 format!(
                     ", {} r_k, {} z_{{k,j}}",
-                    self.universe_size,
-                    point_images.iter().map(HashSet::len).sum::<usize>()
+                    r_vars.len(),
+                    z_vars.iter().map(HashMap::len).sum::<usize>()
                 )
             } else {
                 String::new()
             },
-            if needs_incidence_angle {
-                ", 1 maxf"
-            } else {
-                ""
-            },
+            if maxf_var.is_some() { ", 1 maxf" } else { "" },
         );
 
-        point_images
+        CreatedVariables {
+            point_images,
+            x_vars,
+            y_vars,
+            r_vars,
+            z_vars,
+            maxf_var,
+        }
     }
 
-    /// Add set covering and cloud coverage constraints
-    fn add_coverage_constraints(&self, problem: &mut MultiObjectiveProblem) {
+    /// Add set covering and cloud coverage constraints.
+    ///
+    /// Builds one running [`Expression`] per universe fragment / cloud id by
+    /// iterating each image's own coverage list once — O(total coverage
+    /// entries) — instead of testing `self.images[i].contains(&k)` for every
+    /// `(k, i)` combination, which is O(`universe_size` * `num_images`) and
+    /// was the dominant cost on large instances (tens of millions of
+    /// membership tests, the vast majority of which never hit).
+    fn add_coverage_constraints(
+        &self,
+        problem: &mut MultiObjectiveProblem,
+        x_vars: &[Variable],
+        y_vars: &HashMap<usize, Variable>,
+    ) {
         // Constraint 1: Set covering (equation 8)
         // Sum_{i: k in P_i} x_i >= 1, for all k in U
-        for k in 0..self.universe_size {
-            let mut coverage_expr = Expression::from(0.0);
-            for i in 0..self.num_images {
-                if self.images[i].contains(&k) {
-                    if let Some(&var) = problem.var_map.get(&format!("x_{i}")) {
-                        coverage_expr += var;
-                    }
-                }
+        //
+        // `Expression` is backed by a `HashMap<Variable, f64>` (good_lp), so
+        // growing each of the `universe_size` expressions incrementally from
+        // empty triggers repeated hash-table reallocation across ~100k+
+        // small maps. A cheap first pass over the (already in-hand) coverage
+        // lists computes each point's degree so every expression's map can
+        // be allocated once at its final size.
+        let mut degree = vec![0usize; self.universe_size];
+        for image in &self.images {
+            for &k in image {
+                degree[k] += 1;
             }
-            problem.add_constraint(constraint!(coverage_expr >= 1.0));
+        }
+        let mut coverage_exprs: Vec<Expression> =
+            degree.into_iter().map(Expression::with_capacity).collect();
+        for (i, image) in self.images.iter().enumerate() {
+            let x_i = x_vars[i];
+            for &k in image {
+                coverage_exprs[k] += x_i;
+            }
+        }
+        for expr in coverage_exprs {
+            problem.add_constraint(constraint!(expr >= 1.0));
         }
 
         // Constraint 2: Cloud coverage constraints (equation 15)
@@ -328,32 +495,43 @@ impl SimsInstance {
         // then y_c must be 1 (cloud is covered). This prevents the optimizer from
         // setting y_c = 0 when images are selected during maximization.
         // Special case: if cloud is uncoverable (no images can cover it), set y_c = 0
-        for &c in &self.cloud_ids {
-            let mut cloud_coverage_expr = Expression::from(0.0);
-            let mut has_covering_images = false;
-
-            for i in 0..self.num_images {
-                if self.image_clouds[i].contains(&c) {
-                    if let Some(&var) = problem.var_map.get(&format!("x_{i}")) {
-                        cloud_coverage_expr += var;
-                        has_covering_images = true;
-                    }
-                }
+        let mut cloud_degree = vec![0usize; self.universe_size];
+        for clouds in &self.image_clouds {
+            for &c in clouds {
+                cloud_degree[c] += 1;
             }
+        }
+        let mut cloud_coverage_exprs: HashMap<usize, Expression> =
+            HashMap::with_capacity(self.cloud_ids.len());
+        for (i, clouds) in self.image_clouds.iter().enumerate() {
+            let x_i = x_vars[i];
+            for &c in clouds {
+                *cloud_coverage_exprs
+                    .entry(c)
+                    .or_insert_with(|| Expression::with_capacity(cloud_degree[c])) += x_i;
+            }
+        }
 
-            if let Some(&y_var) = problem.var_map.get(&format!("y_{c}")) {
-                if has_covering_images {
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "Number of images is always much less than 2^53, so f64 conversion is safe"
+        )]
+        let num_images_f64 = self.num_images as f64;
+
+        for &c in &self.cloud_ids {
+            let Some(&y_var) = y_vars.get(&c) else {
+                continue;
+            };
+            match cloud_coverage_exprs.remove(&c) {
+                Some(expr) => {
                     // Lower bound: Sum of covering images >= y_c
-                    problem.add_constraint(constraint!(cloud_coverage_expr.clone() >= y_var));
+                    problem.add_constraint(constraint!(expr.clone() >= y_var));
                     // Upper bound: Sum of covering images <= y_c * num_images
                     // This forces y_c = 1 if any covering image is selected
-                    #[allow(
-                        clippy::cast_precision_loss,
-                        reason = "Number of images is always much less than 2^53, so f64 conversion is safe"
-                    )]
-                    let upper_bound_expr = y_var * (self.num_images as f64);
-                    problem.add_constraint(constraint!(cloud_coverage_expr <= upper_bound_expr));
-                } else {
+                    let upper_bound_expr = y_var * num_images_f64;
+                    problem.add_constraint(constraint!(expr <= upper_bound_expr));
+                }
+                None => {
                     // Uncoverable cloud: must set y_c = 0 to avoid infeasibility
                     problem.add_constraint(constraint!(y_var == 0.0));
                 }
@@ -369,6 +547,9 @@ impl SimsInstance {
         &self,
         problem: &mut MultiObjectiveProblem,
         point_images: &[HashSet<usize>],
+        x_vars: &[Variable],
+        r_vars: &[Variable],
+        z_vars: &[HashMap<usize, Variable>],
     ) {
         let mut num_constraints: usize = 0;
 
@@ -378,7 +559,7 @@ impl SimsInstance {
             if image_set.len() > 1 {
                 let mut z_sum = Expression::from(0.0);
                 for &j in image_set {
-                    if let Some(&z_var) = problem.var_map.get(&format!("z_{k}_{j}")) {
+                    if let Some(&z_var) = z_vars[k].get(&j) {
                         z_sum += z_var;
                     }
                 }
@@ -397,20 +578,17 @@ impl SimsInstance {
         let big_b = self.resolution.iter().fold(0.0_f64, |acc, &x| acc.max(x)) * 10.0; // B > max resolution
 
         for (k, image_set) in point_images.iter().enumerate() {
-            if let Some(&r_var) = problem.var_map.get(&format!("r_{k}")) {
-                for &j in image_set {
-                    if let (Some(&x_var), Some(&z_var)) = (
-                        problem.var_map.get(&format!("x_{j}")),
-                        problem.var_map.get(&format!("z_{k}_{j}")),
-                    ) {
-                        // r_k >= x_j * R_j + B * (1 - x_j) - 2B * z_{kj}
-                        // Simplified: r_k >= (R_j - B) * x_j + B - 2B * z_{kj}
-                        let coeff = self.resolution[j] - big_b;
-                        problem.add_constraint(constraint!(
-                            r_var >= coeff * x_var + big_b - 2.0 * big_b * z_var
-                        ));
-                        num_constraints += 1;
-                    }
+            let r_var = r_vars[k];
+            for &j in image_set {
+                if let Some(&z_var) = z_vars[k].get(&j) {
+                    let x_var = x_vars[j];
+                    // r_k >= x_j * R_j + B * (1 - x_j) - 2B * z_{kj}
+                    // Simplified: r_k >= (R_j - B) * x_j + B - 2B * z_{kj}
+                    let coeff = self.resolution[j] - big_b;
+                    problem.add_constraint(constraint!(
+                        r_var >= coeff * x_var + big_b - 2.0 * big_b * z_var
+                    ));
+                    num_constraints += 1;
                 }
             }
         }
@@ -422,20 +600,18 @@ impl SimsInstance {
     ///
     /// Only call this when `MaxIncidenceAngle` is among the active objectives,
     /// since the `maxf` variable must already exist in `problem`.
-    fn add_incidence_angle_constraints(&self, problem: &mut MultiObjectiveProblem) {
+    fn add_incidence_angle_constraints(
+        &self,
+        problem: &mut MultiObjectiveProblem,
+        x_vars: &[Variable],
+        maxf_var: Variable,
+    ) {
         // Constraint 5: Maximum incidence angle constraints (equation 13)
         // maxf >= x_i * F_i, for all i
-        if let Some(&maxf_var) = problem.var_map.get("maxf") {
-            let mut num_constraints: usize = 0;
-            for i in 0..self.num_images {
-                if let Some(&x_var) = problem.var_map.get(&format!("x_{i}")) {
-                    problem
-                        .add_constraint(constraint!(maxf_var >= self.incidence_angle[i] * x_var));
-                    num_constraints += 1;
-                }
-            }
-            log::debug!("Added {num_constraints} incidence angle constraints");
+        for (i, &x_var) in x_vars.iter().enumerate() {
+            problem.add_constraint(constraint!(maxf_var >= self.incidence_angle[i] * x_var));
         }
+        log::debug!("Added {} incidence angle constraints", x_vars.len());
     }
 
     /// Add objective functions
@@ -444,6 +620,7 @@ impl SimsInstance {
         &self,
         problem: &mut MultiObjectiveProblem,
         objectives: Option<&HashSet<SimsObjective>>,
+        vars: &CreatedVariables,
     ) {
         // Helper to check if objective should be added
         let should_add = |obj: SimsObjective| objectives.is_none_or(|set| set.contains(&obj));
@@ -451,10 +628,8 @@ impl SimsInstance {
         // Objective 1: Minimize total cost (equation 9)
         if should_add(SimsObjective::MinCost) {
             let mut cost_expr = Expression::from(0.0);
-            for i in 0..self.num_images {
-                if let Some(&x_var) = problem.var_map.get(&format!("x_{i}")) {
-                    cost_expr += self.costs[i] * x_var;
-                }
+            for (i, &x_var) in vars.x_vars.iter().enumerate() {
+                cost_expr += self.costs[i] * x_var;
             }
             problem.add_objective(cost_expr, ObjectiveDirection::Minimize);
         }
@@ -469,7 +644,7 @@ impl SimsInstance {
 
             let mut cloud_area_expr = Expression::from(total_cloud_area);
             for &cloud_id in &self.cloud_ids {
-                if let Some(&y_var) = problem.var_map.get(&format!("y_{cloud_id}")) {
+                if let Some(&y_var) = vars.y_vars.get(&cloud_id) {
                     cloud_area_expr -= self.cloud_areas[cloud_id] * y_var;
                 }
             }
@@ -479,21 +654,33 @@ impl SimsInstance {
         // Objective 3: Minimize sum of minimum resolutions (equation 12)
         if should_add(SimsObjective::MinResolution) {
             let mut resolution_expr = Expression::from(0.0);
-            for k in 0..self.universe_size {
-                if let Some(&r_var) = problem.var_map.get(&format!("r_{k}")) {
-                    resolution_expr += r_var;
-                }
+            for &r_var in &vars.r_vars {
+                resolution_expr += r_var;
             }
             problem.add_objective(resolution_expr, ObjectiveDirection::Minimize);
         }
 
         // Objective 4: Minimize maximum incidence angle (equation 13)
         if should_add(SimsObjective::MaxIncidenceAngle) {
-            if let Some(&maxf_var) = problem.var_map.get("maxf") {
+            if let Some(maxf_var) = vars.maxf_var {
                 problem.add_objective(Expression::from(maxf_var), ObjectiveDirection::Minimize);
             }
         }
     }
+}
+
+/// `Variable` handles created by [`SimsInstance::create_variables`], returned
+/// directly so constraint-building code can index into them instead of
+/// reconstructing a variable's name and looking it up in a string-keyed map.
+struct CreatedVariables {
+    point_images: Vec<HashSet<usize>>,
+    x_vars: Vec<Variable>,
+    y_vars: HashMap<usize, Variable>,
+    r_vars: Vec<Variable>,
+    /// `z_vars[k]` maps image index `j` to the `z_{k,j}` variable, for each
+    /// universe fragment `k`. Empty when resolution variables weren't created.
+    z_vars: Vec<HashMap<usize, Variable>>,
+    maxf_var: Option<Variable>,
 }
 
 /// Create a SIMS multi-objective optimization problem following the MILP model
@@ -529,21 +716,29 @@ pub fn create_sims_problem_with_objectives(
     let mut problem = MultiObjectiveProblem::new();
 
     // Create variables (conditionally based on objectives)
-    let point_images = config.create_variables(&mut problem, objectives);
+    let vars = config.create_variables(&mut problem, objectives);
 
     // Always add set-covering and cloud-coverage constraints
-    config.add_coverage_constraints(&mut problem);
+    config.add_coverage_constraints(&mut problem, &vars.x_vars, &vars.y_vars);
 
     // Add resolution constraints only when MinResolution is active
     if needs_resolution {
-        config.add_resolution_constraints(&mut problem, &point_images);
+        config.add_resolution_constraints(
+            &mut problem,
+            &vars.point_images,
+            &vars.x_vars,
+            &vars.r_vars,
+            &vars.z_vars,
+        );
     } else {
         log::info!("Skipping resolution constraints: MinResolution not in objectives");
     }
 
     // Add incidence angle constraints only when MaxIncidenceAngle is active
     if needs_incidence_angle {
-        config.add_incidence_angle_constraints(&mut problem);
+        if let Some(maxf_var) = vars.maxf_var {
+            config.add_incidence_angle_constraints(&mut problem, &vars.x_vars, maxf_var);
+        }
     } else {
         log::info!("Skipping incidence angle constraints: MaxIncidenceAngle not in objectives");
     }
@@ -556,7 +751,7 @@ pub fn create_sims_problem_with_objectives(
     );
 
     // Add objectives (all or subset)
-    config.add_objectives(&mut problem, objectives);
+    config.add_objectives(&mut problem, objectives, &vars);
 
     problem
 }

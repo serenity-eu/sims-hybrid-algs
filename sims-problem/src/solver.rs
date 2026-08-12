@@ -1840,114 +1840,26 @@ pub fn solve_with_milp(
     // in the current implementation. The solver will attempt to respect the timeout
     // but this is dependent on the underlying AUGMECON solver implementation.
 
-    // BUILD CLOUD COVERAGE RELATIONSHIPS FIRST (matching test_gpba_phases.rs logic)
-    // sims_instance.clouds contains which elements are cloudy in each image
-    // We need to build which clouds each image can COVER
-    // A cloud from image i can be covered by image j if:
-    // - j contains that element AND
-    // - j does not have clouds on that element
-
-    use std::collections::HashMap;
-
-    // Build cloud_id_to_area mapping
-    let mut cloud_id_to_area: HashMap<usize, f64> = HashMap::new();
-    for cloudy_elements in &sims_instance.clouds {
-        for &cloud_id in cloudy_elements {
-            if cloud_id < sims_instance.areas.len() {
-                cloud_id_to_area
-                    .entry(cloud_id)
-                    .or_insert(sims_instance.areas[cloud_id] as f64);
-            }
-        }
-    }
-
-    let actual_num_clouds = cloud_id_to_area.len();
+    // Build the augmecon-facing SimsInstance directly from the raw parsed
+    // arrays — including the image_clouds relation (which images can
+    // substitute for a cloud-obscured fragment) — in a single optimized
+    // pass. See `SimsInstance::from_raw_refs` for the complexity/perf
+    // rationale; this used to be ~100 lines of duplicated, unoptimized
+    // conversion logic inlined here.
+    let sims_augmecon_instance = SimsInstance::from_raw_refs(
+        &sims_instance.images,
+        &sims_instance.clouds,
+        &sims_instance.costs,
+        &sims_instance.areas,
+        &sims_instance.resolution,
+        &sims_instance.incidence_angle,
+        sims_instance.universe,
+        sims_instance.max_cloud_area,
+    );
     info!(
         "Found {} unique clouds across all images",
-        actual_num_clouds
+        sims_augmecon_instance.cloud_ids.len()
     );
-
-    // Convert SimsDiscreteProblem to SimsInstance for augmecon
-    // CRITICAL: Use actual number of unique clouds, not num_images!
-    let mut sims_augmecon_instance = SimsInstance::new(
-        sims_instance.num_images,
-        sims_instance.universe,
-        actual_num_clouds, // Use actual cloud count (431 for lagos_nigeria_30)
-        sims_instance.max_cloud_area as i32,
-    );
-
-    // Convert images (sets of universe points covered)
-    for (i, image_set) in sims_instance.images.iter().enumerate() {
-        let coverage_set: std::collections::HashSet<usize> = image_set.iter().cloned().collect();
-        debug!("Image {}: covers {} universe points", i, coverage_set.len());
-        sims_augmecon_instance.set_image_coverage(i, coverage_set);
-        sims_augmecon_instance.set_cost(i, sims_instance.costs[i] as f64);
-        sims_augmecon_instance.set_resolution(i, sims_instance.resolution[i] as f64);
-        sims_augmecon_instance.set_incidence_angle(i, sims_instance.incidence_angle[i] as f64);
-    }
-
-    // Set universe point areas
-    for (k, &area) in sims_instance.areas.iter().enumerate() {
-        sims_augmecon_instance.set_area(k, area as f64);
-    }
-
-    // Build image_clouds: which clouds each image can cover.
-    //
-    // Whether image j can cover fragment f depends only on: (a) f is cloudy
-    // in *some* image, (b) j covers f, and (c) f is not itself cloudy in j.
-    // None of that depends on which image f happened to be cloudy in, so a
-    // single pass over each image's own coverage list is both necessary and
-    // sufficient — O(total coverage entries), the theoretical minimum since
-    // every (image, fragment) coverage pair must be inspected at least once.
-    //
-    // The previous implementation instead looped over every *other* image's
-    // cloud entries to find candidates (and even used an O(n) `Vec::contains`
-    // for the cloud-free check), giving O(num_images^2 * avg_clouds_per_image)
-    // work or worse — this hung for hours on instances with >=300 images.
-    //
-    // "Cloudy in some image" is its own set, built directly from `clouds` —
-    // deliberately NOT reusing cloud_id_to_area's keys, since that map exists
-    // for an unrelated purpose (area lookups) and applies an `areas.len()`
-    // bounds filter for that purpose's sake, not as a definition of cloud
-    // membership.
-    let all_cloudy_fragments: std::collections::HashSet<usize> = sims_instance
-        .clouds
-        .iter()
-        .flat_map(|c| c.iter().copied())
-        .collect();
-
-    let image_cloud_hashsets: Vec<std::collections::HashSet<usize>> = sims_instance
-        .clouds
-        .iter()
-        .map(|c| c.iter().copied().collect())
-        .collect();
-
-    let mut image_clouds: Vec<std::collections::HashSet<usize>> =
-        vec![std::collections::HashSet::new(); sims_instance.num_images];
-
-    for (j, image) in sims_instance.images.iter().enumerate() {
-        let j_clouds = &image_cloud_hashsets[j];
-        for &f in image {
-            if all_cloudy_fragments.contains(&f) && !j_clouds.contains(&f) {
-                image_clouds[j].insert(f);
-            }
-        }
-    }
-
-    // Set cloud coverage (which clouds each image can COVER)
-    for (i, clouds) in image_clouds.iter().enumerate() {
-        sims_augmecon_instance.set_cloud_coverage(i, clouds.clone());
-    }
-
-    // Set cloud_ids vector (list of all unique cloud IDs)
-    let mut cloud_ids_vec: Vec<usize> = cloud_id_to_area.keys().copied().collect();
-    cloud_ids_vec.sort_unstable();
-    sims_augmecon_instance.cloud_ids = cloud_ids_vec;
-
-    // Set cloud areas for all clouds
-    for (&cloud_id, &area) in &cloud_id_to_area {
-        sims_augmecon_instance.set_cloud_area(cloud_id, area);
-    }
 
     // Create MultiObjectiveProblem with only the requested objectives
     let problem = augmecon::sims_problem::create_sims_problem_with_objectives(

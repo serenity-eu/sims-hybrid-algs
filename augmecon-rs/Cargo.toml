@@ -39,6 +39,7 @@ thiserror = "2.0.17"
 anyhow = "1.0.100"
 num_cpus = "1.17.0"
 rayon = "1.11.0"
+fixedbitset = "0.5.7"
 
 [features]
 default = []
@@ -54,6 +55,12 @@ gurobi = ["good_lp/gurobi"]
 [dev-dependencies]
 approx = "0.5.1"
 criterion = { version = "0.8.1", features = ["html_reports"] }
+sims-dzn = { path = "../sims-dzn" }
+flate2 = "1.1.5"
+
+[[bench]]
+name = "sims_construction_bench"
+harness = false
 
 [[example]]
 name = "basic_production_simple"
