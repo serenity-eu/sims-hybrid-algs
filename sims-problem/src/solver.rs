@@ -1891,32 +1891,45 @@ pub fn solve_with_milp(
         sims_augmecon_instance.set_area(k, area as f64);
     }
 
-    // Build image_clouds: which clouds each image can cover
-    // For each cloud in image i, check if OTHER images j (i != j) can cover it
+    // Build image_clouds: which clouds each image can cover.
+    //
+    // Whether image j can cover fragment f depends only on: (a) f is cloudy
+    // in *some* image, (b) j covers f, and (c) f is not itself cloudy in j.
+    // None of that depends on which image f happened to be cloudy in, so a
+    // single pass over each image's own coverage list is both necessary and
+    // sufficient — O(total coverage entries), the theoretical minimum since
+    // every (image, fragment) coverage pair must be inspected at least once.
+    //
+    // The previous implementation instead looped over every *other* image's
+    // cloud entries to find candidates (and even used an O(n) `Vec::contains`
+    // for the cloud-free check), giving O(num_images^2 * avg_clouds_per_image)
+    // work or worse — this hung for hours on instances with >=300 images.
+    //
+    // "Cloudy in some image" is its own set, built directly from `clouds` —
+    // deliberately NOT reusing cloud_id_to_area's keys, since that map exists
+    // for an unrelated purpose (area lookups) and applies an `areas.len()`
+    // bounds filter for that purpose's sake, not as a definition of cloud
+    // membership.
+    let all_cloudy_fragments: std::collections::HashSet<usize> = sims_instance
+        .clouds
+        .iter()
+        .flat_map(|c| c.iter().copied())
+        .collect();
+
+    let image_cloud_hashsets: Vec<std::collections::HashSet<usize>> = sims_instance
+        .clouds
+        .iter()
+        .map(|c| c.iter().copied().collect())
+        .collect();
+
     let mut image_clouds: Vec<std::collections::HashSet<usize>> =
         vec![std::collections::HashSet::new(); sims_instance.num_images];
 
-    for i in 0..sims_instance.clouds.len() {
-        let image_cloud_set: std::collections::HashSet<usize> =
-            sims_instance.clouds[i].iter().copied().collect();
-
-        for &cloud_id in &image_cloud_set {
-            // Check which OTHER images (j != i) can cover this cloud
-            for (j, image) in image_clouds
-                .iter_mut()
-                .enumerate()
-                .take(sims_instance.num_images)
-            {
-                if i != j && sims_instance.images[j].contains(&cloud_id) {
-                    // Image j contains this element, check if it's cloud-free
-                    let j_has_cloud = j < sims_instance.clouds.len()
-                        && sims_instance.clouds[j].contains(&cloud_id);
-
-                    if !j_has_cloud {
-                        // Image j can cover cloud_id (has element, no clouds on it)
-                        image.insert(cloud_id);
-                    }
-                }
+    for (j, image) in sims_instance.images.iter().enumerate() {
+        let j_clouds = &image_cloud_hashsets[j];
+        for &f in image {
+            if all_cloudy_fragments.contains(&f) && !j_clouds.contains(&f) {
+                image_clouds[j].insert(f);
             }
         }
     }

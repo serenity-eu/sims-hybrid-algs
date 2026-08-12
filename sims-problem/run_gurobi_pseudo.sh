@@ -49,12 +49,12 @@ case "$INSTANCE_SET" in
     *) echo "error: INSTANCE_SET must be publication or random-clouds (got '$INSTANCE_SET')" >&2; exit 2 ;;
 esac
 
-# Build the (method, instance) job list, largest size first so the long tail
-# doesn't dominate wall-clock.
-SIZES_DESC=($(printf '%s\n' "${SIZES[@]}" | sort -rn))
+# Build the (method, instance) job list, smallest size first so quick wins
+# land early and any per-size regression surfaces before the long tail.
+SIZES_ASC=($(printf '%s\n' "${SIZES[@]}" | sort -n))
 JOBS=()
 for method in $METHODS; do
-    for size in "${SIZES_DESC[@]}"; do
+    for size in "${SIZES_ASC[@]}"; do
         for city in "${CITIES[@]}"; do
             inst="${city}_${size}"
             [[ -n "$FILTER" ]] && ! echo "$inst" | grep -qE "$FILTER" && continue
