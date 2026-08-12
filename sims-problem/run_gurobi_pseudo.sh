@@ -14,9 +14,16 @@
 # PREREQUISITES (one-time):
 #   * Build sims-problem with the Gurobi backend:
 #       scripts/fetch-gurobi.sh            # provisions GUROBI_HOME + rpath
-#       uv sync                            # "gurobi" is in [tool.maturin] features
 #   * A valid Gurobi license reachable at runtime (named-user/WLS/academic;
 #     the pip license is rejected by the C API).
+#
+# This script always (re)builds sims-problem in --release before launching
+# jobs (see the maturin develop call below): `uv sync`'s default dev/debug
+# profile is fine for iterating on code, but the .dzn parsing + MILP model
+# construction that runs before every solve is measurably (>10x) slower
+# unoptimized, and that cost is paid once per instance across the whole
+# batch. Skip this if you've already got a release build installed and
+# don't want the ~15s rebuild check: SKIP_RELEASE_BUILD=1 ./run_gurobi_pseudo.sh
 #
 # Usage:
 #   ./run_gurobi_pseudo.sh                             # publication set, both methods
@@ -28,6 +35,13 @@
 # =============================================================================
 set -uo pipefail
 cd "$(dirname "$0")"
+
+if [[ "${SKIP_RELEASE_BUILD:-0}" != "1" ]]; then
+    echo "Building sims-problem in --release (skip with SKIP_RELEASE_BUILD=1)..."
+    uv run maturin develop --release \
+        --features "pyo3/extension-module,milp,scalarized_selection,gurobi"
+    echo ""
+fi
 
 FILTER="${1:-}"
 TIMEOUT="${TIMEOUT:-600}"                 # 10 minutes per instance
