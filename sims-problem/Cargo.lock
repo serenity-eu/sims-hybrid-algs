@@ -131,6 +131,7 @@ dependencies = [
  "anyhow",
  "calamine",
  "env_logger",
+ "fixedbitset",
  "good_lp",
  "itertools 0.14.0",
  "log",
@@ -2591,6 +2592,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "703d5c7ef118737c72f1af64ad2f6f8c5e1921f818cdcb97b8fe6fc69bf66214"
 
 [[package]]
+name = "sims-dzn"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "sims-heuristics"
 version = "0.1.0"
 dependencies = [
@@ -2637,9 +2645,9 @@ dependencies = [
  "pyo3",
  "pyo3-log",
  "rayon",
- "regex",
  "serde",
  "serde_json",
+ "sims-dzn",
  "sims-heuristics",
  "tar",
  "tracing",

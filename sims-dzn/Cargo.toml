@@ -1,0 +1,25 @@
+[package]
+name = "sims-dzn"
+version = "0.1.0"
+edition = "2021"
+description = "Fast single-pass parser for the SIMS MiniZinc .dzn instance format"
+
+[lib]
+name = "sims_dzn"
+path = "src/lib.rs"
+
+[dependencies]
+thiserror = "2.0.17"
+
+[dev-dependencies]
+criterion = { version = "0.8.1", features = ["html_reports"] }
+flate2 = "1.1.5"
+
+[[bench]]
+name = "parse_bench"
+harness = false
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }

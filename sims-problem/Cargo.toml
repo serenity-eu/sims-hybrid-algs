@@ -26,7 +26,7 @@ pyo3 = { version = "0.27.2", features = ["extension-module"] }
 pls = { path = "../sims-heuristics", package = "sims-heuristics", version = "0.1.0", default-features = false, features = ["bitmaps"] }
 pareto = { path = "../pareto", version = "0.1.0" }
 augmecon = { path = "../augmecon-rs", version = "0.1.0", optional = true }
-regex = "1.12.2"
+sims-dzn = { path = "../sims-dzn", version = "0.1.0" }
 log = "0.4.29"
 pyo3-log = "0.13.2"
 tar = "0.4.44"

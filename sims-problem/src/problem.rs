@@ -7,8 +7,7 @@ use pyo3::{
     prelude::*,
     types::{PyDict, PyType},
 };
-use std::collections::{HashMap, HashSet};
-use std::fs;
+use std::collections::HashSet;
 
 /// Represents a SIMS discrete problem instance
 #[pyclass]
@@ -94,76 +93,19 @@ impl SimsDiscreteProblem {
     /// Create SimsDiscreteProblem from a MiniZinc data file (.dzn)
     #[classmethod]
     fn from_dzn(_cls: &Bound<'_, PyType>, file_path: &str) -> PyResult<Self> {
-        // Read file content
-        let content = fs::read_to_string(file_path)
-            .map_err(|e| PyValueError::new_err(format!("Failed to read file {file_path}: {e}")))?;
-
-        let mut data: HashMap<String, String> = HashMap::new();
-
-        // Parse simple integer values
-        for field in ["num_images", "universe", "max_cloud_area"] {
-            let pattern = format!(r"{field}\s*=\s*(\d+);");
-            if let Some(captures) = regex::Regex::new(&pattern).unwrap().captures(&content) {
-                data.insert(field.to_string(), captures[1].to_string());
-            }
-        }
-
-        // Parse array of integers
-        for field in ["costs", "areas", "resolution", "incidence_angle"] {
-            let pattern = format!(r"{field}\s*=\s*\[(.*?)\];");
-            if let Some(captures) = regex::Regex::new(&pattern).unwrap().captures(&content) {
-                data.insert(field.to_string(), captures[1].to_string());
-            }
-        }
-
-        // Parse array of sets (for images and clouds)
-        for field in ["images", "clouds"] {
-            let pattern = format!(r"{field}\s*=\s*\[(.*?)\];");
-            if let Some(captures) = regex::Regex::new(&pattern).unwrap().captures(&content) {
-                data.insert(field.to_string(), captures[1].to_string());
-            }
-        }
-
-        // Extract and parse the data
-        let num_images: usize = data
-            .get("num_images")
-            .ok_or_else(|| PyValueError::new_err("Missing num_images"))?
-            .parse()
-            .map_err(|e| PyValueError::new_err(format!("Invalid num_images: {e}")))?;
-
-        let universe: usize = data
-            .get("universe")
-            .ok_or_else(|| PyValueError::new_err("Missing universe"))?
-            .parse()
-            .map_err(|e| PyValueError::new_err(format!("Invalid universe: {e}")))?;
-
-        let max_cloud_area: i64 = data
-            .get("max_cloud_area")
-            .ok_or_else(|| PyValueError::new_err("Missing max_cloud_area"))?
-            .parse()
-            .map_err(|e| PyValueError::new_err(format!("Invalid max_cloud_area: {e}")))?;
-
-        // Parse integer arrays
-        let costs: Vec<i64> = Self::parse_int_array(data.get("costs").map_or("", |v| v))?;
-        let areas: Vec<i64> = Self::parse_int_array(data.get("areas").map_or("", |v| v))?;
-        let resolution: Vec<i64> = Self::parse_int_array(data.get("resolution").map_or("", |v| v))?;
-        let incidence_angle: Vec<i64> =
-            Self::parse_int_array(data.get("incidence_angle").map_or("", |v| v))?;
-
-        // Parse set arrays (convert from 1-based to 0-based indexing)
-        let images: Vec<Vec<usize>> = Self::parse_set_array(data.get("images").map_or("", |v| v))?;
-        let clouds: Vec<Vec<usize>> = Self::parse_set_array(data.get("clouds").map_or("", |v| v))?;
+        let data = sims_dzn::parse_dzn_file(std::path::Path::new(file_path))
+            .map_err(|e| PyValueError::new_err(format!("Failed to parse {file_path}: {e}")))?;
 
         Ok(Self::new(
-            num_images,
-            universe,
-            images,
-            costs,
-            clouds,
-            areas,
-            resolution,
-            incidence_angle,
-            max_cloud_area,
+            data.num_images,
+            data.universe,
+            data.images,
+            data.costs,
+            data.clouds,
+            data.areas,
+            data.resolution,
+            data.incidence_angle,
+            data.max_cloud_area,
         ))
     }
 
@@ -330,54 +272,6 @@ impl SimsDiscreteProblem {
 }
 
 impl SimsDiscreteProblem {
-    /// Helper method to parse integer arrays from dzn format
-    fn parse_int_array(values_str: &str) -> PyResult<Vec<i64>> {
-        let mut result = Vec::new();
-        for value in values_str.split(',') {
-            let trimmed = value.trim();
-            if !trimmed.is_empty() {
-                result.push(
-                    trimmed
-                        .parse()
-                        .map_err(|e| PyValueError::new_err(format!("Invalid integer: {e}")))?,
-                );
-            }
-        }
-        Ok(result)
-    }
-
-    /// Helper method to parse set arrays from dzn format (converts 1-based to 0-based indexing)
-    fn parse_set_array(sets_str: &str) -> PyResult<Vec<Vec<usize>>> {
-        let mut result = Vec::new();
-        let set_regex = regex::Regex::new(r"\{([^}]*)\}").unwrap();
-
-        for capture in set_regex.captures_iter(sets_str) {
-            let set_content = &capture[1];
-            let mut set_elements = Vec::new();
-
-            if !set_content.trim().is_empty() {
-                for element in set_content.split(',') {
-                    let trimmed = element.trim();
-                    if !trimmed.is_empty() {
-                        let value: usize = trimmed.parse().map_err(|e| {
-                            PyValueError::new_err(format!("Invalid set element: {e}"))
-                        })?;
-                        // Convert from 1-based to 0-based indexing
-                        if value > 0 {
-                            set_elements.push(value - 1);
-                        } else {
-                            return Err(PyValueError::new_err(format!(
-                                "Invalid index {value} (must be > 0)"
-                            )));
-                        }
-                    }
-                }
-            }
-            result.push(set_elements);
-        }
-        Ok(result)
-    }
-
     /// Convert to sims-heuristics Problem format directly in memory
     pub fn to_pls_problem(&self) -> ProblemBitset<2> {
         debug!(
