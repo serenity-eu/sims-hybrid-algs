@@ -96,7 +96,15 @@ for job in "${JOBS[@]}"; do
     done
 
     echo "launching $method/$inst (timeout=${TIMEOUT}s) -> $LOG_DIR/${method}_${inst}.log"
-    RUST_LOG=off uv run python generate_pseudo.py \
+    # Invoke the venv's python directly, NOT `uv run python`: `uv run` performs
+    # an implicit sync/rebuild check on every invocation, and sims-problem's
+    # cache-keys (needed for uv to notice source changes in its path
+    # dependencies) historically lagged behind — a change to augmecon-rs could
+    # go undetected, causing `uv run` to silently reinstall a stale cached
+    # wheel over the release build from the step above (and, worse, rebuild it
+    # in --profile=dev per this project's config-settings). Going straight to
+    # the venv sidesteps that resync entirely for the actual solve jobs.
+    RUST_LOG=off .venv/bin/python generate_pseudo.py \
         --solver gurobi \
         --method "$method" \
         --instance-set "$INSTANCE_SET" \
