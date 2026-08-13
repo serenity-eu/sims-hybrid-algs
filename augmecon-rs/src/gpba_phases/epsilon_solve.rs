@@ -6,7 +6,7 @@
 //!
 //! This is the core solving step that invokes the MILP solver.
 
-use crate::epsilon_constraint::EpsilonConstraintBuilder;
+use crate::epsilon_constraint::{EpsilonConstraintBuilder, EpsilonSolveOutcome};
 use crate::model::MultiObjectiveProblem;
 use crate::options::Options;
 use crate::solution::Solution;
@@ -18,6 +18,13 @@ use std::time::Duration;
 pub struct EpsilonSolveResult {
     /// Whether the problem was feasible.
     pub is_feasible: bool,
+
+    /// Set when `is_feasible` is false but infeasibility was NOT proven —
+    /// most commonly a solver timeout with no incumbent found. Callers that
+    /// prune search space based on `is_feasible == false` should check this
+    /// first: an inconclusive result must not be treated as proof nothing
+    /// exists there.
+    pub inconclusive_reason: Option<String>,
 
     /// Objective values in maximization form (negated from original).
     /// Empty if infeasible.
@@ -108,7 +115,7 @@ pub fn solve_epsilon_constraint_config(
     let solve_time_secs = start.elapsed().as_secs_f64();
 
     match solve_result {
-        Some(solution_with_slack) => {
+        EpsilonSolveOutcome::Solved(solution_with_slack) => {
             let solution = solution_with_slack.solution;
 
             // Extract objective values from solution
@@ -117,20 +124,26 @@ pub fn solve_epsilon_constraint_config(
 
             Ok(EpsilonSolveResult {
                 is_feasible: true,
+                inconclusive_reason: None,
                 objectives_max,
                 solution,
                 solve_time_secs,
             })
         }
-        None => {
-            // Infeasible
-            Ok(EpsilonSolveResult {
-                is_feasible: false,
-                objectives_max: vec![],
-                solution: Solution::infeasible(problem.num_objectives()),
-                solve_time_secs,
-            })
-        }
+        EpsilonSolveOutcome::Infeasible => Ok(EpsilonSolveResult {
+            is_feasible: false,
+            inconclusive_reason: None,
+            objectives_max: vec![],
+            solution: Solution::infeasible(problem.num_objectives()),
+            solve_time_secs,
+        }),
+        EpsilonSolveOutcome::Inconclusive(reason) => Ok(EpsilonSolveResult {
+            is_feasible: false,
+            inconclusive_reason: Some(reason),
+            objectives_max: vec![],
+            solution: Solution::infeasible(problem.num_objectives()),
+            solve_time_secs,
+        }),
     }
 }
 

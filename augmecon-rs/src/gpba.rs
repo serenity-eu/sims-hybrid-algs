@@ -18,7 +18,7 @@
 
 use crate::{
     bounds::BoundsCalculator,
-    epsilon_constraint::EpsilonConstraintBuilder,
+    epsilon_constraint::{EpsilonConstraintBuilder, EpsilonSolveOutcome},
     error::Result,
     interval_manager::IntervalManager,
     model::MultiObjectiveProblem,
@@ -509,51 +509,71 @@ impl GpbaA {
                 };
 
                 // Solve epsilon constraint problem
-                if let Some(mut solution) = self.solve_epsilon_constraint_problem_shared(
+                match self.solve_epsilon_constraint_problem_shared(
                     problem,
                     options,
                     &epsilons,
                     &ranges,
                     per_solve_timeout,
                 )? {
-                    log::info!(
-                        "✓ Solver returned objectives (MIN form): {:?}",
-                        solution.objective_values
-                    );
+                    EpsilonSolveOutcome::Solved(mut solution) => {
+                        log::info!(
+                            "✓ Solver returned objectives (MIN form): {:?}",
+                            solution.objective_values
+                        );
 
-                    // Extract selected image indices for logging
-                    let mut selected_indices: Vec<usize> = solution
-                        .decision_variables
-                        .iter()
-                        .filter(|(_, &val)| val > 0.5)
-                        .filter_map(|(name, _)| {
-                            name.strip_prefix("x_")
-                                .and_then(|s| s.parse::<usize>().ok())
-                        })
-                        .collect();
-                    selected_indices.sort_unstable();
-                    log::info!(
-                        "✓ Selected images [{}]: {:?}",
-                        selected_indices.len(),
-                        selected_indices
-                    );
+                        // Extract selected image indices for logging
+                        let mut selected_indices: Vec<usize> = solution
+                            .decision_variables
+                            .iter()
+                            .filter(|(_, &val)| val > 0.5)
+                            .filter_map(|(name, _)| {
+                                name.strip_prefix("x_")
+                                    .and_then(|s| s.parse::<usize>().ok())
+                            })
+                            .collect();
+                        selected_indices.sort_unstable();
+                        log::info!(
+                            "✓ Selected images [{}]: {:?}",
+                            selected_indices.len(),
+                            selected_indices
+                        );
 
-                    // Round to integers since SIMS has discrete objectives
-                    // Keep in MINIMIZATION form for storage and Pareto front
-                    solution.objective_values = solution
-                        .objective_values
-                        .iter()
-                        .map(|&x| x.round())
-                        .collect();
-                    log::info!(
-                        "✓ Solution (MIN form, rounded): {:?}",
-                        solution.objective_values
-                    );
+                        // Round to integers since SIMS has discrete objectives
+                        // Keep in MINIMIZATION form for storage and Pareto front
+                        solution.objective_values = solution
+                            .objective_values
+                            .iter()
+                            .map(|&x| x.round())
+                            .collect();
+                        log::info!(
+                            "✓ Solution (MIN form, rounded): {:?}",
+                            solution.objective_values
+                        );
 
-                    Some(solution)
-                } else {
-                    log::info!("✗ No solution found (INFEASIBLE)");
-                    None
+                        Some(solution)
+                    }
+                    EpsilonSolveOutcome::Infeasible => {
+                        log::info!("✗ No solution found (proven INFEASIBLE)");
+                        None
+                    }
+                    EpsilonSolveOutcome::Inconclusive(reason) => {
+                        // NOT a proven infeasibility (most commonly a solver
+                        // timeout with no incumbent found yet) — the interval-
+                        // pruning/cascade logic below assumes `None` means
+                        // "this epsilon value is impossible", which would be
+                        // wrong here and could silently discard a feasible
+                        // region. Stop the sweep instead of risking a false
+                        // "converged" result; whatever's already in
+                        // pareto_front is still returned.
+                        log::warn!(
+                            "⚠ ε-constraint solve inconclusive at iteration {iteration} \
+                             (NOT proven infeasible): {reason}. Stopping GPBA-A here — the \
+                             remaining search space has not been ruled out, it just wasn't \
+                             explored in the time available."
+                        );
+                        break;
+                    }
                 }
             };
 
@@ -797,7 +817,12 @@ impl GpbaA {
         epsilons
     }
 
-    /// Solve epsilon-constraint problem with proper ranges
+    /// Solve epsilon-constraint problem with proper ranges.
+    ///
+    /// Returns the full [`EpsilonSolveOutcome`] rather than collapsing it to
+    /// `Option<Solution>` — callers must distinguish a proven infeasibility
+    /// (safe to prune) from an inconclusive result like a solver timeout
+    /// (must NOT be treated as proof nothing exists there).
     fn solve_epsilon_constraint_problem_shared(
         &self,
         problem: &MultiObjectiveProblem,
@@ -805,7 +830,7 @@ impl GpbaA {
         epsilons: &HashMap<usize, f64>,
         ranges: &HashMap<usize, f64>,
         timeout: Option<Duration>,
-    ) -> Result<Option<Solution>> {
+    ) -> Result<EpsilonSolveOutcome<Solution>> {
         let mut builder =
             EpsilonConstraintBuilder::new(problem, options, self.config.primary_objective);
 
@@ -814,10 +839,13 @@ impl GpbaA {
             builder = builder.add_constraint_with_range(k, epsilon, range);
         }
 
-        match builder.solve_with_slack(timeout)? {
-            Some(solution_with_slack) => Ok(Some(solution_with_slack.solution)),
-            None => Ok(None),
-        }
+        Ok(match builder.solve_with_slack(timeout)? {
+            EpsilonSolveOutcome::Solved(solution_with_slack) => {
+                EpsilonSolveOutcome::Solved(solution_with_slack.solution)
+            }
+            EpsilonSolveOutcome::Infeasible => EpsilonSolveOutcome::Infeasible,
+            EpsilonSolveOutcome::Inconclusive(reason) => EpsilonSolveOutcome::Inconclusive(reason),
+        })
     }
 
     /// Calculate objective ranges for proper augmentation coefficient scaling
@@ -947,7 +975,7 @@ impl GpbaB {
             }
 
             match builder.solve_with_slack(self.get_remaining_timeout())? {
-                Some(solution_with_slack) => {
+                EpsilonSolveOutcome::Solved(solution_with_slack) => {
                     let mut solution = solution_with_slack.solution;
                     solution.objective_values = solution
                         .objective_values
@@ -962,8 +990,15 @@ impl GpbaB {
                         0,
                     );
                 }
-                None => {
+                EpsilonSolveOutcome::Infeasible => {
                     log::debug!("Infeasible at iteration {iteration}");
+                }
+                EpsilonSolveOutcome::Inconclusive(reason) => {
+                    // GPBA-B's advancement is unconditional (doesn't prune
+                    // based on infeasibility), so a timeout here just means
+                    // this grid point is skipped — safe, unlike GPBA-A's
+                    // interval-based cascade.
+                    log::warn!("Inconclusive (not proven infeasible) at iteration {iteration}: {reason}");
                 }
             }
 
@@ -1171,7 +1206,7 @@ impl GpbaC {
             }
 
             let found_solution = match builder.solve_with_slack(self.get_remaining_timeout())? {
-                Some(solution_with_slack) => {
+                EpsilonSolveOutcome::Solved(solution_with_slack) => {
                     let mut solution = solution_with_slack.solution;
                     solution.objective_values = solution
                         .objective_values
@@ -1187,7 +1222,17 @@ impl GpbaC {
                     );
                     true
                 }
-                None => false,
+                EpsilonSolveOutcome::Infeasible => false,
+                EpsilonSolveOutcome::Inconclusive(reason) => {
+                    // `found_solution=false` feeds into adjust_epsilon_k's search
+                    // direction below, same false-pruning risk as GPBA-A — stop
+                    // rather than let a timeout masquerade as infeasibility.
+                    log::warn!(
+                        "⚠ ε-constraint solve inconclusive at iteration {iteration} \
+                         (NOT proven infeasible): {reason}. Stopping GPBA-C here."
+                    );
+                    break;
+                }
             };
 
             // Advance
