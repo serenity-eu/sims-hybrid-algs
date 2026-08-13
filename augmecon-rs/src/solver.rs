@@ -104,7 +104,7 @@ use std::time::Duration;
 
 use crate::{
     bounds::BoundsCalculator,
-    epsilon_constraint::{EpsilonConstraintBuilder, SolutionWithSlack},
+    epsilon_constraint::{EpsilonConstraintBuilder, EpsilonSolveOutcome, SolutionWithSlack},
     error::{AugmeconError, Result},
     flag::FlagArray,
     grid::GridGenerator,
@@ -579,15 +579,21 @@ impl Augmecon {
             builder = builder.add_constraint_with_range(obj_idx, epsilon, range);
         }
 
-        // Solve with slack values
-        builder.solve_with_slack(timeout)?.map_or_else(
-            || {
-                // Return infeasible solution with empty slack values
-                let infeasible_solution = Solution::infeasible(num_objectives);
-                Ok(SolutionWithSlack::new(infeasible_solution, HashMap::new()))
-            },
-            Ok,
-        )
+        // Solve with slack values. Grid points are solved independently here
+        // (no cascade/pruning across points), so collapsing an inconclusive
+        // result (e.g. a solver timeout) into "infeasible" only affects this
+        // one grid point, not the rest of the search — safe, unlike GPBA-A's
+        // interval-based cascade. Still logged distinctly for diagnosability.
+        match builder.solve_with_slack(timeout)? {
+            EpsilonSolveOutcome::Solved(solution) => Ok(solution),
+            EpsilonSolveOutcome::Infeasible => {
+                Ok(SolutionWithSlack::new(Solution::infeasible(num_objectives), HashMap::new()))
+            }
+            EpsilonSolveOutcome::Inconclusive(reason) => {
+                warn!("ε-constraint solve inconclusive (not proven infeasible): {reason}");
+                Ok(SolutionWithSlack::new(Solution::infeasible(num_objectives), HashMap::new()))
+            }
+        }
     }
 
     /// Solve grid points sequentially (original implementation)
@@ -849,17 +855,19 @@ impl Augmecon {
             builder = builder.add_constraint_with_range(obj_idx, epsilon, range);
         }
 
-        // Solve with slack values
-        builder
-            .solve_with_slack(self.get_remaining_timeout())?
-            .map_or_else(
-                || {
-                    // Return infeasible solution with empty slack values
-                    let infeasible_solution = Solution::infeasible(num_objectives);
-                    Ok(SolutionWithSlack::new(infeasible_solution, HashMap::new()))
-                },
-                Ok,
-            )
+        // Solve with slack values. See the comment on the other
+        // solve_with_slack call site above: grid points are independent
+        // here, so collapsing Inconclusive into "infeasible" is safe.
+        match builder.solve_with_slack(self.get_remaining_timeout())? {
+            EpsilonSolveOutcome::Solved(solution) => Ok(solution),
+            EpsilonSolveOutcome::Infeasible => {
+                Ok(SolutionWithSlack::new(Solution::infeasible(num_objectives), HashMap::new()))
+            }
+            EpsilonSolveOutcome::Inconclusive(reason) => {
+                warn!("ε-constraint solve inconclusive (not proven infeasible): {reason}");
+                Ok(SolutionWithSlack::new(Solution::infeasible(num_objectives), HashMap::new()))
+            }
+        }
     }
 
     /// Filter solutions to keep only Pareto-optimal ones

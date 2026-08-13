@@ -82,6 +82,42 @@ impl SolutionWithSlack {
     }
 }
 
+/// Outcome of attempting to solve one epsilon-constrained subproblem.
+///
+/// Distinguishing `Infeasible` from `Inconclusive` matters: GPBA's
+/// interval-pruning logic treats a proven-infeasible epsilon value (and,
+/// via its cascade rules, everything beyond it) as permanently excluded from
+/// the search. That's only valid when the solver has actually *proven*
+/// infeasibility. A solver timeout with no incumbent yet found is not proof
+/// of anything — the subproblem may well be feasible and just need more
+/// time. Collapsing both cases into "no solution" (as this code used to do)
+/// causes GPBA to silently prune feasible regions and can converge with zero
+/// solutions on an instance that is demonstrably solvable, purely because a
+/// single sub-solve ran out of time.
+#[derive(Debug)]
+pub enum EpsilonSolveOutcome<T> {
+    /// A solution was found (possibly non-optimal, e.g. a time-limited
+    /// incumbent — `good_lp`'s Gurobi/HiGHS/CoinCbc backends surface those as
+    /// `Ok` rather than erroring).
+    Solved(T),
+    /// The solver proved the subproblem has no feasible solution.
+    Infeasible,
+    /// The solver did not return a solution, but *not* because infeasibility
+    /// was proven — most commonly a timeout before any incumbent was found.
+    /// Carries the underlying error's message for diagnostics.
+    Inconclusive(String),
+}
+
+/// Classifies a `good_lp` solve error into the epsilon-solve outcome that's
+/// safe to act on. Shared by every solver backend below so they can't drift
+/// out of sync on what counts as a proven infeasibility.
+fn classify_solve_error<T>(error: &good_lp::ResolutionError) -> EpsilonSolveOutcome<T> {
+    match error {
+        good_lp::ResolutionError::Infeasible => EpsilonSolveOutcome::Infeasible,
+        other => EpsilonSolveOutcome::Inconclusive(other.to_string()),
+    }
+}
+
 /// Builder for epsilon-constraint problems used by optimization algorithms
 pub struct EpsilonConstraintBuilder<'a> {
     problem: &'a MultiObjectiveProblem,
@@ -309,7 +345,10 @@ impl<'a> EpsilonConstraintBuilder<'a> {
     ///
     /// # Errors
     /// Returns error if optimization fails
-    pub fn solve_with_slack(self, timeout: Option<Duration>) -> Result<Option<SolutionWithSlack>> {
+    pub fn solve_with_slack(
+        self,
+        timeout: Option<Duration>,
+    ) -> Result<EpsilonSolveOutcome<SolutionWithSlack>> {
         self.validate_primary_objective()?;
 
         // Build the primary objective expression directly from the stored expression
@@ -680,7 +719,7 @@ impl<'a> EpsilonConstraintBuilder<'a> {
         penalty_sum: &Expression,
         epsilon_augmentation: f64,
         timeout: Option<Duration>,
-    ) -> Option<SolutionWithSlack> {
+    ) -> EpsilonSolveOutcome<SolutionWithSlack> {
         let problem = match direction {
             crate::model::ObjectiveDirection::Minimize => {
                 prob_vars.minimise(augmented_primary.clone())
@@ -723,16 +762,15 @@ impl<'a> EpsilonConstraintBuilder<'a> {
                     sol.solution.feasible,
                     !sol.slack_values.is_empty()
                 );
-                Some(sol)
+                EpsilonSolveOutcome::Solved(sol)
             }
             Err(e) => {
                 log::info!(
-                    "ε-constraint INFEASIBLE: obj[{}], constraints: {:?}",
+                    "ε-constraint did not return a solution: obj[{}], constraints: {:?}: {e}",
                     self.primary_objective,
                     self.epsilon_values
                 );
-                log::debug!("Infeasibility reason: {e:?}");
-                None
+                classify_solve_error(&e)
             }
         }
     }
@@ -973,7 +1011,7 @@ impl<'a> EpsilonConstraintBuilder<'a> {
         penalty_sum: &Expression,
         epsilon_augmentation: f64,
         timeout: Option<Duration>,
-    ) -> Option<SolutionWithSlack> {
+    ) -> EpsilonSolveOutcome<SolutionWithSlack> {
         let problem = match direction {
             crate::model::ObjectiveDirection::Minimize => {
                 prob_vars.minimise(augmented_primary.clone())
@@ -1024,16 +1062,15 @@ impl<'a> EpsilonConstraintBuilder<'a> {
                     sol.solution.feasible,
                     !sol.slack_values.is_empty()
                 );
-                Some(sol)
+                EpsilonSolveOutcome::Solved(sol)
             }
             Err(e) => {
                 log::info!(
-                    "ε-constraint INFEASIBLE: obj[{}], constraints: {:?}",
+                    "ε-constraint did not return a solution: obj[{}], constraints: {:?}: {e}",
                     self.primary_objective,
                     self.epsilon_values
                 );
-                log::debug!("Infeasibility reason: {e:?}");
-                None
+                classify_solve_error(&e)
             }
         }
     }
@@ -1049,7 +1086,7 @@ impl<'a> EpsilonConstraintBuilder<'a> {
         penalty_sum: &Expression,
         epsilon_augmentation: f64,
         timeout: Option<Duration>,
-    ) -> Option<SolutionWithSlack> {
+    ) -> EpsilonSolveOutcome<SolutionWithSlack> {
         crate::verify::bump(&crate::verify::SLACK_SOLVES);
         let problem = match direction {
             crate::model::ObjectiveDirection::Minimize => {
@@ -1107,16 +1144,15 @@ impl<'a> EpsilonConstraintBuilder<'a> {
                     sol.solution.feasible,
                     !sol.slack_values.is_empty()
                 );
-                Some(sol)
+                EpsilonSolveOutcome::Solved(sol)
             }
             Err(e) => {
                 log::info!(
-                    "ε-constraint INFEASIBLE: obj[{}], constraints: {:?}",
+                    "ε-constraint did not return a solution: obj[{}], constraints: {:?}: {e}",
                     self.primary_objective,
                     self.epsilon_values
                 );
-                log::debug!("Infeasibility reason: {e:?}");
-                None
+                classify_solve_error(&e)
             }
         }
     }
@@ -1132,7 +1168,7 @@ impl<'a> EpsilonConstraintBuilder<'a> {
         penalty_sum: &Expression,
         epsilon_augmentation: f64,
         timeout: Option<Duration>,
-    ) -> Option<SolutionWithSlack> {
+    ) -> EpsilonSolveOutcome<SolutionWithSlack> {
         crate::verify::bump(&crate::verify::SLACK_SOLVES);
         let problem = match direction {
             crate::model::ObjectiveDirection::Minimize => {
@@ -1184,16 +1220,15 @@ impl<'a> EpsilonConstraintBuilder<'a> {
                     sol.solution.feasible,
                     !sol.slack_values.is_empty()
                 );
-                Some(sol)
+                EpsilonSolveOutcome::Solved(sol)
             }
             Err(e) => {
                 log::info!(
-                    "ε-constraint INFEASIBLE: obj[{}], constraints: {:?}",
+                    "ε-constraint did not return a solution: obj[{}], constraints: {:?}: {e}",
                     self.primary_objective,
                     self.epsilon_values
                 );
-                log::debug!("Infeasibility reason: {e:?}");
-                None
+                classify_solve_error(&e)
             }
         }
     }
@@ -1209,7 +1244,7 @@ impl<'a> EpsilonConstraintBuilder<'a> {
         penalty_sum: &Expression,
         epsilon_augmentation: f64,
         _timeout: Option<Duration>,
-    ) -> Option<SolutionWithSlack> {
+    ) -> EpsilonSolveOutcome<SolutionWithSlack> {
         let problem = match direction {
             crate::model::ObjectiveDirection::Minimize => {
                 prob_vars.minimise(augmented_primary.clone())
@@ -1255,16 +1290,15 @@ impl<'a> EpsilonConstraintBuilder<'a> {
                     sol.solution.feasible,
                     !sol.slack_values.is_empty()
                 );
-                Some(sol)
+                EpsilonSolveOutcome::Solved(sol)
             }
             Err(e) => {
                 log::info!(
-                    "ε-constraint INFEASIBLE: obj[{}], constraints: {:?}",
+                    "ε-constraint did not return a solution: obj[{}], constraints: {:?}: {e}",
                     self.primary_objective,
                     self.epsilon_values
                 );
-                log::debug!("Infeasibility reason: {e:?}");
-                None
+                classify_solve_error(&e)
             }
         }
     }
