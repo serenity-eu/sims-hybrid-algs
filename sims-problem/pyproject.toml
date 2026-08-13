@@ -33,7 +33,7 @@ dev = [
 ]
 
 [tool.uv]
-cache-keys = [{file = "pyproject.toml"}, {file = "Cargo.toml"}, {file = "**/*.rs"}, {file = "../sims-heuristics/Cargo.toml"}, {file = "../sims-heuristics/**/*.rs"}]
+cache-keys = [{file = "pyproject.toml"}, {file = "Cargo.toml"}, {file = "**/*.rs"}, {file = "../sims-heuristics/Cargo.toml"}, {file = "../sims-heuristics/**/*.rs"}, {file = "../augmecon-rs/Cargo.toml"}, {file = "../augmecon-rs/**/*.rs"}, {file = "../sims-dzn/Cargo.toml"}, {file = "../sims-dzn/**/*.rs"}, {file = "../pareto/Cargo.toml"}, {file = "../pareto/**/*.rs"}]
 config-settings = { build-args = '--profile=dev'}
 
 [tool.uv.sources]
