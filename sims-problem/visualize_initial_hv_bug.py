@@ -76,7 +76,7 @@ def measure_init_time(instance_name: str) -> dict:
         use_ranked_candidates=True,
         max_k1_candidates=15,
         use_greedy_initial_population=True,
-        use_perturbation_restart=True,
+        use_perturbation_restart=False,
         use_diverse_probing=True,
     )
 

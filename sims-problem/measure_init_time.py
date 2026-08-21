@@ -236,7 +236,7 @@ def run_and_analyze(instance_name: str, timeout_s: int, config_name: str) -> Non
             use_ranked_candidates=True,
             max_k1_candidates=15,
             use_greedy_initial_population=True,
-            use_perturbation_restart=True,
+            use_perturbation_restart=False,
         )
     elif config_name == "Diverse PLS":
         result = sims_problem.solve_with_pls(
@@ -249,7 +249,7 @@ def run_and_analyze(instance_name: str, timeout_s: int, config_name: str) -> Non
             use_ranked_candidates=True,
             max_k1_candidates=15,
             use_greedy_initial_population=True,
-            use_perturbation_restart=True,
+            use_perturbation_restart=False,
             use_diverse_probing=True,
         )
     else:

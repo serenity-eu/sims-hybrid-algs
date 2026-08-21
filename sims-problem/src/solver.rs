@@ -215,7 +215,13 @@ impl std::io::Write for SharedVecWriter {
     max_k1_candidates=15usize,
     probing_budget=None,
     use_greedy_initial_population=true,
-    use_perturbation_restart=true,
+    // Default OFF. Perturbation restart keeps an exhausted search alive by
+    // re-injecting perturbed archive solutions, which changes both the search
+    // trajectory and how the wall-clock budget is consumed. Callers that want
+    // it must ask for it, so an omitted argument cannot silently put a
+    // measurement into a different regime than the experiments it is compared
+    // against.
+    use_perturbation_restart=false,
     use_diverse_probing=false,
     diverse_probe_budget=None,
     use_nd_tree_scalarized_query=true,
@@ -2243,7 +2249,7 @@ pub fn solve_with_hybrid(
             15,                    // max_k1_candidates
             None,                  // probing_budget
             true,                  // use_greedy_initial_population
-            true,                  // use_perturbation_restart
+            false,                 // use_perturbation_restart (see the signature default)
             false,                 // use_diverse_probing
             None,                  // diverse_probe_budget
             true,                  // use_nd_tree_scalarized_query
@@ -2319,7 +2325,7 @@ pub fn solve_with_hybrid(
             15,                    // max_k1_candidates
             None,                  // probing_budget
             true,                  // use_greedy_initial_population
-            true,                  // use_perturbation_restart
+            false,                 // use_perturbation_restart (see the signature default)
             false,                 // use_diverse_probing
             None,                  // diverse_probe_budget
             true,                  // use_nd_tree_scalarized_query
