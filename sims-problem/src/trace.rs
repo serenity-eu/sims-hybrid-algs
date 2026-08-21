@@ -2,7 +2,8 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use indicatif::{ProgressBar, ProgressStyle};
-use pareto::{HasObjectives, MoSolution};
+use nd_tree::NDTree;
+use pareto::{HasObjectives, MoSolution, Objectives};
 use pls::explored_solutions_data::SolutionFingerprint;
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -38,6 +39,28 @@ pub struct DominanceInfo<const D: usize> {
     /// When filter_dominated=false: shows domination by any solution in the set
     pub domination_indices: Vec<u32>,
 }
+
+/// Objectives plus the index of the solution they came from.
+///
+/// The dominance index is built with an ND-tree, and the tree stores clones of
+/// whatever it is given. Cloning `SolutionFingerprint` would copy its
+/// `selected_images: Vec<usize>` for every one of the tens of thousands of
+/// explored solutions, so the tree holds these 2-word points instead and the
+/// index rides along -- which also removes the need for an objectives-keyed
+/// reverse lookup.
+#[derive(Clone, PartialEq)]
+struct IndexedPoint<const D: usize> {
+    objectives: Objectives<D>,
+    index: u32,
+}
+
+impl<const D: usize> HasObjectives<D> for IndexedPoint<D> {
+    fn objectives(&self) -> &Objectives<D> {
+        &self.objectives
+    }
+}
+
+impl<const D: usize> MoSolution<D> for IndexedPoint<D> {}
 
 /// Computes dominance information for a set of solutions.
 ///
@@ -76,28 +99,41 @@ pub fn compute_dominance_info<const D: usize>(
             ).unwrap().progress_chars("█▓░"),
         );
 
+        // The kept set is held in an ND-tree so both questions per solution --
+        // "is it dominated at discovery?" and "which kept solutions does it
+        // dominate?" -- prune whole subtrees via node bounds instead of
+        // scanning every kept solution. The previous linear scan made this
+        // O(explored * kept): 20k explored against a 664-solution front cost
+        // ~49s on mexico_city_250, which landed inside the measured solve time.
+        //
+        // Predicates are unchanged (`is_dominated_by` / `dominates`, both
+        // strict), so equal-objective solutions are still kept as distinct and
+        // dominated.bin is byte-identical.
+        let mut tree: NDTree<IndexedPoint<D>, 8, D, 4> = NDTree::new();
+
         'next_solution: for new_solution in solutions.into_iter() {
             pb.inc(1);
             let current_kept_idx = filtered_solutions.len() as u32;
+            let point = IndexedPoint {
+                objectives: *new_solution.objectives(),
+                index: current_kept_idx,
+            };
 
-            // Single pass: check against all kept solutions
-            for (kept_idx, kept_solution) in filtered_solutions.iter().enumerate() {
-                // Is new solution dominated by this kept solution?
-                if new_solution.is_dominated_by(kept_solution.objectives()) {
-                    // Dominated at discovery → skip it
-                    continue 'next_solution;
-                }
-
-                // Does the new solution dominate this kept one?
-                if new_solution.dominates(kept_solution.objectives()) {
-                    // Update domination index only if not already dominated
-                    if domination_indices[kept_idx] == u32::MAX {
-                        domination_indices[kept_idx] = current_kept_idx;
-                    }
-                }
+            if tree.is_strictly_dominated_by_any(&point) {
+                // Dominated at discovery → skip it
+                continue 'next_solution;
             }
 
+            tree.for_each_dominated_by(&point, |dominated| {
+                let kept_idx = dominated.index as usize;
+                // Record only the first dominator, matching the original scan.
+                if domination_indices[kept_idx] == u32::MAX {
+                    domination_indices[kept_idx] = current_kept_idx;
+                }
+            });
+
             // Not dominated at discovery → keep it
+            tree.update_unchecked(point);
             filtered_solutions.push(new_solution);
             domination_indices.push(u32::MAX); // Not dominated yet
         }
@@ -1164,6 +1200,103 @@ pub fn compute_hv_curve_from_trace(
     Ok(curve)
 }
 
+/// Reconstruct the non-dominated front as it stood at a single point in time
+/// during a trace's discovery history.
+///
+/// This is the same incremental front-replay used by
+/// [`compute_hv_curve_from_trace`] (each arriving solution evicts whatever it
+/// dominates, tracked via a reverse-domination index built from the trace's
+/// own `dominated` column) — just evaluated at one `cutoff_time_s` instead of
+/// `num_points` evenly-spaced samples. It exists so callers can compute
+/// *other* front-quality indicators (spacing, IGD, cardinality — anything
+/// that isn't hypervolume) at the same phase-boundary/final timestamps the
+/// paper's HV bar figures already use, without duplicating the trace-replay
+/// logic per indicator.
+///
+/// Returns the front's raw objective points (`Vec<Vec<u64>>`, one row per
+/// non-dominated solution at that moment) — deliberately *not* an indicator
+/// value, so callers can feed the same snapshot into
+/// `front_cardinality`/`compute_spacing`/`compute_igd` (or anything else)
+/// without re-parsing the trace.
+///
+/// `cutoff_time_s <= 0.0` returns an empty front; `cutoff_time_s` at or past
+/// the trace's total duration returns the final front (equivalent to the
+/// last point of `compute_hv_curve_from_trace`'s curve).
+///
+/// # Errors
+/// Returns an error if `trace_data` isn't a valid trace archive.
+#[pyfunction]
+pub fn front_from_trace_at_time(
+    trace_data: Vec<u8>,
+    cutoff_time_s: f64,
+) -> PyResult<Vec<Vec<u64>>> {
+    let td = extract_trace_data(&trace_data).map_err(|e| {
+        pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to extract trace: {e}"))
+    })?;
+
+    let num_objectives = td.metadata.objectives.len();
+    let n = td.metadata.solution_count;
+    if n == 0 || cutoff_time_s <= 0.0 {
+        return Ok(Vec::new());
+    }
+
+    let mut timestamps_us: Vec<u64> = Vec::with_capacity(n);
+    for i in 0..n {
+        let off = i * 4;
+        let val = u32::from_le_bytes(td.timestamps[off..off + 4].try_into().unwrap());
+        timestamps_us.push(u64::from(val));
+    }
+
+    let mut objectives: Vec<Vec<u64>> = Vec::with_capacity(n);
+    for i in 0..n {
+        let mut row = Vec::with_capacity(num_objectives);
+        for j in 0..num_objectives {
+            let off = (i * num_objectives + j) * 8;
+            let val = u64::from_le_bytes(td.objectives[off..off + 8].try_into().unwrap());
+            row.push(val);
+        }
+        objectives.push(row);
+    }
+
+    let mut dominated: Vec<u32> = Vec::with_capacity(n);
+    for i in 0..n {
+        let off = i * 4;
+        dominated.push(u32::from_le_bytes(
+            td.dominated[off..off + 4].try_into().unwrap(),
+        ));
+    }
+
+    let mut rev_dom: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (i, &d) in dominated.iter().enumerate() {
+        if d != u32::MAX && (d as usize) < n {
+            rev_dom[d as usize].push(i);
+        }
+    }
+
+    #[allow(
+        clippy::cast_sign_loss,
+        clippy::cast_possible_truncation,
+        reason = "cutoff_time_s <= 0.0 already returned above; trace durations fit u64 microseconds"
+    )]
+    let cutoff_us = (cutoff_time_s * 1_000_000.0).round() as u64;
+
+    let mut in_front: Vec<bool> = vec![false; n];
+    for idx in 0..n {
+        if timestamps_us[idx] > cutoff_us {
+            break;
+        }
+        in_front[idx] = true;
+        for &victim in &rev_dom[idx] {
+            in_front[victim] = false;
+        }
+    }
+
+    Ok((0..n)
+        .filter(|&i| in_front[i])
+        .map(|i| objectives[i].clone())
+        .collect())
+}
+
 /// Structure to hold extracted trace data
 struct TraceData {
     objectives: Vec<u8>,
@@ -1684,4 +1817,150 @@ pub fn calculate_objective_bounds_from_solutions<const N: usize>(
     let reference_point: Vec<u64> = max_values.iter().map(|&max_val| max_val + 1).collect();
 
     Ok((objective_bounds, reference_point))
+}
+
+#[cfg(test)]
+mod dominance_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn fp(cost: u64, cloud: u64, ts_us: u64) -> SolutionFingerprint<2> {
+        SolutionFingerprint {
+            explored_neighborhood_size: 0,
+            objectives: [cost, cloud],
+            iteration: 0,
+            timestamp: Duration::from_micros(ts_us),
+            selected_images: Vec::new(),
+        }
+    }
+
+    /// The original O(n * kept) linear scan, kept verbatim as the reference.
+    fn reference_filtered(
+        mut solutions: Vec<SolutionFingerprint<2>>,
+    ) -> (Vec<SolutionFingerprint<2>>, Vec<u32>) {
+        solutions.sort_by_key(|s| s.timestamp);
+        let mut filtered: Vec<SolutionFingerprint<2>> = Vec::new();
+        let mut idx: Vec<u32> = Vec::new();
+        'next: for new_solution in solutions.into_iter() {
+            let current = filtered.len() as u32;
+            for (kept_idx, kept) in filtered.iter().enumerate() {
+                if new_solution.is_dominated_by(kept.objectives()) {
+                    continue 'next;
+                }
+                if new_solution.dominates(kept.objectives()) && idx[kept_idx] == u32::MAX {
+                    idx[kept_idx] = current;
+                }
+            }
+            filtered.push(new_solution);
+            idx.push(u32::MAX);
+        }
+        (filtered, idx)
+    }
+
+    /// The ND-tree implementation must agree with the linear scan exactly --
+    /// same kept solutions, same domination indices -- so dominated.bin stays
+    /// byte-identical for already-recorded traces. Duplicated objectives are
+    /// included deliberately: they are kept as distinct solutions (domination
+    /// is strict), which is where a `covers`-based tree query would diverge.
+    #[test]
+    fn nd_tree_dominance_matches_linear_scan() {
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move |m: u64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state % m
+        };
+
+        for trial in 0..50 {
+            let n = 120;
+            let mut sols = Vec::with_capacity(n);
+            for i in 0..n {
+                // Small objective range => frequent ties and duplicates.
+                sols.push(fp(next(25), next(25), i as u64));
+            }
+
+            let (want_sols, want_idx) = reference_filtered(sols.clone());
+            let got = compute_dominance_info(sols, true);
+
+            assert_eq!(
+                got.solutions.len(),
+                want_sols.len(),
+                "trial {trial}: kept count differs"
+            );
+            for (a, b) in got.solutions.iter().zip(want_sols.iter()) {
+                assert_eq!(a.objectives, b.objectives, "trial {trial}: kept order differs");
+            }
+            assert_eq!(got.domination_indices, want_idx, "trial {trial}: indices differ");
+        }
+    }
+}
+
+#[cfg(test)]
+mod dominance_bench {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    /// Not an assertion of speed -- prints the timing so the ND-tree rewrite
+    /// can be compared against the linear scan on a realistic workload
+    /// (mexico_city_250 recorded 20193 explored solutions, 664 kept).
+    #[test]
+    #[ignore]
+    fn bench_dominance_20k() {
+        let mut state = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move |m: u64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state % m
+        };
+        let n: usize = std::env::var("BENCH_N").ok().and_then(|v| v.parse().ok()).unwrap_or(20_193);
+        // Points scattered around a convex trade-off curve, so the kept front
+        // is large (the real mexico_city_250 trace kept 664 of 20193). Uniform
+        // random points would leave only ~66 kept and understate the cost.
+        let mut sols = Vec::with_capacity(n);
+        for i in 0..n {
+            let x = next(2_000_000) + 1;
+            let y = 2_000_000_000_000u64 / x + next(40_000);
+            sols.push(SolutionFingerprint::<2> {
+                explored_neighborhood_size: 0,
+                objectives: [x, y],
+                iteration: 0,
+                timestamp: Duration::from_micros(i as u64),
+                selected_images: Vec::new(),
+            });
+        }
+
+        let t0 = Instant::now();
+        let info = compute_dominance_info(sols.clone(), true);
+        let nd_elapsed = t0.elapsed();
+        let kept = info.solutions.len();
+
+        // Same algorithm the rewrite replaced, for a direct ratio.
+        let t1 = Instant::now();
+        let mut scan_sorted = sols;
+        scan_sorted.sort_by_key(|s| s.timestamp);
+        let mut filtered: Vec<SolutionFingerprint<2>> = Vec::new();
+        let mut idx: Vec<u32> = Vec::new();
+        'next_solution: for new_solution in scan_sorted.into_iter() {
+            let current = filtered.len() as u32;
+            for (kept_idx, k) in filtered.iter().enumerate() {
+                if new_solution.is_dominated_by(k.objectives()) {
+                    continue 'next_solution;
+                }
+                if new_solution.dominates(k.objectives()) && idx[kept_idx] == u32::MAX {
+                    idx[kept_idx] = current;
+                }
+            }
+            filtered.push(new_solution);
+            idx.push(u32::MAX);
+        }
+        let scan_elapsed = t1.elapsed();
+
+        assert_eq!(kept, filtered.len(), "implementations disagree on kept count");
+        println!(
+            "{n} explored -> {kept} kept | ND-tree {nd_elapsed:?} | linear scan {scan_elapsed:?} | speedup {:.1}x",
+            scan_elapsed.as_secs_f64() / nd_elapsed.as_secs_f64()
+        );
+    }
 }

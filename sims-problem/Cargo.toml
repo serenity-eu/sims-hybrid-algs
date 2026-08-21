@@ -22,6 +22,7 @@ scalarized_selection = ["pls/scalarized_selection"]
 external_solvers = ["pls/external_solvers"]
 
 [dependencies]
+nd-tree = { path = "../nd-tree", version = "0.1.0", default-features = false }
 pyo3 = { version = "0.27.2", features = ["extension-module"] }
 pls = { path = "../sims-heuristics", package = "sims-heuristics", version = "0.1.0", default-features = false, features = ["bitmaps"] }
 pareto = { path = "../pareto", version = "0.1.0" }

@@ -494,6 +494,11 @@ where
         });
 
         let average_distances: [u64; N] = array::from_fn(|i| {
+            // Saturating, not `.sum()`: this is a node-splitting balance
+            // heuristic, not correctness-critical, and summing up to N-1
+            // already-large squared distances (see squared_distance_to) can
+            // genuinely exceed u64::MAX on instances with large objective
+            // magnitudes -- saturating still means "very far apart".
             let total_distance: u64 = (0..solutions.len())
                 .filter_map(|j| {
                     if i == j {
@@ -502,7 +507,7 @@ where
                         Some(squared_distance_half_matrix[i.min(j)][i.max(j)])
                     }
                 })
-                .sum();
+                .fold(0u64, u64::saturating_add);
             if solutions.len() <= 1 {
                 0
             } else {
@@ -553,6 +558,126 @@ where
     }
 
     #[must_use]
+    /// Is `sol` dominated by any solution currently in the tree?
+    ///
+    /// Read-only twin of the domination test `update_node` performs while
+    /// inserting, using the same node bounds to prune whole subtrees instead
+    /// of scanning every solution (which is what `iter()` would do).
+    ///
+    /// Pruning rule: every solution `s` in a subtree satisfies `ideal <= s`,
+    /// so a solution with `s <= sol` can exist only if `ideal <= sol`. When
+    /// that fails, nothing in the subtree can dominate `sol` and the whole
+    /// branch is skipped.
+    #[must_use]
+    pub fn is_dominated_by_any(&self, sol: &T) -> bool {
+        let Some(root) = self.root else {
+            return false;
+        };
+        let mut stack = vec![root];
+        while let Some(key) = stack.pop() {
+            match &self.arena[key] {
+                Node::Leaf {
+                    solutions, ideal, ..
+                } => {
+                    if !sol.is_covered_by(ideal) {
+                        continue;
+                    }
+                    if solutions.iter().any(|s| s.covers(sol.objectives())) {
+                        return true;
+                    }
+                }
+                Node::Internal {
+                    children, ideal, ..
+                } => {
+                    if !sol.is_covered_by(ideal) {
+                        continue;
+                    }
+                    stack.extend(children.iter().copied());
+                }
+            }
+        }
+        false
+    }
+
+    /// Is `sol` *strictly* dominated by any solution in the tree?
+    ///
+    /// Same pruning as [`Self::is_dominated_by_any`], but equality does not
+    /// count as domination. Callers that treat equal-objective solutions as
+    /// distinct (the trace format does: two different image selections can
+    /// share objectives, and both are recorded) need this variant.
+    #[must_use]
+    pub fn is_strictly_dominated_by_any(&self, sol: &T) -> bool {
+        let Some(root) = self.root else {
+            return false;
+        };
+        let mut stack = vec![root];
+        while let Some(key) = stack.pop() {
+            match &self.arena[key] {
+                Node::Leaf {
+                    solutions, ideal, ..
+                } => {
+                    if !sol.is_covered_by(ideal) {
+                        continue;
+                    }
+                    if solutions.iter().any(|s| s.dominates(sol.objectives())) {
+                        return true;
+                    }
+                }
+                Node::Internal {
+                    children, ideal, ..
+                } => {
+                    if !sol.is_covered_by(ideal) {
+                        continue;
+                    }
+                    stack.extend(children.iter().copied());
+                }
+            }
+        }
+        false
+    }
+
+    /// Call `f` for every solution in the tree that `sol` strictly dominates.
+    ///
+    /// Pruning rule: every solution `s` in a subtree satisfies `s <= nadir`,
+    /// so a solution with `sol <= s` can exist only if `sol <= nadir`. When
+    /// that fails, `sol` dominates nothing in the subtree and the branch is
+    /// skipped. Domination is still tested per solution rather than assumed
+    /// for a fully covered node, because `covers` admits equality while
+    /// `dominates` does not.
+    pub fn for_each_dominated_by<F>(&self, sol: &T, mut f: F)
+    where
+        F: FnMut(&T),
+    {
+        let Some(root) = self.root else {
+            return;
+        };
+        let mut stack = vec![root];
+        while let Some(key) = stack.pop() {
+            match &self.arena[key] {
+                Node::Leaf {
+                    solutions, nadir, ..
+                } => {
+                    if !sol.covers(nadir) {
+                        continue;
+                    }
+                    for s in solutions {
+                        if sol.dominates(s.objectives()) {
+                            f(s);
+                        }
+                    }
+                }
+                Node::Internal {
+                    children, nadir, ..
+                } => {
+                    if !sol.covers(nadir) {
+                        continue;
+                    }
+                    stack.extend(children.iter().copied());
+                }
+            }
+        }
+    }
+
     pub fn iter(&self) -> NDTreeSolutionIterator<'_, T, N, D, C> {
         NDTreeSolutionIterator::new(self)
     }
@@ -1298,5 +1423,72 @@ mod tests {
         }
 
         assert_eq!(tree.len(), 100);
+    }
+
+    /// The pruned queries must agree with brute force on every input.
+    ///
+    /// `is_dominated_by_any` and `for_each_dominated_by` skip whole subtrees
+    /// using node bounds, so a wrong prune silently returns fewer results
+    /// rather than failing loudly. This compares them against a linear scan
+    /// over the same tree for many random trees and probes.
+    #[test]
+    fn pruned_queries_match_brute_force() {
+        // Deterministic xorshift: no dev-dependency needed for a property test.
+        let mut state = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state % 60
+        };
+
+        for trial in 0..40 {
+            let mut tree: NDTree<Solution<2>, 8, 2, 4> = NDTree::new();
+            let mut inserted: Vec<Solution<2>> = Vec::new();
+            for _ in 0..60 {
+                let sol = Solution::new([next(), next()]);
+                if tree.update(sol.clone()) {
+                    // Mirror the tree's own pruning of newly dominated members.
+                    inserted.retain(|k| !sol.dominates(k.objectives()));
+                    inserted.push(sol);
+                }
+            }
+
+            for _ in 0..60 {
+                let probe = Solution::new([next(), next()]);
+
+                let expected_dominated_by_any =
+                    inserted.iter().any(|s| s.covers(probe.objectives()));
+                assert_eq!(
+                    tree.is_dominated_by_any(&probe),
+                    expected_dominated_by_any,
+                    "trial {trial}: is_dominated_by_any disagreed for {:?}",
+                    probe.objectives()
+                );
+
+                let expected_strict = inserted.iter().any(|s| s.dominates(probe.objectives()));
+                assert_eq!(
+                    tree.is_strictly_dominated_by_any(&probe),
+                    expected_strict,
+                    "trial {trial}: is_strictly_dominated_by_any disagreed for {:?}",
+                    probe.objectives()
+                );
+
+                let mut got: Vec<[u64; 2]> = Vec::new();
+                tree.for_each_dominated_by(&probe, |s| got.push(*s.objectives()));
+                got.sort_unstable();
+                let mut want: Vec<[u64; 2]> = inserted
+                    .iter()
+                    .filter(|s| probe.dominates(s.objectives()))
+                    .map(|s| *s.objectives())
+                    .collect();
+                want.sort_unstable();
+                assert_eq!(
+                    got, want,
+                    "trial {trial}: for_each_dominated_by disagreed for {:?}",
+                    probe.objectives()
+                );
+            }
+        }
     }
 }
