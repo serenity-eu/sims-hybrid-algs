@@ -134,7 +134,7 @@ where
 
     /// Map from solution (via objectives hash) to its index.
     /// Used to quickly find the index of a solution in the tree.
-    solution_to_index: HashMap<Vec<u64>, u32>,
+    solution_to_index: HashMap<[u64; D], u32>,
 }
 
 impl<T, const N: usize, const D: usize, const C: usize> TrackedNdTree<T, N, D, C>
@@ -197,7 +197,7 @@ where
         self.index_to_solution
             .insert(assigned_index, solution.clone());
         self.solution_to_index
-            .insert(objectives.to_vec(), assigned_index);
+            .insert(*objectives, assigned_index);
 
         // Insert into the underlying tree (this handles domination removal)
         self.tree.update(solution);
@@ -207,7 +207,7 @@ where
         if self.config.filter_dominated {
             for &idx in &dominated_indices {
                 if let Some(dominated_sol) = self.index_to_solution.get(&idx) {
-                    let dominated_objs = dominated_sol.objectives().to_vec();
+                    let dominated_objs = *dominated_sol.objectives();
                     self.solution_to_index.remove(&dominated_objs);
                 }
                 self.index_to_solution.remove(&idx);
@@ -220,29 +220,22 @@ where
     }
 
     /// Check if a solution is dominated by any solution in the tree.
+    ///
+    /// Delegates to the tree's bound-pruned query rather than iterating every
+    /// solution: `NDTree::iter()` is a full traversal, which made insertion
+    /// O(tracked) and defeated the point of using a tree at all.
     fn is_dominated_by_any(&self, solution: &T) -> bool {
-        for existing in self.tree.iter() {
-            if solution.is_dominated_by(existing.objectives()) {
-                return true;
-            }
-        }
-        false
+        self.tree.is_dominated_by_any(solution)
     }
 
     /// Find all solutions in the tree that are dominated by the given solution.
     fn find_dominated_by(&self, solution: &T) -> Vec<u32> {
         let mut dominated = Vec::new();
-
-        for existing in self.tree.iter() {
-            if existing.is_dominated_by(solution.objectives()) {
-                // Find the index of this existing solution
-                let obj_vec = existing.objectives().to_vec();
-                if let Some(&idx) = self.solution_to_index.get(&obj_vec) {
-                    dominated.push(idx);
-                }
+        self.tree.for_each_dominated_by(solution, |existing| {
+            if let Some(&idx) = self.solution_to_index.get(existing.objectives()) {
+                dominated.push(idx);
             }
-        }
-
+        });
         dominated
     }
 

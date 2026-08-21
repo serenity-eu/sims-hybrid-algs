@@ -2641,6 +2641,7 @@ dependencies = [
  "flate2",
  "indicatif",
  "log",
+ "nd-tree",
  "pareto",
  "pyo3",
  "pyo3-log",
