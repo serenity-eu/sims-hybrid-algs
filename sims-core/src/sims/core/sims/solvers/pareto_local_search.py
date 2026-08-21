@@ -39,7 +39,7 @@ def solve(
     max_k1_candidates: int = 15,
     probing_budget: int | None = None,
     use_greedy_initial_population: bool = True,
-    use_perturbation_restart: bool = True,
+    use_perturbation_restart: bool = False,
 ) -> SolverResult:
     """
     Solve the SIMS problem using Pareto Local Search via sims_problem.solve_with_pls.

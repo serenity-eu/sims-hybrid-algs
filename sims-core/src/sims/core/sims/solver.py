@@ -109,7 +109,7 @@ def solve(
     max_k1_candidates: int = 15,
     probing_budget: int | None = None,
     use_greedy_initial_population: bool = True,
-    use_perturbation_restart: bool = True,
+    use_perturbation_restart: bool = False,
 ) -> SolverResult:
     match solver_type:
         case SolverType.OR_TOOLS:
@@ -194,7 +194,7 @@ def solve_with_two_phases(
     max_k1_candidates: int = 15,
     probing_budget: int | None = None,
     use_greedy_initial_population: bool = True,
-    use_perturbation_restart: bool = True,
+    use_perturbation_restart: bool = False,
     exact_solver_fn: Optional[Callable[..., SolverResult]] = None,
 ) -> TwoPhaseSolverResult:
     """

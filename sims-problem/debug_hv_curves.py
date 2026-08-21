@@ -166,7 +166,7 @@ def run_config(config_name: str, problem, timeout_s: int):
             use_ranked_candidates=True,
             max_k1_candidates=15,
             use_greedy_initial_population=True,
-            use_perturbation_restart=True,
+            use_perturbation_restart=False,
             use_diverse_probing=True,
         )
     elif config_name == "Scalarized PLS":
@@ -180,7 +180,7 @@ def run_config(config_name: str, problem, timeout_s: int):
             use_ranked_candidates=True,
             max_k1_candidates=15,
             use_greedy_initial_population=True,
-            use_perturbation_restart=True,
+            use_perturbation_restart=False,
             solution_selection_mode="scalarized-chebycheff",
             scalarized_selection_source="archive",
             scalarized_parent_budget=4,
