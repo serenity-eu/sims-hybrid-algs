@@ -227,6 +227,18 @@ _timeout_override: int | None = None
 # produce different results (set automatically when --runs > 1).
 _force_nondeterministic: bool = False
 
+# PLS perturbation restart was disabled throughout because it panicked with
+# "Solution set contains dominated solution!" — a real bug in
+# inject_perturbed_archive_solutions (population inserted via insert_unchecked,
+# bypassing the domination prune), fixed in sims-heuristics. With restart off,
+# PLS halts at its first local-optimum set: measured using 2s of a 190s budget on
+# paris_200 and 16.8s of 150s on rio_de_janeiro_200. Opt in via --pls-restart.
+_pls_perturbation_restart: bool = False
+
+# Merge into an existing per-instance artifact rather than overwriting it
+# (see --append-configs).
+_append_configs: bool = False
+
 
 def timeout_for_size(num_images: int) -> int:
     """PLS timeout in seconds – longer budgets for full HV ablation runs."""
@@ -283,7 +295,7 @@ class PurePLS(AlgorithmConfig):
             use_checkpoint=True,
             use_ranked_candidates=False,
             use_greedy_initial_population=True,
-            use_perturbation_restart=False,
+            use_perturbation_restart=_pls_perturbation_restart,
         )
 
 
@@ -310,7 +322,7 @@ class Hybrid2080(AlgorithmConfig):
             use_checkpoint=False,
             use_ranked_candidates=False,
             use_greedy_initial_population=True,
-            use_perturbation_restart=False,
+            use_perturbation_restart=_pls_perturbation_restart,
         )
 
 
@@ -343,7 +355,7 @@ class HybridPLSParam(AlgorithmConfig):
             use_checkpoint=False,
             use_ranked_candidates=False,
             use_greedy_initial_population=True,
-            use_perturbation_restart=False,
+            use_perturbation_restart=_pls_perturbation_restart,
         )
 
 
@@ -370,7 +382,7 @@ class Hybrid3565(AlgorithmConfig):
             use_checkpoint=False,
             use_ranked_candidates=False,
             use_greedy_initial_population=True,
-            use_perturbation_restart=False,
+            use_perturbation_restart=_pls_perturbation_restart,
         )
 
 
@@ -397,7 +409,7 @@ class HybridBaseline(AlgorithmConfig):
             use_checkpoint=False,
             use_ranked_candidates=False,
             use_greedy_initial_population=True,
-            use_perturbation_restart=False,
+            use_perturbation_restart=_pls_perturbation_restart,
         )
 
 
@@ -424,7 +436,7 @@ class Hybrid7525(AlgorithmConfig):
             use_checkpoint=False,
             use_ranked_candidates=False,
             use_greedy_initial_population=True,
-            use_perturbation_restart=False,
+            use_perturbation_restart=_pls_perturbation_restart,
         )
 
 
@@ -451,7 +463,7 @@ class Hybrid2575(AlgorithmConfig):
             use_checkpoint=False,
             use_ranked_candidates=False,
             use_greedy_initial_population=True,
-            use_perturbation_restart=False,
+            use_perturbation_restart=_pls_perturbation_restart,
         )
 
 
@@ -478,7 +490,7 @@ class Hybrid8020(AlgorithmConfig):
             use_checkpoint=False,
             use_ranked_candidates=False,
             use_greedy_initial_population=True,
-            use_perturbation_restart=False,
+            use_perturbation_restart=_pls_perturbation_restart,
         )
 
 
@@ -496,7 +508,7 @@ class DiverseProbePLS(AlgorithmConfig):
             use_checkpoint=True,
             use_ranked_candidates=False,
             use_greedy_initial_population=True,
-            use_perturbation_restart=False,
+            use_perturbation_restart=_pls_perturbation_restart,
             use_diverse_probing=True,
         )
 
@@ -524,7 +536,7 @@ class DiverseProbeHybrid(AlgorithmConfig):
             use_checkpoint=True,
             use_ranked_candidates=False,
             use_greedy_initial_population=True,
-            use_perturbation_restart=False,
+            use_perturbation_restart=_pls_perturbation_restart,
             use_diverse_probing=True,
         )
 
@@ -550,7 +562,7 @@ class DiverseProbeHybrid3565(DiverseProbeHybrid):
             use_checkpoint=True,
             use_ranked_candidates=False,
             use_greedy_initial_population=True,
-            use_perturbation_restart=False,
+            use_perturbation_restart=_pls_perturbation_restart,
             use_diverse_probing=True,
         )
 
@@ -576,7 +588,7 @@ class DiverseProbeHybrid2080(DiverseProbeHybrid):
             use_checkpoint=True,
             use_ranked_candidates=False,
             use_greedy_initial_population=True,
-            use_perturbation_restart=False,
+            use_perturbation_restart=_pls_perturbation_restart,
             use_diverse_probing=True,
         )
 
@@ -601,7 +613,7 @@ class ScalarizedPLS(AlgorithmConfig):
             use_checkpoint=True,
             use_ranked_candidates=False,
             use_greedy_initial_population=True,
-            use_perturbation_restart=False,
+            use_perturbation_restart=_pls_perturbation_restart,
             solution_selection_mode="scalarized-chebycheff",
             scalarized_selection_source=self.scalarized_selection_source,
             scalarized_parent_budget=self.scalarized_parent_budget,
@@ -640,7 +652,7 @@ class ScalarizedHybrid(AlgorithmConfig):
             use_checkpoint=True,
             use_ranked_candidates=False,
             use_greedy_initial_population=True,
-            use_perturbation_restart=False,
+            use_perturbation_restart=_pls_perturbation_restart,
             solution_selection_mode="scalarized-chebycheff",
             scalarized_selection_source=self.scalarized_selection_source,
             scalarized_parent_budget=self.scalarized_parent_budget,
@@ -671,7 +683,7 @@ class ScalarizedHybrid3565(ScalarizedHybrid):
             use_checkpoint=True,
             use_ranked_candidates=False,
             use_greedy_initial_population=True,
-            use_perturbation_restart=False,
+            use_perturbation_restart=_pls_perturbation_restart,
             solution_selection_mode="scalarized-chebycheff",
             scalarized_selection_source=self.scalarized_selection_source,
             scalarized_parent_budget=self.scalarized_parent_budget,
@@ -702,7 +714,7 @@ class ScalarizedHybrid2080(ScalarizedHybrid):
             use_checkpoint=True,
             use_ranked_candidates=False,
             use_greedy_initial_population=True,
-            use_perturbation_restart=False,
+            use_perturbation_restart=_pls_perturbation_restart,
             solution_selection_mode="scalarized-chebycheff",
             scalarized_selection_source=self.scalarized_selection_source,
             scalarized_parent_budget=self.scalarized_parent_budget,
@@ -733,7 +745,7 @@ class ScalarizedHybrid7525(ScalarizedHybrid):
             use_checkpoint=True,
             use_ranked_candidates=False,
             use_greedy_initial_population=True,
-            use_perturbation_restart=False,
+            use_perturbation_restart=_pls_perturbation_restart,
             solution_selection_mode="scalarized-chebycheff",
             scalarized_selection_source=self.scalarized_selection_source,
             scalarized_parent_budget=self.scalarized_parent_budget,
@@ -764,7 +776,7 @@ class ScalarizedHybrid2575(ScalarizedHybrid):
             use_checkpoint=True,
             use_ranked_candidates=False,
             use_greedy_initial_population=True,
-            use_perturbation_restart=False,
+            use_perturbation_restart=_pls_perturbation_restart,
             solution_selection_mode="scalarized-chebycheff",
             scalarized_selection_source=self.scalarized_selection_source,
             scalarized_parent_budget=self.scalarized_parent_budget,
@@ -1280,7 +1292,7 @@ class GPBASeededPLS(AlgorithmConfig):
             use_checkpoint=True,
             use_ranked_candidates=False,
             use_greedy_initial_population=True,
-            use_perturbation_restart=False,
+            use_perturbation_restart=_pls_perturbation_restart,
         )
 
 
@@ -1447,7 +1459,7 @@ class EAPhase1PLSHybrid(AlgorithmConfig):
                 use_checkpoint=False,
                 use_ranked_candidates=False,
                 use_greedy_initial_population=True,
-                use_perturbation_restart=False,
+                use_perturbation_restart=_pls_perturbation_restart,
             )
 
         ea_result = self._run_ea_phase(problem, ea_time, seed)
@@ -1469,7 +1481,7 @@ class EAPhase1PLSHybrid(AlgorithmConfig):
             use_checkpoint=False,
             use_ranked_candidates=False,
             use_greedy_initial_population=True,
-            use_perturbation_restart=False,
+            use_perturbation_restart=_pls_perturbation_restart,
         )
 
         # Merge traces so the combined timeline spans 0 → total_timeout.
@@ -1670,7 +1682,7 @@ class ExactLivePhase1PLSHybrid(AlgorithmConfig):
                 use_checkpoint=False,
                 use_ranked_candidates=False,
                 use_greedy_initial_population=True,
-                use_perturbation_restart=False,
+                use_perturbation_restart=_pls_perturbation_restart,
             )
 
         # ── Phase 1: run exact solver ───────────────────────────────────
@@ -1715,7 +1727,7 @@ class ExactLivePhase1PLSHybrid(AlgorithmConfig):
             use_checkpoint=False,
             use_ranked_candidates=False,
             use_greedy_initial_population=True,
-            use_perturbation_restart=False,
+            use_perturbation_restart=_pls_perturbation_restart,
         )
 
         pls_trace = pls_result.trace
@@ -2495,6 +2507,28 @@ _PSEUDO_SOURCE_DIRS: dict[str, Path] = {
     "an_2d_gurobi":        _DATA_DIR / "an_2d_gurobi",
     "monise_2d_pub":       _DATA_DIR / "monise_2d_pub",
     "pseudo_solver_solutions": _DATA_DIR / "pseudo_solver_solutions",
+    # random-clouds (family C) pseudo-solutions, generated via generate_pseudo.py
+    # --instance-set random-clouds --solver gurobi (see out_suffix="_rc").
+    "gpbaa_2d_gurobi_rc":  _DATA_DIR / "gpbaa_2d_gurobi_rc",
+    # A&N-calibrated "hard" set (see instance_generation_difficulty.md, Part II).
+    "an_2d_gurobi_hard":   _DATA_DIR / "an_2d_gurobi_hard",
+    # Same solutions as an_2d_gurobi_hard, trimmed to each instance's experiment
+    # timeout (see trim_pseudo.py). The full sets were generated with a generous
+    # budget; this holds exactly the prefix the exact phase could have found.
+    "an_2d_gurobi_hard_t": _DATA_DIR / "an_2d_gurobi_hard_t",
+    "gpbaa_2d_gurobi_hard": _DATA_DIR / "gpbaa_2d_gurobi_hard",
+    "gpbaa_2d_gurobi_hard_t": _DATA_DIR / "gpbaa_2d_gurobi_hard_t",
+    # Both exact methods trimmed to a SINGLE fixed handoff budget (T=200s)
+    # across the whole 150-300 ladder, rather than a per-size schedule. A
+    # schedule that grows with N hands bigger instances more compute in
+    # roughly the proportion needed to offset their difficulty, which flattens
+    # the seed count to ~4 at every size and erases the size effect entirely.
+    # At a fixed 200s the mean seed count falls monotonically 24.0 -> 9.2 ->
+    # 7.4 -> 5.8 -> 5.2 -> 4.8 over N=150..300, and no instance is left with
+    # an empty exact phase.
+    "an_2d_gurobi_hard_t200":   _DATA_DIR / "an_2d_gurobi_hard_t200",
+    "gpbaa_2d_gurobi_hard_t200": _DATA_DIR / "gpbaa_2d_gurobi_hard_t200",
+    "an_2d_gurobi_rc":     _DATA_DIR / "an_2d_gurobi_rc",
 }
 
 _pseudo_cache: dict[str, list[dict]] = {}
@@ -2902,14 +2936,62 @@ def _extract_shared_hybrid_pseudo_objectives(
     return pseudo_objectives & hybrid_objectives & improved_objectives
 
 
-def compute_shared_bounds(all_points: list[list[int]], ndim: int) -> list[list[int]]:
-    """Compute [min, max] bounds per objective with margin."""
+def _pseudo_point(sol: dict, objectives: list[str]) -> list[int] | None:
+    """Objective vector of a stored pseudo-solution, in `objectives` order."""
+    key = {
+        "min_cost": "cost",
+        "cloud_coverage": "cloudy_area",
+        "min_max_incidence_angle": "max_incidence_angle",
+        "min_resolution": "min_resolutions_sum",
+    }
+    row: list[int] = []
+    for obj in objectives:
+        k = key.get(obj)
+        if k is None or sol.get(k) is None:
+            return None
+        row.append(int(sol[k]))
+    return row
+
+
+# Fraction of the (nadir - ideal) range added above the nadir to place the HV
+# reference point. Kept small: its only job is to give the extreme points
+# non-zero volume (at the nadir exactly, each extreme contributes zero height).
+_NADIR_MARGIN = 0.05
+
+
+def compute_shared_bounds(
+    all_points: list[list[int]], ndim: int, front: list[list[int]] | None = None
+) -> list[list[int]]:
+    """Per-objective [min, max] defining the HV reference box.
+
+    `front`, when given, is a Pareto-optimal front (A&N's exact solutions). Its
+    per-objective max IS the true nadir -- for two objectives the nadir is fixed
+    by the lexicographic optima, and unsupported Pareto points lie strictly
+    between them, so they cannot exceed it. The reference point is that nadir
+    plus `_NADIR_MARGIN` of the range.
+
+    Falling back to the max over `all_points` (every point ever recorded in
+    every trace, including dominated early-generation EA candidates) makes the
+    box 1.3-7.6x wider than the front -- measured on the N=200 row, up to 22x
+    the front's area on mexico_city. In that box the two payoff extremes alone
+    sweep ~99% of the hypervolume, every algorithm scores 0.97-0.99, and the
+    indicator stops discriminating. Points beyond the nadir score zero, which is
+    correct: they are dominated by some Pareto-optimal solution and are of no
+    use to a decision maker holding the exact front.
+    """
     bounds: list[list[int]] = []
     for i in range(ndim):
         vals = [p[i] for p in all_points]
-        lo, hi = min(vals), max(vals)
-        rng = max(hi - lo, 1)
-        bounds.append([max(0, lo - 1), hi + int(rng * 0.1) + 1])
+        lo = min(vals)
+        if front:
+            hi = max(p[i] for p in front)
+            rng = max(hi - lo, 1)
+            hi = hi + int(rng * _NADIR_MARGIN)
+        else:
+            hi = max(vals)
+            rng = max(hi - lo, 1)
+            hi = hi + int(rng * 0.1)
+        bounds.append([max(0, lo - 1), hi + 1])
     return bounds
 
 
@@ -4011,20 +4093,60 @@ def run_instance(
     traces: dict[str, bytes] = {}
     run_meta: dict[str, dict] = {}
 
-    for cfg in configs:
-        safe_label = (
-            cfg.label.lower().replace(" ", "_").replace("+", "plus").replace("/", "").replace(":", "")
+    # Configs already recorded for this instance, when appending. Their traces
+    # are reloaded rather than re-run, and phases 2-4 below recompute bounds
+    # and every HV curve over the union -- so adding a config later yields the
+    # same artifact as having run them all together, instead of a file whose
+    # older entries were scored against different bounds.
+    prior_artifact: dict = {}
+    if _append_configs:
+        prior_path = output_dir / f"{display_name}.json"
+        if prior_path.exists():
+            try:
+                prior_artifact = json.loads(prior_path.read_text())
+            except (OSError, json.JSONDecodeError) as e:
+                print(f"  WARNING: cannot read {prior_path} to append: {e}", flush=True)
+
+    def _stored_trace_path(label: str) -> Path | None:
+        """Locate a previously written trace for `label`, if any.
+
+        Two layouts exist: the current one writes into a `traces/` subdirectory
+        keeping the label's case ("Hybrid_50-50"), while older runs wrote a
+        lowercased flat file. Try the recorded path first, then both
+        conventions, so appending works against either.
+        """
+        rec = (prior_artifact.get("configs", {}).get(label) or {}).get("trace_file")
+        if rec:
+            cand = output_dir / rec
+            if cand.exists():
+                return cand
+        safe_new = label.replace("/", "-").replace(" ", "_").replace(":", "-")
+        safe_old = (
+            label.lower().replace(" ", "_").replace("+", "plus").replace("/", "").replace(":", "")
         )
-        existing_trace = output_dir / f"{display_name}__{safe_label}.trace.tar.gz"
-        if existing_trace.exists() and num_runs == 1:
+        for cand in (
+            output_dir / "traces" / f"{display_name}__{safe_new}.trace.tar.gz",
+            output_dir / f"{display_name}__{safe_old}.trace.tar.gz",
+        ):
+            if cand.exists():
+                return cand
+        return None
+
+    for cfg in configs:
+        existing_trace = _stored_trace_path(cfg.label) if _append_configs else None
+        if existing_trace is not None and num_runs == 1:
             trace_data = existing_trace.read_bytes()
             traces[cfg.label] = trace_data
-            run_meta[cfg.label] = dict(
-                final_solutions=0,
-                wall_seconds=0.0,
-                trace_bytes=len(trace_data),
-                skipped=True,
-            )
+            # Carry the recorded metadata forward; only the HV numbers are
+            # recomputed, so solution counts and wall times stay truthful.
+            prior_cfg = dict(prior_artifact.get("configs", {}).get(cfg.label) or {})
+            for drop in ("final_hv", "delta_vs_pure_pls_pct", "curve"):
+                prior_cfg.pop(drop, None)
+            prior_cfg.setdefault("final_solutions", 0)
+            prior_cfg.setdefault("wall_seconds", 0.0)
+            prior_cfg["trace_bytes"] = len(trace_data)
+            prior_cfg["reused_trace"] = True
+            run_meta[cfg.label] = prior_cfg
             print(
                 f"\n  [{cfg.label}] loaded from existing trace ({len(trace_data) // 1024}KB)",
                 flush=True,
@@ -4044,10 +4166,40 @@ def run_instance(
             n_final = len(result.final_solutions)
             invalid_count = 0
 
+            # Persist the raw trace and the final Pareto front, not just their
+            # sizes. Without these the run cannot be re-analysed: recomputing HV
+            # under a different reference point, or computing IGD+/spacing,
+            # needs the actual objective vectors, and re-deriving them means
+            # re-running every solver.
+            trace_rel = None
+            if trace_data:
+                tdir = output_dir / "traces"
+                tdir.mkdir(parents=True, exist_ok=True)
+                safe = cfg.label.replace("/", "-").replace(" ", "_").replace(":", "-")
+                tpath = tdir / f"{display_name}__{safe}.trace.tar.gz"
+                tpath.write_bytes(trace_data)
+                trace_rel = str(tpath.relative_to(output_dir))
+
+            front = []
+            for sol in result.final_solutions:
+                pt = _pseudo_point(
+                    {
+                        "cost": getattr(sol, "cost", None),
+                        "cloudy_area": getattr(sol, "cloudy_area", None),
+                        "max_incidence_angle": getattr(sol, "max_incidence_angle", None),
+                        "min_resolutions_sum": getattr(sol, "min_resolutions_sum", None),
+                    },
+                    OBJECTIVES,
+                )
+                if pt:
+                    front.append(pt)
+
             run_meta[cfg.label] = dict(
                 final_solutions=n_final,
                 wall_seconds=round(wall, 1),
                 trace_bytes=len(trace_data) if trace_data else 0,
+                trace_file=trace_rel,
+                final_front=front,
                 invalid_solutions=invalid_count,
             )
             print(
@@ -4140,8 +4292,21 @@ def run_instance(
         print("  ERROR: no trace data available for any config", flush=True)
         return {"instance": display_name, "error": "no trace data"}
 
-    bounds = compute_shared_bounds(all_points, ndim)
-    print(f"  {len(all_points)} total trace points", flush=True)
+    # Prefer the exact front's nadir as the HV reference: it is the true nadir
+    # (bi-objective, from A&N's lexicographic optima) and is independent of which
+    # heuristics are being compared. Falls back to the trace-max box when no
+    # exact solutions are loaded for this instance.
+    _exact_front: list[list[int]] = []
+    for _s in _current_pseudo_solutions:
+        _pt = _pseudo_point(_s, OBJECTIVES)
+        if _pt and len(_pt) == ndim:
+            _exact_front.append(_pt)
+    bounds = compute_shared_bounds(all_points, ndim, _exact_front or None)
+    print(
+        f"  {len(all_points)} total trace points; HV reference from "
+        f"{'exact-front nadir' if _exact_front else 'trace max (fallback)'}",
+        flush=True,
+    )
 
     # Assert baseline and improved hybrid phase-1 alignment before plotting/HV reporting
     _assert_hybrid_phase1_alignment(traces, num_points, total_timeout // 2)
@@ -5034,6 +5199,28 @@ def _pf_trace_front(
     return _pf_pareto_filter([(float(p[0]), float(p[1])) for p in raw])
 
 
+def _pf_widen_bounds(
+    bounds: list[list[int]], seed_sets: list[list[dict]]
+) -> list[list[int]]:
+    """Widen `bounds` so every pseudo-seed point lies inside it.
+
+    The seed sets are generated with their own (longer) budget, so a seed can
+    sit outside the bounds derived from the run traces — `compute_hypervolume`
+    rejects any point outside its bounds. Widening keeps every bar in the figure
+    on one common reference, which is what makes them comparable.
+    """
+    out = [list(b) for b in bounds]
+    for seeds in seed_sets:
+        for sol in seeds:
+            for i, key in enumerate(("cost", "cloudy_area")):
+                if i >= len(out):
+                    break
+                v = int(float(sol[key]))
+                out[i][0] = min(out[i][0], v)
+                out[i][1] = max(out[i][1], v)
+    return out
+
+
 def _pf_row_data(
     result: dict,
     trace_dir: Path,
@@ -5651,6 +5838,8 @@ def generate_ea_bar_figures(
     output_dir: Path,
     filter_regex: str | None = None,
     num_points: int = 30,
+    gpbaa_seeds_override: Path | None = None,
+    an_seeds_override: Path | None = None,
 ) -> None:
     """Per-instance `{instance}_ea_bars.png`: the same 2x4 layout as the front
     figure, but with every panel a phase-decomposed HV bar chart.
@@ -5664,16 +5853,28 @@ def generate_ea_bar_figures(
     from matplotlib.gridspec import GridSpec
     from matplotlib.ticker import MaxNLocator
 
-    gpbaa_seeds_dir = _PSEUDO_SOURCE_DIRS["gpbaa_2d_highs"]
-    an_seeds_dir = _PSEUDO_SOURCE_DIRS["an_2d_highs"]
+    gpbaa_seeds_dir = Path(gpbaa_seeds_override or _PSEUDO_SOURCE_DIRS["gpbaa_2d_highs"])
+    an_seeds_dir = Path(an_seeds_override or _PSEUDO_SOURCE_DIRS["an_2d_highs"])
     matplotlib.rcParams["hatch.linewidth"] = 0.5
     _HATCH = "////"
+    # A row is rendered only when its results directory actually exists, so a
+    # run that produced just one exact method renders a one-row figure rather
+    # than failing or leaving an empty half-canvas.
+    _have_gpbaa = highs_dir is not None and Path(highs_dir).is_dir()
+    _have_an = an_dir is not None and Path(an_dir).is_dir()
     # (full name for the row's y label, short name for the per-panel ratio label,
     #  exact-phase colour)
-    _ROW_LABELS = [
+    _ALL_ROW_LABELS = [
         ("GPBA-A", "GPBA-A", "#e07b00"),
         ("Anytime Aneja & Nair", "A&N", "#d62728"),
     ]
+    _ROW_LABELS = (
+        ([_ALL_ROW_LABELS[0]] if _have_gpbaa else [])
+        + ([_ALL_ROW_LABELS[1]] if _have_an else [])
+    )
+    if not _ROW_LABELS:
+        print(f"Neither {highs_dir} nor {an_dir} exists", flush=True)
+        return
 
     def _load_json(d: Path, inst: str) -> dict | None:
         p = d / f"{inst}.json"
@@ -5685,49 +5886,79 @@ def generate_ea_bar_figures(
             return []
         return json.loads(p.read_text()).get("solutions", [])
 
-    output_dir.mkdir(parents=True, exist_ok=True)
     pat = re.compile(filter_regex) if filter_regex else None
+    _base = Path(highs_dir) if _have_gpbaa else Path(an_dir)
     instances = sorted(
         p.stem
-        for p in highs_dir.glob("*.json")
-        if p.stem != "all_experiments" and (an_dir / p.name).exists()
+        for p in _base.glob("*.json")
+        if p.stem != "all_experiments"
+        and not (_have_gpbaa and _have_an and not (Path(an_dir) / p.name).exists())
     )
     if pat:
         instances = [i for i in instances if pat.search(i)]
     if not instances:
-        print(f"No shared instances found in {highs_dir} and {an_dir}", flush=True)
+        print(f"No instances found in {_base}", flush=True)
         return
 
     for inst in instances:
-        highs = _load_json(highs_dir, inst)
-        an = _load_json(an_dir, inst)
-        if highs is None or an is None:
+        highs = _load_json(highs_dir, inst) if _have_gpbaa else None
+        an = _load_json(an_dir, inst) if _have_an else None
+        if (_have_gpbaa and highs is None) or (_have_an and an is None):
             continue
-        hb, ab = highs.get("shared_bounds"), an.get("shared_bounds")
-        if not hb or not ab:
+        hb = highs.get("shared_bounds") if highs else None
+        ab = an.get("shared_bounds") if an else None
+        if not (hb or ab):
             print(f"  {inst}: missing shared_bounds, skipping", flush=True)
             continue
-        merged = _merge_bounds(hb, ab)
+        # With one row there is nothing to merge; keep both rows on a common
+        # reference when both are present so their HV bars stay comparable.
+        merged = _merge_bounds(hb, ab) if (hb and ab) else (hb or ab)
 
-        rows = [
-            _ea_bar_data(highs, highs_dir, _load_seeds(gpbaa_seeds_dir, inst),
-                         merged, highs, highs_dir, num_points),
-            _ea_bar_data(an, an_dir, _load_seeds(an_seeds_dir, inst),
-                         merged, highs, highs_dir, num_points),
-        ]
+        gpbaa_seeds = _load_seeds(gpbaa_seeds_dir, inst) if _have_gpbaa else []
+        an_seeds = _load_seeds(an_seeds_dir, inst) if _have_an else []
+        # A missing seed file reads as an empty exact-phase front, which plots
+        # as a zero-height bar rather than an error -- indistinguishable on the
+        # page from a genuine zero. Say so instead of drawing a wrong figure.
+        for _who, _dir, _got in (("GPBA-A", gpbaa_seeds_dir, gpbaa_seeds if _have_gpbaa else None),
+                                 ("A&N", an_seeds_dir, an_seeds if _have_an else None)):
+            if _got is not None and not _got:
+                print(f"  WARNING: {inst}: no {_who} seeds in {_dir} -- "
+                      f"exact-phase values will be empty", flush=True)
+        # Seed sets are generated with their own budget and can hold points
+        # outside the run-derived bounds; compute_hypervolume rejects those.
+        merged = _pf_widen_bounds(merged, [gpbaa_seeds, an_seeds])
+
+        # Reference experiment for axis scaling; fall back to whichever exists.
+        _ref, _ref_dir = (highs, highs_dir) if _have_gpbaa else (an, an_dir)
+        rows = []
+        if _have_gpbaa:
+            rows.append(_ea_bar_data(highs, highs_dir, gpbaa_seeds,
+                                     merged, _ref, _ref_dir, num_points))
+        if _have_an:
+            rows.append(_ea_bar_data(an, an_dir, an_seeds,
+                                     merged, _ref, _ref_dir, num_points))
 
         # One y range over every panel in the figure. Comparing a hatched gain in
         # the MOEA/D column against the PLS column is the whole purpose here, and
         # per-panel autoscaling would silently defeat it.
         vals = [b["final_hv"] for row in rows for bars in row.values()
                 for b in bars.values() if b["final_hv"] > 0]
-        floors = [b["hv_p1"] for row in rows for bars in row.values()
-                  for b in bars.values() if b["hv_p1"] > 0]
-        lo = min(floors + vals) * 0.98 if vals else 0.0
+        # The floor is 0, not `min(...) * 0.98`. These are STACKED bars: the
+        # exact-phase base and the second-phase gain are meant to be read as
+        # two parts of one total. A cropped baseline hides the base entirely
+        # whenever the exact phase contributes little -- exactly the cases the
+        # figure exists to show -- and misstates the ratio between the segments
+        # in every other case.
+        lo = 0.0
         hi = max(vals) * 1.02 if vals else 1.0
 
-        fig = plt.figure(figsize=(_PF_FIG_W, _PF_FIG_H), layout="constrained")
-        gs = GridSpec(2, 4, figure=fig)
+        # Height scales with the number of rows so a single-row figure is not
+        # stretched to a two-row canvas.
+        fig = plt.figure(
+            figsize=(_PF_FIG_W, _PF_FIG_H * len(_ROW_LABELS) / 2.0),
+            layout="constrained",
+        )
+        gs = GridSpec(len(_ROW_LABELS), 4, figure=fig)
 
         for r, (mlabel, mshort, mcol) in enumerate(_ROW_LABELS):
             for ci, (title, ecol, _hy, _cold) in enumerate(_EA_ENGINES):
@@ -5764,17 +5995,23 @@ def generate_ea_bar_figures(
                 # The shared y scale is stated once per row; repeating the tick
                 # labels four times across identical axes is noise.
                 if ci == 0:
-                    ax.set_ylabel(f"{mlabel}\nFinal HV", fontsize=_PF_LABEL_PT)
+                    # With one row the exact method is already named by the
+                    # legend and by every panel's x label, and the two-line
+                    # form overflows the (halved) canvas height.
+                    ax.set_ylabel(
+                        "Final HV" if len(_ROW_LABELS) == 1
+                        else f"{mlabel}\nFinal HV",
+                        fontsize=_PF_LABEL_PT,
+                    )
                 else:
                     ax.tick_params(labelleft=False)
 
         from matplotlib.lines import Line2D  # noqa: F401  (kept for parity)
 
         handles = [
-            mpatches.Patch(facecolor=_ROW_LABELS[0][2], linewidth=0,
-                           label="GPBA-A exact phase"),
-            mpatches.Patch(facecolor=_ROW_LABELS[1][2], linewidth=0,
-                           label="Aneja & Nair exact phase"),
+            mpatches.Patch(facecolor=_col, linewidth=0,
+                           label=f"{_full} exact phase")
+            for _full, _short, _col in _ROW_LABELS
         ] + [
             mpatches.Patch(facecolor=_pf_tint(col), hatch=_HATCH, edgecolor=col,
                            linewidth=_PF_SPINE_LW, label=f"{title} phase gain")
@@ -5793,24 +6030,243 @@ def generate_ea_bar_figures(
         print(f"  Saved: {out}", flush=True)
 
 
-def generate_pareto_front_figures(
+# ── Non-HV indicator variants of the EA-bars figure ─────────────────────────
+#
+# Same 2x4 layout and phase-decomposed hatched-bar mechanic as
+# generate_ea_bar_figures, but the metric is front cardinality / spacing /
+# IGD+ instead of hypervolume. These answer the "HV barely moved, but did the
+# front actually get denser / better resolved?" question HV can't show on its
+# own (see performance-indicators discussion).
+#
+# Scope difference from the HV version: HV's bars average 10 pre-stored runs
+# (`final_hv`/`run_hvs` in the experiment JSON); no equivalent per-run raw
+# front data was ever retained for these indicators (only run 0's trace
+# survives per config -- see `_rescaled`'s docstring above), so these bars are
+# single-run (run 0) values, no error bars. This is exactly the same scope
+# the paper's own Pareto-front *scatter* figures already have ("Presented
+# Pareto fronts were generated in a single (the first) run").
+
+_INDICATOR_LABEL: dict[str, str] = {
+    "cardinality": "Front Cardinality",
+    "spacing": "Spacing",
+    "igd_plus": "IGD+",
+    "igd_plus_c": "1 - IGD+",
+}
+
+# Indicators reported as a single final value per bar, with no exact/heuristic
+# phase split. IGD+ is not additively decomposable the way HV is -- phase 2
+# moves the distance up or down rather than adding area, and it moves it the
+# *wrong* way in over half of the hybrid runs (the seeded EAs discard the seed
+# points their bounded populations cannot keep). A stacked bar would have to
+# render those as negative segments, so these indicators plot the final value
+# alone.
+_FINAL_ONLY_INDICATORS: frozenset[str] = frozenset({"igd_plus_c"})
+
+# Indicators where a larger value is better. `igd_plus_c` is 1 - IGD+, so it
+# inverts IGD+'s direction and bars grow upward with quality.
+_HIGHER_IS_BETTER: frozenset[str] = frozenset({"cardinality", "igd_plus_c"})
+
+
+def _pf_trace_path_for_label(trace_dir: Path, instance: str, label: str) -> Path | None:
+    """Trace filename for a config label, matching the derivation in
+    `_recompute_result_with_bounds` (kept in lockstep with it deliberately --
+    both must agree on how a config label maps to a trace filename)."""
+    safe = (
+        label.lower()
+        .replace(" ", "_")
+        .replace("+", "plus")
+        .replace(":", "")
+        .replace("/", "")
+    )
+    path = trace_dir / f"{instance}__{safe}.trace.tar.gz"
+    return path if path.exists() else None
+
+
+def _pf_indicator_value(
+    front: list,
+    bounds: list[list[int]],
+    indicator: str,
+    reference_set: list[list[float]] | None,
+) -> float:
+    """Dispatch to the right sims_problem indicator function for one front."""
+    pts = [list(p) for p in front]
+    if not pts:
+        return 0.0
+    if indicator == "cardinality":
+        return float(sims_problem.front_cardinality(pts))
+    if indicator == "spacing":
+        return sims_problem.compute_spacing(pts, bounds, normalized=True)
+    if indicator in ("igd_plus", "igd_plus_c"):
+        ref = reference_set if reference_set else pts
+        val = sims_problem.compute_igd(pts, ref, bounds, normalized=True, plus=True)
+        # The complement is a display transform only: 1 - x is strictly
+        # decreasing, so rankings and statistical tests are identical to IGD+.
+        # Report plain IGD+ in tables; use this only for figures where "taller
+        # is better" has to hold. Note 1 is not a true upper bound -- normalized
+        # IGD+ in d dimensions can reach sqrt(d) -- so a catastrophically bad
+        # front could go negative. Warn rather than plot a nonsense bar.
+        if indicator == "igd_plus_c":
+            if val > 1.0:
+                print(f"  WARNING: IGD+ = {val:.4f} > 1, so 1 - IGD+ is "
+                      f"negative; the complement is not meaningful here",
+                      flush=True)
+            return 1.0 - val
+        return val
+    raise ValueError(f"Unknown indicator: {indicator!r}")
+
+
+def _pf_build_reference_set(
+    instance: str,
+    highs_dir: Path,
+    an_dir: Path,
+    gpbaa_seeds: list[dict],
+    an_seeds: list[dict],
+) -> list[list[float]]:
+    """Union of every front ever discovered for this instance -- both exact
+    methods' full seed sets, plus every engine/ratio's final trace front from
+    both experiment directories -- filtered to non-dominated. Used as
+    compute_igd's reference set: the best-known approximation to the true
+    front, built from everything already computed for this instance rather
+    than a separate generous-timeout solve.
+    """
+    points: set[tuple[float, float]] = set()
+    for s in gpbaa_seeds + an_seeds:
+        points.add((float(s["cost"]), float(s["cloudy_area"])))
+    for trace_dir in (highs_dir, an_dir):
+        for path in trace_dir.glob(f"{instance}__*.trace.tar.gz"):
+            try:
+                front = sims_problem.front_from_trace_at_time(path.read_bytes(), 1e12)
+            except Exception:
+                continue
+            for p in front:
+                points.add((float(p[0]), float(p[1])))
+    return [list(p) for p in _pf_pareto_filter(sorted(points))]
+
+
+def _pf_reference_bounds(reference_set: list[list[float]]) -> list[list[float]]:
+    """Per-objective [min, max] (ideal/nadir) of the reference set itself.
+
+    Used to normalise spacing/IGD+ instead of `shared_bounds` -- shared_bounds
+    is built from *every* point ever recorded in every trace (including
+    dominated/early-generation candidates from every EA config, see
+    `compute_shared_bounds`), which is the right choice for HV's reference
+    point but is typically 1.5-3x wider than the region the actual
+    Pareto-optimal front occupies. Normalising a density/convergence metric by
+    that inflated, algorithm-exploration-dependent range understates the
+    values and makes them less comparable across instances. The reference
+    set's own ideal/nadir is the standard choice for these indicators (matches
+    pymoo/moocore convention) and is already computed for IGD+ elsewhere.
+    """
+    ndim = len(reference_set[0])
+    return [
+        [min(p[i] for p in reference_set), max(p[i] for p in reference_set)]
+        for i in range(ndim)
+    ]
+
+
+def _ea_bar_data_indicator(
+    indicator: str,
+    result: dict,
+    trace_dir: Path,
+    seeds: list[dict],
+    merged_bounds: list[list[int]],
+    reference_set: list[list[float]] | None,
+) -> dict[str, dict[float, dict]]:
+    """Phase-decomposed indicator bars per engine per ratio.
+
+    Returns {engine title: {ratio: {p1, p2, final}}}, mirroring
+    `_ea_bar_data`'s {hv_p1, hv_p2, final_hv} shape. Unlike HV, `p2` is NOT
+    floored at 0: for spacing/IGD+ (lower is better), a second phase that
+    improves the front makes `p2` negative by construction (final < p1), and
+    that is real signal, not noise -- flooring it would silently hide
+    improvements. The renderer draws negative `p2` extending *below* `p1`,
+    so the bar's total height (`p1 + p2`) still always equals `final`.
+    """
+    timeout = float(result.get("timeout_s", 0.0))
+    instance = result["instance"]
+
+    out: dict[str, dict[float, dict]] = {}
+    for title, _colour, hybrid_labels, cold_label in _EA_ENGINES:
+        bars: dict[float, dict] = {}
+        for ratio, _name in _PF_RATIOS:
+            _final_only = indicator in _FINAL_ONLY_INDICATORS
+            if ratio == 1.00:
+                front = _pf_exact_front(seeds, timeout)
+                val = _pf_indicator_value(front, merged_bounds, indicator, reference_set)
+                bars[ratio] = dict(p1=val, p2=0.0, final=val)
+            elif ratio == 0.00:
+                path = _pf_trace_path_for_label(trace_dir, instance, cold_label)
+                if path is None:
+                    continue
+                front = sims_problem.front_from_trace_at_time(path.read_bytes(), timeout)
+                val = _pf_indicator_value(front, merged_bounds, indicator, reference_set)
+                bars[ratio] = dict(p1=0.0, p2=val, final=val)
+            else:
+                path = _pf_trace_path_for_label(trace_dir, instance, hybrid_labels[ratio])
+                if path is None:
+                    continue
+                final_front = sims_problem.front_from_trace_at_time(
+                    path.read_bytes(), timeout
+                )
+                final = _pf_indicator_value(
+                    final_front, merged_bounds, indicator, reference_set
+                )
+                if _final_only:
+                    # One bar spanning [0, final]; the renderer draws the
+                    # delta segment when p1 is 0.
+                    bars[ratio] = dict(p1=0.0, p2=final, final=final)
+                else:
+                    p1_front = _pf_exact_front(seeds, ratio * timeout)
+                    p1 = _pf_indicator_value(
+                        p1_front, merged_bounds, indicator, reference_set
+                    )
+                    bars[ratio] = dict(p1=p1, p2=final - p1, final=final)
+        out[title] = bars
+    return out
+
+
+def generate_ea_bar_figures_indicator(
+    indicator: str,
     highs_dir: Path,
     an_dir: Path,
     output_dir: Path,
     filter_regex: str | None = None,
-    num_points: int = 30,
+    gpbaa_seeds_override: Path | None = None,
+    an_seeds_override: Path | None = None,
 ) -> None:
-    """Reconstruct the paper's per-instance `{instance}_pareto_fronts.png` figures
-    from trace artifacts, with phase-separated + hatched HV bars.
-
-    Row 0 = GPBA-A (highs_dir + gpbaa_2d_highs pseudo seeds),
-    Row 1 = Aneja & Nair (an_dir + an_2d_highs pseudo seeds).
+    """Per-instance `{instance}_ea_bars.png` using `indicator` (one of
+    "cardinality", "spacing", "igd_plus") instead of hypervolume. Same 2x4
+    layout, same phase-decomposed hatched-bar mechanic as
+    generate_ea_bar_figures -- see the module comment above this section for
+    what differs (single-run bars, unclipped `p2`).
     """
     from matplotlib.gridspec import GridSpec
     from matplotlib.ticker import MaxNLocator
 
-    gpbaa_seeds_dir = _PSEUDO_SOURCE_DIRS["gpbaa_2d_highs"]
-    an_seeds_dir = _PSEUDO_SOURCE_DIRS["an_2d_highs"]
+    if indicator not in _INDICATOR_LABEL:
+        raise ValueError(
+            f"Unknown indicator {indicator!r}, expected one of {sorted(_INDICATOR_LABEL)}"
+        )
+
+    gpbaa_seeds_dir = Path(gpbaa_seeds_override or _PSEUDO_SOURCE_DIRS["gpbaa_2d_highs"])
+    an_seeds_dir = Path(an_seeds_override or _PSEUDO_SOURCE_DIRS["an_2d_highs"])
+    # Render a row only when its results directory exists, so a grid that ran
+    # one exact method produces a one-row figure instead of failing.
+    _have_gpbaa = highs_dir is not None and Path(highs_dir).is_dir()
+    _have_an = an_dir is not None and Path(an_dir).is_dir()
+    matplotlib.rcParams["hatch.linewidth"] = 0.5
+    _HATCH = "////"
+    _ALL_ROW_LABELS = [
+        ("GPBA-A", "GPBA-A", "#e07b00"),
+        ("Anytime Aneja & Nair", "A&N", "#d62728"),
+    ]
+    _ROW_LABELS = (
+        ([_ALL_ROW_LABELS[0]] if _have_gpbaa else [])
+        + ([_ALL_ROW_LABELS[1]] if _have_an else [])
+    )
+    if not _ROW_LABELS:
+        print(f"Neither {highs_dir} nor {an_dir} exists", flush=True)
+        return
 
     def _load_json(d: Path, inst: str) -> dict | None:
         p = d / f"{inst}.json"
@@ -5822,9 +6278,474 @@ def generate_pareto_front_figures(
             return []
         return json.loads(p.read_text()).get("solutions", [])
 
-    output_dir.mkdir(parents=True, exist_ok=True)
     pat = re.compile(filter_regex) if filter_regex else None
+    _base = Path(highs_dir) if _have_gpbaa else Path(an_dir)
+    instances = sorted(
+        p.stem
+        for p in _base.glob("*.json")
+        if p.stem != "all_experiments"
+        and not (_have_gpbaa and _have_an and not (Path(an_dir) / p.name).exists())
+    )
+    if pat:
+        instances = [i for i in instances if pat.search(i)]
+    if not instances:
+        print(f"No instances found in {_base}", flush=True)
+        return
 
+    ylabel = _INDICATOR_LABEL[indicator]
+
+    for inst in instances:
+        highs = _load_json(highs_dir, inst) if _have_gpbaa else None
+        an = _load_json(an_dir, inst) if _have_an else None
+        if (_have_gpbaa and highs is None) or (_have_an and an is None):
+            continue
+        hb = highs.get("shared_bounds") if highs else None
+        ab = an.get("shared_bounds") if an else None
+        if not (hb or ab):
+            print(f"  {inst}: missing shared_bounds, skipping", flush=True)
+            continue
+        merged = _merge_bounds(hb, ab) if (hb and ab) else (hb or ab)
+
+        gpbaa_seeds = _load_seeds(gpbaa_seeds_dir, inst) if _have_gpbaa else []
+        an_seeds = _load_seeds(an_seeds_dir, inst) if _have_an else []
+        # A missing seed file reads as an empty exact-phase front, which plots
+        # as a zero-height bar rather than an error -- indistinguishable on the
+        # page from a genuine zero. Say so instead of drawing a wrong figure.
+        for _who, _dir, _got in (("GPBA-A", gpbaa_seeds_dir, gpbaa_seeds if _have_gpbaa else None),
+                                 ("A&N", an_seeds_dir, an_seeds if _have_an else None)):
+            if _got is not None and not _got:
+                print(f"  WARNING: {inst}: no {_who} seeds in {_dir} -- "
+                      f"exact-phase values will be empty", flush=True)
+
+        reference_set = (
+            _pf_build_reference_set(inst, highs_dir, an_dir, gpbaa_seeds, an_seeds)
+            if indicator != "cardinality"
+            else None
+        )
+        indicator_bounds = _pf_reference_bounds(reference_set) if reference_set else merged
+
+        rows = []
+        if _have_gpbaa:
+            rows.append(_ea_bar_data_indicator(
+                indicator, highs, highs_dir, gpbaa_seeds, indicator_bounds, reference_set))
+        if _have_an:
+            rows.append(_ea_bar_data_indicator(
+                indicator, an, an_dir, an_seeds, indicator_bounds, reference_set))
+
+        all_vals = [
+            v
+            for row in rows
+            for bars in row.values()
+            for bd in bars.values()
+            for v in (bd["p1"], bd["final"])
+        ]
+        # A phase-decomposed bar must sit on zero -- its segments have to sum
+        # to the total. A final-only bar carries no segments, and these values
+        # occupy a narrow band near 1, so a zero baseline renders every method
+        # as the same full-height bar. Crop to the data instead. This IS an
+        # axis truncation: state it in the caption.
+        # Range over the FINAL values only. `all_vals` also carries the p1
+        # entries, which final-only mode pins to 0, so using it would put the
+        # floor back at zero and undo the crop.
+        _finals = [
+            bd["final"]
+            for row in rows for bars in row.values() for bd in bars.values()
+        ]
+        if indicator in _FINAL_ONLY_INDICATORS and _finals:
+            _span = max(_finals) - min(_finals)
+            _pad = max(_span * 0.15, max(_finals) * 0.005)
+            lo, hi = min(_finals) - _pad, max(_finals) + _pad
+        else:
+            lo = min(0.0, min(all_vals) * 1.02) if all_vals else 0.0
+            hi = max(all_vals) * 1.02 if all_vals else 1.0
+
+        fig = plt.figure(figsize=(_PF_FIG_W, _PF_FIG_H), layout="constrained")
+        gs = GridSpec(len(_ROW_LABELS), 4, figure=fig)
+
+        # The indicator values behind the bars. A zero-height bar is
+        # ambiguous on the page (absent config vs. genuine zero), and for
+        # spacing/IGD+ a genuine zero is a strong claim worth checking.
+        for _lbl, _rd in zip([r[1] for r in _ROW_LABELS], rows):
+            for _eng, _bars in _rd.items():
+                _s = ", ".join(
+                    f"{_n}:{_bars[_r]['final']:.4f}"
+                    for _r, _n in _PF_RATIOS if _r in _bars
+                )
+                print(f"  {inst} [{_lbl}/{_eng}] {indicator} -> {_s}", flush=True)
+
+        for r, (mlabel, mshort, mcol) in enumerate(_ROW_LABELS):
+            for ci, (title, ecol, _hy, _cold) in enumerate(_EA_ENGINES):
+                ax = fig.add_subplot(gs[r, ci])
+                bars = rows[r][title]
+                present = [(ratio, name) for ratio, name in _PF_RATIOS if ratio in bars]
+                xs = list(range(len(present)))
+                for xi, (ratio, _name) in zip(xs, present):
+                    bd = bars[ratio]
+                    p1, final = bd["p1"], bd["final"]
+                    # The solid bar always spans [0, p1] so the exact-phase
+                    # value reads identically across every engine column
+                    # (it IS identical — p1 doesn't depend on the phase-2
+                    # engine). The phase-2 delta is drawn as a second
+                    # rectangle spanning [min(p1, final), max(p1, final)].
+                    # When final >= p1 (HV-like, monotone improvement) it
+                    # sits above the solid bar and is filled solid, matching
+                    # the original stacked-bar look. When final < p1
+                    # (lower-is-better indicators improving in phase 2) it
+                    # would otherwise overlap and mask the solid bar, so it
+                    # is drawn with a transparent fill — only the hatch
+                    # pattern and edge — letting the solid p1 color show
+                    # through underneath.
+                    if p1 != 0:
+                        ax.bar(
+                            xi, p1, width=0.68, color=mcol,
+                            linewidth=0, zorder=3,
+                        )
+                    delta = final - p1
+                    if delta != 0:
+                        improving = delta < 0
+                        ax.bar(
+                            xi, delta, width=0.68, bottom=p1,
+                            facecolor="none" if improving else _pf_tint(ecol),
+                            hatch=_HATCH, edgecolor=ecol,
+                            linewidth=_PF_SPINE_LW, zorder=4,
+                        )
+                ax.set_xticks(xs)
+                ax.set_xticklabels(
+                    [name for _r, name in present], fontsize=_PF_TICK_PT,
+                    rotation=45, ha="right", rotation_mode="anchor",
+                )
+                ax.set_xlabel(f"{mshort} : {title}", fontsize=_PF_LABEL_PT)
+                _pf_panel_title(ax, _PF_PANEL_LETTERS[r * 4 + ci], title)
+                ax.set_ylim(lo, hi)
+                ax.yaxis.set_major_locator(MaxNLocator(nbins=4))
+                _pf_style_axes(ax, grid_axis="y")
+                ax.tick_params(axis="x", length=0)
+                if ci == 0:
+                    # One row: the method is already named by the legend and
+                    # by every panel's x label, and the two-line form overflows
+                    # the halved canvas height.
+                    ax.set_ylabel(
+                        f"Final {ylabel}" if len(_ROW_LABELS) == 1
+                        else f"{mlabel}\nFinal {ylabel}",
+                        fontsize=_PF_LABEL_PT,
+                    )
+                else:
+                    ax.tick_params(labelleft=False)
+
+        _fo = indicator in _FINAL_ONLY_INDICATORS
+        handles = [
+            mpatches.Patch(
+                facecolor=_col, linewidth=0,
+                label=f"{_full} ({'100:0' if _fo else 'exact phase'})",
+            )
+            for _full, _short, _col in _ROW_LABELS
+        ] + [
+            mpatches.Patch(facecolor=_pf_tint(col), hatch=_HATCH, edgecolor=col,
+                           linewidth=_PF_SPINE_LW,
+                           label=title if _fo else f"{title} phase Δ")
+            for title, col, _h, _c in _EA_ENGINES
+        ]
+        leg = fig.legend(
+            handles=handles, loc="outside lower center", ncol=3,
+            fontsize=_PF_LEGEND_PT, frameon=False, handletextpad=0.5,
+            columnspacing=1.6, labelspacing=0.35, handlelength=1.4,
+        )
+        for txt in leg.get_texts():
+            txt.set_color("black")
+
+        out = _pf_save(fig, output_dir, f"{inst}_ea_bars")
+        plt.close(fig)
+        print(f"  Saved: {out}", flush=True)
+
+
+# ── Lollipop variant: direct engine-vs-engine comparison ────────────────────
+#
+# The bar figure above only ever compares phase 1 vs phase 2 *within* one
+# engine's own column -- it never puts two engines' final values in the same
+# axes, so "is PLS better than NSGA-II" can't be read off it directly. Here
+# the panel axis is the ratio (not the engine), and each panel plots all four
+# engines' `final` indicator value as a lollipop (stem + marker, no fill
+# area) so heights are directly comparable and the chart doesn't imply
+# "taller = better" for lower-is-better indicators (spacing, IGD+).
+
+_PF_ENGINE_MARKERS: dict[str, str] = {
+    "PLS": "o",
+    "NSGA-II": "s",
+    "NSGA-III": "^",
+    "MOEA/D": "D",
+}
+
+
+def _pf_lollipop_ratios(rows: list[dict], _row_idx: int) -> list[float]:
+    """Ratios (excluding the pure-exact 1.00 baseline) with data for at least
+    one engine, in `_PF_RATIOS` order."""
+    row = rows[_row_idx]
+    present = {ratio for bars in row.values() for ratio in bars if ratio != 1.00}
+    return [ratio for ratio, _name in _PF_RATIOS if ratio in present]
+
+
+def generate_ea_lollipop_figures_indicator(
+    indicator: str,
+    highs_dir: Path,
+    an_dir: Path,
+    output_dir: Path,
+    filter_regex: str | None = None,
+    gpbaa_seeds_override: Path | None = None,
+    an_seeds_override: Path | None = None,
+) -> None:
+    """Per-instance `{instance}_ea_lollipop.png`: one panel per ratio (not per
+    engine), each showing all four engines' final `indicator` value side by
+    side as lollipops, plus a dashed reference line at the exact-only (100:0)
+    value. Direct visual comparison across engines, unlike
+    generate_ea_bar_figures_indicator's phase-decomposed bars.
+    """
+    from matplotlib.gridspec import GridSpec
+    from matplotlib.lines import Line2D
+    from matplotlib.ticker import MaxNLocator
+
+    if indicator not in _INDICATOR_LABEL:
+        raise ValueError(
+            f"Unknown indicator {indicator!r}, expected one of {sorted(_INDICATOR_LABEL)}"
+        )
+
+    gpbaa_seeds_dir = Path(gpbaa_seeds_override or _PSEUDO_SOURCE_DIRS["gpbaa_2d_highs"])
+    an_seeds_dir = Path(an_seeds_override or _PSEUDO_SOURCE_DIRS["an_2d_highs"])
+    # Render a row only when its results directory exists, so a grid that ran
+    # one exact method produces a one-row figure instead of failing.
+    _have_gpbaa = highs_dir is not None and Path(highs_dir).is_dir()
+    _have_an = an_dir is not None and Path(an_dir).is_dir()
+    _ALL_ROW_LABELS = [
+        ("GPBA-A", "GPBA-A", "#e07b00"),
+        ("Anytime Aneja & Nair", "A&N", "#d62728"),
+    ]
+    _ROW_LABELS = (
+        ([_ALL_ROW_LABELS[0]] if _have_gpbaa else [])
+        + ([_ALL_ROW_LABELS[1]] if _have_an else [])
+    )
+    if not _ROW_LABELS:
+        print(f"Neither {highs_dir} nor {an_dir} exists", flush=True)
+        return
+    higher_is_better = indicator in _HIGHER_IS_BETTER
+    arrow = "↑" if higher_is_better else "↓"
+
+    def _load_json(d: Path, inst: str) -> dict | None:
+        p = d / f"{inst}.json"
+        return json.loads(p.read_text()) if p.exists() else None
+
+    def _load_seeds(d: Path, inst: str) -> list[dict]:
+        p = d / f"{inst}.json"
+        if not p.exists():
+            return []
+        return json.loads(p.read_text()).get("solutions", [])
+
+    pat = re.compile(filter_regex) if filter_regex else None
+    _base = Path(highs_dir) if _have_gpbaa else Path(an_dir)
+    instances = sorted(
+        p.stem
+        for p in _base.glob("*.json")
+        if p.stem != "all_experiments"
+        and not (_have_gpbaa and _have_an and not (Path(an_dir) / p.name).exists())
+    )
+    if pat:
+        instances = [i for i in instances if pat.search(i)]
+    if not instances:
+        print(f"No instances found in {_base}", flush=True)
+        return
+
+    ylabel = _INDICATOR_LABEL[indicator]
+
+    for inst in instances:
+        highs = _load_json(highs_dir, inst) if _have_gpbaa else None
+        an = _load_json(an_dir, inst) if _have_an else None
+        if (_have_gpbaa and highs is None) or (_have_an and an is None):
+            continue
+        hb = highs.get("shared_bounds") if highs else None
+        ab = an.get("shared_bounds") if an else None
+        if not (hb or ab):
+            print(f"  {inst}: missing shared_bounds, skipping", flush=True)
+            continue
+        merged = _merge_bounds(hb, ab) if (hb and ab) else (hb or ab)
+
+        gpbaa_seeds = _load_seeds(gpbaa_seeds_dir, inst) if _have_gpbaa else []
+        an_seeds = _load_seeds(an_seeds_dir, inst) if _have_an else []
+        # A missing seed file reads as an empty exact-phase front, which plots
+        # as a zero-height bar rather than an error -- indistinguishable on the
+        # page from a genuine zero. Say so instead of drawing a wrong figure.
+        for _who, _dir, _got in (("GPBA-A", gpbaa_seeds_dir, gpbaa_seeds if _have_gpbaa else None),
+                                 ("A&N", an_seeds_dir, an_seeds if _have_an else None)):
+            if _got is not None and not _got:
+                print(f"  WARNING: {inst}: no {_who} seeds in {_dir} -- "
+                      f"exact-phase values will be empty", flush=True)
+
+        reference_set = (
+            _pf_build_reference_set(inst, highs_dir, an_dir, gpbaa_seeds, an_seeds)
+            if indicator != "cardinality"
+            else None
+        )
+        indicator_bounds = _pf_reference_bounds(reference_set) if reference_set else merged
+
+        rows = []
+        if _have_gpbaa:
+            rows.append(_ea_bar_data_indicator(
+                indicator, highs, highs_dir, gpbaa_seeds, indicator_bounds, reference_set))
+        if _have_an:
+            rows.append(_ea_bar_data_indicator(
+                indicator, an, an_dir, an_seeds, indicator_bounds, reference_set))
+
+        all_vals = [
+            bd["final"]
+            for row in rows
+            for bars in row.values()
+            for ratio, bd in bars.items()
+        ]
+        lo = min(0.0, min(all_vals) * 1.02) if all_vals else 0.0
+        hi = max(all_vals) * 1.05 if all_vals else 1.0
+        # Markers sitting at/near lo=0 get clipped in half by the axes frame
+        # (matplotlib clips at the exact ylim); pad the *displayed* floor
+        # below the data floor so nothing touches the frame. Stems are still
+        # drawn from the true y=0 baseline below -- this margin is purely
+        # visual headroom, not a change to what's plotted.
+        lo_display = lo - 0.03 * (hi - lo)
+
+        ratio_cols = [_pf_lollipop_ratios(rows, i) for i in range(len(rows))]
+        ncols = max((len(rc) for rc in ratio_cols), default=0)
+        if ncols == 0:
+            continue
+
+        _hscale = len(_ROW_LABELS) / 2.0 if len(_ROW_LABELS) >= 2 else 0.62
+        fig = plt.figure(
+            figsize=(_PF_FIG_W, _PF_FIG_H * _hscale), layout="constrained"
+        )
+        gs = GridSpec(len(_ROW_LABELS), ncols, figure=fig)
+
+        for r, (mlabel, mshort, mcol) in enumerate(_ROW_LABELS):
+            baseline = None
+            for bars in rows[r].values():
+                if 1.00 in bars:
+                    baseline = bars[1.00]["final"]
+                    break
+            for ci, ratio in enumerate(ratio_cols[r]):
+                ax = fig.add_subplot(gs[r, ci])
+                if baseline is not None:
+                    ax.axhline(
+                        baseline, color=mcol, linestyle="--", linewidth=_PF_SPINE_LW,
+                        zorder=2,
+                    )
+                xs, labels = [], []
+                for xi, (title, ecol, _hy, _cold) in enumerate(_EA_ENGINES):
+                    bd = rows[r][title].get(ratio)
+                    if bd is None:
+                        continue
+                    xs.append(xi)
+                    labels.append(title)
+                    val = bd["final"]
+                    is_pls = title == "PLS"
+                    ax.vlines(
+                        xi, 0, val, color=ecol,
+                        linewidth=1.1 if is_pls else 0.7, zorder=3,
+                        clip_on=False,
+                    )
+                    ax.plot(
+                        xi, val, marker=_PF_ENGINE_MARKERS[title],
+                        markersize=5.5 if is_pls else 4.0,
+                        markerfacecolor=ecol, markeredgecolor=ecol,
+                        markeredgewidth=0.8 if is_pls else 0.4,
+                        zorder=4, clip_on=False,
+                    )
+                ax.set_xticks(range(len(_EA_ENGINES)))
+                ax.set_xticklabels(
+                    [t for t, *_ in _EA_ENGINES], fontsize=_PF_TICK_PT,
+                    rotation=45, ha="right", rotation_mode="anchor",
+                )
+                ax.set_xlim(-0.6, len(_EA_ENGINES) - 0.4)
+                _, ratio_name = next(p for p in _PF_RATIOS if p[0] == ratio)
+                ax.set_xlabel(f"{mshort} : {ratio_name}", fontsize=_PF_LABEL_PT)
+                _pf_panel_title(ax, _PF_PANEL_LETTERS[r * ncols + ci], ratio_name)
+                ax.set_ylim(lo_display, hi)
+                ax.yaxis.set_major_locator(MaxNLocator(nbins=4))
+                _pf_style_axes(ax, grid_axis="y")
+                ax.tick_params(axis="x", length=0)
+                if ci == 0:
+                    # One row: the method is already named by the legend and
+                    # by every panel's x label, and the two-line form overflows
+                    # the halved canvas height.
+                    ax.set_ylabel(
+                        f"Final {ylabel}" if len(_ROW_LABELS) == 1
+                        else f"{mlabel}\nFinal {ylabel}",
+                        fontsize=_PF_LABEL_PT,
+                    )
+                else:
+                    ax.tick_params(labelleft=False)
+
+        fig.suptitle(
+            f"{arrow} {'higher' if higher_is_better else 'lower'} is better",
+            fontsize=_PF_LEGEND_PT,
+        )
+
+        handles = [
+            Line2D(
+                [0], [0], marker=_PF_ENGINE_MARKERS[title], color=col,
+                markerfacecolor=col, markeredgecolor=col,
+                markeredgewidth=0.8 if title == "PLS" else 0.4,
+                linewidth=1.1 if title == "PLS" else 0.7, label=title,
+            )
+            for title, col, _h, _c in _EA_ENGINES
+        ] + [
+            Line2D(
+                [0], [0], color=_col, linestyle="--",
+                linewidth=_PF_SPINE_LW, label=f"{_short} (100:0) reference",
+            )
+            for _full, _short, _col in _ROW_LABELS
+        ]
+        leg = fig.legend(
+            handles=handles, loc="outside lower center", ncol=3,
+            fontsize=_PF_LEGEND_PT, frameon=False, handletextpad=0.5,
+            columnspacing=1.6, labelspacing=0.35, handlelength=1.4,
+        )
+        for txt in leg.get_texts():
+            txt.set_color("black")
+
+        out = _pf_save(fig, output_dir, f"{inst}_ea_lollipop")
+        plt.close(fig)
+        print(f"  Saved: {out}", flush=True)
+
+
+def compute_ea_rank_summary(
+    indicator: str,
+    highs_dir: Path,
+    an_dir: Path,
+    filter_regex: str | None = None,
+) -> "pd.DataFrame":
+    """Cross-instance proof table: for every (exact method, ratio), rank the
+    four engines' final `indicator` value (1 = best) on each instance and
+    aggregate mean rank + win count over all instances. Ranking (rather than
+    averaging raw values) sidesteps the fact that spacing/IGD+/cardinality
+    scales differ per instance, so raw cross-instance averages would be
+    dominated by whichever instances happen to have larger scales.
+    """
+    import pandas as pd
+
+    if indicator not in _INDICATOR_LABEL:
+        raise ValueError(
+            f"Unknown indicator {indicator!r}, expected one of {sorted(_INDICATOR_LABEL)}"
+        )
+    higher_is_better = indicator in _HIGHER_IS_BETTER
+
+    gpbaa_seeds_dir = _PSEUDO_SOURCE_DIRS["gpbaa_2d_highs"]
+    an_seeds_dir = _PSEUDO_SOURCE_DIRS["an_2d_highs"]
+    _ROW_LABELS = [("GPBA-A", "GPBA-A"), ("Anytime Aneja & Nair", "A&N")]
+
+    def _load_json(d: Path, inst: str) -> dict | None:
+        p = d / f"{inst}.json"
+        return json.loads(p.read_text()) if p.exists() else None
+
+    def _load_seeds(d: Path, inst: str) -> list[dict]:
+        p = d / f"{inst}.json"
+        if not p.exists():
+            return []
+        return json.loads(p.read_text()).get("solutions", [])
+
+    pat = re.compile(filter_regex) if filter_regex else None
     instances = sorted(
         p.stem
         for p in highs_dir.glob("*.json")
@@ -5832,8 +6753,132 @@ def generate_pareto_front_figures(
     )
     if pat:
         instances = [i for i in instances if pat.search(i)]
+
+    records = []
+    for inst in instances:
+        highs = _load_json(highs_dir, inst)
+        an = _load_json(an_dir, inst)
+        if highs is None or an is None:
+            continue
+        hb, ab = highs.get("shared_bounds"), an.get("shared_bounds")
+        if not hb or not ab:
+            continue
+        merged = _merge_bounds(hb, ab)
+
+        gpbaa_seeds = _load_seeds(gpbaa_seeds_dir, inst)
+        an_seeds = _load_seeds(an_seeds_dir, inst)
+        reference_set = (
+            _pf_build_reference_set(inst, highs_dir, an_dir, gpbaa_seeds, an_seeds)
+            if indicator != "cardinality"
+            else None
+        )
+        indicator_bounds = _pf_reference_bounds(reference_set) if reference_set else merged
+
+        rows = [
+            _ea_bar_data_indicator(
+                indicator, highs, highs_dir, gpbaa_seeds, indicator_bounds, reference_set
+            ),
+            _ea_bar_data_indicator(
+                indicator, an, an_dir, an_seeds, indicator_bounds, reference_set
+            ),
+        ]
+
+        for r, (mlabel, mshort) in enumerate(_ROW_LABELS):
+            for ratio in _pf_lollipop_ratios(rows, r):
+                vals = {
+                    title: rows[r][title][ratio]["final"]
+                    for title, *_ in _EA_ENGINES
+                    if ratio in rows[r][title]
+                }
+                if len(vals) < 2:
+                    continue
+                ordered = sorted(
+                    vals, key=lambda t: vals[t], reverse=higher_is_better
+                )
+                ranks = {t: ordered.index(t) + 1 for t in vals}
+                for title, rank in ranks.items():
+                    records.append(
+                        dict(
+                            instance=inst, exact_method=mshort, ratio=ratio,
+                            engine=title, value=vals[title], rank=rank,
+                            is_best=rank == 1,
+                        )
+                    )
+
+    df = pd.DataFrame.from_records(records)
+    if df.empty:
+        return df
+    summary = (
+        df.groupby(["exact_method", "ratio", "engine"])
+        .agg(mean_rank=("rank", "mean"), wins=("is_best", "sum"), n=("rank", "size"))
+        .reset_index()
+        .sort_values(["exact_method", "ratio", "mean_rank"])
+    )
+    return summary
+
+
+def generate_pareto_front_figures(
+    highs_dir: Path,
+    an_dir: Path,
+    output_dir: Path,
+    filter_regex: str | None = None,
+    num_points: int = 30,
+    gpbaa_seeds_override: Path | None = None,
+    an_seeds_override: Path | None = None,
+) -> None:
+    """Reconstruct the paper's per-instance `{instance}_pareto_fronts.png` figures
+    from trace artifacts, with phase-separated + hatched HV bars.
+
+    Row 0 = GPBA-A (highs_dir + gpbaa_2d_highs pseudo seeds),
+    Row 1 = Aneja & Nair (an_dir + an_2d_highs pseudo seeds).
+    """
+    from matplotlib.gridspec import GridSpec
+    from matplotlib.ticker import MaxNLocator
+
+    # Seed sources default to the publication *_highs datasets, but any instance
+    # set generated later (e.g. the A&N-calibrated "hard" grid) keeps its
+    # pseudo-solutions elsewhere, so allow an explicit override. Without this the
+    # exact-phase portion of every bar silently comes out empty.
+    gpbaa_seeds_dir = gpbaa_seeds_override or _PSEUDO_SOURCE_DIRS["gpbaa_2d_highs"]
+    an_seeds_dir = an_seeds_override or _PSEUDO_SOURCE_DIRS["an_2d_highs"]
+
+    # A row is rendered only if its results directory was supplied. Passing just
+    # one of --highs-dir/--an-dir produces the corresponding single-row figure,
+    # which is what you want before the second exact method has been run.
+    # --highs-dir/--an-dir both carry defaults, so "not supplied" cannot be
+    # detected by None. Treat a directory that does not exist as absent, which
+    # is what happens when only one exact method has been run.
+    _have_gpbaa = highs_dir is not None and Path(highs_dir).is_dir()
+    _have_an = an_dir is not None and Path(an_dir).is_dir()
+    if not (_have_gpbaa or _have_an):
+        print("neither --highs-dir nor --an-dir given", flush=True)
+        return
+
+    def _load_json(d: Path, inst: str) -> dict | None:
+        if d is None:
+            return None
+        p = d / f"{inst}.json"
+        return json.loads(p.read_text()) if p.exists() else None
+
+    def _load_seeds(d: Path, inst: str) -> list[dict]:
+        p = d / f"{inst}.json"
+        if not p.exists():
+            return []
+        return json.loads(p.read_text()).get("solutions", [])
+
+    pat = re.compile(filter_regex) if filter_regex else None
+
+    _base = highs_dir if _have_gpbaa else an_dir
+    instances = sorted(
+        p.stem
+        for p in Path(_base).glob("*.json")
+        if p.stem != "all_experiments"
+        and (not (_have_gpbaa and _have_an) or (Path(an_dir) / p.name).exists())
+    )
+    if pat:
+        instances = [i for i in instances if pat.search(i)]
     if not instances:
-        print(f"No shared instances found in {highs_dir} and {an_dir}", flush=True)
+        print(f"No instances found in {_base}", flush=True)
         return
 
     # Unified colour scheme — colour encodes the *algorithm*, identically in the
@@ -5848,30 +6893,59 @@ def generate_pareto_front_figures(
     _PLS_HATCH = "////"
     matplotlib.rcParams["hatch.linewidth"] = 0.5
     # Row style: (full method label, short name, exact/method colour, exact marker)
-    _ROWS = [
+    _ALL_ROWS = [
         ("GPBA-A", "GPBA-A", "#e07b00", "X"),
         ("Anytime Aneja & Nair", "Aneja & Nair", "#d62728", "X"),
     ]
+    _ROWS = ([_ALL_ROWS[0]] if _have_gpbaa else []) + ([_ALL_ROWS[1]] if _have_an else [])
 
     for inst in instances:
         highs = _load_json(highs_dir, inst)
         an = _load_json(an_dir, inst)
-        if highs is None or an is None:
+        if (_have_gpbaa and highs is None) or (_have_an and an is None):
             continue
-        hb = highs.get("shared_bounds")
-        ab = an.get("shared_bounds")
-        if not hb or not ab:
+        hb = highs.get("shared_bounds") if highs else None
+        ab = an.get("shared_bounds") if an else None
+        if not (hb or ab):
             print(f"  {inst}: missing shared_bounds, skipping", flush=True)
             continue
-        merged = _merge_bounds(hb, ab)
+        # With one row there is nothing to merge; keep both rows on a common
+        # reference when both are present so their HV bars stay comparable.
+        merged = _merge_bounds(hb, ab) if (hb and ab) else (hb or ab)
 
-        gpbaa_seeds = _load_seeds(gpbaa_seeds_dir, inst)
-        an_seeds = _load_seeds(an_seeds_dir, inst)
+        gpbaa_seeds = _load_seeds(gpbaa_seeds_dir, inst) if _have_gpbaa else []
+        an_seeds = _load_seeds(an_seeds_dir, inst) if _have_an else []
+        # A missing seed file reads as an empty exact-phase front, which plots
+        # as a zero-height bar rather than an error -- indistinguishable on the
+        # page from a genuine zero. Say so instead of drawing a wrong figure.
+        for _who, _dir, _got in (("GPBA-A", gpbaa_seeds_dir, gpbaa_seeds if _have_gpbaa else None),
+                                 ("A&N", an_seeds_dir, an_seeds if _have_an else None)):
+            if _got is not None and not _got:
+                print(f"  WARNING: {inst}: no {_who} seeds in {_dir} -- "
+                      f"exact-phase values will be empty", flush=True)
+        merged = _pf_widen_bounds(merged, [gpbaa_seeds, an_seeds])
 
-        row_data = [
-            _pf_row_data(highs, highs_dir, gpbaa_seeds, merged, highs, highs_dir, num_points),
-            _pf_row_data(an, an_dir, an_seeds, merged, highs, highs_dir, num_points),
-        ]
+        # `_pf_row_data`'s last two arguments are the reference experiment used
+        # for axis scaling; fall back to whichever row exists.
+        _ref, _ref_dir = (highs, highs_dir) if _have_gpbaa else (an, an_dir)
+        row_data = []
+        if _have_gpbaa:
+            row_data.append(
+                _pf_row_data(highs, highs_dir, gpbaa_seeds, merged, _ref, _ref_dir, num_points))
+        if _have_an:
+            row_data.append(
+                _pf_row_data(an, an_dir, an_seeds, merged, _ref, _ref_dir, num_points))
+
+        # Exact-phase share per ratio — the number the "why heuristics at all?"
+        # question turns on, and not otherwise readable off the zoomed bars.
+        for _lbl, rd in zip([r[1] for r in _ROWS], row_data):
+            _sh = ", ".join(
+                f"{_n}:{100.0 * rd['bars'][_r]['hv_p1'] / rd['bars'][_r]['final_hv']:.0f}%"
+                for _r, _n in _PF_RATIOS
+                if _r in rd["bars"] and rd["bars"][_r]["final_hv"] > 0
+            )
+            print(f"  {inst} [{_lbl}] exact-phase share of final HV -> {_sh}",
+                  flush=True)
 
         # Shared scatter-axis normalisation. Divide by the max over the actual
         # plotted points (not the wide HV upper bound), so fronts fill the panel
@@ -5906,19 +6980,27 @@ def generate_pareto_front_figures(
             bd["final_hv"] for rd in row_data for bd in rd["bars"].values()
             if bd["final_hv"] > 0
         ]
-        _all_p1 = [
-            bd["hv_p1"] for rd in row_data for bd in rd["bars"].values()
-            if bd["hv_p1"] > 0
-        ]
-        bar_lo = min(_all_p1 + _all_hv) * 0.98 if _all_hv else 0.0
+        # Stacked bars must sit on zero -- see the note in
+        # generate_ea_bar_figures. A cropped baseline swallowed the exact-phase
+        # base whenever it was the smallest value in the figure, which is the
+        # common case: the exact phase contributes ~10% of the final HV once
+        # it has returned only its first extreme point.
+        bar_lo = 0.0
         bar_hi = max(_all_hv) * 1.02 if _all_hv else 1.0
 
-        fig = plt.figure(figsize=(_PF_FIG_W, _PF_FIG_H), layout="constrained")
+        # A single row does not get exactly half the height: the panel titles
+        # and the rotated ratio labels cost the same absolute space at any row
+        # count, so a literal halving squeezes the axes until panel a)'s title
+        # runs into panel b). 0.62 leaves that furniture room.
+        _hscale = len(_ROWS) / 2.0 if len(_ROWS) >= 2 else 0.62
+        fig = plt.figure(
+            figsize=(_PF_FIG_W, _PF_FIG_H * _hscale), layout="constrained"
+        )
         # `constrained_layout` (set on the figure) sizes the gutters from the
         # actual text extents, which is what keeps 7-8 pt labels from colliding
         # at this width; hand-tuned hspace/wspace cannot adapt to the tick label
         # widths, which vary per instance.
-        gs = GridSpec(2, 4, figure=fig, width_ratios=[1.3, 1, 1, 1])
+        gs = GridSpec(len(_ROWS), 4, figure=fig, width_ratios=[1.3, 1, 1, 1])
 
         for r, ((mlabel, mshort, mcol, emark), rd) in enumerate(zip(_ROWS, row_data)):
             bottom_row = r == len(_ROWS) - 1
@@ -6005,22 +7087,23 @@ def generate_pareto_front_figures(
         # the hatched patch names the PLS-phase gain in the bars.
         from matplotlib.lines import Line2D
 
-        (g_lbl, g_short, g_col, g_mk), (a_lbl, a_short, a_col, a_mk) = _ROWS
+        # Build one front/exact-phase legend pair per rendered row, so a
+        # single-row figure does not try to unpack two.
+        _exact_handles = []
+        for _lbl, _short, _col, _mk in _ROWS:
+            _exact_handles.append(
+                Line2D([], [], marker=_mk, color=_col, linestyle="None",
+                       markersize=3.2, label=f"{_lbl} front"))
+            _exact_handles.append(
+                mpatches.Patch(facecolor=_col, linewidth=0,
+                               label=f"{_short} exact phase"))
         # Six entries in three columns. Matplotlib fills a legend column-major,
         # so this ordering puts each algorithm in its own column: the front
         # marker on top, the bar swatch that encodes the same algorithm below.
         # The previous legend listed only the hatched PLS-phase patch, leaving
         # the two solid bar colours — the largest areas of ink in panels a/e —
         # undefined anywhere in the figure.
-        handles = [
-            Line2D([], [], marker=g_mk, color=g_col, linestyle="None",
-                   markersize=3.2, label=f"{g_lbl} front"),
-            mpatches.Patch(facecolor=g_col, linewidth=0,
-                           label=f"{g_short} exact phase"),
-            Line2D([], [], marker=a_mk, color=a_col, linestyle="None",
-                   markersize=3.2, label=f"{a_lbl} front"),
-            mpatches.Patch(facecolor=a_col, linewidth=0,
-                           label=f"{a_short} exact phase"),
+        handles = _exact_handles + [
             Line2D([], [], marker="^", color=_PLS_COLOR, linestyle="None",
                    markersize=3.0, label="Pareto Local Search front"),
             mpatches.Patch(facecolor=_pf_tint(_PLS_COLOR), hatch=_PLS_HATCH,
@@ -6037,6 +7120,133 @@ def generate_pareto_front_figures(
 
         out = _pf_save(fig, output_dir, f"{inst}_pareto_fronts")
         plt.close(fig)
+        print(f"  Saved: {out}", flush=True)
+
+
+# ── Phase-1 budget sweep ────────────────────────────────────────────────────
+#
+# The other phase figures sample the exact:heuristic split at the four or five
+# ratios that were actually RUN. This one sweeps the exact phase alone in 10%
+# steps of the same wall-clock budget, which needs no extra runs: the exact
+# phase is replayed from the pseudo-solution seed set by cutting it at
+# `f * timeout`, exactly as `_pf_exact_hv` does for the run figures.
+#
+# Every bar is drawn to a total height of 1.0. The solid segment is the share
+# of the instance's achievable HV that the exact phase has secured by that
+# budget; the hatched remainder is what the heuristic phase is left to close.
+# The normaliser is the best final HV any configuration reached on that
+# instance, recomputed against the same bounds as the bars themselves so the
+# ratio is between two commensurable numbers.
+
+_PHASE1_STEPS: list[float] = [round(0.1 * i, 1) for i in range(1, 11)]
+
+
+def generate_phase1_sweep_figures(
+    an_dir: Path,
+    output_dir: Path,
+    an_seeds_override: Path | None = None,
+    filter_regex: str | None = None,
+    num_points: int = 30,
+) -> None:
+    """Per-instance `{instance}_phase1_sweep.png`: exact-phase HV share at 10%
+    steps of the budget, each bar completed to 1.0 by the heuristic phase."""
+    from matplotlib.ticker import MaxNLocator
+
+    an_seeds_dir = Path(an_seeds_override or _PSEUDO_SOURCE_DIRS["an_2d_highs"])
+    an_dir = Path(an_dir)
+    if not an_dir.is_dir():
+        print(f"{an_dir} does not exist", flush=True)
+        return
+
+    matplotlib.rcParams["hatch.linewidth"] = 0.5
+    _EXACT_COL = "#d62728"
+    _PLS_COL = "#1f77b4"
+
+    pat = re.compile(filter_regex) if filter_regex else None
+    instances = sorted(
+        p.stem for p in an_dir.glob("*.json") if p.stem != "all_experiments"
+    )
+    if pat:
+        instances = [i for i in instances if pat.search(i)]
+    if not instances:
+        print(f"No instances found in {an_dir}", flush=True)
+        return
+
+    for inst in instances:
+        result = json.loads((an_dir / f"{inst}.json").read_text())
+        bounds = result.get("shared_bounds")
+        if not bounds:
+            print(f"  {inst}: missing shared_bounds, skipping", flush=True)
+            continue
+        seed_path = an_seeds_dir / f"{inst}.json"
+        seeds = (
+            json.loads(seed_path.read_text()).get("solutions", [])
+            if seed_path.exists()
+            else []
+        )
+        if not seeds:
+            print(f"  WARNING: {inst}: no seeds in {an_seeds_dir}, skipping",
+                  flush=True)
+            continue
+        bounds = _pf_widen_bounds(bounds, [seeds])
+        timeout = float(result.get("timeout_s", 0.0))
+
+        # Normaliser: best final HV on this instance, recomputed against the
+        # same (widened) bounds the bars use.
+        recomp = _recompute_result_with_bounds(result, an_dir, bounds, num_points)
+        finals = [
+            float(c.get("final_hv", 0.0)) for c in recomp.get("configs", {}).values()
+        ]
+        best = max(finals) if finals else 0.0
+        if best <= 0:
+            print(f"  {inst}: no positive final HV, skipping", flush=True)
+            continue
+
+        shares, raw = [], []
+        for f in _PHASE1_STEPS:
+            hv1 = _pf_exact_hv(seeds, bounds, f * timeout)
+            raw.append(hv1)
+            shares.append(min(1.0, hv1 / best))
+
+        fig, ax = plt.subplots(
+            figsize=(_PF_FIG_W * 0.62, _PF_FIG_H * 0.62), layout="constrained"
+        )
+        xs = list(range(len(_PHASE1_STEPS)))
+        ax.bar(xs, shares, width=0.72, color=_EXACT_COL, linewidth=0, zorder=3,
+               label="Aneja & Nair exact phase")
+        ax.bar(
+            xs, [1.0 - s for s in shares], width=0.72, bottom=shares,
+            facecolor=_pf_tint(_PLS_COL), hatch="////", edgecolor=_PLS_COL,
+            linewidth=_PF_SPINE_LW, zorder=3, label="remaining to best HV",
+        )
+        ax.set_xticks(xs)
+        ax.set_xticklabels([f"{int(f * 100)}" for f in _PHASE1_STEPS],
+                           fontsize=_PF_TICK_PT)
+        ax.set_xlabel("Exact-phase budget (% of timeout)", fontsize=_PF_LABEL_PT)
+        ax.set_ylabel("Share of best final HV", fontsize=_PF_LABEL_PT)
+        ax.set_ylim(0.0, 1.0)
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
+        _pf_style_axes(ax, grid_axis="y")
+        ax.tick_params(axis="x", length=0)
+        ax.set_title(
+            f"{inst}  (T = {timeout:.0f} s, best HV = {best:.4f})",
+            fontsize=_PF_LABEL_PT,
+        )
+        # Bars span the full height at every x, so any in-axes legend sits on
+        # top of data; put it under the axes instead.
+        leg = fig.legend(
+            loc="outside lower center", ncol=2, fontsize=_PF_LEGEND_PT,
+            frameon=False, handletextpad=0.5, columnspacing=1.6,
+            labelspacing=0.35, handlelength=1.4,
+        )
+        for t in leg.get_texts():
+            t.set_color("black")
+
+        out = _pf_save(fig, output_dir, f"{inst}_phase1_sweep")
+        plt.close(fig)
+        pct = ", ".join(f"{int(f * 100)}%:{s:.3f}"
+                        for f, s in zip(_PHASE1_STEPS, shares))
+        print(f"  {inst} exact-phase share -> {pct}", flush=True)
         print(f"  Saved: {out}", flush=True)
 
 
@@ -7007,11 +8217,11 @@ def main() -> int:
         "--pseudo-source",
         type=str,
         default="gpbaa",
-        choices=[
-            "gpbaa", "monise", "gpbaa_2d", "monise_2d",
-            "gpbaa_2d_pub", "gpbaa_2d_highs", "an_2d_highs", "monise_2d_pub", "pseudo_solver_solutions",
-            "gpbaa_2d_gurobi", "an_2d_gurobi",
-        ],
+        # Derived from _PSEUDO_SOURCE_DIRS rather than duplicated: a hardcoded
+        # copy silently rejects any source added to the dict, which is an
+        # argparse error at launch rather than anything the caller can see
+        # coming.
+        choices=sorted(_PSEUDO_SOURCE_DIRS),
         help=(
             "Source of initial-population solutions for hybrid configs. "
             "'gpbaa'/'monise' use 4D pre-recorded solutions; "
@@ -7025,6 +8235,36 @@ def main() -> int:
         help=(
             "Use publication-data instances (100/150/200/250 images, 5 cities) "
             "instead of the default test instances."
+        ),
+    )
+    parser.add_argument(
+        "--rc-instances",
+        action="store_true",
+        help=(
+            "Use publication-data/satellite-data/instances_random_clouds "
+            "instances (family C / random-clouds) instead of the default test "
+            "instances. Sizes 50/75/100/125/150/175/200, 5 cities."
+        ),
+    )
+    parser.add_argument(
+        "--pls-restart",
+        action="store_true",
+        help=(
+            "Enable PLS perturbation restart. Off by default because it used to "
+            "panic ('Solution set contains dominated solution!'); that bug is "
+            "fixed in sims-heuristics. With restart off PLS stops at its first "
+            "local-optimum set, using a few percent of its budget."
+        ),
+    )
+    parser.add_argument(
+        "--hard-instances",
+        action="store_true",
+        help=(
+            "Use publication-data/satellite-data/instances_hard_an — the set "
+            "calibrated so Aneja & Nair returns 5-15 solutions at the experiment "
+            "budget, leaving the heuristic phase real headroom. Per-city size "
+            "ladders are read from the directory (they differ: pool limits and "
+            "the A&N difficulty window do not line up across cities)."
         ),
     )
     parser.add_argument(
@@ -7050,6 +8290,23 @@ def main() -> int:
             "Generate CD diagram, Bayesian signed-rank simplex plots, and top-cluster "
             "bar chart from existing JSON artifacts in --output-dir, then exit."
         ),
+    )
+    parser.add_argument(
+        "--pf-seeds-gpbaa",
+        type=Path,
+        default=None,
+        help=(
+            "Directory of GPBA-A pseudo-solutions for --pareto-fronts. Defaults "
+            "to the gpbaa_2d_highs publication dataset; override when the "
+            "instance set keeps its seeds elsewhere (e.g. the A&N-calibrated "
+            "hard grid), otherwise the exact-phase bars come out empty."
+        ),
+    )
+    parser.add_argument(
+        "--pf-seeds-an",
+        type=Path,
+        default=None,
+        help="Directory of A&N pseudo-solutions for --pareto-fronts (see --pf-seeds-gpbaa).",
     )
     parser.add_argument(
         "--pareto-fronts",
@@ -7090,6 +8347,71 @@ def main() -> int:
             "chart. Rows = exact method (GPBA-A, Aneja & Nair), columns = "
             "second-phase engine (PLS, NSGA-II, NSGA-III, MOEA/D). Uses "
             "--highs-dir and --an-dir; writes to --output-dir, then exits."
+        ),
+    )
+    parser.add_argument(
+        "--append-configs",
+        action="store_true",
+        help=(
+            "Merge into an existing per-instance JSON instead of overwriting it. "
+            "Configs whose trace is already stored are reloaded rather than "
+            "re-run; shared bounds and every HV curve are then recomputed over "
+            "the union, so the merged artifact matches what a single run of all "
+            "configs would have produced. Use this to add a ratio or engine to a "
+            "finished grid without re-running what is already there."
+        ),
+    )
+    parser.add_argument(
+        "--phase1-sweep",
+        action="store_true",
+        help=(
+            "Per-instance `{instance}_phase1_sweep.png`: exact-phase HV in 10%% "
+            "steps of the budget, replayed from the pseudo-solution seeds "
+            "against the same bounds as the grid results. Each bar is completed "
+            "to 1.0 by a hatched 'remaining to best HV' segment. Uses --an-dir "
+            "and --pf-seeds-an; writes to --output-dir, then exits."
+        ),
+    )
+    parser.add_argument(
+        "--ea-bars-indicator",
+        choices=sorted(_INDICATOR_LABEL),
+        default=None,
+        help=(
+            "Same figure as --ea-bars (2x4 phase-decomposed bar chart, same "
+            "rows/columns), but using this performance indicator instead of "
+            "hypervolume -- for showcasing density/spread gains HV alone "
+            "can't show. Single-run (run 0) bars, no error bars (see "
+            "generate_ea_bar_figures_indicator's docstring for why). Uses "
+            "--highs-dir and --an-dir; writes to "
+            "--output-dir/plots_ea_<indicator>_png, then exits."
+        ),
+    )
+    parser.add_argument(
+        "--ea-lollipop-indicator",
+        choices=sorted(_INDICATOR_LABEL),
+        default=None,
+        help=(
+            "Per-instance `{instance}_ea_lollipop.png`: same 2xN grid as "
+            "--ea-bars-indicator, but panels are indexed by ratio (not "
+            "engine) and each panel plots all four engines' final indicator "
+            "value as lollipops (stem + marker) side by side, so engines are "
+            "directly comparable in one axes -- unlike the phase-decomposed "
+            "bars, which only compare phase 1 vs phase 2 within one engine. "
+            "Uses --highs-dir and --an-dir; writes to "
+            "--output-dir/plots_ea_lollipop_<indicator>_png, then exits."
+        ),
+    )
+    parser.add_argument(
+        "--ea-rank-summary",
+        choices=sorted(_INDICATOR_LABEL),
+        default=None,
+        help=(
+            "Cross-instance proof table: ranks the four engines' final "
+            "indicator value per instance/ratio/exact-method and aggregates "
+            "mean rank + win count over all instances (rank sidesteps "
+            "per-instance scale differences that a raw average can't). "
+            "Prints the table and writes "
+            "--output-dir/ea_rank_summary_<indicator>.csv, then exits."
         ),
     )
     parser.add_argument(
@@ -7134,6 +8456,16 @@ def main() -> int:
         _force_nondeterministic = True
         print(f"Non-deterministic mode enabled ({args.runs} runs per config)", flush=True)
 
+    global _append_configs
+    _append_configs = args.append_configs
+    if _append_configs:
+        print("Append mode: existing configs will be reused, bounds recomputed", flush=True)
+
+    global _pls_perturbation_restart
+    if args.pls_restart:
+        _pls_perturbation_restart = True
+        print("PLS perturbation restart ENABLED", flush=True)
+
     # Apply biobjective mode globally (affects OBJECTIVES used by every config's
     # .run() and by bounds/HV-curve computation throughout run_instance()).
     global OBJECTIVES
@@ -7152,6 +8484,8 @@ def main() -> int:
             args.highs_dir,
             args.an_dir,
             args.output_dir,
+            gpbaa_seeds_override=args.pf_seeds_gpbaa,
+            an_seeds_override=args.pf_seeds_an,
             filter_regex=args.filter,
             num_points=args.num_points,
         )
@@ -7184,7 +8518,67 @@ def main() -> int:
             args.output_dir,
             filter_regex=args.filter,
             num_points=args.num_points,
+            gpbaa_seeds_override=args.pf_seeds_gpbaa,
+            an_seeds_override=args.pf_seeds_an,
         )
+        return 0
+
+    if args.phase1_sweep:
+        generate_phase1_sweep_figures(
+            args.an_dir,
+            args.output_dir,
+            an_seeds_override=args.pf_seeds_an,
+            filter_regex=args.filter,
+            num_points=args.num_points,
+        )
+        return 0
+
+    if args.ea_bars_indicator:
+        # _pf_save appends "_png"/"_eps" to whatever base dir it's given (see
+        # its docstring), so pass the un-suffixed base here to land in
+        # sibling plots_ea_<indicator>_png / plots_ea_<indicator>_eps dirs --
+        # matching the plots_ea_png / plots_ea_eps convention exactly.
+        generate_ea_bar_figures_indicator(
+            args.ea_bars_indicator,
+            args.highs_dir,
+            args.an_dir,
+            args.output_dir / f"plots_ea_{args.ea_bars_indicator}",
+            filter_regex=args.filter,
+            gpbaa_seeds_override=args.pf_seeds_gpbaa,
+            an_seeds_override=args.pf_seeds_an,
+        )
+        return 0
+
+    if args.ea_lollipop_indicator:
+        generate_ea_lollipop_figures_indicator(
+            args.ea_lollipop_indicator,
+            args.highs_dir,
+            args.an_dir,
+            args.output_dir / f"plots_ea_lollipop_{args.ea_lollipop_indicator}",
+            filter_regex=args.filter,
+            gpbaa_seeds_override=args.pf_seeds_gpbaa,
+            an_seeds_override=args.pf_seeds_an,
+        )
+        return 0
+
+    if args.ea_rank_summary:
+        import pandas as pd
+
+        summary = compute_ea_rank_summary(
+            args.ea_rank_summary,
+            args.highs_dir,
+            args.an_dir,
+            filter_regex=args.filter,
+        )
+        if summary.empty:
+            print("No data to rank.", flush=True)
+            return 0
+        with pd.option_context("display.max_rows", None, "display.width", 120):
+            print(summary.to_string(index=False), flush=True)
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        out_csv = args.output_dir / f"ea_rank_summary_{args.ea_rank_summary}.csv"
+        summary.to_csv(out_csv, index=False)
+        print(f"  Saved: {out_csv}", flush=True)
         return 0
 
     # Override instance set for publication experiments.
@@ -7203,6 +8597,40 @@ def main() -> int:
             for city, sizes in _pub_cities
             for size in sizes
             if (INSTANCES_DIR / f"{city}_{size}" / f"{city}_{size}.dzn").exists()
+        ]
+    elif args.hard_instances:
+        INSTANCES_DIR = (
+            Path(__file__).parent.parent
+            / "publication-data"
+            / "satellite-data"
+            / "instances_hard_an"
+        )
+        # Ladders are per city, so discover them from disk instead of hardcoding
+        # a common list that would silently drop instances.
+        instances = []
+        for _p in sorted(INSTANCES_DIR.glob("*.dzn")):
+            _city, _, _size = _p.stem.rpartition("_")
+            instances.append((_p.stem, _p.name, int(_size)))
+        instances.sort(key=lambda t: (t[0].rpartition("_")[0], t[2]))
+    elif args.rc_instances:
+        INSTANCES_DIR = (
+            Path(__file__).parent.parent
+            / "publication-data"
+            / "satellite-data"
+            / "instances_random_clouds"
+        )
+        _rc_cities = [
+            ("lagos_nigeria", [50, 75, 100, 125, 150, 175, 200]),
+            ("mexico_city", [50, 75, 100, 125, 150, 175, 200]),
+            ("paris", [50, 75, 100, 125, 150, 175, 200]),
+            ("rio_de_janeiro", [50, 75, 100, 125, 150, 175, 200]),
+            ("tokyo_bay", [50, 75, 100, 125, 150, 175, 200]),
+        ]
+        instances = [
+            (f"{city}_{size}", f"{city}_{size}.dzn", size)
+            for city, sizes in _rc_cities
+            for size in sizes
+            if (INSTANCES_DIR / f"{city}_{size}.dzn").exists()
         ]
     else:
         instances = ALL_INSTANCES
