@@ -48,19 +48,28 @@ source .venv/bin/activate
 cd sims-problem
 uv pip install -e . --reinstall-package sims-problem
 
-# Release build of sims-problem
-uv pip install -e . --reinstall-package sims-problem \
-  --config-settings=build-args="--release"
+# Release build of sims-problem (venv must be active)
+maturin develop --release
 
 # Build with milp feature enabled (requires Gurobi)
-uv pip install -e . --reinstall-package sims-problem \
-  --config-settings=build-args="--release --features milp"
+maturin develop --release --features milp
 
 # Standalone PLS binary (for PLS_PATH env var)
 cd sims-heuristics
 cargo build --release --bin pls
 export PLS_PATH=$PWD/target/release/pls
 ```
+
+Use `maturin develop` for release builds, not `uv pip install --config-settings=build-args=...`.
+uv forwards build-args to maturin's `pep517 write-dist-info` metadata step, which accepts no
+build flags at all, so both the quoted form (`build-args="--release --features milp"` →
+`unexpected argument '--release --features milp'`) and one-flag-per-setting (→ `unexpected
+argument '--release'`) fail on maturin 1.9.6. The debug recipe above works because it passes
+no build-args.
+
+`maturin develop` may warn `Failed to set rpath ... did you install patchelf?`. It is harmless
+for an in-place venv install; silence it with `pip install patchelf` if you package the wheel
+for another machine.
 
 ## Testing
 

@@ -5184,6 +5184,17 @@ def _pf_exact_hv(
     against the same reference point as the stored final HVs (upper bound + 1)."""
     # compute_hypervolume requires integer points (Vec<Vec<u64>>).
     pts = [[int(x), int(y)] for x, y in _pf_exact_front(seeds, exact_time)]
+    # Unlike the trace-curve path -- which normalises without checking and lets
+    # out-of-box points fall out of the sweep on their own -- compute_hypervolume
+    # *panics* on any point outside `bounds`. Against a tight reference-set box
+    # (rather than the run-derived shared bounds, which by construction contain
+    # every point) a seed can sit past the nadir. Such a point does not dominate
+    # the reference point, so it contributes exactly zero volume; dropping it is
+    # equivalent to keeping it, and is what makes the tight box usable here.
+    pts = [
+        p for p in pts
+        if all(bounds[i][0] <= p[i] <= bounds[i][1] for i in range(len(p)))
+    ]
     if not pts:
         return 0.0
     # Reference point = the upper bound (the nadir), matching the normalisation
@@ -5933,9 +5944,29 @@ def generate_ea_bar_figures(
             if _got is not None and not _got:
                 print(f"  WARNING: {inst}: no {_who} seeds in {_dir} -- "
                       f"exact-phase values will be empty", flush=True)
-        # Seed sets are generated with their own budget and can hold points
-        # outside the run-derived bounds; compute_hypervolume rejects those.
-        merged = _pf_widen_bounds(merged, [gpbaa_seeds, an_seeds])
+        # Normalise against the reference Pareto set's own ideal/nadir rather
+        # than the run-derived `shared_bounds`. shared_bounds spans every point
+        # any config ever recorded -- including dominated early-generation EA
+        # candidates far from the front -- so it runs 1.6-2.8x wider than the
+        # region the optimal front actually occupies, and deflates every HV on
+        # the page by that factor. The reference set's own ideal/nadir is the
+        # standard choice and is already what the indicator figures use; this
+        # keeps the two figure families on one normalisation.
+        #
+        # A tight box no longer contains every point, which is fine on both
+        # paths that consume it: the trace-curve path normalises without a
+        # bounds check and drops out-of-box points from the sweep naturally,
+        # and `_pf_exact_hv` filters them explicitly (see its comment). Points
+        # past the nadir contribute zero volume either way.
+        reference_set = _pf_build_reference_set(
+            inst, highs_dir, an_dir, gpbaa_seeds, an_seeds
+        )
+        if reference_set:
+            merged = [[int(lo), int(hi)] for lo, hi in _pf_reference_bounds(reference_set)]
+        else:
+            # No reference set to derive a box from; fall back to the old
+            # behaviour rather than plotting nothing.
+            merged = _pf_widen_bounds(merged, [gpbaa_seeds, an_seeds])
 
         # Reference experiment for axis scaling; fall back to whichever exists.
         _ref, _ref_dir = (highs, highs_dir) if _have_gpbaa else (an, an_dir)
@@ -7156,6 +7187,8 @@ def generate_phase1_sweep_figures(
     an_seeds_override: Path | None = None,
     filter_regex: str | None = None,
     num_points: int = 30,
+    highs_dir: Path | None = None,
+    gpbaa_seeds_override: Path | None = None,
 ) -> None:
     """Per-instance `{instance}_phase1_sweep.png`: exact-phase HV share at 10%
     steps of the budget, each bar completed to 1.0 by the heuristic phase."""
@@ -7166,6 +7199,17 @@ def generate_phase1_sweep_figures(
     if not an_dir.is_dir():
         print(f"{an_dir} does not exist", flush=True)
         return
+    # The reference set -- and so the bounds -- must be built from the same
+    # material as the other figures, which means both exact methods' runs and
+    # seeds. This figure only needs the A&N dir for its own bars, so the GPBA
+    # side is optional; without it the box is built from A&N alone and the
+    # values are not comparable with the EA-bar figures.
+    gpbaa_seeds_dir = Path(gpbaa_seeds_override) if gpbaa_seeds_override else None
+    highs_dir = Path(highs_dir) if highs_dir else None
+    if highs_dir is not None and not highs_dir.is_dir():
+        print(f"  WARNING: {highs_dir} does not exist -- reference set will be "
+              f"built from A&N data only", flush=True)
+        highs_dir = None
 
     matplotlib.rcParams["hatch.linewidth"] = 0.5
     _EXACT_COL = "#d62728"
@@ -7197,11 +7241,25 @@ def generate_phase1_sweep_figures(
             print(f"  WARNING: {inst}: no seeds in {an_seeds_dir}, skipping",
                   flush=True)
             continue
-        bounds = _pf_widen_bounds(bounds, [seeds])
+        # Same normalisation as the EA-bar figures: the reference Pareto set's
+        # own ideal/nadir, not `shared_bounds`. See the longer note in
+        # `generate_ea_bar_figures` for why shared_bounds deflates every value.
+        gpbaa_seeds = (
+            json.loads((gpbaa_seeds_dir / f"{inst}.json").read_text()).get("solutions", [])
+            if gpbaa_seeds_dir and (gpbaa_seeds_dir / f"{inst}.json").exists()
+            else []
+        )
+        reference_set = _pf_build_reference_set(
+            inst, highs_dir if highs_dir else an_dir, an_dir, gpbaa_seeds, seeds
+        )
+        if reference_set:
+            bounds = [[int(lo), int(hi)] for lo, hi in _pf_reference_bounds(reference_set)]
+        else:
+            bounds = _pf_widen_bounds(bounds, [seeds])
         timeout = float(result.get("timeout_s", 0.0))
 
         # Normaliser: best final HV on this instance, recomputed against the
-        # same (widened) bounds the bars use.
+        # same bounds the bars use.
         recomp = _recompute_result_with_bounds(result, an_dir, bounds, num_points)
         finals = [
             float(c.get("final_hv", 0.0)) for c in recomp.get("configs", {}).values()
@@ -8539,6 +8597,8 @@ def main() -> int:
             an_seeds_override=args.pf_seeds_an,
             filter_regex=args.filter,
             num_points=args.num_points,
+            highs_dir=args.highs_dir,
+            gpbaa_seeds_override=args.pf_seeds_gpbaa,
         )
         return 0
 
