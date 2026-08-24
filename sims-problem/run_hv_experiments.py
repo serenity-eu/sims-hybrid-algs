@@ -4115,7 +4115,16 @@ def run_instance(
         lowercased flat file. Try the recorded path first, then both
         conventions, so appending works against either.
         """
-        rec = (prior_artifact.get("configs", {}).get(label) or {}).get("trace_file")
+        prior_cfg = prior_artifact.get("configs", {}).get(label)
+        if prior_cfg is None:
+            # A trace file on its own is not evidence of a completed config: an
+            # interrupted run leaves orphan traces behind (the trace is written
+            # as each config finishes, the artifact only at the end). Reusing
+            # one would silently resurrect a partial run and report it with
+            # final_solutions=0, so require a recorded entry and re-run
+            # otherwise.
+            return None
+        rec = prior_cfg.get("trace_file")
         if rec:
             cand = output_dir / rec
             if cand.exists():
