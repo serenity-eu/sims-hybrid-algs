@@ -60,7 +60,7 @@ fn nearest_sq(p: &[f64], set: &[f64], d: usize, plus: bool, flip: bool) -> f64 {
 
 /// Flatten `points` (row-major `Vec<Vec<T>>`) into a contiguous `Vec<f64>` of
 /// length `points.len() * d`, taking the first `d` coordinates of each row.
-fn flatten<T: HVNumeric>(points: &[Vec<T>], d: usize) -> Vec<f64> {
+pub(crate) fn flatten<T: HVNumeric>(points: &[Vec<T>], d: usize) -> Vec<f64> {
     let mut out = Vec::with_capacity(points.len() * d);
     for p in points {
         for v in &p[..d] {
@@ -146,7 +146,7 @@ pub fn gd_generic<T: HVNumeric>(
 /// Normalise a flat `d`-strided buffer in place to `[0,1]` using per-objective
 /// `[min,max]` bounds (range 0 ⇒ divide by 1). Values outside the bounds are
 /// allowed (kept proportional), unlike the HV module's strict version.
-fn normalize_in_place(buf: &mut [f64], bounds: &[Vec<f64>], d: usize) {
+pub(crate) fn normalize_in_place(buf: &mut [f64], bounds: &[Vec<f64>], d: usize) {
     let ranges: Vec<f64> = bounds
         .iter()
         .map(|b| {
@@ -168,7 +168,7 @@ fn normalize_in_place(buf: &mut [f64], bounds: &[Vec<f64>], d: usize) {
 
 /// Extract `Vec<Vec<f64>>` point rows from a Python object that is either a list
 /// of numeric rows or a list of [`Solution`] objects.
-fn extract_points(data: &Bound<'_, PyAny>, d: usize) -> PyResult<Vec<Vec<f64>>> {
+pub(crate) fn extract_points(data: &Bound<'_, PyAny>, d: usize) -> PyResult<Vec<Vec<f64>>> {
     if let Ok(rows) = data.extract::<Vec<Vec<f64>>>() {
         return Ok(rows);
     }

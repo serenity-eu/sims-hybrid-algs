@@ -5,6 +5,7 @@ pub mod igd;
 pub mod problem;
 pub mod solution;
 pub mod solver;
+pub mod spacing;
 pub mod trace;
 
 // Re-export the main types
@@ -70,6 +71,11 @@ fn sims_problem(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // IGD / IGD+ / GD / GD+ performance indicators (companion to hypervolume)
     m.add_function(wrap_pyfunction!(igd::compute_igd, m)?)?;
 
+    // Spacing (density/uniformity) and front cardinality — companions to
+    // hypervolume/IGD for showcasing density gains that HV alone can't see.
+    m.add_function(wrap_pyfunction!(spacing::compute_spacing, m)?)?;
+    m.add_function(wrap_pyfunction!(spacing::front_cardinality, m)?)?;
+
     // Add trace generation function
     m.add_function(wrap_pyfunction!(trace::generate_trace, m)?)?;
 
@@ -78,6 +84,10 @@ fn sims_problem(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Add HV-over-time curve computation from trace
     m.add_function(wrap_pyfunction!(trace::compute_hv_curve_from_trace, m)?)?;
+
+    // Front reconstruction at an arbitrary trace timestamp (shared building
+    // block for non-HV indicator figures — spacing/IGD/cardinality-over-time).
+    m.add_function(wrap_pyfunction!(trace::front_from_trace_at_time, m)?)?;
 
     // Add classes
     m.add_class::<SimsDiscreteProblem>()?;
