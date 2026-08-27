@@ -6413,13 +6413,27 @@ def generate_ea_bar_figures_indicator(
                 )
                 print(f"  {inst} [{_lbl}/{_eng}] {indicator} -> {_s}", flush=True)
 
+        # Final-only indicators have no phase decomposition to show: every bar
+        # is a single number. Colouring the 100:0 bar by exact method and the
+        # rest by engine then encodes a split that does not exist on the page
+        # and reads as a phase decomposition, so those panels use one colour --
+        # the column's engine colour -- for every bar, and 100:0 is identified
+        # by its x tick label like every other ratio.
+        _fo = indicator in _FINAL_ONLY_INDICATORS
+
         for r, (mlabel, mshort, mcol) in enumerate(_ROW_LABELS):
             for ci, (title, ecol, _hy, _cold) in enumerate(_EA_ENGINES):
                 ax = fig.add_subplot(gs[r, ci])
                 bars = rows[r][title]
                 present = [(ratio, name) for ratio, name in _PF_RATIOS if ratio in bars]
                 xs = list(range(len(present)))
-                for xi, (ratio, _name) in zip(xs, present):
+                if _fo:
+                    for xi, (ratio, _name) in zip(xs, present):
+                        ax.bar(
+                            xi, bars[ratio]["final"], width=0.68,
+                            color=ecol, linewidth=0, zorder=3,
+                        )
+                for xi, (ratio, _name) in zip([] if _fo else xs, present):
                     bd = bars[ratio]
                     p1, final = bd["p1"], bd["final"]
                     # The solid bar always spans [0, p1] so the exact-phase
@@ -6472,21 +6486,30 @@ def generate_ea_bar_figures_indicator(
                 else:
                     ax.tick_params(labelleft=False)
 
-        _fo = indicator in _FINAL_ONLY_INDICATORS
-        handles = [
-            mpatches.Patch(
-                facecolor=_col, linewidth=0,
-                label=f"{_full} ({'100:0' if _fo else 'exact phase'})",
-            )
-            for _full, _short, _col in _ROW_LABELS
-        ] + [
-            mpatches.Patch(facecolor=_pf_tint(col), hatch=_HATCH, edgecolor=col,
-                           linewidth=_PF_SPINE_LW,
-                           label=title if _fo else f"{title} phase Δ")
-            for title, col, _h, _c in _EA_ENGINES
-        ]
+        if _fo:
+            # One colour per panel: the only thing left to key is which engine
+            # each column belongs to. The exact methods no longer get their own
+            # swatch -- their bar is the 100:0 column, named on the x axis, and
+            # the row is named by the y label.
+            handles = [
+                mpatches.Patch(facecolor=col, linewidth=0, label=title)
+                for title, col, _h, _c in _EA_ENGINES
+            ]
+        else:
+            handles = [
+                mpatches.Patch(
+                    facecolor=_col, linewidth=0,
+                    label=f"{_full} (exact phase)",
+                )
+                for _full, _short, _col in _ROW_LABELS
+            ] + [
+                mpatches.Patch(facecolor=_pf_tint(col), hatch=_HATCH, edgecolor=col,
+                               linewidth=_PF_SPINE_LW,
+                               label=f"{title} phase Δ")
+                for title, col, _h, _c in _EA_ENGINES
+            ]
         leg = fig.legend(
-            handles=handles, loc="outside lower center", ncol=3,
+            handles=handles, loc="outside lower center", ncol=len(handles) if _fo else 3,
             fontsize=_PF_LEGEND_PT, frameon=False, handletextpad=0.5,
             columnspacing=1.6, labelspacing=0.35, handlelength=1.4,
         )
