@@ -6432,10 +6432,22 @@ def generate_ea_bar_figures_indicator(
                 present = [(ratio, name) for ratio, name in _PF_RATIOS if ratio in bars]
                 xs = list(range(len(present)))
                 if _fo:
+                    # Mark the panel's best ratio. With one colour per panel
+                    # and a cropped y range the winner is often a hairline
+                    # above the runner-up (0.9561 vs 0.9532 is a pixel), so
+                    # the ranking is not reliably readable off the bar
+                    # heights -- the outline states it. Compared with a
+                    # relative tolerance so a genuine tie marks both bars
+                    # rather than letting float noise pick one arbitrarily.
+                    _vals = [bars[ratio]["final"] for ratio, _n in present]
+                    _best = max(_vals) if _vals else 0.0
                     for xi, (ratio, _name) in zip(xs, present):
+                        _v = bars[ratio]["final"]
+                        _is_best = _best > 0 and abs(_v - _best) <= 1e-12 * abs(_best)
                         ax.bar(
-                            xi, bars[ratio]["final"], width=0.68,
-                            color=ecol, linewidth=0, zorder=3,
+                            xi, _v, width=0.68, color=ecol, zorder=3,
+                            edgecolor="black" if _is_best else "none",
+                            linewidth=1.1 if _is_best else 0,
                         )
                 for xi, (ratio, _name) in zip([] if _fo else xs, present):
                     bd = bars[ratio]
@@ -6498,6 +6510,9 @@ def generate_ea_bar_figures_indicator(
             handles = [
                 mpatches.Patch(facecolor=col, linewidth=0, label=title)
                 for title, col, _h, _c in _EA_ENGINES
+            ] + [
+                mpatches.Patch(facecolor="white", edgecolor="black", linewidth=1.1,
+                               label="best ratio in panel"),
             ]
         else:
             handles = [
