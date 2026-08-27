@@ -6090,7 +6090,11 @@ _INDICATOR_LABEL: dict[str, str] = {
     "cardinality": "Front Cardinality",
     "spacing": "Spacing",
     "igd_plus": "IGD+",
-    "igd_plus_c": "1 - IGD+",
+    # Set as a formula rather than running text: this is the one indicator
+    # whose label IS an expression, and "1 - IGD+" in the axis font reads as
+    # prose (or worse, as a range) next to the plain-text row and panel
+    # labels. mathtext gives it the proper minus, spacing, and superscript.
+    "igd_plus_c": r"$1 - \mathrm{IGD}^{+}$",
 }
 
 # Indicators reported as a single final value per bar, with no exact/heuristic
