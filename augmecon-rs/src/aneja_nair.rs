@@ -179,6 +179,13 @@ impl AnejaNair {
         );
         log::info!("=== Anytime Aneja & Nair: starting ===");
         let solver = SingleObjectiveSolver::new(problem, options);
+        // The gap-filling loop below solves dozens of weighted sums that differ
+        // only in their weights, so it builds the model once and replaces just
+        // the objective. Available on the native Gurobi backend alone; every
+        // other backend keeps rebuilding, which is correct, only slower.
+        #[cfg(feature = "gurobi")]
+        let mut session = matches!(options.solver, crate::solver_enum::Solver::Gurobi)
+            .then(|| crate::single_objective::WeightedSumSession::new(problem, options));
         let directions = problem.objectives.iter().map(|(_, dir)| *dir).collect();
         let mut front = ParetoFront::new(directions);
 
@@ -222,7 +229,19 @@ impl AnejaNair {
             let sum = (wi1 + wi2) as f64;
             let weights = [wi1 as f64 / sum, wi2 as f64 / sum];
 
-            let sol = solver.solve_weighted_sum(&weights, self.per_solve())?;
+            let sol = {
+                #[cfg(feature = "gurobi")]
+                {
+                    match session.as_mut() {
+                        Some(session) => session.solve(&weights, self.per_solve())?,
+                        None => solver.solve_weighted_sum(&weights, self.per_solve())?,
+                    }
+                }
+                #[cfg(not(feature = "gurobi"))]
+                {
+                    solver.solve_weighted_sum(&weights, self.per_solve())?
+                }
+            };
             let z = Point {
                 f1: sol.objective_values[0],
                 f2: sol.objective_values[1],

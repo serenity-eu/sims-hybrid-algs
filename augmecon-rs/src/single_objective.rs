@@ -9,6 +9,7 @@ use crate::{
     options::Options,
     solution::Solution,
 };
+use good_lp::constraint;
 #[cfg(feature = "coin_cbc")]
 use good_lp::solvers::coin_cbc;
 #[cfg(feature = "highs")]
@@ -43,6 +44,119 @@ fn create_gurobi_solver_with_timeout(
     let seconds = timeout.as_secs() as u32;
     let gurobi = GurobiSolver::new().with_max_seconds(seconds);
     good_lp::solvers::lp_solvers::LpSolver(gurobi)
+}
+
+/// A Gurobi model held across a sweep of weighted-sum solves.
+///
+/// Aneja & Nair issues dozens of solves that differ only in their objective
+/// weights: the variables, the constraints and the feasible set are identical
+/// every time. Rebuilding the model for each one costs about 0.65s on the
+/// larger instances -- roughly 22us per constraint to clone it out of the
+/// problem and rebuild it term by term -- which at thirty solves is a tenth of
+/// a 200-second budget spent re-describing a model the solver already has.
+///
+/// Batching the rows into a single Gurobi call was measured and changed
+/// nothing, which is what established the cost is marshalling on this side
+/// rather than anything the solver does. So the model is built once and only
+/// its objective is replaced. Gurobi keeps its presolved copy, its basis and
+/// its cut pool across the change.
+///
+/// Restricted to the native Gurobi backend: it is the only one this crate has
+/// in-place editing for, and the only one the comparison runs on.
+#[cfg(feature = "gurobi")]
+pub struct WeightedSumSession<'a> {
+    problem: &'a MultiObjectiveProblem,
+    model: good_lp::solvers::gurobi::GurobiProblem,
+}
+
+#[cfg(feature = "gurobi")]
+impl<'a> WeightedSumSession<'a> {
+    /// Build the model once, with every structural constraint in place.
+    ///
+    /// The objective is a placeholder; [`Self::solve`] replaces it outright on
+    /// every call, and `set_objective` zeroes any coefficient absent from the
+    /// replacement, so no term of one sweep step survives into the next.
+    #[must_use]
+    pub fn new(problem: &'a MultiObjectiveProblem, options: &Options) -> Self {
+        let mut model = problem
+            .variables
+            .clone()
+            .minimise(good_lp::Expression::from(0.0))
+            .using(gurobi);
+        crate::options::apply_gurobi_options(&mut model, options);
+        for constraint in &problem.constraints {
+            model.add_constraint(constraint.clone());
+        }
+        Self { problem, model }
+    }
+
+    /// Minimise `sum w_i f_i` over the model, maximised objectives negated.
+    ///
+    /// # Errors
+    /// [`AugmeconError::InvalidObjectiveCount`] if `weights` does not match the
+    /// problem's objectives, or [`AugmeconError::OptimizationError`] if the
+    /// solve fails.
+    pub fn solve(&mut self, weights: &[f64], timeout: Option<Duration>) -> Result<Solution> {
+        use good_lp::solvers::{
+            ModelWithMutableObjective, ObjectiveDirection, ReusableModel, SolverModel as _,
+        };
+
+        if weights.len() != self.problem.num_objectives() {
+            return Err(AugmeconError::InvalidObjectiveCount(weights.len()));
+        }
+        let expr: good_lp::Expression = self
+            .problem
+            .objectives
+            .iter()
+            .zip(weights)
+            .map(|((obj_expr, dir), &w)| match dir {
+                crate::model::ObjectiveDirection::Minimize => w * obj_expr.clone(),
+                crate::model::ObjectiveDirection::Maximize => (-w) * obj_expr.clone(),
+            })
+            .sum();
+        self.model
+            .set_objective(expr, ObjectiveDirection::Minimisation);
+        if let Some(limit) = timeout {
+            let _ = self
+                .model
+                .as_inner_mut()
+                .set_param(grb::parameter::DoubleParam::TimeLimit, limit.as_secs_f64());
+        }
+
+        let solution = self.model.solve_mut().map_err(|e| {
+            AugmeconError::OptimizationError(format!("Weighted-sum optimization failed: {e:?}"))
+        })?;
+        // A weighted sum stopped at its time limit returns an incumbent, not an
+        // optimum. Aneja & Nair's construction assumes the optimum -- a
+        // suboptimal answer here does not just cost a point, it misplaces the
+        // segment the next weight is derived from -- so say when that happens.
+        if !matches!(
+            good_lp::solvers::Solution::status(&solution),
+            good_lp::solvers::SolutionStatus::Optimal
+        ) {
+            log::warn!(
+                "Weighted-sum solve for weights {weights:?} stopped before proving optimality"
+            );
+        }
+        Ok(self.extract(&solution))
+    }
+
+    /// Read a solved model back into a [`Solution`].
+    fn extract<S: GoodLpSolution>(&self, solution: &S) -> Solution {
+        let variable_values = self
+            .problem
+            .var_map
+            .iter()
+            .map(|(name, &var)| (name.clone(), solution.value(var)))
+            .collect();
+        let objective_values = self
+            .problem
+            .objectives
+            .iter()
+            .map(|(obj_expr, _)| obj_expr.eval_with(solution))
+            .collect();
+        Solution::new(objective_values, variable_values)
+    }
 }
 
 /// Solver for single-objective optimization problems
@@ -221,9 +335,17 @@ impl<'a> SingleObjectiveSolver<'a> {
             #[cfg(feature = "gurobi")]
             crate::solver_enum::Solver::Gurobi => {
                 let model = if matches!(direction, crate::model::ObjectiveDirection::Minimize) {
-                    prob_vars.minimise(objective_expr).using(gurobi)
+                    {
+                        let mut m = prob_vars.minimise(objective_expr).using(gurobi);
+                        crate::options::apply_gurobi_options(&mut m, self.options);
+                        m
+                    }
                 } else {
-                    prob_vars.maximise(objective_expr).using(gurobi)
+                    {
+                        let mut m = prob_vars.maximise(objective_expr).using(gurobi);
+                        crate::options::apply_gurobi_options(&mut m, self.options);
+                        m
+                    }
                 };
                 // Gurobi honours TimeLimit natively (unlike HiGHS presolve), so
                 // just wire the solve budget in.
@@ -318,7 +440,8 @@ impl<'a> SingleObjectiveSolver<'a> {
             )),
             #[cfg(feature = "gurobi")]
             crate::solver_enum::Solver::Gurobi => {
-                let model = prob_vars.minimise(expr).using(gurobi);
+                let mut model = prob_vars.minimise(expr).using(gurobi);
+                crate::options::apply_gurobi_options(&mut model, self.options);
                 let model = match effective_timeout {
                     Some(t) => model.with_time_limit(t.as_secs_f64()),
                     None => model,
@@ -515,7 +638,8 @@ impl<'a> SingleObjectiveSolver<'a> {
             #[cfg(feature = "gurobi")]
             crate::solver_enum::Solver::Gurobi => {
                 // FORCE MAXIMIZATION regardless of original direction
-                let model = prob_vars.maximise(objective_expr).using(gurobi);
+                let mut model = prob_vars.maximise(objective_expr).using(gurobi);
+                crate::options::apply_gurobi_options(&mut model, self.options);
                 let model = match effective_timeout {
                     Some(t) => model.with_time_limit(t.as_secs_f64()),
                     None => model,
@@ -528,6 +652,121 @@ impl<'a> SingleObjectiveSolver<'a> {
                     .to_string(),
             )),
         }
+    }
+
+    /// Solve two objectives lexicographically in a single Gurobi call.
+    ///
+    /// Declares a hierarchical multi-objective model -- `primary` at the higher
+    /// `ObjNPriority`, `secondary` below it -- and lets Gurobi run the passes
+    /// internally, "only from among those that would not degrade the solution
+    /// quality for higher-priority objectives". That is the same guarantee a
+    /// pin-and-reminimise pair of solves gives, without the second cold solve:
+    /// measured here, the manual version cost ~95s of a 200s budget.
+    ///
+    /// It also sidesteps the augmentation entirely. The epsilon-constraint
+    /// augmentation only makes a solution efficient when its term stays above
+    /// the solver's sensitivity (GPBA-A paper, Section 4.2); a priority is a
+    /// structural statement instead of a numerical one, so no rho, no range
+    /// scaling, no tolerance interaction.
+    ///
+    /// `ObjN` is a per-variable attribute with no `good_lp` equivalent, so this
+    /// reaches through `GurobiProblem::var_map` and `as_inner_mut`.
+    ///
+    /// # Errors
+    /// Returns error if the model cannot be built or the solve fails
+    #[cfg(feature = "gurobi")]
+    pub fn solve_lexicographic(
+        &self,
+        primary: usize,
+        secondary: usize,
+        timeout: Option<Duration>,
+    ) -> Result<Solution> {
+        use grb::prelude as grbp;
+
+        let prob_vars = self.problem.variables.clone();
+        let (primary_expr, primary_dir) = &self.problem.objectives[primary];
+        // Build with the primary objective so good_lp lays out the model as
+        // usual; the ObjN attributes below define both objectives explicitly.
+        let mut model = match primary_dir {
+            crate::model::ObjectiveDirection::Minimize => {
+                prob_vars.minimise(primary_expr.clone()).using(gurobi)
+            }
+            crate::model::ObjectiveDirection::Maximize => {
+                prob_vars.maximise(primary_expr.clone()).using(gurobi)
+            }
+        };
+        crate::options::apply_gurobi_options(&mut model, self.options);
+        let model = match timeout {
+            Some(t) => model.with_time_limit(t.as_secs_f64()),
+            None => model,
+        };
+        // Constraints are added by solve_with_model_common below.
+        let mut model = model;
+
+        // Gurobi minimises every objective of a hierarchical model in the
+        // model's own sense, so flip the sign of any objective whose direction
+        // differs from the model's.
+        let sense_flip = |dir: &crate::model::ObjectiveDirection| -> f64 {
+            if std::mem::discriminant(dir) == std::mem::discriminant(primary_dir) {
+                1.0
+            } else {
+                -1.0
+            }
+        };
+
+        let objectives: [(usize, i32); 2] = [(primary, 2), (secondary, 1)];
+        {
+            let var_map = model.var_map().clone();
+            let inner = model.as_inner_mut();
+            inner
+                .set_attr(grbp::attr::NumObj, 2)
+                .map_err(|e| AugmeconError::OptimizationError(format!("NumObj: {e}")))?;
+            for (obj_idx, priority) in objectives {
+                inner
+                    .set_param(
+                        grbp::param::ObjNumber,
+                        if obj_idx == primary { 0 } else { 1 },
+                    )
+                    .map_err(|e| AugmeconError::OptimizationError(format!("ObjNumber: {e}")))?;
+                let (expr, dir) = &self.problem.objectives[obj_idx];
+                let flip = sense_flip(dir);
+                let coeffs: Vec<(grb::Var, f64)> =
+                    good_lp::IntoAffineExpression::linear_coefficients(expr)
+                        .filter_map(|(v, c)| var_map.get(&v).map(|gv| (*gv, flip * c)))
+                        .collect();
+                inner
+                    .set_obj_attr_batch(grbp::attr::ObjN, coeffs)
+                    .map_err(|e| AugmeconError::OptimizationError(format!("ObjN: {e}")))?;
+                inner
+                    .set_attr(grbp::attr::ObjNPriority, priority)
+                    .map_err(|e| AugmeconError::OptimizationError(format!("ObjNPriority: {e}")))?;
+            }
+        }
+
+        self.solve_with_model_common(model, primary)
+    }
+
+    /// Minimise `objective_index` with `pin_index` fixed at `pin_value`.
+    ///
+    /// The second stage of the two-stage payoff-table construction: it turns an
+    /// arbitrary optimum of one objective into the *lexicographic* optimum, and
+    /// so an efficient rather than merely weakly efficient extreme point.
+    ///
+    /// Exists so callers outside this crate can do that without depending on
+    /// `good_lp` directly to build the equality constraint.
+    ///
+    /// # Errors
+    /// Returns error if the optimization fails or the pinned problem is infeasible
+    pub fn solve_objective_pinned(
+        &self,
+        objective_index: usize,
+        pin_index: usize,
+        pin_value: f64,
+        timeout: Option<Duration>,
+    ) -> Result<Solution> {
+        let (pin_expr, _) = &self.problem.objectives[pin_index];
+        let pinned = constraint!(pin_expr.clone() == pin_value);
+        self.solve_objective_with_constraints(objective_index, &[pinned], timeout)
     }
 
     /// Solve single-objective optimization with additional constraints
@@ -663,9 +902,17 @@ impl<'a> SingleObjectiveSolver<'a> {
             #[cfg(feature = "gurobi")]
             crate::solver_enum::Solver::Gurobi => {
                 let model = if matches!(direction, crate::model::ObjectiveDirection::Minimize) {
-                    prob_vars.minimise(objective_expr).using(gurobi)
+                    {
+                        let mut m = prob_vars.minimise(objective_expr).using(gurobi);
+                        crate::options::apply_gurobi_options(&mut m, self.options);
+                        m
+                    }
                 } else {
-                    prob_vars.maximise(objective_expr).using(gurobi)
+                    {
+                        let mut m = prob_vars.maximise(objective_expr).using(gurobi);
+                        crate::options::apply_gurobi_options(&mut m, self.options);
+                        m
+                    }
                 };
                 let model = match effective_timeout {
                     Some(t) => model.with_time_limit(t.as_secs_f64()),
