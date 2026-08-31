@@ -188,6 +188,7 @@ impl std::io::Write for SharedVecWriter {
 #[expect(
     clippy::too_many_arguments,
     reason = "It's okay for Python API to have many parameters"
+
 )]
 #[pyfunction]
 #[pyo3(signature = (
@@ -1809,6 +1810,14 @@ pub fn solve_with_milp(
     solver_name: String,
     method: String,
 ) -> PyResult<SolvingResult> {
+    // Started here, not after the setup below, because the caller's budget is
+    // wall clock: everything this function does is spent from it, including
+    // building the model and computing the heuristic nadir. Starting the clock
+    // after that work made it free, and it is not -- measured on
+    // `lagos_nigeria_150` as a flat 8 seconds over budget whatever the budget
+    // was, at 20s, 60s and 200s alike.
+    let start_time = std::time::Instant::now();
+
     // Validate objectives
     let valid_objectives = [
         "min_cost",
@@ -1939,7 +1948,18 @@ pub fn solve_with_milp(
     // Compute ideal bounds by minimizing each objective
     info!("Computing ideal bounds by minimizing each objective");
     let mut ideal_bounds = Vec::with_capacity(objectives.len());
-    let start_time = std::time::Instant::now();
+    let mut lex_extremes: Vec<augmecon::solution::Solution> = Vec::new();
+
+    // The first-phase method needs time of its own, so the preparation above it
+    // is bounded to a share of the budget rather than to the whole of it.
+    //
+    // Without this the lexicographic solves can take everything: measured on
+    // tokyo_bay_225 as 215s against a 200s budget, leaving the method zero
+    // seconds and the run reporting nothing but the two extremes. Overrunning
+    // the caller's limit to hide that is not an option -- a wall-clock bound
+    // that is exceeded whenever preparation is slow is not a bound.
+    let prework_budget = timeout.mul_f64(PREWORK_SHARE);
+
     for (i, _objective) in objectives.iter().enumerate() {
         let elapsed = start_time.elapsed();
         if elapsed >= timeout {
@@ -1947,30 +1967,77 @@ pub fn solve_with_milp(
                 "Timeout exceeded while computing ideal bounds",
             ));
         }
-        let timeout_remaining = timeout
+        let prework_remaining = prework_budget
             .checked_sub(elapsed)
             .unwrap_or(Duration::from_secs(0));
-        let solution = augmecon::single_objective::SingleObjectiveSolver::new(&problem, &options)
-            .solve_objective(i, Some(timeout_remaining))
-            .map_err(|e| {
-                PyValueError::new_err(format!(
-                    "Failed to compute ideal for objective {}: {}",
-                    i, e
-                ))
-            })?;
 
-        if !solution.feasible {
-            return Err(PyValueError::new_err(format!(
-                "Problem infeasible when minimizing objective {}",
-                i
-            )));
-        }
+        // Prefer the *lexicographic* extreme, and take the ideal value from it
+        // rather than solving for the ideal separately: Gurobi runs the two
+        // priority passes internally, and its first pass is exactly the plain
+        // single-objective solve, so its optimum for objective `i` is the ideal
+        // value. Doing both is two redundant full solves per objective, which
+        // on the larger instances consumed the entire budget before the
+        // first-phase method was even called.
+        //
+        // The plain solve remains the fallback, because it is what defines
+        // `ideal_bounds`, and those are required. It is also far cheaper --
+        // seconds against the lexicographic solve's minutes on the larger
+        // instances -- which is what makes it a usable fallback when the
+        // preparation budget runs out. It returns an arbitrary optimum among
+        // ties, which is only weakly efficient (measured on tokyo_bay_225 as
+        // 3.6% excess cloud at the min-cost extreme, and 0.8% excess cost at
+        // the zero-cloud extreme), so it never serves as an extreme point --
+        // only as the ideal value.
+        let lex = if objectives.len() == 2 && !prework_remaining.is_zero() {
+            let other = 1 - i;
+            match augmecon::single_objective::SingleObjectiveSolver::new(&problem, &options)
+                .solve_lexicographic(i, other, Some(prework_remaining))
+            {
+                Ok(lex) if lex.feasible => Some(lex),
+                Ok(_) => {
+                    log::warn!("Hierarchical extreme {i} infeasible, falling back to plain solve");
+                    None
+                }
+                Err(e) => {
+                    log::warn!("Hierarchical extreme {i} failed: {e}, falling back to plain solve");
+                    None
+                }
+            }
+        } else {
+            if objectives.len() == 2 {
+                log::warn!(
+                    "Preparation budget spent; taking objective {i}'s extreme from a plain solve"
+                );
+            }
+            None
+        };
 
-        ideal_bounds.push(solution.objective_values[i]);
-        info!(
-            "Ideal value for objective {} ({}): {}",
-            i, objectives[i], solution.objective_values[i]
-        );
+        let ideal = if let Some(lex) = lex {
+            let ideal = lex.objective_values[i];
+            lex_extremes.push(lex);
+            ideal
+        } else {
+            let timeout_remaining = timeout
+                .checked_sub(start_time.elapsed())
+                .unwrap_or(Duration::from_secs(0));
+            let solution =
+                augmecon::single_objective::SingleObjectiveSolver::new(&problem, &options)
+                    .solve_objective(i, Some(timeout_remaining))
+                    .map_err(|e| {
+                        PyValueError::new_err(format!(
+                            "Failed to compute ideal for objective {i}: {e}"
+                        ))
+                    })?;
+            if !solution.feasible {
+                return Err(PyValueError::new_err(format!(
+                    "Problem infeasible when minimizing objective {i}"
+                )));
+            }
+            solution.objective_values[i]
+        };
+
+        ideal_bounds.push(ideal);
+        info!("Ideal value for objective {} ({}): {}", i, objectives[i], ideal);
     }
 
     // Cap each ε-subproblem so no single hard solve consumes the whole GPBA budget:
@@ -1990,9 +2057,32 @@ pub fn solve_with_milp(
         per_solve_timeout: Some(per_solve_cap),
     };
 
-    // First-phase method: GPBA-A (ε-constraint coverage bisection) or Anytime
-    // Aneja & Nair (weighted-sum dichotomic search). Both return a ParetoFront.
-    let pareto_front = if method.eq_ignore_ascii_case("aneja")
+    // GPBA-A (ε-constraint coverage bisection) or Anytime Aneja & Nair
+    // (weighted-sum dichotomic search). Both return a ParetoFront.
+    let pareto_front = if method.eq_ignore_ascii_case("quadtree") || method.eq_ignore_ascii_case("qt")
+    {
+        let remaining = method_budget(timeout, start_time.elapsed());
+        run_quadtree_dispatch(RunPsbox {
+            problem: &problem,
+            num_objectives: objectives.len(),
+            timeout: remaining,
+            per_solve_cap,
+            lex_extremes: &lex_extremes,
+        })?
+    } else if method.eq_ignore_ascii_case("psbox") {
+        // The box search is charged only the time that is left. The corners
+        // above already cost four solves, and its guarantee is a bound on total
+        // wall-clock, so handing it the full budget a second time would
+        // overrun the limit by however long they took.
+        let remaining = method_budget(timeout, start_time.elapsed());
+        run_psbox_dispatch(RunPsbox {
+            problem: &problem,
+            num_objectives: objectives.len(),
+            timeout: remaining,
+            per_solve_cap,
+            lex_extremes: &lex_extremes,
+        })?
+    } else if method.eq_ignore_ascii_case("aneja")
         || method.eq_ignore_ascii_case("aneja_nair")
         || method.eq_ignore_ascii_case("an")
     {
@@ -2002,8 +2092,9 @@ pub fn solve_with_milp(
             target_solutions: None,
         };
         let mut an = augmecon::aneja_nair::AnejaNair::new(an_config);
-        if timeout.as_secs() > 0 {
-            an = an.with_timeout(timeout);
+        let remaining = method_budget(timeout, start_time.elapsed());
+        if !remaining.is_zero() {
+            an = an.with_timeout(remaining);
         }
         an.generate_representation(&problem, &options)
             .map_err(|e| PyValueError::new_err(format!("Aneja & Nair solving failed: {e}")))?
@@ -2012,13 +2103,36 @@ pub fn solve_with_milp(
             "Using GPBA-A algorithm with Python-compatible dynamic interval exploration (gamma=1)"
         );
         let mut gpba_a = GpbaA::new(config);
-        if timeout.as_secs() > 0 {
-            gpba_a = gpba_a.with_timeout(timeout);
+        let remaining = method_budget(timeout, start_time.elapsed());
+        if !remaining.is_zero() {
+            gpba_a = gpba_a.with_timeout(remaining);
         }
         gpba_a
             .generate_representation(&problem, &options)
             .map_err(|e| PyValueError::new_err(format!("GPBA-A solving failed: {e}")))?
     };
+
+    let mut pareto_front = pareto_front;
+
+    for extreme in lex_extremes {
+        pareto_front.add_solution_with_precision(extreme, 0);
+    }
+
+    let n_before = pareto_front.solutions.len();
+
+    // Filter step of Algorithm 1 in the GPBA-A paper (line 23,
+    // `N(Z) <- Filter(N̂(Z))`): the accumulated set "may contain weakly
+    // non-dominated criterion vectors" and has to be filtered before it is
+    // reported as the Pareto front. This matters here beyond weak efficiency:
+    // each epsilon-subproblem is capped (see `per_solve_cap`) and returns its
+    // incumbent on the cap, so the set can contain unproven points that a
+    // later, better solve dominates.
+    pareto_front.filter_dominated_solutions();
+    info!(
+        "Front after filtering: {} -> {} solutions",
+        n_before,
+        pareto_front.solutions.len()
+    );
 
     let pareto_solutions = &pareto_front.solutions;
 
@@ -6016,4 +6130,377 @@ fn read_profiling_trace_data(
     } else {
         None
     }
+}
+
+/// Run the Pascoletti-Serafini box search and adapt its front to the shared type.
+///
+/// Unlike the other two first-phase methods this one reports only points whose
+/// solve proved optimality, and reports how many solver calls it used and
+/// whether the front is complete.
+#[cfg(feature = "gurobi")]
+fn run_psbox(args: RunPsbox<'_>) -> Result<augmecon::solution::ParetoFront, PyErr> {
+    // Converting the problem and building the model happen inside the method's
+    // budget, not before it. The caller works out how much time is left when it
+    // dispatches; everything after that point is spent from it, and on these
+    // instances the conversion plus a 27905-row model build is seconds, not
+    // milliseconds. Left unaccounted it put a 200-second run at 204.4s.
+    let entered = std::time::Instant::now();
+    let RunPsbox { problem, num_objectives, timeout, per_solve_cap, lex_extremes } = args;
+    let ps_problem = to_psbox_problem(problem)?;
+    let seeds = to_psbox_seeds(problem, lex_extremes);
+    let ps_config = psbox::Config {
+        deadline: Some(timeout.saturating_sub(entered.elapsed())),
+        per_solve: Some(per_solve_cap),
+        delta: None,
+        bounds: to_psbox_bounds(&seeds),
+        seeds,
+        // These runs are always cut short, so the order points arrive in is the
+        // whole result; see `psbox::Split`.
+        split: psbox::Split::Bisect,
+    };
+    let outcome = psbox::solve(&ps_problem, &ps_config);
+    info!(
+        "psbox: {} nondominated points in {} solver calls ({})",
+        outcome.front.len(),
+        outcome.solves,
+        if outcome.exhaustive { "complete front" } else { "stopped on deadline" }
+    );
+    let mut front = augmecon::solution::ParetoFront::new(vec![
+        augmecon::model::ObjectiveDirection::Minimize;
+        num_objectives
+    ]);
+    for s in outcome.front.solutions() {
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "objective magnitudes are far below 2^53; see psbox::model"
+        )]
+        let objectives: Vec<f64> = s.objectives.iter().map(|&v| v as f64).collect();
+        let mut sol = augmecon::solution::Solution::new(objectives, s.variables.clone());
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "elapsed seconds in a bounded run; microseconds fit in u64"
+        )]
+        let found_us = (s.found_at * 1e6) as u64;
+        sol.metadata.insert("timestamp_us".to_string(), found_us.to_string());
+        front.add_solution_with_precision(sol, 0);
+    }
+    Ok(front)
+}
+
+/// Share of the budget held back so the run finishes inside it.
+///
+/// Two percent. Gurobi honours its `TimeLimit` closely -- measured at 10-20ms
+/// per solve -- so the guard only has to cover the front conversion and the
+/// trace write that follow the last solve. It was a tenth while every
+/// scalarisation rebuilt the model, since that rebuild happened outside the
+/// solver's own limit; `psbox::solve::Session` removed the rebuild, and the
+/// whole call then landed within 0.3s of its target. Holding twenty seconds
+/// back for a 0.3s overshoot cost the method nearly a tenth of its search.
+///
+/// It is deliberately taken off the budget the *method* is given rather than
+/// added to the deadline: a bound the caller sets is a bound, and the honest
+/// response to a solver that overruns is to ask it for less, not to quietly
+/// take longer.
+const TIMEOUT_GUARD: f64 = 0.02;
+
+/// The budget a first-phase method may actually spend.
+///
+/// What remains of the caller's limit after the preparation already done, less
+/// the guard band.
+///
+/// Every first-phase method must take its deadline from here. Two of them --
+/// Aneja & Nair and GPBA-A -- were instead handed the caller's whole `timeout`
+/// after the preparation had already spent up to half of it, so they ran for
+/// preparation plus the full budget. That is both an overrun in its own right
+/// and an unfair comparison: the methods that did subtract their preparation
+/// were measured against two that did not.
+fn method_budget(timeout: Duration, elapsed: Duration) -> Duration {
+    timeout
+        .mul_f64(1.0 - TIMEOUT_GUARD)
+        .saturating_sub(elapsed)
+}
+
+/// Share of the wall-clock budget the pre-method preparation may consume.
+///
+/// Half. The preparation (ideal bounds and the lexicographic extremes) is
+/// useful but optional refinement; the first-phase method is the thing being
+/// measured, and it has to be left a working budget on instances where the
+/// preparation is slow.
+const PREWORK_SHARE: f64 = 0.5;
+
+/// Weighted-sum solves the quadtree search issues before searching.
+///
+/// The paper uses twenty; twenty-four here, raised twice from an initial eight.
+/// These solves produced nearly everything the earlier runs had to show for
+/// themselves, while the feasibility checks that followed cost about four times
+/// as much apiece and mostly subdivided space without closing any of it. Now
+/// that the sweep is dichotomic rather than uniform no solve is wasted -- each
+/// one either finds a new point or retires a segment -- so raising the count
+/// costs nothing when the frontier runs out, and the shared deadline stops it
+/// eating the search's budget when it does not.
+#[cfg(feature = "gurobi")]
+const QUADTREE_WARM_START: usize = 24;
+
+/// Share of the budget the warm start may spend before the region search runs.
+///
+/// Two thirds. Every dichotomic solve is productive, so left alone the warm
+/// start spends everything -- measured on `lagos_nigeria_150` as twenty-two
+/// solves, twenty-two checks, and not one region examined, so none of the
+/// nineteen bounds it proved was ever applied. Two thirds keeps the solves that
+/// actually produce points while leaving the search enough to use them.
+#[cfg(feature = "gurobi")]
+const QUADTREE_WARM_START_SHARE: f64 = 2.0 / 3.0;
+
+/// Time limit for a single quadtree feasibility check.
+///
+/// The paper suggests `beta * log(size)` with `beta` around five seconds. Here
+/// the whole budget is small relative to how long one solve takes, and an
+/// undecided region costs only a subdivision, so a short limit is the right
+/// trade: it converts hard regions into smaller questions instead of waiting on
+/// them. A tenth of the budget, bounded to a sensible window.
+#[cfg(feature = "gurobi")]
+fn quadtree_node_timeout(timeout: Duration) -> Duration {
+    timeout
+        .checked_div(10)
+        .unwrap_or(timeout)
+        .clamp(Duration::from_secs(5), Duration::from_secs(30))
+}
+
+/// Run the quadtree criterion-space search.
+///
+/// Reports the points carrying a proof and no others.
+///
+/// A point qualifies two ways. Either it came from a strictly positively
+/// weighted sum solved to optimality -- which cannot return a dominated point,
+/// since anything dominating it would score strictly lower -- or no unexplored
+/// region can hold anything that dominates it. The first route is much the
+/// commoner at these budgets, and unlike the second it does not need the search
+/// to have closed off the criterion space.
+///
+/// Both stricter and looser policies were measured and are worse. Reporting
+/// only points certified by *coverage* meant reporting nothing: a 200-second
+/// run leaves over 99% of the criterion space unexplored, so the search found
+/// eight points on `lagos_nigeria_150` and returned none. Reporting the whole
+/// front instead admitted unproven incumbents from timed-out solves, and four
+/// of seven points on `tokyo_bay_225` turned out to be dominated -- worse than
+/// the method this crate exists to improve on.
+#[cfg(feature = "gurobi")]
+fn run_quadtree(args: RunPsbox<'_>) -> Result<augmecon::solution::ParetoFront, PyErr> {
+    // Converting the problem and building the model happen inside the method's
+    // budget, not before it. The caller works out how much time is left when it
+    // dispatches; everything after that point is spent from it, and on these
+    // instances the conversion plus a 27905-row model build is seconds, not
+    // milliseconds. Left unaccounted it put a 200-second run at 204.4s.
+    let entered = std::time::Instant::now();
+    let RunPsbox { problem, num_objectives, timeout, per_solve_cap, lex_extremes } = args;
+    let qt_problem = to_psbox_problem(problem)?;
+    let seeds = to_psbox_seeds(problem, lex_extremes);
+
+    let bounds = match to_psbox_bounds(&seeds) {
+        Some(bounds) => bounds,
+        None => {
+            // No extremes from the caller, so pay for them here. Anti-ideal
+            // bounds are looser than the extremes would give, but valid.
+            let budget = psbox::solve::Budget::new_with(Some(timeout), Some(per_solve_cap));
+            let mut solves = 0;
+            let mut session = psbox::solve::Session::new(&qt_problem);
+            psbox::compute_bounds(&mut session, &budget, &mut solves).ok_or_else(|| {
+                PyValueError::new_err(
+                    "quadtree could not establish criterion-space bounds within the budget",
+                )
+            })?
+        }
+    };
+
+    let config = psbox::quadtree::Config {
+        deadline: Some(timeout.saturating_sub(entered.elapsed())),
+        node_timeout: Some(quadtree_node_timeout(timeout)),
+        bounds,
+        seeds,
+        warm_start: QUADTREE_WARM_START,
+        warm_start_timeout: Some(quadtree_node_timeout(timeout)),
+        warm_start_share: QUADTREE_WARM_START_SHARE,
+    };
+    let outcome = psbox::quadtree::solve(&qt_problem, &config);
+    let certified = outcome.certified.iter().filter(|c| **c).count();
+    info!(
+        "quadtree: {} points ({certified} proven) in {} feasibility checks, {} regions retired by \
+         bound, {}, {:.2}% of the criterion space unexplored",
+        outcome.front.len(),
+        outcome.checks,
+        outcome.eliminated,
+        if outcome.exhaustive { "complete front" } else { "stopped on deadline" },
+        outcome.gap
+    );
+
+    let mut front = augmecon::solution::ParetoFront::new(vec![
+        augmecon::model::ObjectiveDirection::Minimize;
+        num_objectives
+    ]);
+    for (solution, proven) in outcome.front.solutions().iter().zip(&outcome.certified) {
+        if *proven {
+            front.add_solution_with_precision(to_augmecon_solution(solution), 0);
+        }
+    }
+    Ok(front)
+}
+
+/// Dispatch to [`run_quadtree`], or explain why it is unavailable.
+#[cfg(not(feature = "gurobi"))]
+fn run_quadtree_dispatch(_args: RunPsbox<'_>) -> Result<augmecon::solution::ParetoFront, PyErr> {
+    Err(PyValueError::new_err(
+        "method 'quadtree' needs the gurobi feature: it relies on the solver reporting \
+         whether a region is infeasible, undecided, or holds a point",
+    ))
+}
+
+/// Dispatch to [`run_quadtree`].
+#[cfg(feature = "gurobi")]
+fn run_quadtree_dispatch(args: RunPsbox<'_>) -> Result<augmecon::solution::ParetoFront, PyErr> {
+    run_quadtree(args)
+}
+
+/// Adapt a `psbox` solution for the shared Pareto front.
+#[cfg(feature = "gurobi")]
+fn to_augmecon_solution(solution: &psbox::Solution) -> augmecon::solution::Solution {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "objective magnitudes are far below 2^53; see psbox::model"
+    )]
+    let objectives: Vec<f64> = solution.objectives.iter().map(|&v| v as f64).collect();
+    let mut adapted = augmecon::solution::Solution::new(objectives, solution.variables.clone());
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "elapsed seconds in a bounded run; microseconds fit in u64"
+    )]
+    let found_us = (solution.found_at * 1e6) as u64;
+    adapted.metadata.insert("timestamp_us".to_string(), found_us.to_string());
+    adapted
+}
+
+/// Arguments for [`run_psbox`].
+///
+/// A struct rather than five positional parameters, two of which are
+/// `Duration`s that would otherwise be trivial to transpose at the call site.
+struct RunPsbox<'a> {
+    problem: &'a augmecon::model::MultiObjectiveProblem,
+    num_objectives: usize,
+    /// Wall-clock left for the box search, not the caller's original budget.
+    timeout: Duration,
+    per_solve_cap: Duration,
+    /// Lexicographic extremes already computed by the caller, if any.
+    lex_extremes: &'a [augmecon::solution::Solution],
+}
+
+/// Adapt the caller's lexicographic extremes into `psbox` solutions.
+///
+/// These are already proven nondominated, so they are handed over as seeds
+/// rather than re-derived, saving the solves that would cost.
+#[cfg(feature = "gurobi")]
+fn to_psbox_seeds(
+    problem: &augmecon::model::MultiObjectiveProblem,
+    lex_extremes: &[augmecon::solution::Solution],
+) -> Vec<psbox::Solution> {
+    use augmecon::model::ObjectiveDirection;
+    lex_extremes
+        .iter()
+        .map(|sol| {
+            let objectives = sol
+                .objectives()
+                .iter()
+                .zip(&problem.objectives)
+                .map(|(&raw, (_, direction))| {
+                    // `psbox` minimises every objective, so a maximised one is
+                    // stored negated there -- the convention `to_psbox_problem`
+                    // applies to the expressions themselves.
+                    let signed = match direction {
+                        ObjectiveDirection::Minimize => raw,
+                        ObjectiveDirection::Maximize => -raw,
+                    };
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        reason = "objective values are integral and far below 2^53"
+                    )]
+                    let value = signed.round() as i64;
+                    value
+                })
+                .collect();
+            psbox::Solution {
+                objectives,
+                variables: sol.decision_variables.clone(),
+                found_at: 0.0,
+            }
+        })
+        .collect()
+}
+
+/// Derive `psbox`'s bounds from the lexicographic extremes.
+///
+/// For two objectives the extremes give both bounds exactly: the ideal value of
+/// each objective is its minimum over the extremes, and its largest *nondominated*
+/// value is its maximum over them, since no nondominated point lies outside the
+/// range the extremes span. That is tighter than the anti-ideal `psbox` would
+/// otherwise compute, and it saves the `2p` solves computing it would cost.
+///
+/// Returns `None` for anything but a complete pair, in which case `psbox`
+/// establishes the bounds itself: a partial set would understate the range and
+/// silently truncate the search.
+#[cfg(feature = "gurobi")]
+fn to_psbox_bounds(seeds: &[psbox::Solution]) -> Option<psbox::Bounds> {
+    let [first, second] = seeds else { return None };
+    let pairs = || first.objectives.iter().zip(&second.objectives);
+    Some(psbox::Bounds {
+        ideal: pairs().map(|(a, b)| *a.min(b)).collect(),
+        anti_ideal: pairs().map(|(a, b)| *a.max(b)).collect(),
+    })
+}
+
+/// Translate the shared MILP model into `psbox`'s form.
+///
+/// `psbox` minimises every objective by construction -- the rectangle geometry
+/// is stated that way -- so a maximised objective is negated here rather than
+/// carried as a direction flag. Both crates build on the same `good_lp` types,
+/// so variables and constraints move across unchanged.
+#[cfg(feature = "gurobi")]
+fn to_psbox_problem(
+    problem: &augmecon::model::MultiObjectiveProblem,
+) -> Result<psbox::Problem, PyErr> {
+    use augmecon::model::ObjectiveDirection;
+    if problem.objectives.len() < 2 {
+        return Err(PyValueError::new_err(format!(
+            "psbox needs at least two objectives; got {}",
+            problem.objectives.len()
+        )));
+    }
+    let convert = |(expr, dir): &(augmecon::Expression, ObjectiveDirection)| match dir {
+        ObjectiveDirection::Minimize => expr.clone(),
+        ObjectiveDirection::Maximize => -expr.clone(),
+    };
+    Ok(psbox::Problem {
+        variables: problem.variables.clone(),
+        constraints: problem.constraints.clone(),
+        objectives: problem.objectives.iter().map(convert).collect(),
+        var_names: problem.var_map.clone(),
+    })
+}
+
+/// Dispatch to [`run_psbox`], or explain why it is unavailable.
+///
+/// The box search distinguishes a proven optimum from an incumbent by reading
+/// the solver's stopping status, and its guarantee rests on that, so it is
+/// offered only where that is available rather than degraded silently.
+#[cfg(not(feature = "gurobi"))]
+fn run_psbox_dispatch(_args: RunPsbox<'_>) -> Result<augmecon::solution::ParetoFront, PyErr> {
+    Err(PyValueError::new_err(
+        "method 'psbox' needs the gurobi feature: it relies on the solver reporting \
+         whether each solve proved optimality",
+    ))
+}
+
+/// Dispatch to [`run_psbox`].
+#[cfg(feature = "gurobi")]
+fn run_psbox_dispatch(args: RunPsbox<'_>) -> Result<augmecon::solution::ParetoFront, PyErr> {
+    run_psbox(args)
 }

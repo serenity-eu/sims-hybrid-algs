@@ -1,0 +1,27 @@
+[package]
+name = "psbox"
+version = "0.1.0"
+edition = "2024"
+description = """
+Exact biobjective integer programming by Pascoletti-Serafini box search
+(Dogan, Karsu & Ulus). Returns only proven nondominated points, in
+2N+1 to 4N-3 solver calls, and degrades to a representative subset under a
+wall-clock deadline rather than to an arbitrary one.
+
+Deliberately standalone: it shares no solver layer with `augmecon-rs` so the
+two can be compared head to head without a common bug flattering both.
+"""
+
+[dependencies]
+good_lp = { git = "https://github.com/hlvlad/good_lp", branch = "gurobi", default-features = false, features = ["lp-solvers"] }
+grb = { version = "3.0.1", default-features = false, features = ["gurobi12"], optional = true }
+log = "0.4"
+
+[features]
+default = []
+gurobi = ["good_lp/gurobi", "dep:grb"]
+highs = ["good_lp/highs"]
+
+[[example]]
+name = "model_build_cost"
+required-features = ["gurobi"]
