@@ -15,7 +15,7 @@ milp = ["augmecon", "augmecon/coin_cbc", "augmecon/highs"]
 # Native Gurobi backend (grb linked-library, via the good_lp fork's `gurobi`
 # branch). Opt-in on top of milp: building it needs a licensed Gurobi install
 # (set up GUROBI_HOME with scripts/fetch-gurobi.sh) and a valid license to solve.
-gurobi = ["milp", "augmecon/gurobi"]
+gurobi = ["milp", "augmecon/gurobi", "dep:psbox", "psbox/gurobi"]
 bounds_check = ["pls/bounds_check"]
 parallel = ["pls/parallel"]
 scalarized_selection = ["pls/scalarized_selection"]
@@ -27,6 +27,10 @@ pyo3 = { version = "0.27.2", features = ["extension-module"] }
 pls = { path = "../sims-heuristics", package = "sims-heuristics", version = "0.1.0", default-features = false, features = ["bitmaps"] }
 pareto = { path = "../pareto", version = "0.1.0" }
 augmecon = { path = "../augmecon-rs", version = "0.1.0", optional = true }
+# Exact biobjective front generation by Pascoletti-Serafini box search. Kept
+# independent of augmecon so the two first-phase algorithms share no solver
+# layer and can be compared without a common defect flattering both.
+psbox = { path = "../psbox", version = "0.1.0", optional = true }
 sims-dzn = { path = "../sims-dzn", version = "0.1.0" }
 log = "0.4.29"
 pyo3-log = "0.13.2"

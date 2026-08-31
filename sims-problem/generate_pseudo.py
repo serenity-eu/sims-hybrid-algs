@@ -53,6 +53,7 @@ def resolve_dzn(path: Path) -> Path:
 #   random-clouds  : ROOT/publication-data/satellite-data/instances_random_clouds/{inst}.dzn (flat), sizes 100-500
 PUB_DIR = ROOT / "publication-data" / "experiments"
 RC_DIR = ROOT / "publication-data" / "satellite-data" / "instances_random_clouds"
+HARD_DIR = ROOT / "publication-data" / "satellite-data" / "instances_hard_an"
 
 CITIES = ["lagos_nigeria", "mexico_city", "paris", "rio_de_janeiro", "tokyo_bay"]
 
@@ -75,7 +76,27 @@ INSTANCE_SETS = {
         # pseudo-solutions (e.g. gpbaa_2d_gurobi_rc vs gpbaa_2d_gurobi).
         "out_suffix": "_rc",
     },
+    "hard": {
+        # The A&N-calibrated set (instance_generation_difficulty.md, Part II).
+        # Ladders differ per city, so `sizes` is the union and missing files are
+        # skipped by the caller.
+        "sizes": [125, 150, 175, 200, 225, 250, 275, 300, 350],
+        "dzn_path": lambda inst: HARD_DIR / f"{inst}.dzn",
+        "timeout_by_size": {},
+        "out_suffix": "_hard",
+    },
 }
+
+
+def if_prefix(method: str) -> str:
+    """Output-directory prefix for a first-phase method."""
+    if method in ("aneja", "aneja_nair", "an"):
+        return "an_2d"
+    if method == "psbox":
+        return "psbox_2d"
+    if method in ("quadtree", "qt"):
+        return "qt_2d"
+    return "gpbaa_2d"
 
 
 def out_dir_for(method: str, solver: str = "highs", instance_set: str = "publication") -> Path:
@@ -89,7 +110,7 @@ def out_dir_for(method: str, solver: str = "highs", instance_set: str = "publica
     instance_set: appends out_suffix (e.g. "_rc" for random-clouds) so the two
     instance sets' pseudo-solutions never collide.
     """
-    prefix = "an_2d" if method in ("aneja", "aneja_nair", "an") else "gpbaa_2d"
+    prefix = if_prefix(method)
     suffix = INSTANCE_SETS[instance_set]["out_suffix"]
     name = f"{prefix}_{solver}{suffix}"
     return ROOT / "sims-core" / "tests" / "data" / name
@@ -116,6 +137,13 @@ def run_instance(inst: str, size: int, solver: str = "highs",
         method=method,
     )
 
+    # Stopped here, not after the loop below. The timeout governs the solver;
+    # re-evaluating objectives in Python costs about two seconds per solution on
+    # these instances, so folding it in made a run look further over budget the
+    # more solutions it found -- penalising exactly the methods that found most.
+    solve_secs = time.monotonic() - t0
+    post = time.monotonic()
+
     solutions = []
     for idx, s in enumerate(res.final_solutions):
         cost, cloud, inc, resn = s.compute_objectives(problem)
@@ -138,7 +166,7 @@ def run_instance(inst: str, size: int, solver: str = "highs",
         f"{inst}: {len(solutions)} solutions "
         f"(ts range {min((x['timestamp_s'] for x in solutions), default=0):.1f}"
         f"–{max((x['timestamp_s'] for x in solutions), default=0):.1f}s) "
-        f"in {time.monotonic() - t0:.1f}s",
+        f"in {solve_secs:.1f}s solving (+{time.monotonic() - post:.1f}s reporting)",
         flush=True,
     )
     return len(solutions)
@@ -153,9 +181,17 @@ def main():
     ap.add_argument("--timeout", type=int, default=None,
                     help="Override per-instance budget (s); for very hard instances "
                          "whose ideal-bounds solve needs more than the size default.")
-    ap.add_argument("--method", default="gpba", choices=["gpba", "aneja"],
-                    help="First-phase exact method: gpba (GPBA-A -> gpbaa_2d_highs) "
-                         "or aneja (Anytime Aneja & Nair -> an_2d_highs).")
+    ap.add_argument("--method", default="gpba",
+                    choices=["gpba", "aneja", "psbox", "quadtree"],
+                    help="First-phase exact method: gpba (GPBA-A -> gpbaa_2d_highs), "
+                         "aneja (Anytime Aneja & Nair -> an_2d_highs), psbox "
+                         "(Kirlik & Sayin rectangle search -> psbox_2d_*), or "
+                         "quadtree (Quadtree Search Method -> qt_2d_*). psbox "
+                         "reports only points whose solve proved optimality, so it "
+                         "never emits an unproven incumbent when the budget runs out; "
+                         "quadtree asks only whether a region holds a feasible point, "
+                         "which is far cheaper, and reports the points no unexplored "
+                         "region can dominate.")
     ap.add_argument("--instance-set", default="publication",
                     choices=list(INSTANCE_SETS),
                     help="publication (5 cities x 100-250, default) or "
@@ -166,6 +202,12 @@ def main():
         for size in INSTANCE_SETS[args.instance_set]["sizes"]:
             inst = f"{city}_{size}"
             if args.filter and args.filter not in inst:
+                continue
+            # Size ladders are per city in the "hard" set, so most (city, size)
+            # pairs in the union simply do not exist. Skip rather than abort.
+            spec = INSTANCE_SETS[args.instance_set]
+            probe = spec["dzn_path"](inst)
+            if not (probe.exists() or probe.with_suffix(".dzn.gz").exists()):
                 continue
             run_instance(inst, size, args.solver, args.timeout, args.method, args.instance_set)
 
