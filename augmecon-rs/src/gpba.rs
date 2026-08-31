@@ -26,6 +26,7 @@ use crate::{
     solution::{ParetoFront, Solution},
     timer::Timer,
 };
+use good_lp::constraint;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -41,6 +42,7 @@ struct PreviousSolutionInfo {
 
 /// Configuration for GPBA representation algorithms
 #[derive(Debug, Clone)]
+
 pub struct GpbaConfig {
     /// Primary objective index to optimize directly
     pub primary_objective: usize,
@@ -70,6 +72,62 @@ pub struct GpbaA {
     rwv: Vec<f64>,
     /// Timer for timeout tracking
     timer: Option<Timer>,
+}
+
+/// Re-solve one emitted point lexicographically: pin the primary objective at
+/// the value just found and minimise the other objective.
+///
+/// The epsilon-constraint solve only guarantees a *weakly* efficient point.
+/// The augmentation term is supposed to upgrade that to efficient, but its
+/// coefficient (`rho * 10^-(k+1) / range`) lands near 1e-10 here against a
+/// primary objective of ~1e6 -- a 1e16 coefficient range that no
+/// double-precision simplex resolves, and which `mip_gap = 0` does not rescue
+/// (measured: the dominated extreme came back unchanged). Pinning and
+/// re-minimising sidesteps the scaling entirely; it is the same two-stage
+/// construction `BoundsCalculator::calculate_payoff_table` already uses for
+/// the off-diagonal payoff entries.
+///
+/// Returns the refined objective values and decision variables, or `None` when
+/// refinement does not apply or does not improve anything.
+fn refine_lexicographic(
+    problem: &MultiObjectiveProblem,
+    options: &Options,
+    objective_values: &[f64],
+    primary: usize,
+    timer: Option<&Timer>,
+) -> Option<(Vec<f64>, HashMap<String, f64>)> {
+    if !options.lexicographic_refine || problem.num_objectives() != 2 {
+        return None;
+    }
+    let secondary = 1 - primary;
+    let (primary_expr, _) = &problem.objectives[primary];
+    let pinned = constraint!(primary_expr.clone() == objective_values[primary]);
+
+    let solved = crate::single_objective::SingleObjectiveSolver::new(problem, options)
+        .solve_objective_with_constraints(secondary, &[pinned], timer.map(Timer::remaining));
+
+    match solved {
+        Ok(sol) if sol.feasible => {
+            // Only accept a strict improvement on the secondary objective; an
+            // equal value means the original point was already efficient.
+            if sol.objective_values[secondary] < objective_values[secondary] {
+                log::debug!(
+                    "Lexicographic refinement: obj{secondary} {} -> {}",
+                    objective_values[secondary],
+                    sol.objective_values[secondary]
+                );
+                crate::verify::bump(&crate::verify::LEX_REFINED);
+                Some((sol.objective_values, sol.decision_variables))
+            } else {
+                None
+            }
+        }
+        Ok(_) => None,
+        Err(e) => {
+            log::warn!("Lexicographic refinement failed, keeping original point: {e}");
+            None
+        }
+    }
 }
 
 impl GpbaA {
@@ -169,6 +227,7 @@ impl GpbaA {
     /// MAX form where the range is [nadir (most negative), ideal (least negative)].
     ///
     /// Returns the next epsilon value to try (in MAX form).
+
     fn adjust_epsilon_k(
         _k: usize, // Keep for API compatibility
         current_epsilon_k: f64,
@@ -302,11 +361,13 @@ impl GpbaA {
 
         // Step 1: Compute or use provided bounds using shared calculator
         log::info!("=== STEP 1: Computing bounds (payoff table) ===");
-        let (ideal_min, nadir_min) = if let Some((ideal, nadir)) = &self.config.manual_bounds {
-            (ideal.clone(), nadir.clone())
-        } else {
-            BoundsCalculator::new(problem, options).calculate_bounds(self.timer.as_ref())?
-        };
+        let (ideal_min, nadir_min, lex_extremes) =
+            if let Some((ideal, nadir)) = &self.config.manual_bounds {
+                (ideal.clone(), nadir.clone(), Vec::new())
+            } else {
+                BoundsCalculator::new(problem, options)
+                    .calculate_bounds_with_solutions(self.timer.as_ref())?
+            };
 
         log::info!("Ideal point (minimization): {ideal_min:?}");
         log::info!("Nadir point (minimization): {nadir_min:?}");
@@ -382,6 +443,30 @@ impl GpbaA {
             crate::model::ObjectiveDirection::Minimize;
             problem.num_objectives()
         ]);
+
+        // Seed the front with the payoff table's lexicographic extremes.
+        //
+        // These solves have already happened while computing the bounds, so
+        // this is free. It matters because the sweep's own extreme points come
+        // from *unaugmented* single-objective solves and are therefore only
+        // weakly efficient: on tokyo_bay_225 the min-cost point came back with
+        // 3.6% more cloud than achievable at the same cost, and the zero-cloud
+        // point with 0.8% more cost. The augmentation of (P5) cannot fix those
+        // because it does not apply to them.
+        for extreme in lex_extremes.into_iter().flatten() {
+            let mut sol = extreme;
+            let elapsed_us = self
+                .timer
+                .as_ref()
+                .map_or(0, |t| t.elapsed().as_micros() as u64);
+            sol.metadata
+                .insert("timestamp_us".to_string(), elapsed_us.to_string());
+            log::debug!(
+                "Seeding front with payoff extreme {:?}",
+                sol.objective_values
+            );
+            pareto_front.add_solution_with_precision(sol, 0);
+        }
 
         let mut iteration = 0;
         let mut relaxation_reuses: usize = 0;
@@ -602,10 +687,22 @@ impl GpbaA {
                     );
                 }
 
-                let mut pareto_solution = Solution::new(
-                    solution.objective_values.clone(),
-                    solution.decision_variables.clone(),
-                );
+                // Upgrade weak efficiency to efficiency before the point is
+                // recorded (see `refine_lexicographic`).
+                let (refined_objs, refined_vars) = refine_lexicographic(
+                    problem,
+                    options,
+                    &solution.objective_values,
+                    self.config.primary_objective,
+                    self.timer.as_ref(),
+                )
+                .unwrap_or_else(|| {
+                    (
+                        solution.objective_values.clone(),
+                        solution.decision_variables.clone(),
+                    )
+                });
+                let mut pareto_solution = Solution::new(refined_objs, refined_vars);
                 // Record the wall-clock discovery time (µs since start) so callers can
                 // reconstruct the GPBA-A front's timeline (used for hybrid pseudo-seeding).
                 let elapsed_us = self
@@ -931,11 +1028,13 @@ impl GpbaB {
 
         log::info!("=== GPBA-B: Starting generate_representation ===");
 
-        let (ideal_min, nadir_min) = if let Some((ideal, nadir)) = &self.config.manual_bounds {
-            (ideal.clone(), nadir.clone())
-        } else {
-            BoundsCalculator::new(problem, options).calculate_bounds(self.timer.as_ref())?
-        };
+        let (ideal_min, nadir_min, lex_extremes) =
+            if let Some((ideal, nadir)) = &self.config.manual_bounds {
+                (ideal.clone(), nadir.clone(), Vec::new())
+            } else {
+                BoundsCalculator::new(problem, options)
+                    .calculate_bounds_with_solutions(self.timer.as_ref())?
+            };
 
         let ideal_max: Vec<f64> = ideal_min.iter().map(|&x| -x).collect();
         let nadir_max: Vec<f64> = nadir_min.iter().map(|&x| -x).collect();
@@ -953,6 +1052,37 @@ impl GpbaB {
             crate::model::ObjectiveDirection::Minimize;
             problem.num_objectives()
         ]);
+        // Seed with the payoff table's lexicographic extremes (see the note in
+        // GpbaA::generate_representation): these solves have already happened
+        // while computing the bounds, and the sweep's own extremes come from
+        // unaugmented single-objective solves that are only weakly efficient.
+        for extreme in lex_extremes.into_iter().flatten() {
+            let mut sol = extreme;
+            let elapsed_us = self
+                .timer
+                .as_ref()
+                .map_or(0, |t| t.elapsed().as_micros() as u64);
+            sol.metadata
+                .insert("timestamp_us".to_string(), elapsed_us.to_string());
+            pareto_front.add_solution_with_precision(sol, 0);
+        }
+
+        // Every subproblem in the sweep below shares its variables, its
+        // constraints and its slack structure; only the epsilon right-hand
+        // sides move. Build the model once and edit it, on the native Gurobi
+        // backend where in-place editing exists. Other backends keep
+        // rebuilding, which is correct, only slower.
+        #[cfg(feature = "gurobi")]
+        let mut session = matches!(options.solver, crate::solver_enum::Solver::Gurobi).then(|| {
+            crate::epsilon_constraint::EpsilonSession::new(
+                problem,
+                options,
+                self.config.primary_objective,
+                &constraint_indices,
+                &ranges,
+                options.epsilon_augmentation,
+            )
+        });
 
         let mut iteration = 0;
 
@@ -967,28 +1097,67 @@ impl GpbaB {
                 epsilons.insert(k, -ef_array[i]);
             }
 
-            let mut builder =
-                EpsilonConstraintBuilder::new(problem, options, self.config.primary_objective);
-            for (&k, &epsilon) in &epsilons {
-                let range = ranges.get(&k).copied().unwrap_or(1000.0);
-                builder = builder.add_constraint_with_range(k, epsilon, range);
-            }
+            let outcome = {
+                #[cfg(feature = "gurobi")]
+                {
+                    match session.as_mut() {
+                        Some(session) => {
+                            session.solve(&epsilons, &ranges, options, self.get_remaining_timeout())
+                        }
+                        None => solve_epsilon_by_rebuild(
+                            problem,
+                            options,
+                            self.config.primary_objective,
+                            &epsilons,
+                            &ranges,
+                            self.get_remaining_timeout(),
+                        )?,
+                    }
+                }
+                #[cfg(not(feature = "gurobi"))]
+                {
+                    solve_epsilon_by_rebuild(
+                        problem,
+                        options,
+                        self.config.primary_objective,
+                        &epsilons,
+                        &ranges,
+                        self.get_remaining_timeout(),
+                    )?
+                }
+            };
 
-            match builder.solve_with_slack(self.get_remaining_timeout())? {
-                EpsilonSolveOutcome::Solved(solution_with_slack) => {
+            match outcome {
+                EpsilonSolveOutcome::Solved(mut solution_with_slack) => {
+                    let pooled = std::mem::take(&mut solution_with_slack.pool);
                     let mut solution = solution_with_slack.solution;
                     solution.objective_values = solution
                         .objective_values
                         .iter()
                         .map(|&x| x.round())
                         .collect();
-                    pareto_front.add_solution_with_precision(
-                        Solution::new(
+                    // Pooled candidates from the same solve, dominance-filtered
+                    // by the front like any other point. They cost no extra
+                    // solver time -- Gurobi found them on the way to this
+                    // solution and would otherwise discard them.
+                    for cand in pooled {
+                        pareto_front.add_solution_with_precision(cand, 0);
+                    }
+
+                    let (r_objs, r_vars) = refine_lexicographic(
+                        problem,
+                        options,
+                        &solution.objective_values,
+                        self.config.primary_objective,
+                        self.timer.as_ref(),
+                    )
+                    .unwrap_or_else(|| {
+                        (
                             solution.objective_values.clone(),
                             solution.decision_variables.clone(),
-                        ),
-                        0,
-                    );
+                        )
+                    });
+                    pareto_front.add_solution_with_precision(Solution::new(r_objs, r_vars), 0);
                 }
                 EpsilonSolveOutcome::Infeasible => {
                     log::debug!("Infeasible at iteration {iteration}");
@@ -998,7 +1167,9 @@ impl GpbaB {
                     // based on infeasibility), so a timeout here just means
                     // this grid point is skipped — safe, unlike GPBA-A's
                     // interval-based cascade.
-                    log::warn!("Inconclusive (not proven infeasible) at iteration {iteration}: {reason}");
+                    log::warn!(
+                        "Inconclusive (not proven infeasible) at iteration {iteration}: {reason}"
+                    );
                 }
             }
 
@@ -1155,11 +1326,13 @@ impl GpbaC {
 
         log::info!("=== GPBA-C: Starting generate_representation ===");
 
-        let (ideal_min, nadir_min) = if let Some((ideal, nadir)) = &self.config.manual_bounds {
-            (ideal.clone(), nadir.clone())
-        } else {
-            BoundsCalculator::new(problem, options).calculate_bounds(self.timer.as_ref())?
-        };
+        let (ideal_min, nadir_min, lex_extremes) =
+            if let Some((ideal, nadir)) = &self.config.manual_bounds {
+                (ideal.clone(), nadir.clone(), Vec::new())
+            } else {
+                BoundsCalculator::new(problem, options)
+                    .calculate_bounds_with_solutions(self.timer.as_ref())?
+            };
 
         let ideal_max: Vec<f64> = ideal_min.iter().map(|&x| -x).collect();
         let nadir_max: Vec<f64> = nadir_min.iter().map(|&x| -x).collect();
@@ -1184,6 +1357,20 @@ impl GpbaC {
             crate::model::ObjectiveDirection::Minimize;
             problem.num_objectives()
         ]);
+        // Seed with the payoff table's lexicographic extremes (see the note in
+        // GpbaA::generate_representation): these solves have already happened
+        // while computing the bounds, and the sweep's own extremes come from
+        // unaugmented single-objective solves that are only weakly efficient.
+        for extreme in lex_extremes.into_iter().flatten() {
+            let mut sol = extreme;
+            let elapsed_us = self
+                .timer
+                .as_ref()
+                .map_or(0, |t| t.elapsed().as_micros() as u64);
+            sol.metadata
+                .insert("timestamp_us".to_string(), elapsed_us.to_string());
+            pareto_front.add_solution_with_precision(sol, 0);
+        }
 
         let mut iteration = 0;
 
@@ -1206,20 +1393,36 @@ impl GpbaC {
             }
 
             let found_solution = match builder.solve_with_slack(self.get_remaining_timeout())? {
-                EpsilonSolveOutcome::Solved(solution_with_slack) => {
+                EpsilonSolveOutcome::Solved(mut solution_with_slack) => {
+                    let pooled = std::mem::take(&mut solution_with_slack.pool);
                     let mut solution = solution_with_slack.solution;
                     solution.objective_values = solution
                         .objective_values
                         .iter()
                         .map(|&x| x.round())
                         .collect();
-                    pareto_front.add_solution_with_precision(
-                        Solution::new(
+                    // Pooled candidates from the same solve, dominance-filtered
+                    // by the front like any other point. They cost no extra
+                    // solver time -- Gurobi found them on the way to this
+                    // solution and would otherwise discard them.
+                    for cand in pooled {
+                        pareto_front.add_solution_with_precision(cand, 0);
+                    }
+
+                    let (r_objs, r_vars) = refine_lexicographic(
+                        problem,
+                        options,
+                        &solution.objective_values,
+                        self.config.primary_objective,
+                        self.timer.as_ref(),
+                    )
+                    .unwrap_or_else(|| {
+                        (
                             solution.objective_values.clone(),
                             solution.decision_variables.clone(),
-                        ),
-                        0,
-                    );
+                        )
+                    });
+                    pareto_front.add_solution_with_precision(Solution::new(r_objs, r_vars), 0);
                     true
                 }
                 EpsilonSolveOutcome::Infeasible => false,
@@ -1606,4 +1809,24 @@ mod tests {
         // Should return first matching solution (A)
         assert_eq!(solution.unwrap(), vec![50.0, 80.0]);
     }
+}
+
+/// Solve one epsilon subproblem by building a fresh model.
+///
+/// The path every backend without in-place editing takes, and the reference the
+/// reused path is checked against.
+fn solve_epsilon_by_rebuild(
+    problem: &MultiObjectiveProblem,
+    options: &Options,
+    primary_objective: usize,
+    epsilons: &HashMap<usize, f64>,
+    ranges: &HashMap<usize, f64>,
+    timeout: Option<Duration>,
+) -> Result<EpsilonSolveOutcome<crate::epsilon_constraint::SolutionWithSlack>> {
+    let mut builder = EpsilonConstraintBuilder::new(problem, options, primary_objective);
+    for (&k, &epsilon) in epsilons {
+        let range = ranges.get(&k).copied().unwrap_or(1000.0);
+        builder = builder.add_constraint_with_range(k, epsilon, range);
+    }
+    builder.solve_with_slack(timeout)
 }
