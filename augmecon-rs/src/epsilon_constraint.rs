@@ -69,6 +69,11 @@ pub struct SolutionWithSlack {
     pub solution: Solution,
     /// Slack variable values indexed by objective index
     pub slack_values: HashMap<usize, f64>,
+    /// Other feasible solutions this same solve found and would otherwise
+    /// discard (see `Options::solution_pool_size`). Pareto *candidates*, not
+    /// optima: they must go through the front's dominance filter like any
+    /// other point.
+    pub pool: Vec<Solution>,
 }
 
 impl SolutionWithSlack {
@@ -78,6 +83,7 @@ impl SolutionWithSlack {
         Self {
             solution,
             slack_values,
+            pool: Vec::new(),
         }
     }
 }
@@ -115,6 +121,210 @@ fn classify_solve_error<T>(error: &good_lp::ResolutionError) -> EpsilonSolveOutc
     match error {
         good_lp::ResolutionError::Infeasible => EpsilonSolveOutcome::Infeasible,
         other => EpsilonSolveOutcome::Inconclusive(other.to_string()),
+    }
+}
+
+/// A Gurobi model held across an epsilon-constraint sweep.
+///
+/// Every subproblem GPBA-A issues has the same variables, the same structural
+/// constraints and the same slack variables; only the right-hand sides of the
+/// epsilon rows move. Rebuilding for each one costs about 0.65s on the larger
+/// instances, almost all of it cloning constraints out of the problem and
+/// rebuilding them term by term, which at thirty solves is a tenth of a
+/// 200-second budget.
+///
+/// So the model is built once, with one epsilon row per constrained objective,
+/// and a sweep step sets their right-hand sides. Gurobi keeps its presolved
+/// copy, its basis and its cut pool across the change.
+///
+/// # The constant term
+///
+/// good_lp normalises `expr == eps` to `linear == eps - c`, moving the
+/// objective's constant to the right-hand side when the row is built. Setting
+/// that right-hand side later therefore constrains the *linear part*, and an
+/// epsilon of `e` silently becomes `f == e + c`. These objectives carry
+/// constants, so [`Self::solve`] reapplies the offset on every set.
+///
+/// Restricted to the native Gurobi backend, the only one with in-place editing
+/// and the only one the comparison runs on.
+#[cfg(feature = "gurobi")]
+pub struct EpsilonSession<'a> {
+    problem: &'a MultiObjectiveProblem,
+    model: good_lp::solvers::gurobi::GurobiProblem,
+    /// Slack variable and epsilon row per constrained objective.
+    rows: HashMap<usize, (good_lp::Variable, good_lp::constraint::ConstraintReference)>,
+    /// Each constrained objective's constant term, absent from its row.
+    constants: HashMap<usize, f64>,
+    penalty_sum: Expression,
+    augmented_primary: Expression,
+    epsilon_augmentation: f64,
+    primary_objective: usize,
+}
+
+#[cfg(feature = "gurobi")]
+impl<'a> EpsilonSession<'a> {
+    /// Build the model once for a sweep constraining `constrained` objectives.
+    ///
+    /// `ranges` scales each slack's penalty exactly as the rebuild path does.
+    #[must_use]
+    pub fn new(
+        problem: &'a MultiObjectiveProblem,
+        options: &Options,
+        primary_objective: usize,
+        constrained: &[usize],
+        ranges: &HashMap<usize, f64>,
+        epsilon_augmentation: f64,
+    ) -> Self {
+        let mut prob_vars = problem.variables.clone();
+
+        // Slack variables and the penalty term, mirroring
+        // `create_slack_variables_and_penalty` so both paths solve the same
+        // model -- see the derivation there for the weighting.
+        let mut slack = HashMap::new();
+        let mut penalty_sum = Expression::from(0.0);
+        for &obj_idx in constrained {
+            if obj_idx >= problem.objectives.len() {
+                continue;
+            }
+            let slack_var = prob_vars.add(variable().min(0.0));
+            slack.insert(obj_idx, slack_var);
+            let weight = 10_f64.powi(i32::try_from(obj_idx).unwrap_or_default());
+            let range = ranges.get(&obj_idx).copied().unwrap_or(1000.0);
+            let normalized_weight = if range.abs() < 1e-10 {
+                weight
+            } else {
+                weight / range
+            };
+            penalty_sum += normalized_weight * slack_var;
+        }
+
+        let (primary_expr, direction) = &problem.objectives[primary_objective];
+        // The augmented objective is fixed for the sweep: only the epsilon
+        // right-hand sides move.
+        let augmented_primary = primary_expr.clone() + epsilon_augmentation * penalty_sum.clone();
+        let mut model = match direction {
+            crate::model::ObjectiveDirection::Minimize => {
+                prob_vars.minimise(augmented_primary.clone())
+            }
+            crate::model::ObjectiveDirection::Maximize => {
+                prob_vars.maximise(augmented_primary.clone())
+            }
+        }
+        .using(gurobi);
+        crate::options::apply_gurobi_options(&mut model, options);
+
+        for constraint in &problem.constraints {
+            model.add_constraint(constraint.clone());
+        }
+
+        // One epsilon row per constrained objective, with a placeholder
+        // right-hand side that `solve` replaces before the first solve.
+        let mut rows = HashMap::new();
+        let mut constants = HashMap::new();
+        for (&obj_idx, &slack_var) in &slack {
+            let (obj_expr, obj_direction) = &problem.objectives[obj_idx];
+            let mut expr = obj_expr.clone();
+            match obj_direction {
+                crate::model::ObjectiveDirection::Maximize => expr -= slack_var,
+                crate::model::ObjectiveDirection::Minimize => expr += slack_var,
+            }
+            constants.insert(obj_idx, good_lp::IntoAffineExpression::constant(&expr));
+            rows.insert(
+                obj_idx,
+                (slack_var, model.add_constraint(constraint!(expr == 0.0))),
+            );
+        }
+
+        Self {
+            problem,
+            model,
+            rows,
+            constants,
+            penalty_sum,
+            augmented_primary,
+            epsilon_augmentation,
+            primary_objective,
+        }
+    }
+
+    /// Solve for one set of epsilon values, reusing the model.
+    ///
+    /// Extraction is delegated to a throwaway [`EpsilonConstraintBuilder`], so
+    /// the reused path and the rebuild path report solutions through identical
+    /// code -- the point of reuse is to reach the same answer sooner, and a
+    /// second copy of this logic would be free to drift.
+    pub fn solve(
+        &mut self,
+        epsilon_values: &HashMap<usize, f64>,
+        ranges: &HashMap<usize, f64>,
+        options: &Options,
+        timeout: Option<Duration>,
+    ) -> EpsilonSolveOutcome<SolutionWithSlack> {
+        use good_lp::solvers::{ModelWithMutableRhs, ReusableModel, SolverModel as _};
+
+        crate::verify::bump(&crate::verify::SLACK_SOLVES);
+        for (&obj_idx, &epsilon) in epsilon_values {
+            if let Some(&(_, row)) = self.rows.get(&obj_idx) {
+                // The row carries the linear part alone; see the type's note.
+                let constant = self.constants.get(&obj_idx).copied().unwrap_or(0.0);
+                self.model.set_rhs(row, epsilon - constant);
+            }
+        }
+        if let Some(limit) = timeout {
+            let _ = self
+                .model
+                .as_inner_mut()
+                .set_param(grb::parameter::DoubleParam::TimeLimit, limit.as_secs_f64());
+        }
+
+        log::info!(
+            "Solving epsilon-constraint: optimize obj[{}], constraints: {epsilon_values:?} using Gurobi (reused model)",
+            self.primary_objective
+        );
+
+        match self.model.solve_mut() {
+            Ok(solution) => {
+                let mut builder =
+                    EpsilonConstraintBuilder::new(self.problem, options, self.primary_objective);
+                for (&obj_idx, &epsilon) in epsilon_values {
+                    let range = ranges.get(&obj_idx).copied().unwrap_or(1000.0);
+                    builder = builder.add_constraint_with_range(obj_idx, epsilon, range);
+                }
+                let slack_vars: HashMap<usize, good_lp::Variable> = self
+                    .rows
+                    .iter()
+                    .map(|(&obj_idx, &(slack, _))| (obj_idx, slack))
+                    .collect();
+                let mut sol = builder.extract_solution_with_slack(
+                    &solution,
+                    &self.penalty_sum,
+                    &self.augmented_primary,
+                    self.epsilon_augmentation,
+                    &slack_vars,
+                );
+                // Free Pareto candidates this solve already found; read from the
+                // model, which a reused solve leaves intact.
+                if options.solution_pool_size > 0 {
+                    sol.pool = builder.harvest_pool_values(self.model.solution_pool());
+                    if !sol.pool.is_empty() {
+                        log::debug!("Harvested {} pooled candidates", sol.pool.len());
+                    }
+                }
+                EpsilonSolveOutcome::Solved(sol)
+            }
+            Err(good_lp::ResolutionError::Infeasible) => EpsilonSolveOutcome::Infeasible,
+            Err(e) => EpsilonSolveOutcome::Inconclusive(format!("{e:?}")),
+        }
+    }
+
+    /// Whether this session constrains exactly `constrained`.
+    ///
+    /// A sweep that changes which objectives it bounds needs a different model,
+    /// since the epsilon rows and slack variables are structural.
+    #[must_use]
+    pub fn covers(&self, constrained: &[usize]) -> bool {
+        constrained.len() == self.rows.len()
+            && constrained.iter().all(|k| self.rows.contains_key(k))
     }
 }
 
@@ -247,7 +457,13 @@ impl<'a> EpsilonConstraintBuilder<'a> {
         // Add augmentation term based on GPBA paper formulation (Problem 5)
         // Primary objective += ρ * Σ(10^(k-1) * s_k / r_k)
         // This ensures proper solutions and prevents weak efficiency
-        let epsilon_augmentation = 1e2; // Extremely large augmentation to prevent slack usage
+        // Theorem 3 (Mavrotas 2009, restated as Thm 3 in the GPBA-A paper): rho
+        // must be "sufficiently small", usually 1e-3 to 1e-6, for the optimum of
+        // (P5) to be efficient. rho was 1e2 here, which makes the augmentation
+        // term reach 1.0 -- the same size as the smallest gap between two
+        // integer cost values, so it can reorder the primary objective rather
+        // than merely break ties in it.
+        let epsilon_augmentation = self.options.epsilon_augmentation;
 
         // Work directly with the problem's variables and add slack variables to it
         // Clone the problem variables to avoid mutating the original
@@ -356,8 +572,9 @@ impl<'a> EpsilonConstraintBuilder<'a> {
 
         // Add augmentation term based on GPBA paper formulation (Problem 5)
         // Primary objective += ρ * Σ(10^(k-1) * s_k / r_k)
-        // Use small augmentation to encourage slack usage for bypass calculation
-        let epsilon_augmentation = 1e-6; // Small augmentation to compute slack values
+        // Same rho as the non-slack path: this is the solve the main GPBA-A
+        // loop actually uses, so it is the one that has to satisfy Theorem 3.
+        let epsilon_augmentation = self.options.epsilon_augmentation;
 
         // Work directly with the problem's variables and add slack variables to it
         // Clone the problem variables to avoid mutating the original
@@ -466,9 +683,15 @@ impl<'a> EpsilonConstraintBuilder<'a> {
                 let slack_var = prob_vars.add(variable().min(0.0)); // Non-negative slack
                 slack_vars.insert(obj_idx, slack_var);
 
-                // Add slack to primary objective with correct weight using standard formulation
-                // Uses: eps * (10^(-o+1) * slack / range) where o is 1-based objective index
-                let weight = 10_f64.powi(-(i32::try_from(obj_idx).unwrap_or_default() + 1));
+                // Problem (P5) of Mesquita-Cunha et al. (EJOR 306, 2023):
+                //   max z_q(x) + rho * sum_{k != q} 10^(k-1) * s_k / r_k
+                // with k the 1-based objective index, so for the 0-based
+                // `obj_idx` the exponent is obj_idx itself. This previously read
+                // 10^-(obj_idx+1), i.e. 10^-2 where the paper asks for 10^+1 --
+                // a factor of 1000 in the wrong direction, which combined with
+                // rho = 1e-6 in the main loop left the augmentation 1e6 times
+                // weaker than Theorem 3 requires for efficiency.
+                let weight = 10_f64.powi(i32::try_from(obj_idx).unwrap_or_default());
                 let range = self
                     .objective_ranges
                     .get(&obj_idx)
@@ -908,6 +1131,7 @@ impl<'a> EpsilonConstraintBuilder<'a> {
         };
 
         let mut model = problem.using(gurobi);
+        crate::options::apply_gurobi_options(&mut model, self.options);
 
         // Note: generic parameter setting is not wired for the Gurobi backend.
         if !self.options.solver_parameters.is_empty() {
@@ -1180,6 +1404,7 @@ impl<'a> EpsilonConstraintBuilder<'a> {
         };
 
         let mut model = problem.using(gurobi);
+        crate::options::apply_gurobi_options(&mut model, self.options);
 
         // Bound this subproblem's wall-clock. Gurobi honours TimeLimit natively
         // (no presolve workaround needed) and returns its incumbent on the limit,
@@ -1205,14 +1430,22 @@ impl<'a> EpsilonConstraintBuilder<'a> {
         );
 
         match model.solve() {
-            Ok(solution) => {
-                let sol = self.extract_solution_with_slack(
+            Ok(mut solution) => {
+                let mut sol = self.extract_solution_with_slack(
                     &solution,
                     penalty_sum,
                     augmented_primary,
                     epsilon_augmentation,
                     slack_vars,
                 );
+                // Free Pareto candidates: solutions this solve already
+                // found and would otherwise throw away.
+                if self.options.solution_pool_size > 0 {
+                    sol.pool = self.harvest_pool(&mut solution);
+                    if !sol.pool.is_empty() {
+                        log::debug!("Harvested {} pooled candidates", sol.pool.len());
+                    }
+                }
                 log::info!(
                     "ε-constraint solved: obj[{}]={:.2}, feasible={}, slacks present={}",
                     self.primary_objective,
@@ -1231,6 +1464,47 @@ impl<'a> EpsilonConstraintBuilder<'a> {
                 classify_solve_error(&e)
             }
         }
+    }
+
+    /// Turn a solve's retained solution pool into Pareto candidates.
+    ///
+    /// Only the decision variables are read back; objective values are
+    /// recomputed from the problem's own expressions rather than taken from
+    /// Gurobi, because the model it solved carries the augmentation term and
+    /// its objective value is therefore not the problem's.
+    #[cfg(feature = "gurobi")]
+    fn harvest_pool(&self, solved: &mut good_lp::solvers::gurobi::GurobiSolved) -> Vec<Solution> {
+        self.harvest_pool_values(solved.solution_pool())
+    }
+
+    /// Turn a raw solution pool into `Solution`s.
+    ///
+    /// Split out so a reused model, which reads its pool from the model rather
+    /// than from a consumed `GurobiSolved`, harvests through exactly the same
+    /// code as the rebuild path.
+    #[cfg(feature = "gurobi")]
+    fn harvest_pool_values(&self, pool: Vec<HashMap<good_lp::Variable, f64>>) -> Vec<Solution> {
+        let mut out = Vec::with_capacity(pool.len());
+        // Skip index 0: that is the incumbent, already reported separately.
+        for values in pool.into_iter().skip(1) {
+            let objective_values: Vec<f64> = self
+                .problem
+                .objectives
+                .iter()
+                .map(|(expr, _)| {
+                    good_lp::IntoAffineExpression::linear_coefficients(expr)
+                        .map(|(v, c)| c * values.get(&v).copied().unwrap_or(0.0))
+                        .sum::<f64>()
+                        .round()
+                })
+                .collect();
+            let mut decision_variables = HashMap::with_capacity(self.problem.var_map.len());
+            for (name, var) in &self.problem.var_map {
+                decision_variables.insert(name.clone(), values.get(var).copied().unwrap_or(0.0));
+            }
+            out.push(Solution::new(objective_values, decision_variables));
+        }
+        out
     }
 
     /// Solve with slack - SCIP solver implementation
