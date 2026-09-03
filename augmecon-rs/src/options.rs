@@ -184,6 +184,81 @@ pub struct Options {
     pub solver: Solver,
     /// Solver-specific configuration parameters (only used if solver supports parameters)
     pub solver_parameters: HashMap<String, String>,
+    /// Relative MIP optimality gap for backends that expose it (currently the
+    /// native Gurobi backend).
+    ///
+    /// The default of 0 is deliberate. The AUGMECON augmentation term that
+    /// makes an epsilon-constraint solution *efficient* rather than merely
+    /// *weakly* efficient is scaled by `rho * 10^-(k+1) / range`; with a
+    /// second objective whose range is ~1e9 that coefficient lands around
+    /// 1e-10, so the reward for choosing the strictly better of two
+    /// primary-optimal solutions is a tiny fraction of the solver's default
+    /// relative gap (1e-4, i.e. hundreds of absolute units on a 1e6-scale
+    /// objective). The solver then stops at whichever incumbent it reached
+    /// first and returns a dominated point. Solving to a zero gap restores the
+    /// tie-break the formulation intends.
+    pub mip_gap: Option<f64>,
+    /// Re-solve each emitted solution lexicographically before adding it to the
+    /// front: fix the primary objective at the value just found and minimise
+    /// the remaining objective.
+    ///
+    /// Without this the epsilon-constraint solve only guarantees *weak*
+    /// efficiency. Efficiency is supposed to come from the augmentation term,
+    /// but on SIMS that term is numerically inert -- the coefficient works out
+    /// around 1e-10 against a primary objective of ~1e6, a range no
+    /// double-precision simplex can resolve, and tightening `mip_gap` does not
+    /// help. The Python reference implementation reaches the same conclusion
+    /// from the other direction and disables augmentation outright for this
+    /// model (`is_numerically_possible_augment_objective` -> false), noting
+    /// that its single-objective solutions "are not necessarily on the Pareto
+    /// front".
+    ///
+    /// This costs one extra MILP solve per emitted point, which in a
+    /// wall-clock-bounded phase means fewer points found in the same budget.
+    /// Only implemented for the bi-objective case; ignored otherwise.
+    pub lexicographic_refine: bool,
+    /// Ask the solver for an efficient point directly, by declaring the
+    /// epsilon subproblem's objectives as a two-level hierarchy.
+    ///
+    /// The alternative to both of this crate's other answers to weak
+    /// efficiency, and cheaper than either: the augmentation term costs
+    /// nothing but only works while it stays above the solver's sensitivity,
+    /// and [`Self::lexicographic_refine`] always works but costs a second
+    /// solve per emitted point. A priority costs neither -- Gurobi runs both
+    /// passes inside one `optimize()` call -- and, being structural rather
+    /// than numerical, cannot be too small to take effect.
+    ///
+    /// Native Gurobi only; other backends ignore it and keep the augmentation.
+    pub hierarchical_efficiency: bool,
+    /// `rho` in Problem (P5) of the GPBA-A paper. Theorem 3 requires it to be
+    /// "sufficiently small", usually between 1e-3 and 1e-6, for the optimum of
+    /// (P5) to be an *efficient* (not merely weakly efficient) solution.
+    ///
+    /// The default follows Section 4.2 of that paper, which reports rho = 1e-2
+    /// for the GPBA algorithms (1e-3 was used only for AUGMECON2) and warns
+    /// that when the slack is divided by a wide objective range the product
+    /// "may become smaller than the implementation software's sensitivity",
+    /// whose consequence is "the failure to compute some non-dominated
+    /// criterion vectors" -- exactly the defect measured here.
+    ///
+    /// The augmentation term saturates at `rho * 10^(k-1)`, so with the paper's
+    /// weights and rho = 1e-3 it tops out near 1e-2: small enough not to
+    /// reorder an integer primary objective (whose smallest gap is 1), large
+    /// enough to break ties in it -- provided the solver's optimality tolerance
+    /// can see it (see `mip_gap` and the Gurobi `OptimalityTol` set alongside).
+    pub epsilon_augmentation: f64,
+    /// How many solutions to retain from each MIP solve's solution pool.
+    ///
+    /// A scalarised solve visits many feasible integer solutions before it
+    /// proves optimality and normally reports only the best. Those discarded
+    /// solutions improve the scalarised objective while ranging freely over
+    /// the others, so a good share of them are non-dominated in the original
+    /// objective space -- free Pareto candidates from a solve already paid
+    /// for. `PoolSearchMode = 1` merely *keeps* what the search already found,
+    /// as opposed to mode 2 which searches for more and does cost time.
+    ///
+    /// 0 disables the pool.
+    pub solution_pool_size: usize,
 }
 
 impl Default for Options {
@@ -207,6 +282,11 @@ impl Default for Options {
             process_timeout: None,
             solver: Solver::default(),
             solver_parameters: HashMap::new(),
+            mip_gap: Some(0.0),
+            lexicographic_refine: false,
+            hierarchical_efficiency: false,
+            epsilon_augmentation: 1e-2,
+            solution_pool_size: 64,
         }
     }
 }
@@ -342,5 +422,48 @@ mod num_cpus {
         std::thread::available_parallelism()
             .map(std::num::NonZero::get)
             .unwrap_or(1)
+    }
+}
+
+/// Apply solver parameters that the native Gurobi backend can accept.
+///
+/// `good_lp`'s `GurobiProblem` exposes the underlying `grb::Model` through
+/// `as_inner_mut`, so parameters *are* reachable even though
+/// `Solver::supports_parameters` reports false for the generic string-keyed
+/// path. Only settings that materially affect correctness go through here;
+/// see `Options::mip_gap` for why the gap is one of them.
+#[cfg(feature = "gurobi")]
+pub(crate) fn apply_gurobi_options(
+    model: &mut good_lp::solvers::gurobi::GurobiProblem,
+    options: &Options,
+) {
+    if let Some(gap) = options.mip_gap {
+        if let Err(e) = model.as_inner_mut().set_param(grb::param::MIPGap, gap) {
+            log::warn!("Could not set Gurobi MIPGap to {gap}: {e}");
+        }
+    }
+    // The augmentation term of (P5) is ~1e-2 against a primary objective of
+    // ~1e6, i.e. 1e-8 relative -- below the default OptimalityTol of 1e-6, so
+    // the solver would not act on it. 1e-9 is Gurobi's minimum and puts the
+    // term comfortably above the resolution floor.
+    if let Err(e) = model
+        .as_inner_mut()
+        .set_param(grb::param::OptimalityTol, 1e-9)
+    {
+        log::warn!("Could not tighten Gurobi OptimalityTol: {e}");
+    }
+    if options.solution_pool_size > 0 {
+        let m = model.as_inner_mut();
+        // Mode 1 keeps the solutions the search finds anyway; mode 2 would go
+        // looking for more, which costs time we do not have.
+        if let Err(e) = m.set_param(grb::param::PoolSearchMode, 1) {
+            log::warn!("Could not set Gurobi PoolSearchMode: {e}");
+        }
+        if let Err(e) = m.set_param(
+            grb::param::PoolSolutions,
+            i32::try_from(options.solution_pool_size).unwrap_or(i32::MAX),
+        ) {
+            log::warn!("Could not set Gurobi PoolSolutions: {e}");
+        }
     }
 }
