@@ -74,6 +74,33 @@ pub struct GpbaA {
     timer: Option<Timer>,
 }
 
+/// The session handed to [`refine_lexicographic`], or a unit placeholder when
+/// no backend supports in-place editing.
+#[cfg(feature = "gurobi")]
+type RefineSession<'a, 'p> = Option<&'a mut crate::single_objective::ScalarisationSession<'p>>;
+#[cfg(not(feature = "gurobi"))]
+type RefineSession<'a, 'p> = ();
+
+/// Borrow the refinement session, where the backend has one.
+///
+/// A function rather than a macro so the call sites read the same in both
+/// feature configurations without reaching into their caller's locals.
+#[cfg(feature = "gurobi")]
+fn refine_session<'a, 'p>(
+    held: &'a mut Option<crate::single_objective::ScalarisationSession<'p>>,
+) -> RefineSession<'a, 'p> {
+    held.as_mut()
+}
+
+#[cfg(not(feature = "gurobi"))]
+const fn refine_session<'a, 'p>(held: &'a mut LexSessionSlot) -> RefineSession<'a, 'p> {
+    *held
+}
+
+/// What a build without an editable backend holds in place of a session.
+#[cfg(not(feature = "gurobi"))]
+type LexSessionSlot = ();
+
 /// Re-solve one emitted point lexicographically: pin the primary objective at
 /// the value just found and minimise the other objective.
 ///
@@ -95,16 +122,44 @@ fn refine_lexicographic(
     objective_values: &[f64],
     primary: usize,
     timer: Option<&Timer>,
+    session: RefineSession<'_, '_>,
 ) -> Option<(Vec<f64>, HashMap<String, f64>)> {
     if !options.lexicographic_refine || problem.num_objectives() != 2 {
         return None;
     }
     let secondary = 1 - primary;
-    let (primary_expr, _) = &problem.objectives[primary];
-    let pinned = constraint!(primary_expr.clone() == objective_values[primary]);
+    let deadline = timer.map(Timer::remaining);
 
-    let solved = crate::single_objective::SingleObjectiveSolver::new(problem, options)
-        .solve_objective_with_constraints(secondary, &[pinned], timer.map(Timer::remaining));
+    // Through the session when there is one: pinning is then a right-hand-side
+    // edit on a model already built, which is what makes one extra solve per
+    // emitted point affordable. Rebuilding for it was measured at six emitted
+    // points falling to two, and is why this pass is off by default.
+    #[cfg(feature = "gurobi")]
+    let solved = match session {
+        Some(session) => {
+            session.solve_pinned(secondary, primary, objective_values[primary], deadline)
+        }
+        None => refine_by_rebuild(
+            problem,
+            options,
+            objective_values,
+            primary,
+            secondary,
+            deadline,
+        ),
+    };
+    #[cfg(not(feature = "gurobi"))]
+    let solved = {
+        let () = session;
+        refine_by_rebuild(
+            problem,
+            options,
+            objective_values,
+            primary,
+            secondary,
+            deadline,
+        )
+    };
 
     match solved {
         Ok(sol) if sol.feasible => {
@@ -468,6 +523,16 @@ impl GpbaA {
             pareto_front.add_solution_with_precision(sol, 0);
         }
 
+        // The lexicographic post-pass pins one objective and minimises the
+        // other. Through a session that is a bound-row edit on a model already
+        // built, so it costs a solve rather than a solve plus a rebuild.
+        #[cfg(feature = "gurobi")]
+        let mut lex_session = (options.lexicographic_refine
+            && matches!(options.solver, crate::solver_enum::Solver::Gurobi))
+        .then(|| crate::single_objective::ScalarisationSession::new(problem, options));
+        #[cfg(not(feature = "gurobi"))]
+        let mut lex_session: LexSessionSlot = ();
+
         let mut iteration = 0;
         let mut relaxation_reuses: usize = 0;
         // Track explored epsilon configurations to avoid exact re-solves
@@ -695,6 +760,7 @@ impl GpbaA {
                     &solution.objective_values,
                     self.config.primary_objective,
                     self.timer.as_ref(),
+                    refine_session(&mut lex_session),
                 )
                 .unwrap_or_else(|| {
                     (
@@ -1084,6 +1150,16 @@ impl GpbaB {
             )
         });
 
+        // The lexicographic post-pass pins one objective and minimises the
+        // other. Through a session that is a bound-row edit on a model already
+        // built, so it costs a solve rather than a solve plus a rebuild.
+        #[cfg(feature = "gurobi")]
+        let mut lex_session = (options.lexicographic_refine
+            && matches!(options.solver, crate::solver_enum::Solver::Gurobi))
+        .then(|| crate::single_objective::ScalarisationSession::new(problem, options));
+        #[cfg(not(feature = "gurobi"))]
+        let mut lex_session: LexSessionSlot = ();
+
         let mut iteration = 0;
 
         while iteration < MAX_ITERATIONS {
@@ -1150,6 +1226,7 @@ impl GpbaB {
                         &solution.objective_values,
                         self.config.primary_objective,
                         self.timer.as_ref(),
+                        refine_session(&mut lex_session),
                     )
                     .unwrap_or_else(|| {
                         (
@@ -1372,6 +1449,16 @@ impl GpbaC {
             pareto_front.add_solution_with_precision(sol, 0);
         }
 
+        // The lexicographic post-pass pins one objective and minimises the
+        // other. Through a session that is a bound-row edit on a model already
+        // built, so it costs a solve rather than a solve plus a rebuild.
+        #[cfg(feature = "gurobi")]
+        let mut lex_session = (options.lexicographic_refine
+            && matches!(options.solver, crate::solver_enum::Solver::Gurobi))
+        .then(|| crate::single_objective::ScalarisationSession::new(problem, options));
+        #[cfg(not(feature = "gurobi"))]
+        let mut lex_session: LexSessionSlot = ();
+
         let mut iteration = 0;
 
         while iteration < MAX_ITERATIONS {
@@ -1415,6 +1502,7 @@ impl GpbaC {
                         &solution.objective_values,
                         self.config.primary_objective,
                         self.timer.as_ref(),
+                        refine_session(&mut lex_session),
                     )
                     .unwrap_or_else(|| {
                         (
@@ -1829,4 +1917,22 @@ fn solve_epsilon_by_rebuild(
         builder = builder.add_constraint_with_range(k, epsilon, range);
     }
     builder.solve_with_slack(timeout)
+}
+
+/// The pinned re-solve, building a fresh model.
+///
+/// What every backend without in-place editing uses, and the reference the
+/// session path is checked against.
+fn refine_by_rebuild(
+    problem: &MultiObjectiveProblem,
+    options: &Options,
+    objective_values: &[f64],
+    primary: usize,
+    secondary: usize,
+    deadline: Option<Duration>,
+) -> Result<crate::solution::Solution> {
+    let (primary_expr, _) = &problem.objectives[primary];
+    let pinned = constraint!(primary_expr.clone() == objective_values[primary]);
+    crate::single_objective::SingleObjectiveSolver::new(problem, options)
+        .solve_objective_with_constraints(secondary, &[pinned], deadline)
 }

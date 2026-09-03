@@ -124,6 +124,73 @@ fn classify_solve_error<T>(error: &good_lp::ResolutionError) -> EpsilonSolveOutc
     }
 }
 
+/// Declare the epsilon subproblem's objectives as a two-level hierarchy.
+///
+/// The epsilon-constraint solve on its own returns a *weakly* efficient point:
+/// it fixes what the primary objective can reach and says nothing about the
+/// rest. GPBA-A's answer is an augmentation term, which only works while its
+/// contribution stays above the solver's sensitivity -- and on these instances
+/// it lands near 1e-10 against a primary objective of ~1e6, so it does not.
+/// Re-solving each point with the primary pinned gives the guarantee back but
+/// costs a second solve per point, which measured as a front collapsing to its
+/// two extremes.
+///
+/// A priority is the same statement made structurally. Gurobi optimises the
+/// lower level "only from among those that would not degrade the solution
+/// quality for higher-priority objectives", inside one `optimize()` call and
+/// reusing its own search between the passes -- so the point comes back
+/// efficient at no extra solve, with no rho, no range scaling and no tolerance
+/// interaction to get wrong.
+///
+/// `ObjN` is per-variable and has no good_lp equivalent, so this reaches
+/// through `var_map` and `as_inner_mut`.
+#[cfg(feature = "gurobi")]
+fn declare_hierarchy(
+    model: &mut good_lp::solvers::gurobi::GurobiProblem,
+    problem: &MultiObjectiveProblem,
+    primary: usize,
+) -> std::result::Result<(), String> {
+    use grb::prelude as grbp;
+
+    if problem.num_objectives() != 2 {
+        return Err("a hierarchy is only defined here for two objectives".to_string());
+    }
+    let secondary = 1 - primary;
+    let (_, primary_dir) = &problem.objectives[primary];
+    // Gurobi minimises every level in the model's own sense, so flip any
+    // objective whose direction differs from the model's.
+    let sense_flip = |dir: &crate::model::ObjectiveDirection| -> f64 {
+        if std::mem::discriminant(dir) == std::mem::discriminant(primary_dir) {
+            1.0
+        } else {
+            -1.0
+        }
+    };
+
+    let var_map = model.var_map().clone();
+    let inner = model.as_inner_mut();
+    inner
+        .set_attr(grbp::attr::NumObj, 2)
+        .map_err(|e| format!("NumObj: {e}"))?;
+    for (slot, (obj_idx, priority)) in [(primary, 2), (secondary, 1)].into_iter().enumerate() {
+        inner
+            .set_param(grbp::param::ObjNumber, i32::try_from(slot).unwrap_or(0))
+            .map_err(|e| format!("ObjNumber: {e}"))?;
+        let (expr, dir) = &problem.objectives[obj_idx];
+        let flip = sense_flip(dir);
+        let coeffs: Vec<(grb::Var, f64)> = good_lp::IntoAffineExpression::linear_coefficients(expr)
+            .filter_map(|(v, c)| var_map.get(&v).map(|gv| (*gv, flip * c)))
+            .collect();
+        inner
+            .set_obj_attr_batch(grbp::attr::ObjN, coeffs)
+            .map_err(|e| format!("ObjN: {e}"))?;
+        inner
+            .set_attr(grbp::attr::ObjNPriority, priority)
+            .map_err(|e| format!("ObjNPriority: {e}"))?;
+    }
+    Ok(())
+}
+
 /// A Gurobi model held across an epsilon-constraint sweep.
 ///
 /// Every subproblem GPBA-A issues has the same variables, the same structural
@@ -201,7 +268,15 @@ impl<'a> EpsilonSession<'a> {
         let (primary_expr, direction) = &problem.objectives[primary_objective];
         // The augmented objective is fixed for the sweep: only the epsilon
         // right-hand sides move.
-        let augmented_primary = primary_expr.clone() + epsilon_augmentation * penalty_sum.clone();
+        // With priorities the augmentation term is redundant: efficiency comes
+        // from the second priority level rather than from a term that has to
+        // stay above the solver's sensitivity. Leaving it in would perturb the
+        // primary objective for no benefit.
+        let augmented_primary = if options.hierarchical_efficiency {
+            primary_expr.clone()
+        } else {
+            primary_expr.clone() + epsilon_augmentation * penalty_sum.clone()
+        };
         let mut model = match direction {
             crate::model::ObjectiveDirection::Minimize => {
                 prob_vars.minimise(augmented_primary.clone())
@@ -233,6 +308,17 @@ impl<'a> EpsilonSession<'a> {
                 obj_idx,
                 (slack_var, model.add_constraint(constraint!(expr == 0.0))),
             );
+        }
+
+        if options.hierarchical_efficiency {
+            // Declared once. The epsilon right-hand sides move between solves;
+            // the objective hierarchy does not.
+            if let Err(e) = declare_hierarchy(&mut model, problem, primary_objective) {
+                log::warn!(
+                    "Could not declare a hierarchical objective, falling back to the \
+                     augmentation term: {e}"
+                );
+            }
         }
 
         Self {

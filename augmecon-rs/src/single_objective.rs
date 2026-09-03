@@ -46,11 +46,12 @@ fn create_gurobi_solver_with_timeout(
     good_lp::solvers::lp_solvers::LpSolver(gurobi)
 }
 
-/// A Gurobi model held across a sweep of weighted-sum solves.
+/// A Gurobi model held across a sweep of scalarised solves.
 ///
-/// Aneja & Nair issues dozens of solves that differ only in their objective
-/// weights: the variables, the constraints and the feasible set are identical
-/// every time. Rebuilding the model for each one costs about 0.65s on the
+/// Both callers issue dozens of solves that differ only in their objective and
+/// in a bound or two: the variables, the constraints and the feasible set are
+/// identical every time. Aneja & Nair varies the weights; GPBA-A's
+/// lexicographic post-pass pins one objective and minimises the other. Rebuilding the model for each one costs about 0.65s on the
 /// larger instances -- roughly 22us per constraint to clone it out of the
 /// problem and rebuild it term by term -- which at thirty solves is a tenth of
 /// a 200-second budget spent re-describing a model the solver already has.
@@ -64,13 +65,27 @@ fn create_gurobi_solver_with_timeout(
 /// Restricted to the native Gurobi backend: it is the only one this crate has
 /// in-place editing for, and the only one the comparison runs on.
 #[cfg(feature = "gurobi")]
-pub struct WeightedSumSession<'a> {
+pub struct ScalarisationSession<'a> {
     problem: &'a MultiObjectiveProblem,
     model: good_lp::solvers::gurobi::GurobiProblem,
+    /// `f_j <= u_j` and `-f_j <= -l_j`, one pair per objective, relaxed unless
+    /// a solve asks for them.
+    upper: Vec<good_lp::constraint::ConstraintReference>,
+    lower: Vec<good_lp::constraint::ConstraintReference>,
+    /// Each objective's constant term, which its bound rows do not carry.
+    ///
+    /// good_lp normalises `f <= x` to `linear <= x - c`, moving the constant to
+    /// the right-hand side when the row is built, so setting that right-hand
+    /// side later bounds the linear part alone. Reapplied on every set.
+    constants: Vec<f64>,
 }
 
+/// A bound wide enough that Gurobi treats the row as absent.
 #[cfg(feature = "gurobi")]
-impl<'a> WeightedSumSession<'a> {
+const FREE: f64 = 1e30;
+
+#[cfg(feature = "gurobi")]
+impl<'a> ScalarisationSession<'a> {
     /// Build the model once, with every structural constraint in place.
     ///
     /// The objective is a placeholder; [`Self::solve`] replaces it outright on
@@ -87,7 +102,94 @@ impl<'a> WeightedSumSession<'a> {
         for constraint in &problem.constraints {
             model.add_constraint(constraint.clone());
         }
-        Self { problem, model }
+
+        // One relaxed row per bound a solve can impose, added here so their
+        // right-hand sides can move later without touching the model's
+        // structure -- which is what keeps Gurobi's warm start usable.
+        let mut upper = Vec::with_capacity(problem.num_objectives());
+        let mut lower = Vec::with_capacity(problem.num_objectives());
+        let mut constants = Vec::with_capacity(problem.num_objectives());
+        for (obj_expr, _) in &problem.objectives {
+            upper.push(model.add_constraint(constraint!(obj_expr.clone() <= FREE)));
+            lower.push(model.add_constraint(constraint!(-obj_expr.clone() <= FREE)));
+            constants.push(good_lp::IntoAffineExpression::constant(obj_expr));
+        }
+
+        Self {
+            problem,
+            model,
+            upper,
+            lower,
+            constants,
+        }
+    }
+
+    /// Relax every bound row, so a solve sees only the bounds it asks for.
+    fn release_bounds(&mut self) {
+        use good_lp::solvers::ModelWithMutableRhs;
+        for index in 0..self.problem.num_objectives() {
+            self.model.set_rhs(self.upper[index], FREE);
+            self.model.set_rhs(self.lower[index], FREE);
+        }
+    }
+
+    /// Minimise objective `secondary` with objective `pinned` held at `value`.
+    ///
+    /// The second half of a lexicographic refinement: the epsilon-constraint
+    /// solve fixes what the primary objective can reach, and this establishes
+    /// the best the other objective can do there -- turning a merely weakly
+    /// efficient point into an efficient one.
+    ///
+    /// Pinning is two bound rows rather than an equality constraint, so it is a
+    /// right-hand-side edit on the model already built. That matters: this pass
+    /// costs one extra solve per emitted point, and when each of those solves
+    /// also rebuilt the model it was too expensive to keep on -- measured at
+    /// six emitted points falling to two.
+    ///
+    /// # Errors
+    /// [`AugmeconError::OptimizationError`] if the solve fails.
+    pub fn solve_pinned(
+        &mut self,
+        secondary: usize,
+        pinned: usize,
+        value: f64,
+        timeout: Option<Duration>,
+    ) -> Result<Solution> {
+        use good_lp::solvers::{
+            ModelWithMutableObjective, ModelWithMutableRhs, ObjectiveDirection, ReusableModel,
+            SolverModel as _,
+        };
+
+        self.release_bounds();
+        let constant = self.constants[pinned];
+        self.model.set_rhs(self.upper[pinned], value - constant);
+        self.model.set_rhs(self.lower[pinned], constant - value);
+
+        let (secondary_expr, direction) = &self.problem.objectives[secondary];
+        let objective = match direction {
+            crate::model::ObjectiveDirection::Minimize => secondary_expr.clone(),
+            crate::model::ObjectiveDirection::Maximize => -secondary_expr.clone(),
+        };
+        self.model
+            .set_objective(objective, ObjectiveDirection::Minimisation);
+        if let Some(limit) = timeout {
+            let _ = self
+                .model
+                .as_inner_mut()
+                .set_param(grb::parameter::DoubleParam::TimeLimit, limit.as_secs_f64());
+        }
+
+        let started = std::time::Instant::now();
+        let solved = self.model.solve_mut().map_err(|e| {
+            AugmeconError::OptimizationError(format!("Lexicographic refinement failed: {e:?}"))
+        })?;
+        log::info!(
+            "PINNED obj{secondary} with obj{pinned} fixed at {value}: {:.2}s (reused model)",
+            started.elapsed().as_secs_f64()
+        );
+        let solution = self.extract(&solved);
+        self.release_bounds();
+        Ok(solution)
     }
 
     /// Minimise `sum w_i f_i` over the model, maximised objectives negated.
@@ -114,6 +216,9 @@ impl<'a> WeightedSumSession<'a> {
                 crate::model::ObjectiveDirection::Maximize => (-w) * obj_expr.clone(),
             })
             .sum();
+        // A weighted sum is unconstrained beyond the problem's own rows; drop
+        // anything a pinned solve left behind.
+        self.release_bounds();
         self.model
             .set_objective(expr, ObjectiveDirection::Minimisation);
         if let Some(limit) = timeout {
