@@ -185,7 +185,7 @@ impl AnejaNair {
         // other backend keeps rebuilding, which is correct, only slower.
         #[cfg(feature = "gurobi")]
         let mut session = matches!(options.solver, crate::solver_enum::Solver::Gurobi)
-            .then(|| crate::single_objective::WeightedSumSession::new(problem, options));
+            .then(|| crate::single_objective::ScalarisationSession::new(problem, options));
         let directions = problem.objectives.iter().map(|(_, dir)| *dir).collect();
         let mut front = ParetoFront::new(directions);
 

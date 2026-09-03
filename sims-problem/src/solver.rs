@@ -1917,11 +1917,18 @@ pub fn solve_with_milp(
     );
 
     // Configure options for GPBA-A with Python parameters
-    let options = Options::default()
+    let mut options = Options::default()
         .with_solver(solver)
         .with_bypass_coefficient(bypass_coefficient)
         .with_early_exit(early_exit)
         .with_flag_array(flag_array);
+    // Temporary A/B switch for the lexicographic post-pass, which trades one
+    // extra solve per emitted point for a guarantee that the point is
+    // efficient rather than only weakly so.
+    options.lexicographic_refine = std::env::var("GPBA_LEX_REFINE").is_ok();
+    // Efficiency from an objective priority rather than an augmentation term
+    // or a second solve; see `Options::hierarchical_efficiency`.
+    options.hierarchical_efficiency = std::env::var("GPBA_HIERARCHY").is_ok();
 
     info!(
         "GPBA-A Options: solver={}, bypass_coefficient={}, early_exit={}, flag_array={}",
@@ -6188,26 +6195,23 @@ fn run_psbox(args: RunPsbox<'_>) -> Result<augmecon::solution::ParetoFront, PyEr
     Ok(front)
 }
 
-/// Share of the budget held back so the run finishes inside it.
-///
-/// Two percent. Gurobi honours its `TimeLimit` closely -- measured at 10-20ms
-/// per solve -- so the guard only has to cover the front conversion and the
-/// trace write that follow the last solve. It was a tenth while every
-/// scalarisation rebuilt the model, since that rebuild happened outside the
-/// solver's own limit; `psbox::solve::Session` removed the rebuild, and the
-/// whole call then landed within 0.3s of its target. Holding twenty seconds
-/// back for a 0.3s overshoot cost the method nearly a tenth of its search.
-///
-/// It is deliberately taken off the budget the *method* is given rather than
-/// added to the deadline: a bound the caller sets is a bound, and the honest
-/// response to a solver that overruns is to ask it for less, not to quietly
-/// take longer.
-const TIMEOUT_GUARD: f64 = 0.02;
+
 
 /// The budget a first-phase method may actually spend.
 ///
-/// What remains of the caller's limit after the preparation already done, less
-/// the guard band.
+/// What remains of the caller's limit after the preparation already done.
+///
+/// The limit governs *solving*: the payoff/lexicographic preparation and the
+/// method's own solves are spent from it, and nothing is held back. Filtering
+/// the front, converting it for Python and writing the trace happen after the
+/// last solve returns and are deliberately outside it -- they report the answer
+/// rather than compute it, and charging them to the budget would take search
+/// time away to pay for bookkeeping.
+///
+/// A share used to be withheld here. It was sized for a per-solve model rebuild
+/// that happened outside Gurobi's own time limit; `psbox::solve::Session`
+/// removed the rebuild, and what was left was 0.3-0.4s of reporting tail --
+/// fixed rather than proportional, and not the solver's to pay for.
 ///
 /// Every first-phase method must take its deadline from here. Two of them --
 /// Aneja & Nair and GPBA-A -- were instead handed the caller's whole `timeout`
@@ -6216,9 +6220,7 @@ const TIMEOUT_GUARD: f64 = 0.02;
 /// and an unfair comparison: the methods that did subtract their preparation
 /// were measured against two that did not.
 fn method_budget(timeout: Duration, elapsed: Duration) -> Duration {
-    timeout
-        .mul_f64(1.0 - TIMEOUT_GUARD)
-        .saturating_sub(elapsed)
+    timeout.saturating_sub(elapsed)
 }
 
 /// Share of the wall-clock budget the pre-method preparation may consume.

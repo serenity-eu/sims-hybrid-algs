@@ -5065,6 +5065,20 @@ _PF_LEGEND_PT = 7.0
 
 # Ink that is not data: kept thin and grey so it recedes behind the markers.
 _PF_AXIS_GREY = "#4d4d4d"
+# Colour of the "best on this instance" caret and its value label. Deliberately
+# outside every engine palette -- an engine colour would read as "this bar
+# belongs to that engine". A dark goldenrod rather than a pure yellow: pure
+# yellow on white fails contrast for a 3.5pt marker and small bold text, so
+# this is a clean golden yellow with a darker rim on the marker for definition.
+# It must also stay clearly yellower than the GPBA-A row's #e07b00 orange, or
+# the caret reads as belonging to the exact-phase bars underneath it.
+_PF_MARK_COL = "#F2A900"
+_PF_MARK_EDGE = "#9C6B00"
+# Caret size, and the gap left on BOTH sides of it (bar-to-caret and
+# caret-to-label), in points. Small but non-zero: touching the bar reads as
+# part of it.
+_PF_MARK_SIZE = 4.0
+_PF_MARK_GAP = 2.0
 _PF_GRID_GREY = "#d9d9d9"
 _PF_SPINE_LW = 0.6
 _PF_GRID_LW = 0.4
@@ -5539,8 +5553,8 @@ def _bergmann_hommel_adjust(pvals: dict[tuple, float], k: int) -> dict[tuple, fl
 # baselines. Each entry is (label, row index into `_ea_bar_data` output, engine,
 # ratio); row 0 is GPBA-A-seeded, row 1 is Aneja & Nair-seeded.
 _FRIEDMAN_TREATMENTS: list[tuple[str, int, str, float]] = [
-    ("A\\&N+PLS", 1, "PLS", 0.50),
-    ("GPBA-A+PLS", 0, "PLS", 0.50),
+    ("A\\&N+PLS", 1, "PLS", 0.80),
+    ("GPBA-A+PLS", 0, "PLS", 0.80),
     ("A\\&N", 1, "PLS", 1.00),
     ("GPBA-A", 0, "PLS", 1.00),
     ("PLS", 0, "PLS", 0.00),
@@ -5550,29 +5564,34 @@ _FRIEDMAN_TREATMENTS: list[tuple[str, int, str, float]] = [
 ]
 
 
-def run_friedman_test(
+def _treatment_matrix(
     highs_dir: Path,
     an_dir: Path,
-    output_dir: Path,
-    filter_regex: str | None = None,
-    num_points: int = 30,
-    alpha: float = 0.05,
-) -> None:
-    """Friedman omnibus + all-pairs post-hoc with Bergmann-Hommel correction.
+    filter_regex: str | None,
+    num_points: int,
+    gpbaa_seeds_override: Path | None,
+    an_seeds_override: Path | None,
+    indicator: str,
+) -> tuple[list[str], "np.ndarray", list[str]]:
+    """Build the (instances x treatments) response matrix for the rank tests.
 
-    Blocks are instances, treatments are algorithms, and the response is the
-    mean hypervolume. Ranks are computed within each instance, so the result is
-    invariant to any per-instance monotone rescaling -- but *only* if every
-    treatment in one block shares one normalisation, which is why the matrix is
-    built from `_ea_bar_data` against merged bounds rather than from the raw
-    per-experiment `final_hv` values (the GPBA-A and A&N experiments normalise
-    against different bounds).
+    Shared by `run_friedman_test` and `run_wilcoxon_ranking` so the two
+    procedures can never disagree about the numbers they are testing -- they
+    differ only in the statistic applied to this matrix.
+
+    Returns (labels, data, instances used); `data` is empty when fewer than
+    three instances survive.
     """
     import numpy as np
-    from scipy.stats import friedmanchisquare
 
-    gpbaa_seeds_dir = _PSEUDO_SOURCE_DIRS["gpbaa_2d_highs"]
-    an_seeds_dir = _PSEUDO_SOURCE_DIRS["an_2d_highs"]
+
+    # Hardcoding these meant the two exact-only treatments were built from
+    # missing seed files on any instance set other than the publication one:
+    # _seeds returned [], their HV came out 0, and the instance was then
+    # dropped by the "non-positive HV" guard -- silently shrinking n rather
+    # than erroring.
+    gpbaa_seeds_dir = Path(gpbaa_seeds_override or _PSEUDO_SOURCE_DIRS["gpbaa_2d_highs"])
+    an_seeds_dir = Path(an_seeds_override or _PSEUDO_SOURCE_DIRS["an_2d_highs"])
 
     def _load(d: Path, inst: str) -> dict | None:
         p = d / f"{inst}.json"
@@ -5602,21 +5621,44 @@ def run_friedman_test(
         if not hb or not ab:
             continue
         merged = _merge_bounds(hb, ab)
-        rows = [
-            _ea_bar_data(highs, highs_dir, _seeds(gpbaa_seeds_dir, inst),
-                         merged, highs, highs_dir, num_points),
-            _ea_bar_data(an, an_dir, _seeds(an_seeds_dir, inst),
-                         merged, highs, highs_dir, num_points),
-        ]
+        _gs, _as = _seeds(gpbaa_seeds_dir, inst), _seeds(an_seeds_dir, inst)
+        if not _gs or not _as:
+            print(f"  WARNING: {inst}: missing seeds (GPBA-A {len(_gs)}, "
+                  f"A&N {len(_as)}) -- exact-only treatments would be zero, "
+                  f"skipping instance", flush=True)
+            continue
+        # Same normalisation as the figures and tables. Ranks are within-block
+        # so the ordering is robust to this, but the three must not disagree
+        # about what number a cell holds.
+        _refset = _pf_build_reference_set(inst, highs_dir, an_dir, _gs, _as)
+        if _refset:
+            merged = [[int(lo), int(hi)] for lo, hi in _pf_reference_bounds(_refset)]
+        if indicator == "hv":
+            rows = [
+                _ea_bar_data(highs, highs_dir, _gs,
+                             merged, highs, highs_dir, num_points),
+                _ea_bar_data(an, an_dir, _as,
+                             merged, highs, highs_dir, num_points),
+            ]
+            _key = "final_hv"
+        else:
+            _rs = _refset if indicator != "cardinality" else None
+            _b = ([[int(lo), int(hi)] for lo, hi in _pf_reference_bounds(_rs)]
+                  if _rs else merged)
+            rows = [
+                _ea_bar_data_indicator(indicator, highs, highs_dir, _gs, _b, _rs),
+                _ea_bar_data_indicator(indicator, an, an_dir, _as, _b, _rs),
+            ]
+            _key = "final"
         try:
             row = [
-                rows[r][engine][ratio]["final_hv"]
+                rows[r][engine][ratio][_key]
                 for _lbl, r, engine, ratio in _FRIEDMAN_TREATMENTS
             ]
         except KeyError as exc:
             print(f"  {inst}: missing {exc}, skipping", flush=True)
             continue
-        if any(v <= 0 for v in row):
+        if indicator == "hv" and any(v <= 0 for v in row):
             print(f"  {inst}: non-positive HV, skipping", flush=True)
             continue
         matrix.append(row)
@@ -5624,13 +5666,292 @@ def run_friedman_test(
 
     if len(matrix) < 3:
         print(f"Not enough complete instances ({len(matrix)})", flush=True)
+        return labels, np.asarray([]), used
+    return labels, np.asarray(matrix), used
+
+
+def run_wilcoxon_ranking(
+    highs_dir: Path,
+    an_dir: Path,
+    output_dir: Path,
+    filter_regex: str | None = None,
+    num_points: int = 30,
+    alpha: float = 0.05,
+    gpbaa_seeds_override: Path | None = None,
+    an_seeds_override: Path | None = None,
+    indicator: str = "hv",
+) -> None:
+    """All-pairs Wilcoxon signed-rank with Holm correction, as one procedure.
+
+    The paired alternative to `run_friedman_test`, over exactly the same
+    response matrix. The difference is what each statistic sees: Friedman
+    replaces every value with its rank among the k treatments and throws away
+    the magnitudes, while Wilcoxon works on the per-instance differences of one
+    pair at a time. On this data that costs Friedman a great deal of power --
+    the hybrid beats its own seeder on every instance, which Friedman leaves at
+    p = 0.2 after correction and Wilcoxon puts at p < 1e-4.
+
+    Holm controls the family-wise error rate over all k(k-1)/2 pairs on its own;
+    an omnibus gate is not required for validity (that requirement belongs to
+    the protected-LSD tradition), though `run_friedman_test` still provides one
+    if a venue expects it.
+
+    Both the pairwise test and the correction come from scikit-posthocs
+    (`posthoc_wilcoxon`, `p_adjust="holm"`), which is already a dependency and
+    is used the same way by the critical-difference diagram.
+    """
+    import numpy as np
+    import pandas as pd
+    import scikit_posthocs as sp
+
+    labels, data, used = _treatment_matrix(
+        highs_dir, an_dir, filter_regex, num_points,
+        gpbaa_seeds_override, an_seeds_override, indicator,
+    )
+    if data.size == 0:
+        return
+    n, k = data.shape
+
+    higher_is_better = indicator == "hv" or indicator in _HIGHER_IS_BETTER
+    order = ((-data) if higher_is_better else data).argsort(axis=1).argsort(axis=1) + 1.0
+    ranks = np.empty_like(order)
+    for i in range(n):
+        for j in range(k):
+            tied = np.isclose(data[i], data[i][j], rtol=0, atol=5e-7)
+            ranks[i][j] = order[i][tied].mean()
+    avg = ranks.mean(axis=0)
+
+    # Long format is what posthoc_wilcoxon expects. Column order is preserved
+    # so the returned matrix is indexed by `labels`.
+    df = pd.DataFrame(data, columns=labels)
+    long = df.melt(var_name="method", value_name="value")
+    pm = sp.posthoc_wilcoxon(
+        long, val_col="value", group_col="method", p_adjust="holm", sort=False,
+    )
+
+    label_txt = [lbl.replace(chr(92), "") for lbl in labels]
+    print(f"\nWilcoxon signed-rank + Holm over {n} instances, {k} algorithms"
+          f"  (response: {indicator})")
+    print(f"  {k * (k - 1) // 2} pairwise comparisons, alpha={alpha}")
+    print("\nAverage ranks (1 = best):")
+    for lbl, r in sorted(zip(label_txt, avg), key=lambda t: t[1]):
+        print(f"  {lbl:14s} {r:.2f}")
+
+    sig: set[tuple] = set()
+    print(f"\nHolm-adjusted pairwise p-values:")
+    rows = []
+    for i in range(k):
+        for j in range(i + 1, k):
+            pv = float(pm.loc[labels[i], labels[j]])
+            rows.append((pv, i, j))
+            if pv < alpha:
+                sig.add((i, j))
+    for pv, i, j in sorted(rows):
+        wins = int(((data[:, i] > data[:, j]) if higher_is_better
+                    else (data[:, i] < data[:, j])).sum())
+        mark = "*" if pv < alpha else " "
+        print(f"  {mark} {label_txt[i]:14s} vs {label_txt[j]:14s} "
+              f"p = {pv:.4g}   ({wins}/{n} wins)")
+    print(f"\n  {len(sig)} of {len(rows)} pairs significant at alpha={alpha}")
+
+    ordered = sorted(range(k), key=lambda j: avg[j])
+    parts = []
+    for pos, j in enumerate(ordered):
+        parts.append(f"\\text{{{labels[j]} ({avg[j]:.2f})}}")
+        if pos + 1 < len(ordered):
+            nxt = ordered[pos + 1]
+            pair = (min(j, nxt), max(j, nxt))
+            parts.append("\\succ" if pair in sig else "\\sim")
+    equation = " ".join(parts)
+    print("\nLaTeX (\\succ = significant at alpha, \\sim = not significant):")
+    print(" ", equation)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out = output_dir / ("wilcoxon_ranking.tex" if indicator == "hv"
+                        else f"wilcoxon_ranking_{indicator}.tex")
+    out.write_text(equation + "\n")
+    print(f"\n  Saved: {out}", flush=True)
+
+    _write_wilcoxon_tables(
+        output_dir, indicator, labels, avg, pm, data, sig, n, alpha,
+        higher_is_better,
+    )
+
+
+_INDICATOR_SHORT = {"hv": "HV", "igd_plus": "IGD$^+$"}
+
+
+def _rank_biserial(a, b, higher_is_better: bool) -> tuple[float, int, int, int]:
+    """Matched-pairs rank-biserial correlation for `a` against `b`, plus W/T/L.
+
+    The effect size that belongs with a Wilcoxon signed-rank test: the signed
+    rank sum normalised by its maximum, so it lands in [-1, 1] and is read like
+    a correlation. +1 means every pair favours `a`, 0 means the favourable and
+    unfavourable ranks cancel. A p-value says only whether a difference is
+    detectable at this sample size; this says how one-sided it is, which is
+    what a claim like "significant but small" has to be argued from.
+
+    Ties are dropped pairwise, as Wilcoxon itself drops them, so `wins + losses`
+    can be less than `n`.
+    """
+    import numpy as np
+
+    diff = (a - b) if higher_is_better else (b - a)
+    nz = diff[~np.isclose(diff, 0.0, rtol=0, atol=5e-7)]
+    ties = len(diff) - len(nz)
+    if nz.size == 0:
+        return 0.0, 0, ties, 0
+    # Rank the magnitudes, averaging ties, then split by sign.
+    mag = np.abs(nz)
+    order = mag.argsort()
+    ranks = np.empty(len(mag), dtype=float)
+    ranks[order] = np.arange(1, len(mag) + 1, dtype=float)
+    for v in np.unique(mag):
+        m = np.isclose(mag, v, rtol=0, atol=0)
+        if m.sum() > 1:
+            ranks[m] = ranks[m].mean()
+    total = ranks.sum()
+    favourable = ranks[nz > 0].sum()
+    r = (2.0 * favourable / total) - 1.0 if total > 0 else 0.0
+    return float(r), int((nz > 0).sum()), ties, int((nz < 0).sum())
+
+
+def _write_wilcoxon_tables(
+    output_dir, indicator, labels, avg, pm, data, sig, n, alpha,
+    higher_is_better,
+) -> None:
+    """Emit the pairwise tests as tables rather than only as a ranking chain.
+
+    The chain reports one comparison per adjacent pair -- seven of the
+    twenty-eight this procedure actually runs -- so most of the result is
+    invisible in it, including every significant pair whose members are not
+    neighbours in the ranking. Both tables here report all of them.
+
+    Two forms, because they answer different questions. `wilcoxon_summary`
+    gives one row per method and names who it beats, which is what a reader
+    scanning for the headline needs. `wilcoxon_matrix` gives every adjusted
+    p-value, which is what a reader checking the claim needs.
+    """
+    k = len(labels)
+    order = sorted(range(k), key=lambda j: avg[j])
+    rank_of = {j: pos + 1 for pos, j in enumerate(order)}
+
+    def beats(i: int) -> list[int]:
+        """Indices this method is significantly better than, in rank order."""
+        out = []
+        for j in range(k):
+            if i == j or (min(i, j), max(i, j)) not in sig:
+                continue
+            better = ((data[:, i] > data[:, j]).sum() if higher_is_better
+                      else (data[:, i] < data[:, j]).sum())
+            if better * 2 > n:
+                out.append(rank_of[j])
+        return sorted(out)
+
+    ind = "hypervolume" if indicator == "hv" else indicator.replace("_", "+")
+    n_sig = len(sig)
+    n_pairs = k * (k - 1) // 2
+
+    import numpy as np
+
+    rows = []
+    for pos, j in enumerate(order):
+        won = beats(j)
+        cell = ", ".join(str(x) for x in won) if won else "---"
+        median = float(np.median(data[:, j]))
+        # Effect size against the next-ranked method: the comparison a reader
+        # makes anyway when scanning a ranking, and the one a "significant but
+        # small" claim rests on.
+        if pos + 1 < len(order):
+            nxt = order[pos + 1]
+            r, w, t, l = _rank_biserial(data[:, j], data[:, nxt], higher_is_better)
+            eff = f"{r:+.2f}"
+            wtl = f"{w}/{t}/{l}"
+        else:
+            eff, wtl = "---", "---"
+        rows.append(
+            f"{pos + 1} & {labels[j]} & {avg[j]:.2f} & {median:.4f} & "
+            f"{eff} & {wtl} & {cell} \\\\"
+        )
+    summary = (
+        "% Generated by run_hv_experiments.py --wilcoxon-ranking. Do not edit.\n"
+        "\\begin{tabular}{@{}clccccl@{}}\n\\toprule\n"
+        "\\# & Method & Avg.\\ rank & Median " + _INDICATOR_SHORT.get(indicator, indicator)
+        + " & $r$ & W/T/L & Significantly better than \\\\\n"
+        "\\midrule\n" + "\n".join(rows) + "\n\\bottomrule\n\\end{tabular}\n"
+    )
+    out = output_dir / (f"wilcoxon_summary_{indicator}.tex" if indicator != "hv"
+                        else "wilcoxon_summary.tex")
+    out.write_text(summary)
+    print(f"  Saved: {out}", flush=True)
+
+    # Full matrix of Holm-adjusted p-values, lower triangle (upper is the
+    # mirror image and carries nothing extra).
+    head = " & ".join(str(i + 1) for i in range(k - 1))
+    mrows = []
+    for a, i in enumerate(order):
+        if a == 0:
+            continue
+        cells = []
+        for b, j in enumerate(order[:a]):
+            pv = float(pm.loc[labels[i], labels[j]])
+            txt = "<.0001" if pv < 1e-4 else f"{pv:.4f}".lstrip("0")
+            cells.append(f"\\bfseries {txt}" if pv < alpha else txt)
+        cells += [""] * (k - 1 - len(cells))
+        mrows.append(f"{a + 1} & " + " & ".join(cells) + " \\\\")
+    matrix = (
+        "% Generated by run_hv_experiments.py --wilcoxon-ranking. Do not edit.\n"
+        "\\begin{tabular}{@{}l" + "c" * (k - 1) + "@{}}\n\\toprule\n"
+        " & " + head + " \\\\\n\\midrule\n"
+        + "\n".join(mrows) + "\n\\bottomrule\n\\end{tabular}\n"
+    )
+    out = output_dir / (f"wilcoxon_matrix_{indicator}.tex" if indicator != "hv"
+                        else "wilcoxon_matrix.tex")
+    out.write_text(matrix)
+    print(f"  Saved: {out}", flush=True)
+    print(f"  ({n_sig}/{n_pairs} pairs significant, {n} instances, {ind})",
+          flush=True)
+
+
+def run_friedman_test(
+    highs_dir: Path,
+    an_dir: Path,
+    output_dir: Path,
+    filter_regex: str | None = None,
+    num_points: int = 30,
+    alpha: float = 0.05,
+    gpbaa_seeds_override: Path | None = None,
+    an_seeds_override: Path | None = None,
+    indicator: str = "hv",
+) -> None:
+    """Friedman omnibus + all-pairs post-hoc with Bergmann-Hommel correction.
+
+    Blocks are instances, treatments are algorithms. Ranks are computed within
+    each instance, so the result is invariant to any per-instance monotone
+    rescaling -- and to the 1 - x display complements, since ranking is taken
+    with the indicator's direction in mind.
+
+    See `run_wilcoxon_ranking` for the paired alternative, which uses the
+    per-instance differences rather than ranks among the k treatments.
+    """
+    import numpy as np
+    from scipy.stats import friedmanchisquare
+
+    labels, data, used = _treatment_matrix(
+        highs_dir, an_dir, filter_regex, num_points,
+        gpbaa_seeds_override, an_seeds_override, indicator,
+    )
+    if data.size == 0:
         return
 
     data = np.asarray(matrix)  # (N instances, k treatments)
     n, k = data.shape
 
-    # Rank within each instance, best (highest HV) = rank 1.
-    order = (-data).argsort(axis=1).argsort(axis=1) + 1.0
+    # Rank within each instance, best = rank 1. Which end is "best" depends on
+    # the indicator: HV and the 1 - x complements are higher-is-better, raw
+    # IGD+ and spacing are lower-is-better.
+    _hib = indicator == "hv" or indicator in _HIGHER_IS_BETTER
+    order = ((-data) if _hib else data).argsort(axis=1).argsort(axis=1) + 1.0
     # Average tied ranks, or two algorithms with identical HV would be split
     # arbitrarily by argsort -- and identical values are common here.
     ranks = np.empty_like(order)
@@ -5642,14 +5963,25 @@ def run_friedman_test(
 
     stat, p_omni = friedmanchisquare(*[data[:, j] for j in range(k)])
 
-    # Pairwise p-values from scikit-posthocs rather than hand-rolled: Conover's
-    # post-hoc for a Friedman design, unadjusted (the Bergmann-Hommel step is
-    # applied separately below).
-    import scikit_posthocs as sp
+    # Pairwise p-values from the standard Friedman rank-difference statistic:
+    #
+    #     z_ij = (Rbar_i - Rbar_j) / sqrt( k(k+1) / (6n) )
+    #
+    # two-sided against the normal. This is the post-hoc that Bergmann-Hommel
+    # is defined over in Garcia & Herrera (JMLR 2008), and the one the paper
+    # describes as "the Friedman post-hoc test".
+    #
+    # It replaces scikit-posthocs' Conover procedure, which was used here
+    # previously: Conover re-ranks and refers to a t-distribution with the
+    # residual variance of the Friedman two-way ANOVA. It is a different and
+    # more liberal statistic, so pairing it with Bergmann-Hommel could declare
+    # differences the named procedure would not.
+    from scipy.stats import norm as _norm
 
-    pmatrix = sp.posthoc_conover_friedman(data, p_adjust=None).values
+    se = math.sqrt(k * (k + 1) / (6.0 * n))
     pvals: dict[tuple, float] = {
-        (i, j): float(pmatrix[i][j]) for i in range(k) for j in range(i + 1, k)
+        (i, j): float(2.0 * _norm.sf(abs(avg[i] - avg[j]) / se))
+        for i in range(k) for j in range(i + 1, k)
     }
 
     adj = _bergmann_hommel_adjust(pvals, k)
@@ -5685,7 +6017,8 @@ def run_friedman_test(
     print(" ", equation)
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    out = output_dir / "friedman_ranking.tex"
+    out = output_dir / ("friedman_ranking.tex" if indicator == "hv"
+                        else f"friedman_ranking_{indicator}.tex")
     out.write_text(equation + "\n")
     print(f"\n  Saved: {out}", flush=True)
 
@@ -5696,6 +6029,8 @@ def generate_ea_tables(
     output_dir: Path,
     filter_regex: str | None = None,
     num_points: int = 30,
+    gpbaa_seeds_override: Path | None = None,
+    an_seeds_override: Path | None = None,
 ) -> None:
     """Emit one LaTeX longtable per exact method comparing the second-phase
     algorithms: `ea_hv_gpbaa.tex` and `ea_hv_aneja.tex`.
@@ -5707,8 +6042,13 @@ def generate_ea_tables(
     yet -- so it spans the four algorithm columns instead of repeating one value
     four times.
     """
-    gpbaa_seeds_dir = _PSEUDO_SOURCE_DIRS["gpbaa_2d_highs"]
-    an_seeds_dir = _PSEUDO_SOURCE_DIRS["an_2d_highs"]
+    # These were hardcoded to the publication dataset, so on any other
+    # instance set the seed files simply did not exist, _seeds returned [] and
+    # every 100:0 cell printed 0.0000 -- a plausible-looking number rather than
+    # an error. The bar figures take the same overrides; the tables have to as
+    # well or the two disagree on the exact-phase row.
+    gpbaa_seeds_dir = Path(gpbaa_seeds_override or _PSEUDO_SOURCE_DIRS["gpbaa_2d_highs"])
+    an_seeds_dir = Path(an_seeds_override or _PSEUDO_SOURCE_DIRS["an_2d_highs"])
     engines = [title for title, _c, _h, _cold in _EA_ENGINES]
 
     def _load(d: Path, inst: str) -> dict | None:
@@ -5748,13 +6088,26 @@ def generate_ea_tables(
             print(f"  {inst}: missing shared_bounds, skipping", flush=True)
             continue
         merged = _merge_bounds(hb, ab)
+        _gs, _as = _seeds(gpbaa_seeds_dir, inst), _seeds(an_seeds_dir, inst)
+        for _who, _dir, _got in (("GPBA-A", gpbaa_seeds_dir, _gs),
+                                 ("A&N", an_seeds_dir, _as)):
+            if not _got:
+                print(f"  WARNING: {inst}: no {_who} seeds in {_dir} -- the "
+                      f"100:0 row will read 0.0000", flush=True)
+        # Same normalisation as the bar figures (see the note there): the
+        # reference set's own ideal/nadir, not the run-derived shared bounds.
+        # The docstring promises a cell and its bar can never disagree, which
+        # only holds if both are normalised the same way.
+        _refset = _pf_build_reference_set(inst, highs_dir, an_dir, _gs, _as)
+        if _refset:
+            merged = [[int(lo), int(hi)] for lo, hi in _pf_reference_bounds(_refset)]
         collected.append(
             {
                 "instance": inst,
                 "rows": [
-                    _ea_bar_data(highs, highs_dir, _seeds(gpbaa_seeds_dir, inst),
+                    _ea_bar_data(highs, highs_dir, _gs,
                                  merged, highs, highs_dir, num_points),
-                    _ea_bar_data(an, an_dir, _seeds(an_seeds_dir, inst),
+                    _ea_bar_data(an, an_dir, _as,
                                  merged, highs, highs_dir, num_points),
                 ],
             }
@@ -5763,13 +6116,27 @@ def generate_ea_tables(
     for row_idx, fname, method, label in targets:
         lines: list[str] = []
         ncol = len(engines)
+        # Whether any cell actually has run-to-run spread. With --runs 1 every
+        # SD is 0.000, and printing "(0.000)" beside every mean while the
+        # caption says "mean over 10 runs" states something untrue about the
+        # experiment. Drop the boxes and say single run instead.
+        _has_sd = any(
+            b.get("std", 0.0) > 0
+            for rec in collected for b in rec["rows"][row_idx].get(engines[0], {}).values()
+        ) or any(
+            b.get("std", 0.0) > 0
+            for rec in collected for eng in engines
+            for b in rec["rows"][row_idx].get(eng, {}).values()
+        )
         colspec = "ll" + "r" * ncol
         # Pad each algorithm header by the SD box width so its right edge lines
         # up with the means below it, not with the SDs.
         # \scriptsize: with the pad added, "NSGA-III" at \footnotesize becomes
         # wider than "0.9981" plus its box, so the header — not the data — would
         # set the column width and push the table 16pt past \textwidth.
-        pad = f"\\tiny{{\\makebox[{_EA_STD_BOX}][r]{{}}}}"
+        # The header pad only exists to reserve the SD box width; with no SDs
+        # to print it would just indent every header away from its column.
+        pad = f"\\tiny{{\\makebox[{_EA_STD_BOX}][r]{{}}}}" if _has_sd else ""
         header = (
             " & ".join(
                 ["\\scriptsize{Instance}", "\\scriptsize{Ratio}"]
@@ -5779,10 +6146,12 @@ def generate_ea_tables(
         )
         cap = (
             f"Hypervolume by second-phase algorithm, seeded by {method}. "
-            "Values are the mean over 10 runs, with the standard deviation in "
-            "parentheses; the best value for each instance is in bold, "
-            "normalised against bounds shared by both exact methods. The "
-            "100:0 row is the exact phase alone."
+            + ("Values are the mean over 10 runs, with the standard deviation "
+               "in parentheses; " if _has_sd else "")
+            + "The best value for each instance is in bold, normalised on the "
+            "ideal and nadir of the reference Pareto set, the union of every "
+            "front found for that instance. The 100:0 row is the exact phase "
+            "alone."
         )
         lines += [
             # Six columns of "0.9621 +/- 0.0001" overflow \textwidth by ~42pt at
@@ -5837,7 +6206,8 @@ def generate_ea_tables(
                     )
                 else:
                     cells = " & ".join(
-                        f"{_hv(e, ratio)} {_ea_std_tex(bars[e][ratio]['std'])}"
+                        (f"{_hv(e, ratio)} {_ea_std_tex(bars[e][ratio]['std'])}"
+                         if _has_sd else _hv(e, ratio))
                         if ratio in bars.get(e, {}) else "---"
                         for e in engines
                     )
@@ -5872,6 +6242,7 @@ def generate_ea_bar_figures(
     """
     from matplotlib.gridspec import GridSpec
     from matplotlib.ticker import MaxNLocator
+    from matplotlib.transforms import offset_copy
 
     gpbaa_seeds_dir = Path(gpbaa_seeds_override or _PSEUDO_SOURCE_DIRS["gpbaa_2d_highs"])
     an_seeds_dir = Path(an_seeds_override or _PSEUDO_SOURCE_DIRS["an_2d_highs"])
@@ -5990,7 +6361,12 @@ def generate_ea_bar_figures(
         # figure exists to show -- and misstates the ratio between the segments
         # in every other case.
         lo = 0.0
-        hi = max(vals) * 1.02 if vals else 1.0
+        # 1.08, not 1.02: the best bar carries a value callout above it, which
+        # needs headroom inside the axes or it collides with the panel title.
+        hi = max(vals) * 1.34 if vals else 1.0
+        # Best configuration anywhere in this instance's figure -- across every
+        # engine, ratio and exact method, not the best within each panel.
+        _gbest = max(vals) if vals else 0.0
 
         # Height scales with the number of rows so a single-row figure is not
         # stretched to a two-row canvas.
@@ -6008,6 +6384,9 @@ def generate_ea_bar_figures(
                 xs = list(range(len(present)))
                 for xi, (ratio, _name) in zip(xs, present):
                     bd = bars[ratio]
+                    # The instance's single best configuration, across every
+                    # engine, ratio and exact method in the figure.
+                    _best = _gbest > 0 and abs(bd["final_hv"] - _gbest) <= 1e-12 * _gbest
                     if bd["hv_p1"] > 0:
                         ax.bar(xi, bd["hv_p1"], width=0.68, color=mcol,
                                linewidth=0, zorder=3)
@@ -6019,6 +6398,41 @@ def generate_ea_bar_figures(
                         ax.errorbar(xi, bd["final_hv"], yerr=bd["std"], fmt="none",
                                     ecolor=_PF_AXIS_GREY, elinewidth=0.5,
                                     capsize=1.5, capthick=0.5, zorder=5)
+                    # Mark it with a caret above the bar plus its value.
+                    #
+                    # An added mark, not a saturation step: dimming the other
+                    # thirty-nine bars would lower contrast for every
+                    # comparison a reader might make (50:50 against 20:80,
+                    # exact bases across a row) in order to privilege the one
+                    # comparison chosen here. A caret leaves all forty bars at
+                    # full fidelity and adds information instead of removing
+                    # it. The value gives the margin, which no mark can.
+                    if _best:
+                        # Both gaps -- bar to caret, caret to label -- are the
+                        # same _PF_MARK_GAP points. That needs one unit for
+                        # both: a data-unit offset for the caret and a points
+                        # offset for the label cannot stay equal, since the
+                        # data-unit one rescales with each figure's y range.
+                        # offset_copy shifts the caret in points instead, so
+                        # the caret sits _PF_MARK_GAP above the bar and the
+                        # label the same distance above the caret.
+                        _tr = offset_copy(
+                            ax.transData, fig=fig, units="points",
+                            y=_PF_MARK_GAP + _PF_MARK_SIZE / 2.0,
+                        )
+                        ax.plot([xi], [bd["final_hv"]], marker="v",
+                                markersize=_PF_MARK_SIZE, color=_PF_MARK_COL,
+                                markeredgecolor=_PF_MARK_EDGE,
+                                markeredgewidth=0.4, linestyle="none",
+                                transform=_tr, clip_on=False, zorder=6)
+                        ax.annotate(
+                            f"{bd['final_hv']:.4f}", (xi, bd["final_hv"]),
+                            textcoords="offset points",
+                            xytext=(0, 2 * _PF_MARK_GAP + _PF_MARK_SIZE),
+                            ha="center", va="bottom",
+                            fontsize=_PF_TICK_PT - 1, color="black",
+                            fontweight="bold", zorder=6, clip_on=False,
+                        )
                 ax.set_xticks(xs)
                 ax.set_xticklabels([name for _r, name in present],
                                    fontsize=_PF_TICK_PT, rotation=45,
@@ -6056,6 +6470,20 @@ def generate_ea_bar_figures(
             mpatches.Patch(facecolor=_pf_tint(col), hatch=_HATCH, edgecolor=col,
                            linewidth=_PF_SPINE_LW, label=f"{title} phase gain")
             for title, col, _h, _c in _EA_ENGINES
+        ] + [
+            # The caret key belongs at the end of the legend, not floating in
+            # the middle of it: it describes an annotation, not one of the six
+            # bar styles. fig.legend fills column-major, so with six real
+            # handles at ncol=3 the columns are (3, 3, 1) and a seventh handle
+            # lands at the TOP of column three. Two invisible spacers push the
+            # caret to the bottom row of the last column.
+            mpatches.Patch(facecolor="none", edgecolor="none", linewidth=0,
+                           label=" "),
+            mpatches.Patch(facecolor="none", edgecolor="none", linewidth=0,
+                           label=" "),
+            Line2D([], [], marker="v", markersize=4.0, color=_PF_MARK_COL,
+                   markeredgecolor=_PF_MARK_EDGE, markeredgewidth=0.4,
+                   linestyle="none", label="best on this instance"),
         ]
         leg = fig.legend(
             handles=handles, loc="outside lower center", ncol=3,
@@ -6093,8 +6521,13 @@ _INDICATOR_LABEL: dict[str, str] = {
     # Set as a formula rather than running text: this is the one indicator
     # whose label IS an expression, and "1 - IGD+" in the axis font reads as
     # prose (or worse, as a range) next to the plain-text row and panel
-    # labels. mathtext gives it the proper minus, spacing, and superscript.
-    "igd_plus_c": r"$1 - \mathrm{IGD}^{+}$",
+    # labels. mathtext alone only fixes the glyphs -- the minus and the
+    # superscript -- which is too quiet to separate the expression from the
+    # word "Final" beside it, so the formula is also set bold.
+    "igd_plus_c": r"$\mathbf{1 - IGD^{+}}$",
+    # Set bold like the IGD+ complement, and for the same reason: the label is
+    # an expression, not a name.
+    "spacing_c": r"$\mathbf{1 - Spacing}$",
 }
 
 # Indicators reported as a single final value per bar, with no exact/heuristic
@@ -6104,11 +6537,15 @@ _INDICATOR_LABEL: dict[str, str] = {
 # points their bounded populations cannot keep). A stacked bar would have to
 # render those as negative segments, so these indicators plot the final value
 # alone.
-_FINAL_ONLY_INDICATORS: frozenset[str] = frozenset({"igd_plus_c"})
+_FINAL_ONLY_INDICATORS: frozenset[str] = frozenset(
+    {"igd_plus_c", "spacing", "spacing_c"}
+)
 
 # Indicators where a larger value is better. `igd_plus_c` is 1 - IGD+, so it
 # inverts IGD+'s direction and bars grow upward with quality.
-_HIGHER_IS_BETTER: frozenset[str] = frozenset({"cardinality", "igd_plus_c"})
+_HIGHER_IS_BETTER: frozenset[str] = frozenset(
+    {"cardinality", "igd_plus_c", "spacing_c"}
+)
 
 
 def _pf_trace_path_for_label(trace_dir: Path, instance: str, label: str) -> Path | None:
@@ -6138,8 +6575,21 @@ def _pf_indicator_value(
         return 0.0
     if indicator == "cardinality":
         return float(sims_problem.front_cardinality(pts))
-    if indicator == "spacing":
-        return sims_problem.compute_spacing(pts, bounds, normalized=True)
+    if indicator in ("spacing", "spacing_c"):
+        val = sims_problem.compute_spacing(pts, bounds, normalized=True)
+        # Same display transform as igd_plus_c. Spacing normalises the POINTS
+        # to the unit box, then returns the population SD of nearest-neighbour
+        # L1 distances in it -- a distance-like quantity, not a fraction, so 1
+        # is not a true upper bound any more than it is for IGD+. On these
+        # instances it runs 0.003-0.54, but warn rather than plot a negative
+        # bar if a front ever exceeds 1.
+        if indicator == "spacing_c":
+            if val > 1.0:
+                print(f"  WARNING: spacing = {val:.4f} > 1, so 1 - spacing is "
+                      f"negative; the complement is not meaningful here",
+                      flush=True)
+            return 1.0 - val
+        return val
     if indicator in ("igd_plus", "igd_plus_c"):
         ref = reference_set if reference_set else pts
         val = sims_problem.compute_igd(pts, ref, bounds, normalized=True, plus=True)
@@ -6286,6 +6736,8 @@ def generate_ea_bar_figures_indicator(
     """
     from matplotlib.gridspec import GridSpec
     from matplotlib.ticker import MaxNLocator
+    from matplotlib.transforms import offset_copy
+    from matplotlib.lines import Line2D
 
     if indicator not in _INDICATOR_LABEL:
         raise ValueError(
@@ -6398,7 +6850,7 @@ def generate_ea_bar_figures_indicator(
         if indicator in _FINAL_ONLY_INDICATORS and _finals:
             _span = max(_finals) - min(_finals)
             _pad = max(_span * 0.15, max(_finals) * 0.005)
-            lo, hi = min(_finals) - _pad, max(_finals) + _pad
+            lo, hi = min(_finals) - _pad, max(_finals) + _pad * 2.8
         else:
             lo = min(0.0, min(all_vals) * 1.02) if all_vals else 0.0
             hi = max(all_vals) * 1.02 if all_vals else 1.0
@@ -6424,6 +6876,12 @@ def generate_ea_bar_figures_indicator(
         # the column's engine colour -- for every bar, and 100:0 is identified
         # by its x tick label like every other ratio.
         _fo = indicator in _FINAL_ONLY_INDICATORS
+        # Which end of the range is "best" depends on the indicator: spacing is
+        # lower-is-better, so taking a max here would mark the worst cell.
+        _hib = indicator in _HIGHER_IS_BETTER
+        # Best configuration anywhere in this instance's figure. `_finals`
+        # already spans every row, engine and ratio.
+        _gbest = (max(_finals) if _hib else min(_finals)) if _finals else 0.0
 
         for r, (mlabel, mshort, mcol) in enumerate(_ROW_LABELS):
             for ci, (title, ecol, _hy, _cold) in enumerate(_EA_ENGINES):
@@ -6432,23 +6890,56 @@ def generate_ea_bar_figures_indicator(
                 present = [(ratio, name) for ratio, name in _PF_RATIOS if ratio in bars]
                 xs = list(range(len(present)))
                 if _fo:
-                    # Mark the panel's best ratio. With one colour per panel
-                    # and a cropped y range the winner is often a hairline
-                    # above the runner-up (0.9561 vs 0.9532 is a pixel), so
-                    # the ranking is not reliably readable off the bar
-                    # heights -- the outline states it. Compared with a
-                    # relative tolerance so a genuine tie marks both bars
-                    # rather than letting float noise pick one arbitrarily.
-                    _vals = [bars[ratio]["final"] for ratio, _n in present]
-                    _best = max(_vals) if _vals else 0.0
+                    # Mark the instance's single best configuration -- across
+                    # every engine, ratio and exact method in the figure, not
+                    # the best within each panel. A per-panel winner marks
+                    # eight bars and answers "best ratio given this engine",
+                    # which is not the question the grid is posed to answer;
+                    # one mark answers "what should you actually run".
+                    #
+                    # Emphasis, not decoration: the winner keeps the full
+                    # engine colour and everything else is muted toward white.
+                    # A border would add a second visual channel (an edge)
+                    # meaning something different from every other edge on the
+                    # page; a saturation step reads as "this one" without
+                    # adding vocabulary and survives greyscale printing as a
+                    # lightness difference.
+                    #
+                    # Exactly one bar carries a value label, so the number is a
+                    # callout rather than an inconsistent encoding -- labelling
+                    # one bar per panel would give a precise figure for eight
+                    # bars and force estimation for the other thirty-two.
+                    #
+                    # Compared with a relative tolerance so a genuine tie
+                    # emphasises both bars rather than letting float noise
+                    # pick one arbitrarily.
+                    _best = _gbest
                     for xi, (ratio, _name) in zip(xs, present):
                         _v = bars[ratio]["final"]
                         _is_best = _best > 0 and abs(_v - _best) <= 1e-12 * abs(_best)
-                        ax.bar(
-                            xi, _v, width=0.68, color=ecol, zorder=3,
-                            edgecolor="black" if _is_best else "none",
-                            linewidth=1.1 if _is_best else 0,
-                        )
+                        ax.bar(xi, _v, width=0.68, zorder=3, linewidth=0,
+                               color=ecol)
+                        if _is_best:
+                            # Equal gaps in points on both sides of the caret;
+                            # see the note in generate_ea_bar_figures.
+                            _tr = offset_copy(
+                                ax.transData, fig=fig, units="points",
+                                y=_PF_MARK_GAP + _PF_MARK_SIZE / 2.0,
+                            )
+                            ax.plot([xi], [_v], marker="v",
+                                    markersize=_PF_MARK_SIZE,
+                                    color=_PF_MARK_COL,
+                                    markeredgecolor=_PF_MARK_EDGE,
+                                    markeredgewidth=0.4, linestyle="none",
+                                    transform=_tr, clip_on=False, zorder=6)
+                            ax.annotate(
+                                f"{_v:.4f}", (xi, _v),
+                                textcoords="offset points",
+                                xytext=(0, 2 * _PF_MARK_GAP + _PF_MARK_SIZE),
+                                ha="center", va="bottom",
+                                fontsize=_PF_TICK_PT - 1, color="black",
+                                fontweight="bold", zorder=6, clip_on=False,
+                            )
                 for xi, (ratio, _name) in zip([] if _fo else xs, present):
                     bd = bars[ratio]
                     p1, final = bd["p1"], bd["final"]
@@ -6511,8 +7002,11 @@ def generate_ea_bar_figures_indicator(
                 mpatches.Patch(facecolor=col, linewidth=0, label=title)
                 for title, col, _h, _c in _EA_ENGINES
             ] + [
-                mpatches.Patch(facecolor="white", edgecolor="black", linewidth=1.1,
-                               label="best ratio in panel"),
+                # The caret itself is the key -- it is the mark that appears on
+                # the page, so the legend shows it rather than describing it.
+                Line2D([], [], marker="v", markersize=4.0, color=_PF_MARK_COL,
+                       markeredgecolor=_PF_MARK_EDGE, markeredgewidth=0.4,
+                       linestyle="none", label="best on this instance"),
             ]
         else:
             handles = [
@@ -6916,6 +7410,7 @@ def generate_pareto_front_figures(
     """
     from matplotlib.gridspec import GridSpec
     from matplotlib.ticker import MaxNLocator
+    from matplotlib.transforms import offset_copy
 
     # Seed sources default to the publication *_highs datasets, but any instance
     # set generated later (e.g. the A&N-calibrated "hard" grid) keeps its
@@ -7005,7 +7500,17 @@ def generate_pareto_front_figures(
             if _got is not None and not _got:
                 print(f"  WARNING: {inst}: no {_who} seeds in {_dir} -- "
                       f"exact-phase values will be empty", flush=True)
-        merged = _pf_widen_bounds(merged, [gpbaa_seeds, an_seeds])
+        # Same normalisation as the bar figures and the appendix tables: the
+        # reference Pareto set's own ideal/nadir rather than the run-derived
+        # shared bounds. These bounds reach only the hypervolume recomputation
+        # inside `_pf_row_data`; the scatter panels scale to the fronts
+        # themselves, so a tighter box cannot clip a plotted point.
+        _refset = _pf_build_reference_set(inst, highs_dir, an_dir,
+                                          gpbaa_seeds, an_seeds)
+        if _refset:
+            merged = [[int(lo), int(hi)] for lo, hi in _pf_reference_bounds(_refset)]
+        else:
+            merged = _pf_widen_bounds(merged, [gpbaa_seeds, an_seeds])
 
         # `_pf_row_data`'s last two arguments are the reference experiment used
         # for axis scaling; fall back to whichever row exists.
@@ -8428,6 +8933,29 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--wilcoxon-ranking",
+        action="store_true",
+        help=(
+            "All-pairs Wilcoxon signed-rank with Holm correction over the same "
+            "response matrix as --friedman, as a single self-contained "
+            "procedure (Holm controls FWER without an omnibus gate). Prints "
+            "average ranks, the adjusted p-matrix with win counts, and the "
+            "same chain notation; writes `wilcoxon_ranking.tex` to "
+            "--output-dir, then exits. Honours --friedman-indicator."
+        ),
+    )
+    parser.add_argument(
+        "--friedman-indicator",
+        default="hv",
+        choices=["hv"] + sorted(_INDICATOR_LABEL),
+        help=(
+            "Response variable for --friedman (default: hv). The test is "
+            "invariant to the 1 - x complements: ranks are within-block and "
+            "1 - x is strictly decreasing, so igd_plus and igd_plus_c give "
+            "the same chain."
+        ),
+    )
+    parser.add_argument(
         "--friedman",
         action="store_true",
         help=(
@@ -8600,6 +9128,19 @@ def main() -> int:
         )
         return 0
 
+    if args.wilcoxon_ranking:
+        run_wilcoxon_ranking(
+            args.highs_dir,
+            args.an_dir,
+            args.output_dir,
+            filter_regex=args.filter,
+            num_points=args.num_points,
+            gpbaa_seeds_override=args.pf_seeds_gpbaa,
+            an_seeds_override=args.pf_seeds_an,
+            indicator=args.friedman_indicator,
+        )
+        return 0
+
     if args.friedman:
         run_friedman_test(
             args.highs_dir,
@@ -8607,6 +9148,9 @@ def main() -> int:
             args.output_dir,
             filter_regex=args.filter,
             num_points=args.num_points,
+            gpbaa_seeds_override=args.pf_seeds_gpbaa,
+            an_seeds_override=args.pf_seeds_an,
+            indicator=args.friedman_indicator,
         )
         return 0
 
@@ -8617,6 +9161,8 @@ def main() -> int:
             args.output_dir,
             filter_regex=args.filter,
             num_points=args.num_points,
+            gpbaa_seeds_override=args.pf_seeds_gpbaa,
+            an_seeds_override=args.pf_seeds_an,
         )
         return 0
 
