@@ -61,6 +61,8 @@ pub mod concurrent_pls;
 pub mod diverse_probe_iter;
 pub mod evolutionary;
 pub mod explored_solutions_data;
+#[cfg(feature = "milp_lns")]
+pub mod milp_lns;
 pub mod objective_tracker;
 pub mod objective_tracker_impl;
 pub mod objectives;

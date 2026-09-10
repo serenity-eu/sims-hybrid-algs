@@ -16,6 +16,13 @@ crates = ["moors", "optirustic"]
 moors = { path = "./target/patch/moors-0.2.10" }
 optirustic = { path = "./target/patch/optirustic-1.2.2" }
 
+[[bin]]
+name = "lns_milp"
+path = "src/bin/lns_milp.rs"
+test = false
+bench = false
+required-features = ["milp_lns"]
+
 [lib]
 name = "pls"
 
@@ -125,6 +132,8 @@ optirustic = { version = "1.2.2", default-features = false, optional = true }
 ndarray = { version = "0.16.1", optional = true }
 
 [features]
+# MILP-based large-neighbourhood search prototype (needs a HiGHS build).
+milp_lns = ["dep:highs", "dep:highs-sys"]
 default = ["bitmaps", "plotting", "bounds_check"]
 plotting = ["plotters", "nd-tree/plotting"]
 bitmaps = ["fixedbitset"]
@@ -148,3 +157,12 @@ pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
 # Keep existing overrides with higher priority
 needless_return = "allow"
+
+
+[dependencies.highs]
+version = "1.12"
+optional = true
+
+[dependencies.highs-sys]
+version = "1.11"
+optional = true
