@@ -153,6 +153,18 @@ pub enum AugmeconError {
     /// Solver not supported (disabled at compile time)
     #[error("Unsupported solver: {0}")]
     UnsupportedSolver(String),
+
+    /// A subproblem stopped at its time limit with an incumbent rather than a
+    /// proven optimum.
+    ///
+    /// Distinct from [`Self::OptimizationError`] because it is not a failure of
+    /// the model: the point is feasible, it simply is not known to be optimal.
+    /// Both Aneja & Nair and GPBA-A derive their next search direction from the
+    /// points they have, so accepting one silently misplaces every subsequent
+    /// step. Callers that require optimality stop the sweep and keep what they
+    /// proved; callers that do not can ignore this variant.
+    #[error("Subproblem stopped before proving optimality")]
+    NotProvenOptimal,
 }
 
 /// Result type used throughout the AUGMECON library

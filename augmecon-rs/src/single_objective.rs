@@ -72,6 +72,9 @@ pub struct ScalarisationSession<'a> {
     /// a solve asks for them.
     upper: Vec<good_lp::constraint::ConstraintReference>,
     lower: Vec<good_lp::constraint::ConstraintReference>,
+    /// Reject an incumbent that stopped at its time limit; see
+    /// [`Options::require_optimal`].
+    require_optimal: bool,
     /// Each objective's constant term, which its bound rows do not carry.
     ///
     /// good_lp normalises `f <= x` to `linear <= x - c`, moving the constant to
@@ -118,6 +121,7 @@ impl<'a> ScalarisationSession<'a> {
         Self {
             problem,
             model,
+            require_optimal: options.require_optimal,
             upper,
             lower,
             constants,
@@ -242,6 +246,9 @@ impl<'a> ScalarisationSession<'a> {
             log::warn!(
                 "Weighted-sum solve for weights {weights:?} stopped before proving optimality"
             );
+            if self.require_optimal {
+                return Err(AugmeconError::NotProvenOptimal);
+            }
         }
         Ok(self.extract(&solution))
     }
@@ -629,6 +636,19 @@ impl<'a> SingleObjectiveSolver<'a> {
             println!("DEBUG: Single objective optimization failed: {e:?}");
             AugmeconError::OptimizationError(format!("Single objective optimization failed: {e:?}"))
         })?;
+        // The payoff-table and lexicographic solves come through here too. A
+        // time-limited incumbent is feasible but not the optimum those
+        // constructions assume, so reject it rather than seed the sweep with a
+        // wrong extreme.
+        if self.options.require_optimal
+            && !matches!(
+                good_lp::solvers::Solution::status(&solution),
+                good_lp::solvers::SolutionStatus::Optimal
+            )
+        {
+            log::warn!("single-objective solve stopped before proving optimality");
+            return Err(AugmeconError::NotProvenOptimal);
+        }
         log::debug!("Single-objective problem solved successfully");
 
         // Extract variable values (don't log individual variables, too verbose)
