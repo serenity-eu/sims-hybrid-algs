@@ -2051,10 +2051,25 @@ pub fn solve_with_milp(
     // spread the budget across many solves for a denser coverage front. On the cap the
     // solver returns its incumbent (a valid feasible Pareto candidate). Bounded to a
     // sensible [10s, 45s] window regardless of total budget.
-    let per_solve_cap = timeout
-        .checked_div(6)
-        .unwrap_or(timeout)
-        .clamp(Duration::from_secs(10), Duration::from_secs(45));
+    // `GPBA_PER_SOLVE_CAP` overrides the cap for A/B testing: a value in
+    // seconds sets it directly, and `0` removes it so every subproblem is
+    // solved to optimality. The default below spreads the budget across many
+    // solves, which raises the point count on instances where a subproblem
+    // finishes well inside the cap -- but on hard instances every subproblem
+    // hits it, and a capped solve still reports its incumbent as a Pareto
+    // point, so the count falls *and* the points are no longer proven optimal.
+    let per_solve_cap = match std::env::var("GPBA_PER_SOLVE_CAP")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+    {
+        Some(0) => timeout,
+        Some(secs) => Duration::from_secs(secs).min(timeout),
+        None => timeout
+            .checked_div(6)
+            .unwrap_or(timeout)
+            .clamp(Duration::from_secs(10), Duration::from_secs(45)),
+    };
+    info!("GPBA/A&N per-solve cap: {per_solve_cap:?} (global budget {timeout:?})");
 
     // Configure GPBA-A for Python-compatible dynamic interval exploration (gamma=1)
     let config = GpbaConfig {
