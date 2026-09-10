@@ -24,6 +24,8 @@
 //! `MinResolution` is a sum of per-element minima and needs a different
 //! formulation, so neither is wired up here.
 pub mod balanced_box;
+#[cfg(feature = "gurobi_lns")]
+pub mod gurobi_model;
 pub mod model;
 pub mod operators;
 

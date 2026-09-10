@@ -48,6 +48,52 @@ pub enum SolveOutcome {
     NoSolution,
 }
 
+/// The subproblem interface Balanced Box and the LNS driver depend on.
+///
+/// Both backends build the model once and mutate bounds per solve; the
+/// algorithms only need to say which images are free, where the clear-area
+/// floor and cost ceiling sit, and which objective to pursue.
+pub trait SubproblemSolver {
+    /// Fix every image to its incumbent value except those in `free`, apply the
+    /// bounds, and optimise `objective`.
+    fn solve(
+        &mut self,
+        incumbent: &FixedBitSet,
+        free: &FixedBitSet,
+        min_clear_area: f64,
+        max_cost: f64,
+        objective: Objective,
+        seconds: f64,
+    ) -> (SolveOutcome, FixedBitSet);
+
+    fn num_images(&self) -> usize;
+    fn cost_of_selection(&self, s: &FixedBitSet) -> u64;
+    fn clear_area_of(&self, s: &FixedBitSet) -> u64;
+}
+
+impl SubproblemSolver for PersistentModel {
+    fn solve(
+        &mut self,
+        incumbent: &FixedBitSet,
+        free: &FixedBitSet,
+        min_clear_area: f64,
+        max_cost: f64,
+        objective: Objective,
+        seconds: f64,
+    ) -> (SolveOutcome, FixedBitSet) {
+        Self::solve(self, incumbent, free, min_clear_area, max_cost, objective, seconds)
+    }
+    fn num_images(&self) -> usize {
+        Self::num_images(self)
+    }
+    fn cost_of_selection(&self, s: &FixedBitSet) -> u64 {
+        Self::cost_of_selection(self, s)
+    }
+    fn clear_area_of(&self, s: &FixedBitSet) -> u64 {
+        Self::clear_area_of(self, s)
+    }
+}
+
 pub struct PersistentModel {
     model: Option<Model>,
     /// Clear-coverage sets, kept so a warm start can supply consistent `y`
