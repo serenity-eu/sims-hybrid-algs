@@ -36,7 +36,7 @@ use std::{
 
 use fixedbitset::FixedBitSet;
 
-use super::model::{Objective, PersistentModel, SolveOutcome};
+use super::model::{Objective, SolveOutcome, SubproblemSolver};
 
 /// A point in criterion space together with the selection that achieves it.
 #[derive(Debug, Clone)]
@@ -101,16 +101,16 @@ pub struct BoxSearchStats {
     pub exact: bool,
 }
 
-pub struct BalancedBox<'a> {
-    model: &'a mut PersistentModel,
+pub struct BalancedBox<'a, S: SubproblemSolver + ?Sized> {
+    model: &'a mut S,
     total_area: u64,
     all_free: FixedBitSet,
     mip_time: Duration,
     stats: BoxSearchStats,
 }
 
-impl<'a> BalancedBox<'a> {
-    pub fn new(model: &'a mut PersistentModel, total_area: u64, mip_time: Duration) -> Self {
+impl<'a, S: SubproblemSolver + ?Sized> BalancedBox<'a, S> {
+    pub fn new(model: &'a mut S, total_area: u64, mip_time: Duration) -> Self {
         let mut all_free = FixedBitSet::with_capacity(model.num_images());
         all_free.insert_range(..);
         Self { model, total_area, all_free, mip_time, stats: BoxSearchStats::default() }
@@ -276,17 +276,37 @@ impl<'a> BalancedBox<'a> {
 
         self.stats.boxes_left = queue.len();
         self.stats.exact = queue.is_empty() && self.stats.timed_out == 0;
-        points.sort_unstable_by_key(|p| (p.cost, p.cloud));
-        points.dedup_by_key(|p| (p.cost, p.cloud));
-        (points, self.stats)
+        (non_dominated(points), self.stats)
     }
+}
+
+/// Keep only the mutually non-dominated points.
+    ///
+    /// A solve that hits its time limit returns the best incumbent it found,
+    /// which need not be optimal for its box; such a point can be dominated by
+    /// one discovered in another box. Emitting it would misreport the front, so
+    /// the sweep runs once at the end rather than trusting every solve.
+fn non_dominated(mut points: Vec<BoxPoint>) -> Vec<BoxPoint> {
+    points.sort_unstable_by_key(|p| (p.cost, p.cloud));
+    points.dedup_by_key(|p| (p.cost, p.cloud));
+    let mut out: Vec<BoxPoint> = Vec::with_capacity(points.len());
+    let mut best_cloud = u64::MAX;
+    for p in points {
+        if p.cloud < best_cloud {
+            best_cloud = p.cloud;
+            out.push(p);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        milp_lns::model::clear_coverage, objectives::ObjectiveType, problem_bitset::ProblemBitset,
+        milp_lns::model::{clear_coverage, PersistentModel},
+        objectives::ObjectiveType,
+        problem_bitset::ProblemBitset,
     };
 
     fn setup() -> (ProblemBitset<2>, Vec<FixedBitSet>, Vec<u64>) {
@@ -345,6 +365,26 @@ mod tests {
             assert_eq!(covered.count_ones(..), p.universe_size, "returned a non-cover");
         }
         assert!(stats.solves >= 2, "at least the two lexicographic extremes");
+    }
+
+    #[test]
+    fn dominated_points_are_filtered_out_of_the_result() {
+        // A timed-out solve can return a point dominated by one from another
+        // box; the result must not contain it.
+        let mk = |cost, cloud| BoxPoint {
+            cost,
+            cloud,
+            images: FixedBitSet::with_capacity(1),
+        };
+        let out = non_dominated(vec![
+            mk(10, 100),
+            mk(20, 200), // dominated by (10,100)
+            mk(30, 50),
+            mk(40, 60),  // dominated by (30,50)
+            mk(50, 10),
+        ]);
+        let got: Vec<(u64, u64)> = out.iter().map(|p| (p.cost, p.cloud)).collect();
+        assert_eq!(got, vec![(10, 100), (30, 50), (50, 10)]);
     }
 
     #[test]

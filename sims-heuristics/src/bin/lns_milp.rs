@@ -38,6 +38,10 @@ struct Cli {
     /// solves. Spreads its solves over the whole front, so a partial budget
     /// still covers both ends.
     #[arg(long)] balanced_box: bool,
+    /// Subproblem solver. Gurobi needs the `gurobi_lns` feature and a licence.
+    #[arg(long, default_value = "highs")] solver: String,
+    /// Solver threads (Gurobi only). Defaults to Gurobi's own choice.
+    #[arg(long)] threads: Option<i32>,
 }
 
 fn main() {
@@ -73,24 +77,45 @@ fn main() {
 
     let deadline = Instant::now() + a.timeout;
     if a.balanced_box {
-        use pls::milp_lns::{balanced_box::BalancedBox, model::{clear_coverage, PersistentModel}};
+        use pls::milp_lns::{
+            balanced_box::BalancedBox,
+            model::{clear_coverage, PersistentModel, SubproblemSolver},
+        };
         let (clear, areas) = clear_coverage(&problem);
         let total: u64 = areas.iter().sum();
-        let mut model = PersistentModel::new(&problem, &clear, &areas);
         let warm = starts
             .iter()
             .min_by_key(|s| s.ones().map(|i| problem.image_cost(i)).sum::<u64>())
             .cloned()
             .unwrap_or_else(|| FixedBitSet::with_capacity(problem.images.len()));
-        let mut bb = BalancedBox::new(&mut model, total, a.mip_time);
+
+        let mut highs_model;
+        #[cfg(feature = "gurobi_lns")]
+        let mut gurobi_model;
+        let model: &mut dyn SubproblemSolver = match a.solver.as_str() {
+            "highs" => {
+                highs_model = PersistentModel::new(&problem, &clear, &areas);
+                &mut highs_model
+            }
+            #[cfg(feature = "gurobi_lns")]
+            "gurobi" => {
+                gurobi_model = pls::milp_lns::gurobi_model::GurobiModel::new(
+                    &problem, &clear, &areas, a.threads,
+                )
+                .expect("build Gurobi model (licence?)");
+                &mut gurobi_model
+            }
+            other => panic!("unknown solver {other:?}; expected \"highs\" or \"gurobi\""),
+        };
+        let mut bb = BalancedBox::new(model, total, a.mip_time);
         let (pts, stats) = bb.run(&warm, Instant::now() + a.timeout);
         for pt in &pts {
             let sel: Vec<String> = pt.images.ones().map(|i| i.to_string()).collect();
             println!("{},{},{},{}", pt.cost, pt.cloud, sel.len(), sel.join(" "));
         }
         eprintln!(
-            "balanced box: {} points | solves {} (optimal {}, timed out {}, infeasible {}) | boxes closed {} left {} | exact {}",
-            pts.len(), stats.solves, stats.optimal, stats.timed_out, stats.infeasible,
+            "balanced box [{}]: {} points | solves {} (optimal {}, timed out {}, infeasible {}) | boxes closed {} left {} | exact {}",
+            a.solver, pts.len(), stats.solves, stats.optimal, stats.timed_out, stats.infeasible,
             stats.boxes_closed, stats.boxes_left, stats.exact
         );
         return;

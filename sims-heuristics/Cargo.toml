@@ -134,6 +134,9 @@ ndarray = { version = "0.16.1", optional = true }
 [features]
 # MILP-based large-neighbourhood search prototype (needs a HiGHS build).
 milp_lns = ["dep:highs", "dep:highs-sys"]
+# Gurobi-backed subproblem solver. Needs a licensed Gurobi at build time
+# (grb-sys2 reads GUROBI_HOME/GUROBI_LIBNAME) and at run time.
+gurobi_lns = ["milp_lns", "dep:grb"]
 default = ["bitmaps", "plotting", "bounds_check"]
 plotting = ["plotters", "nd-tree/plotting"]
 bitmaps = ["fixedbitset"]
@@ -165,4 +168,10 @@ optional = true
 
 [dependencies.highs-sys]
 version = "1.11"
+optional = true
+
+[dependencies.grb]
+version = "3.0.1"
+features = ["gurobi12"]
+default-features = false
 optional = true
