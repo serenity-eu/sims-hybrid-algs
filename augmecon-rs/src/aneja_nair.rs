@@ -22,7 +22,7 @@
 //! with **exact `i128` integer arithmetic** on the un-normalised weights.
 
 use crate::{
-    error::Result,
+    error::{AugmeconError, Result},
     model::MultiObjectiveProblem,
     options::Options,
     single_objective::SingleObjectiveSolver,
@@ -229,18 +229,34 @@ impl AnejaNair {
             let sum = (wi1 + wi2) as f64;
             let weights = [wi1 as f64 / sum, wi2 as f64 / sum];
 
-            let sol = {
+            let solved = {
                 #[cfg(feature = "gurobi")]
                 {
                     match session.as_mut() {
-                        Some(session) => session.solve(&weights, self.per_solve())?,
-                        None => solver.solve_weighted_sum(&weights, self.per_solve())?,
+                        Some(session) => session.solve(&weights, self.per_solve()),
+                        None => solver.solve_weighted_sum(&weights, self.per_solve()),
                     }
                 }
                 #[cfg(not(feature = "gurobi"))]
                 {
-                    solver.solve_weighted_sum(&weights, self.per_solve())?
+                    solver.solve_weighted_sum(&weights, self.per_solve())
                 }
+            };
+            let sol = match solved {
+                Ok(sol) => sol,
+                // The incumbent is feasible but unproven, and this gap's weight
+                // is what the next weights are derived from. Keep the points
+                // already proven rather than either trusting it or discarding
+                // the run.
+                Err(AugmeconError::NotProvenOptimal) => {
+                    log::warn!(
+                        "Aneja & Nair: stopping early -- a weighted-sum subproblem \
+                         did not prove optimality; returning {} proven points",
+                        front.solutions.len()
+                    );
+                    break;
+                }
+                Err(e) => return Err(e),
             };
             let z = Point {
                 f1: sol.objective_values[0],

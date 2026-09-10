@@ -370,6 +370,20 @@ impl<'a> EpsilonSession<'a> {
 
         match self.model.solve_mut() {
             Ok(solution) => {
+                // Same contract as the weighted-sum path: GPBA-A bisects the
+                // largest remaining gap, so an unproven incumbent misplaces
+                // every later bisection, not just this point.
+                if options.require_optimal
+                    && !matches!(
+                        good_lp::solvers::Solution::status(&solution),
+                        good_lp::solvers::SolutionStatus::Optimal
+                    )
+                {
+                    log::warn!("epsilon-constraint subproblem stopped before proving optimality");
+                    return EpsilonSolveOutcome::Inconclusive(
+                        "stopped before proving optimality".to_string(),
+                    );
+                }
                 let mut builder =
                     EpsilonConstraintBuilder::new(self.problem, options, self.primary_objective);
                 for (&obj_idx, &epsilon) in epsilon_values {

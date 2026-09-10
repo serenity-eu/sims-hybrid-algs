@@ -160,6 +160,16 @@ pub struct Options {
     pub round_decimals: usize,
     /// Nadir ratio for automatic nadir point calculation
     pub nadir_ratio: f64,
+    /// Reject subproblem answers that stopped at a time limit without proving
+    /// optimality.
+    ///
+    /// Both first-phase methods assume each subproblem returns its optimum:
+    /// Aneja & Nair derives the next weight from the segment between known
+    /// points, and GPBA-A bisects the largest remaining gap. An incumbent that
+    /// is merely feasible therefore does not just add one questionable point,
+    /// it steers the rest of the search. With this set the sweep stops at the
+    /// first unproven answer and returns the points it did prove.
+    pub require_optimal: bool,
     /// Enable early exit optimization
     pub early_exit: bool,
     /// Enable bypass coefficient optimization
@@ -270,6 +280,7 @@ impl Default for Options {
             penalty_weight: 1e-3,
             round_decimals: 9,
             nadir_ratio: 1.0,
+            require_optimal: true,
             early_exit: true,
             bypass_coefficient: true,
             flag_array: true,
