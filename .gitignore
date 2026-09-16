@@ -223,3 +223,12 @@ publication-data/satellite-data/instances_random_clouds/*.dzn
 # cargo config it generates (absolute GUROBI_HOME / rpath).
 /.gurobi/
 /.cargo/config.toml
+
+# The published biobjective experiment set. Two rules above would otherwise
+# swallow it: `experiment*` matches the directory itself, and `*.tar.gz` the
+# anytime traces inside it. Git cannot re-include a path inside an ignored
+# directory, so the directory is un-ignored first and its contents second.
+# The traces are needed, not incidental: every table and figure generator
+# reads them, so the results cannot be rebuilt without them.
+!publication-data/experiments-x10-2obj/
+!publication-data/experiments-x10-2obj/**
