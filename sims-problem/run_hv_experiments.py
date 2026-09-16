@@ -112,7 +112,19 @@ for _city, _sizes in _CITIES:
         if (INSTANCES_DIR / _fname).exists():
             ALL_INSTANCES.append((f"{_city}_{_size}", _fname, _size))
 
+# Biobjective by default: the pseudo-solution sets are 2-objective fronts
+# (`*_2d_*`), and the paper is biobjective. Defaulting to four objectives meant
+# a run that forgot `--biobjective` seeded 2-objective exact fronts into a
+# 4-objective search and reported 4-objective hypervolumes -- completing
+# cleanly, with the full artifact set, and answering the wrong question. Use
+# `--four-objectives` to opt back in.
 OBJECTIVES = [
+    "min_cost",
+    "cloud_coverage",
+]
+
+#: The full objective set, selected by `--four-objectives`.
+FOUR_OBJECTIVES = [
     "min_cost",
     "cloud_coverage",
     "min_max_incidence_angle",
@@ -136,29 +148,72 @@ _PLS_VARIANT_MAP: dict[str, str] = {
     "Diverse Probe PLS": "Diverse Probe",
 }
 
-# Maps config label → (short_name, hex_color) for hybrid comparison bars.
-# Grouped by algorithm family: PLS, NSGA-II, NSGA-III, MOEA/D.
-_HYBRID_BAR_STYLES: list[tuple[str, str, str]] = [
-    # (config_label, display_name, color)
-    # Grouped by algorithm family, ratios 80:20→50:50→20:80 left to right.
-    # Default PLS (no exact phase) appears last/rightmost as the baseline reference.
-    ("Hybrid 80:20",          "PLS 80:20",      "#08306b"),
-    ("Hybrid 50:50",          "PLS 50:50",      "#2171b5"),
-    ("Hybrid 20:80",          "PLS 20:80",      "#6baed6"),
-    ("Default PLS",           "PLS 0:100",      "#9ecae1"),
-    ("Hybrid NSGA-II 80:20",  "NSGA-II 80:20",  "#7f2704"),
-    ("Hybrid NSGA-II 50:50",  "NSGA-II 50:50",  "#d94801"),
-    ("Hybrid NSGA-II 20:80",  "NSGA-II 20:80",  "#f16913"),
-    ("Baseline NSGA-II",      "NSGA-II 0:100",  "#fdae6b"),
-    ("Hybrid NSGA-III 80:20", "NSGA-III 80:20", "#00441b"),
-    ("Hybrid NSGA-III 50:50", "NSGA-III 50:50", "#238b45"),
-    ("Hybrid NSGA-III 20:80", "NSGA-III 20:80", "#41ab5d"),
-    ("Baseline NSGA-III",     "NSGA-III 0:100", "#74c476"),
-    ("Hybrid MOEA/D 80:20",   "MOEA/D 80:20",   "#3f007d"),
-    ("Hybrid MOEA/D 50:50",   "MOEA/D 50:50",   "#756bb1"),
-    ("Hybrid MOEA/D 20:80",   "MOEA/D 20:80",   "#9e9ac8"),
-    ("Baseline MOEA/D",       "MOEA/D 0:100",   "#bcbddc"),
+#: The exact/heuristic split used across the paper, in the order bars and
+#: panels are drawn. This is the single source of truth for the ratio grid:
+#: `_PF_RATIO_TO_LABEL` and `_HYBRID_BAR_STYLES` are both derived from it, so
+#: changing the step here changes every consumer. Hardcoding a second copy is
+#: how the 80/20 grid survived the move to 25% steps and raised `KeyError: 0.75`.
+_PF_RATIOS: list[tuple[float, str]] = [
+    (1.00, "100:0"),
+    (0.75, "75:25"),
+    (0.50, "50:50"),
+    (0.25, "25:75"),
+    (0.00, "0:100"),
 ]
+
+#: Config label for each intermediate ratio (the pure-exact and pure-heuristic
+#: ends have their own labels and are excluded).
+_PF_RATIO_TO_LABEL: dict[float, str] = {
+    r: f"Hybrid {name}" for r, name in _PF_RATIOS if 0.0 < r < 1.0
+}
+
+
+def _shade_ramp(anchors: list[str], n: int) -> list[str]:
+    """Sample `n` colours spanning the dark→light `anchors`.
+
+    When `n` equals the number of anchors every sample lands exactly on an
+    anchor, so the hand-picked palettes below are reproduced byte for byte and
+    existing figures do not shift. A different ratio count interpolates in RGB
+    instead of raising, so the grid stays changeable in one place. Kept free of
+    matplotlib: this table is built at import time, and matplotlib is optional.
+    """
+    if n <= 0:
+        return []
+    if n == 1:
+        return [anchors[0]]
+    rgb = [tuple(int(a[k : k + 2], 16) for k in (1, 3, 5)) for a in anchors]
+    span = len(rgb) - 1
+    out = []
+    for idx in range(n):
+        pos = idx / (n - 1) * span
+        lo = min(int(pos), span - 1) if span else 0
+        frac = pos - lo
+        c = tuple(
+            round(rgb[lo][k] + (rgb[lo + 1][k] - rgb[lo][k]) * frac) for k in range(3)
+        )
+        out.append("#%02x%02x%02x" % c)
+    return out
+
+
+#: (display prefix, hybrid label template, pure-heuristic label, dark→light shades).
+#: One entry per second-phase algorithm; ratios come from `_PF_RATIOS`.
+_HYBRID_BAR_FAMILIES: list[tuple[str, str, str, list[str]]] = [
+    ("PLS", "Hybrid {r}", "Default PLS", ["#08306b", "#2171b5", "#6baed6", "#9ecae1"]),
+    ("NSGA-II", "Hybrid NSGA-II {r}", "Baseline NSGA-II", ["#7f2704", "#d94801", "#f16913", "#fdae6b"]),
+    ("NSGA-III", "Hybrid NSGA-III {r}", "Baseline NSGA-III", ["#00441b", "#238b45", "#41ab5d", "#74c476"]),
+    ("MOEA/D", "Hybrid MOEA/D {r}", "Baseline MOEA/D", ["#3f007d", "#756bb1", "#9e9ac8", "#bcbddc"]),
+]
+
+# Maps config label → (short_name, hex_color) for hybrid comparison bars.
+# Grouped by algorithm family, ratios descending left to right, with the
+# pure-heuristic run (0:100) last in each group as that family's own baseline.
+# The pure-exact end (100:0) is not per-family, so it is not a bar here.
+_HYBRID_BAR_STYLES: list[tuple[str, str, str]] = []
+for _prefix, _tmpl, _baseline_label, _anchors in _HYBRID_BAR_FAMILIES:
+    _bars = [(r, name) for r, name in _PF_RATIOS if r < 1.0]
+    for (_r, _name), _colour in zip(_bars, _shade_ramp(_anchors, len(_bars))):
+        _label = _baseline_label if _r == 0.0 else _tmpl.format(r=_name)
+        _HYBRID_BAR_STYLES.append((_label, f"{_prefix} {_name}", _colour))
 
 _VARIANT_COLORS: dict[str, str] = {
     "Default": "#e07b00",
@@ -5019,19 +5074,20 @@ def _regenerate_monise_curve_with_bounds(
 # of both experiments' bounds) so their HV bars are directly comparable — this
 # is what the two auto-computed per-experiment references failed to guarantee.
 
-# ratio → (bar label, trace slug for the PLS/hybrid part). ratio 1.0 has no
-# trace (pure exact, from pseudo seeds); 0.0 = pure PLS (default_pls trace).
-_PF_RATIOS: list[tuple[float, str]] = [
-    (1.00, "100:0"),
-    (0.80, "80:20"),
-    (0.50, "50:50"),
-    (0.20, "20:80"),
-    (0.00, "0:100"),
-]
+# `_PF_RATIOS` and `_PF_RATIO_TO_LABEL` are defined near the top of the module,
+# beside `_HYBRID_BAR_STYLES`, which is derived from the same grid.
+
+# ratio → trace slug for the PLS/hybrid part. Ratio 1.0 has no trace (pure
+# exact, from pseudo seeds); 0.0 = pure PLS (default_pls trace). Slugs are the
+# config labels put through the same sanitiser the run uses when it writes a
+# trace (`label.lower()`, spaces to underscores, colons removed), so
+# "Hybrid 75:25" becomes `hybrid_7525`. They must agree: `_pf_trace_front`
+# returns an empty front when the file is missing, so a mismatch shows up as
+# blank panels rather than an error.
 _PF_RATIO_TO_SLUG: dict[float, str] = {
-    0.80: "hybrid_8020",
+    0.75: "hybrid_7525",
     0.50: "hybrid_5050",
-    0.20: "hybrid_2080",
+    0.25: "hybrid_2575",
     0.00: "default_pls",
 }
 # Scatter panels shown (matching the paper: pure exact, balanced, pure PLS).
@@ -5322,7 +5378,7 @@ def _pf_row_data(
         elif ratio == 0.00:
             bars[ratio] = dict(hv_p1=0.0, hv_p2=pls_final_hv, final_hv=pls_final_hv)
         else:
-            label = {0.80: "Hybrid 80:20", 0.50: "Hybrid 50:50", 0.20: "Hybrid 20:80"}[ratio]
+            label = _PF_RATIO_TO_LABEL[ratio]
             final_hv = _avg_final(label)
             if final_hv == 0.0:
                 continue
@@ -5356,31 +5412,28 @@ def _pf_row_data(
 # there is nothing method-specific about them, so the A&N row reuses the same
 # numbers rather than leaving its 0:100 bar empty. This mirrors how the front
 # figure already sources "Default PLS" for both rows.
+def _family_hybrid_labels(family: str | None) -> dict[float, str]:
+    """Ratio -> config label for one second-phase algorithm.
+
+    Derived from `_PF_RATIO_TO_LABEL` so every engine follows the one ratio
+    grid. The EA rows used to carry their own 80/50/20 literals, which is what
+    raised `KeyError: 0.75` as soon as the grid moved to 25 % steps -- the PLS
+    row, already derived, was unaffected.
+    """
+    if family is None:
+        return dict(_PF_RATIO_TO_LABEL)
+    return {
+        ratio: label.replace("Hybrid ", f"Hybrid {family} ", 1)
+        for ratio, label in _PF_RATIO_TO_LABEL.items()
+    }
+
+
 _EA_ENGINES: list[tuple[str, str, dict[float, str], str]] = [
     # (column title, colour, {ratio: hybrid label}, cold-start label)
-    (
-        "PLS", "#1f77b4",
-        {0.80: "Hybrid 80:20", 0.50: "Hybrid 50:50", 0.20: "Hybrid 20:80"},
-        "Default PLS",
-    ),
-    (
-        "NSGA-II", "#2ca02c",
-        {0.80: "Hybrid NSGA-II 80:20", 0.50: "Hybrid NSGA-II 50:50",
-         0.20: "Hybrid NSGA-II 20:80"},
-        "Baseline NSGA-II",
-    ),
-    (
-        "NSGA-III", "#9467bd",
-        {0.80: "Hybrid NSGA-III 80:20", 0.50: "Hybrid NSGA-III 50:50",
-         0.20: "Hybrid NSGA-III 20:80"},
-        "Baseline NSGA-III",
-    ),
-    (
-        "MOEA/D", "#17becf",
-        {0.80: "Hybrid MOEA/D 80:20", 0.50: "Hybrid MOEA/D 50:50",
-         0.20: "Hybrid MOEA/D 20:80"},
-        "Baseline MOEA/D",
-    ),
+    ("PLS", "#1f77b4", _family_hybrid_labels(None), "Default PLS"),
+    ("NSGA-II", "#2ca02c", _family_hybrid_labels("NSGA-II"), "Baseline NSGA-II"),
+    ("NSGA-III", "#9467bd", _family_hybrid_labels("NSGA-III"), "Baseline NSGA-III"),
+    ("MOEA/D", "#17becf", _family_hybrid_labels("MOEA/D"), "Baseline MOEA/D"),
 ]
 
 
@@ -5552,16 +5605,44 @@ def _bergmann_hommel_adjust(pvals: dict[tuple, float], k: int) -> dict[tuple, fl
 # Treatments for the Friedman test, extending the paper's Eq. 1 with the EA
 # baselines. Each entry is (label, row index into `_ea_bar_data` output, engine,
 # ratio); row 0 is GPBA-A-seeded, row 1 is Aneja & Nair-seeded.
-_FRIEDMAN_TREATMENTS: list[tuple[str, int, str, float]] = [
-    ("A\\&N+PLS", 1, "PLS", 0.80),
-    ("GPBA-A+PLS", 0, "PLS", 0.80),
-    ("A\\&N", 1, "PLS", 1.00),
-    ("GPBA-A", 0, "PLS", 1.00),
-    ("PLS", 0, "PLS", 0.00),
-    ("NSGA-II", 0, "NSGA-II", 0.00),
-    ("NSGA-III", 0, "NSGA-III", 0.00),
-    ("MOEA/D", 0, "MOEA/D", 0.00),
-]
+#: The hybrid split the rank tests treat as "the" two-phase configuration: the
+#: largest exact share on the ratio grid, taken from `_PF_RATIOS` rather than
+#: written out. It was hardcoded to 0.80, a ratio the 25 %-step grid does not
+#: contain, so every instance was dropped as "missing 0.8" and the tests then
+#: reported "not enough complete instances" instead of failing outright.
+_HYBRID_TREATMENT_RATIO: float = max(_PF_RATIO_TO_LABEL)
+
+
+#: Second-phase engines that get both a seeded (hybrid) and a cold-start
+#: treatment in the rank tests. PLS first so it heads the list, as in the
+#: figures and the longtables.
+_TESTED_ENGINES: tuple[str, ...] = ("PLS", "NSGA-II", "NSGA-III", "MOEA/D")
+
+
+def _friedman_treatments(have_an: bool) -> list[tuple[str, int, str, float]]:
+    """(label, results-row, engine, ratio) for each treatment under test.
+
+    Row 0 is the GPBA-A-seeded results, row 1 the Aneja & Nair ones. When no
+    A&N directory was given, its treatments are omitted so the tests run on the
+    GPBA-A half alone rather than comparing against absent data.
+
+    Every engine contributes a seeded treatment (at `_HYBRID_TREATMENT_RATIO`)
+    and a cold-start one, plus the exact phase alone per seeding method. Only
+    PLS used to get a hybrid entry, so the EA hybrids -- which the longtables
+    and the bar figures both report -- were missing from the rankings entirely,
+    and the tests appeared to compare hybrid PLS against cold-start EAs.
+    """
+    r = _HYBRID_TREATMENT_RATIO
+    rows = [(0, "GPBA-A")] + ([(1, "A\\&N")] if have_an else [])
+    treatments: list[tuple[str, int, str, float]] = []
+    # Seeded treatments, exact phase first for each seeding method.
+    for row, exact in rows:
+        treatments.append((exact, row, "PLS", 1.00))
+        for engine in _TESTED_ENGINES:
+            treatments.append((f"{exact}+{engine}", row, engine, r))
+    # Cold starts are seeding-independent, so they appear once.
+    treatments += [(engine, 0, engine, 0.00) for engine in _TESTED_ENGINES]
+    return treatments
 
 
 def _treatment_matrix(
@@ -5601,28 +5682,35 @@ def _treatment_matrix(
         p = d / f"{inst}.json"
         return json.loads(p.read_text()).get("solutions", []) if p.exists() else []
 
+    _have_an = an_dir is not None and Path(an_dir).is_dir()
     pat = re.compile(filter_regex) if filter_regex else None
     instances = sorted(
         p.stem
         for p in highs_dir.glob("*.json")
-        if p.stem != "all_experiments" and (an_dir / p.name).exists()
+        if p.stem != "all_experiments"
+        and (not _have_an or (an_dir / p.name).exists())
     )
     if pat:
         instances = [i for i in instances if pat.search(i)]
 
-    labels = [t[0] for t in _FRIEDMAN_TREATMENTS]
+    treatments = _friedman_treatments(_have_an)
+    labels = [t[0] for t in treatments]
+    _pruned = False
     matrix: list[list[float]] = []
     used: list[str] = []
     for inst in instances:
-        highs, an = _load(highs_dir, inst), _load(an_dir, inst)
-        if highs is None or an is None:
+        highs = _load(highs_dir, inst)
+        an = _load(an_dir, inst) if _have_an else None
+        if highs is None or (_have_an and an is None):
             continue
-        hb, ab = highs.get("shared_bounds"), an.get("shared_bounds")
-        if not hb or not ab:
+        hb = highs.get("shared_bounds")
+        ab = an.get("shared_bounds") if _have_an else None
+        if not hb or (_have_an and not ab):
             continue
-        merged = _merge_bounds(hb, ab)
-        _gs, _as = _seeds(gpbaa_seeds_dir, inst), _seeds(an_seeds_dir, inst)
-        if not _gs or not _as:
+        merged = _merge_bounds(hb, ab) if _have_an else [list(b) for b in hb]
+        _gs = _seeds(gpbaa_seeds_dir, inst)
+        _as = _seeds(an_seeds_dir, inst) if _have_an else []
+        if not _gs or (_have_an and not _as):
             print(f"  WARNING: {inst}: missing seeds (GPBA-A {len(_gs)}, "
                   f"A&N {len(_as)}) -- exact-only treatments would be zero, "
                   f"skipping instance", flush=True)
@@ -5637,9 +5725,10 @@ def _treatment_matrix(
             rows = [
                 _ea_bar_data(highs, highs_dir, _gs,
                              merged, highs, highs_dir, num_points),
+            ] + ([
                 _ea_bar_data(an, an_dir, _as,
                              merged, highs, highs_dir, num_points),
-            ]
+            ] if _have_an else [])
             _key = "final_hv"
         else:
             _rs = _refset if indicator != "cardinality" else None
@@ -5647,13 +5736,31 @@ def _treatment_matrix(
                   if _rs else merged)
             rows = [
                 _ea_bar_data_indicator(indicator, highs, highs_dir, _gs, _b, _rs),
+            ] + ([
                 _ea_bar_data_indicator(indicator, an, an_dir, _as, _b, _rs),
-            ]
+            ] if _have_an else [])
             _key = "final"
+        # Drop treatments the results cannot supply, once, on the first
+        # instance -- rather than skipping every instance for a missing cell
+        # and reporting "not enough complete instances". This is what lets a
+        # seeding method that has PLS but not yet the EA hybrids contribute the
+        # treatments it does have, instead of being left out entirely.
+        if not _pruned:
+            keep = [
+                t for t in treatments
+                if t[3] in rows[t[1]].get(t[2], {})
+            ]
+            if len(keep) != len(treatments):
+                gone = [t[0] for t in treatments if t not in keep]
+                print(f"  no data for {', '.join(gone)} -- excluded from the "
+                      f"tests", flush=True)
+                treatments = keep
+                labels[:] = [t[0] for t in treatments]
+            _pruned = True
         try:
             row = [
                 rows[r][engine][ratio][_key]
-                for _lbl, r, engine, ratio in _FRIEDMAN_TREATMENTS
+                for _lbl, r, engine, ratio in treatments
             ]
         except KeyError as exc:
             print(f"  {inst}: missing {exc}, skipping", flush=True)
@@ -5778,7 +5885,28 @@ def run_wilcoxon_ranking(
     )
 
 
-_INDICATOR_SHORT = {"hv": "HV", "igd_plus": "IGD$^+$"}
+#: Short column header per indicator. Every key of `_INDICATOR_LABEL` needs an
+#: entry: the old fallback printed the raw slug, and slugs containing an
+#: underscore (`igd_plus_c`, `spacing_c`) are a LaTeX error in text mode, so a
+#: table for those indicators would not compile at all.
+_INDICATOR_SHORT = {
+    "hv": "HV",
+    "igd_plus": "IGD$^+$",
+    "igd_plus_c": "$1-$IGD$^+$",
+    "spacing": "Spacing",
+    "spacing_c": "$1-$Spacing",
+    "cardinality": "$|S|$",
+}
+
+
+def _indicator_short(indicator: str) -> str:
+    """Header label for `indicator`, never a bare slug.
+
+    Falls back to the slug with underscores escaped rather than emitting them
+    raw, so an indicator added later degrades to an ugly header instead of an
+    uncompilable table.
+    """
+    return _INDICATOR_SHORT.get(indicator) or indicator.replace("_", r"\_")
 
 
 def _rank_biserial(a, b, higher_is_better: bool) -> tuple[float, int, int, int]:
@@ -5876,7 +6004,7 @@ def _write_wilcoxon_tables(
     summary = (
         "% Generated by run_hv_experiments.py --wilcoxon-ranking. Do not edit.\n"
         "\\begin{tabular}{@{}clccccl@{}}\n\\toprule\n"
-        "\\# & Method & Avg.\\ rank & Median " + _INDICATOR_SHORT.get(indicator, indicator)
+        "\\# & Method & Avg.\\ rank & Median " + _indicator_short(indicator)
         + " & $r$ & W/T/L & Significantly better than \\\\\n"
         "\\midrule\n" + "\n".join(rows) + "\n\\bottomrule\n\\end{tabular}\n"
     )
@@ -5944,7 +6072,11 @@ def run_friedman_test(
     if data.size == 0:
         return
 
-    data = np.asarray(matrix)  # (N instances, k treatments)
+    # `_treatment_matrix` already returns the array; the line that used to sit
+    # here re-wrapped a local `matrix` that a refactor had moved into that
+    # helper, so --friedman raised NameError before reaching any output. That
+    # is why friedman_ranking.tex could not be regenerated and drifted out of
+    # agreement with the Wilcoxon tables built from the same matrix.
     n, k = data.shape
 
     # Rank within each instance, best = rank 1. Which end is "best" depends on
@@ -6031,12 +6163,16 @@ def generate_ea_tables(
     num_points: int = 30,
     gpbaa_seeds_override: Path | None = None,
     an_seeds_override: Path | None = None,
+    indicator: str = "hv",
 ) -> None:
     """Emit one LaTeX longtable per exact method comparing the second-phase
-    algorithms: `ea_hv_gpbaa.tex` and `ea_hv_aneja.tex`.
+    algorithms, e.g. `ea_hv_gpbaa.tex` and `ea_hv_aneja.tex`.
 
-    Numbers come from `_ea_bar_data`, the same function that feeds the bar
-    figures, so a table cell and its bar can never disagree.
+    `indicator` selects the quality measure: "hv" (the default) or any key of
+    `_INDICATOR_LABEL`, which names the file `ea_<indicator>_<method>.tex`.
+    Numbers come from `_ea_bar_data` / `_ea_bar_data_indicator`, the same
+    functions that feed the bar figures, so a table cell and its bar can never
+    disagree.
 
     The 100:0 row is the exact phase alone -- no second-phase algorithm has run
     yet -- so it spans the four algorithm columns instead of repeating one value
@@ -6050,6 +6186,11 @@ def generate_ea_tables(
     gpbaa_seeds_dir = Path(gpbaa_seeds_override or _PSEUDO_SOURCE_DIRS["gpbaa_2d_highs"])
     an_seeds_dir = Path(an_seeds_override or _PSEUDO_SOURCE_DIRS["an_2d_highs"])
     engines = [title for title, _c, _h, _cold in _EA_ENGINES]
+    # A table is emitted only for an exact method whose results directory
+    # exists, so a run that produced just GPBA-A yields one table rather than a
+    # second one full of zeros. Mirrors `generate_ea_bar_figures`, which already
+    # renders a single row in that case.
+    _have_an = an_dir is not None and Path(an_dir).is_dir()
 
     def _load(d: Path, inst: str) -> dict | None:
         p = d / f"{inst}.json"
@@ -6064,33 +6205,50 @@ def generate_ea_tables(
     instances = sorted(
         p.stem
         for p in highs_dir.glob("*.json")
-        if p.stem != "all_experiments" and (an_dir / p.name).exists()
+        if p.stem != "all_experiments"
+        and (not _have_an or (an_dir / p.name).exists())
     )
     if pat:
         instances = [i for i in instances if pat.search(i)]
     if not instances:
-        print(f"No shared instances found in {highs_dir} and {an_dir}", flush=True)
+        _where = f"{highs_dir} and {an_dir}" if _have_an else str(highs_dir)
+        print(f"No instances found in {_where}", flush=True)
         return
 
     # row index -> (which row of `rows` to read, output filename, caption, label)
+    if indicator != "hv" and indicator not in _INDICATOR_LABEL:
+        raise SystemExit(
+            f"Unknown indicator {indicator!r}, expected 'hv' or one of "
+            f"{sorted(_INDICATOR_LABEL)}"
+        )
+    _slug = "hv" if indicator == "hv" else indicator
     targets = [
-        (0, "ea_hv_gpbaa.tex", "GPBA-A", "tab:ea_hv_gpbaa"),
-        (1, "ea_hv_aneja.tex", "Anytime Aneja \\& Nair", "tab:ea_hv_aneja"),
+        (0, f"ea_{_slug}_gpbaa.tex", "GPBA-A", f"tab:ea_{_slug}_gpbaa"),
     ]
+    if _have_an:
+        targets.append(
+            (1, f"ea_{_slug}_aneja.tex", "Anytime Aneja \\& Nair",
+             f"tab:ea_{_slug}_aneja")
+        )
     collected: list[dict[str, dict[str, dict[float, dict]]]] = []
 
     for inst in instances:
-        highs, an = _load(highs_dir, inst), _load(an_dir, inst)
-        if highs is None or an is None:
+        highs = _load(highs_dir, inst)
+        an = _load(an_dir, inst) if _have_an else None
+        if highs is None or (_have_an and an is None):
             continue
-        hb, ab = highs.get("shared_bounds"), an.get("shared_bounds")
-        if not hb or not ab:
+        hb = highs.get("shared_bounds")
+        ab = an.get("shared_bounds") if _have_an else None
+        if not hb or (_have_an and not ab):
             print(f"  {inst}: missing shared_bounds, skipping", flush=True)
             continue
-        merged = _merge_bounds(hb, ab)
-        _gs, _as = _seeds(gpbaa_seeds_dir, inst), _seeds(an_seeds_dir, inst)
-        for _who, _dir, _got in (("GPBA-A", gpbaa_seeds_dir, _gs),
-                                 ("A&N", an_seeds_dir, _as)):
+        merged = _merge_bounds(hb, ab) if _have_an else [list(b) for b in hb]
+        _gs = _seeds(gpbaa_seeds_dir, inst)
+        _as = _seeds(an_seeds_dir, inst) if _have_an else []
+        _checks = [("GPBA-A", gpbaa_seeds_dir, _gs)]
+        if _have_an:
+            _checks.append(("A&N", an_seeds_dir, _as))
+        for _who, _dir, _got in _checks:
             if not _got:
                 print(f"  WARNING: {inst}: no {_who} seeds in {_dir} -- the "
                       f"100:0 row will read 0.0000", flush=True)
@@ -6101,17 +6259,30 @@ def generate_ea_tables(
         _refset = _pf_build_reference_set(inst, highs_dir, an_dir, _gs, _as)
         if _refset:
             merged = [[int(lo), int(hi)] for lo, hi in _pf_reference_bounds(_refset)]
+        if indicator == "hv":
+            def _row(res, d, sd):
+                return _ea_bar_data(res, d, sd, merged, highs, highs_dir, num_points)
+        else:
+            # Cardinality is a plain count, so it is not measured against a
+            # reference set -- mirrors the rule in `_treatment_matrix`.
+            _rs = _refset if indicator != "cardinality" else None
+            def _row(res, d, sd):
+                return _ea_bar_data_indicator(indicator, res, d, sd, merged, _rs)
         collected.append(
             {
                 "instance": inst,
-                "rows": [
-                    _ea_bar_data(highs, highs_dir, _gs,
-                                 merged, highs, highs_dir, num_points),
-                    _ea_bar_data(an, an_dir, _as,
-                                 merged, highs, highs_dir, num_points),
-                ],
+                "rows": [_row(highs, highs_dir, _gs)]
+                + ([_row(an, an_dir, _as)] if _have_an else []),
             }
         )
+
+    # `_ea_bar_data` reports the final value under "final_hv";
+    # `_ea_bar_data_indicator` uses "final". Cardinality is a count, so it is
+    # printed as an integer rather than to four decimals.
+    _key = "final_hv" if indicator == "hv" else "final"
+    _hib = indicator == "hv" or indicator in _HIGHER_IS_BETTER
+    _fmt = (lambda v: f"{v:.0f}") if indicator == "cardinality" else (lambda v: f"{v:.4f}")
+    _round = (lambda v: round(v)) if indicator == "cardinality" else (lambda v: round(v, 4))
 
     for row_idx, fname, method, label in targets:
         lines: list[str] = []
@@ -6121,9 +6292,6 @@ def generate_ea_tables(
         # caption says "mean over 10 runs" states something untrue about the
         # experiment. Drop the boxes and say single run instead.
         _has_sd = any(
-            b.get("std", 0.0) > 0
-            for rec in collected for b in rec["rows"][row_idx].get(engines[0], {}).values()
-        ) or any(
             b.get("std", 0.0) > 0
             for rec in collected for eng in engines
             for b in rec["rows"][row_idx].get(eng, {}).values()
@@ -6144,14 +6312,22 @@ def generate_ea_tables(
             )
             + " \\\\"
         )
+        _name = {
+            "hv": "Hypervolume",
+            "igd_plus_c": "$1 - \\mathrm{IGD}^{+}$",
+            "igd_plus": "$\\mathrm{IGD}^{+}$",
+            "cardinality": "Front cardinality",
+            "spacing": "Spacing",
+        }.get(indicator, indicator)
+        # A longtable repeats its caption on every continuation page, so the
+        # reading conventions live in the section text and the caption stays a
+        # one-line identifier. `_norm` is kept only to describe an indicator
+        # whose direction is not obvious from its name.
         cap = (
-            f"Hypervolume by second-phase algorithm, seeded by {method}. "
-            + ("Values are the mean over 10 runs, with the standard deviation "
-               "in parentheses; " if _has_sd else "")
-            + "The best value for each instance is in bold, normalised on the "
-            "ideal and nadir of the reference Pareto set, the union of every "
-            "front found for that instance. The 100:0 row is the exact phase "
-            "alone."
+            f"{_name} by second-phase algorithm, seeded by {method}."
+            + (" Values are the mean over the runs, with the standard "
+               "deviation in parentheses." if _has_sd else "")
+            + ("" if _hib else " Lower is better.")
         )
         lines += [
             # Six columns of "0.9621 +/- 0.0001" overflow \textwidth by ~42pt at
@@ -6183,17 +6359,19 @@ def generate_ea_tables(
             # exact-only 100:0 row. Compared at the 4 decimals actually printed,
             # so two cells that read the same are both marked rather than one
             # winning on digits the reader cannot see.
-            best = max(
-                round(bars[e][r]["final_hv"], 4)
+            _vals = [
+                _round(bars[e][r][_key])
                 for e in engines
                 for r in ratios
                 if r in bars.get(e, {})
-            )
+            ]
+            best = max(_vals) if _hib else min(_vals)
 
             def _hv(engine: str, ratio: float) -> str:
-                v = bars[engine][ratio]["final_hv"]
-                txt = f"{v:.4f}"
-                return f"\\textbf{{{txt}}}" if round(v, 4) >= best else txt
+                v = bars[engine][ratio][_key]
+                txt = _fmt(v)
+                won = _round(v) >= best if _hib else _round(v) <= best
+                return f"\\textbf{{{txt}}}" if won else txt
 
             for i, ratio in enumerate(ratios):
                 # "100:0" as in the figures, not "100\% : 0\%" -- the percent
@@ -6206,7 +6384,7 @@ def generate_ea_tables(
                     )
                 else:
                     cells = " & ".join(
-                        (f"{_hv(e, ratio)} {_ea_std_tex(bars[e][ratio]['std'])}"
+                        (f"{_hv(e, ratio)} {_ea_std_tex(bars[e][ratio].get('std', 0.0))}"
                          if _has_sd else _hv(e, ratio))
                         if ratio in bars.get(e, {}) else "---"
                         for e in engines
@@ -6368,10 +6546,18 @@ def generate_ea_bar_figures(
         # engine, ratio and exact method, not the best within each panel.
         _gbest = max(vals) if vals else 0.0
 
-        # Height scales with the number of rows so a single-row figure is not
-        # stretched to a two-row canvas.
+        # Height scales with the number of rows, but NOT by a literal halving.
+        # The column titles, the rotated ratio labels, the per-panel x labels
+        # and the legend all cost the same absolute space at any row count, so
+        # `rows / 2` takes that fixed furniture out of the axes alone: the
+        # one-row figure came out with the plot area at roughly a sixth of the
+        # canvas and the bars squashed flat. This legend runs to three rows
+        # (exact phase, four phase gains, best marker), more furniture than the
+        # indicator figures carry, hence a larger single-row scale than the
+        # 0.62 they use.
+        _hscale = len(_ROW_LABELS) / 2.0 if len(_ROW_LABELS) >= 2 else 0.78
         fig = plt.figure(
-            figsize=(_PF_FIG_W, _PF_FIG_H * len(_ROW_LABELS) / 2.0),
+            figsize=(_PF_FIG_W, _PF_FIG_H * _hscale),
             layout="constrained",
         )
         gs = GridSpec(len(_ROW_LABELS), 4, figure=fig)
@@ -8767,9 +8953,16 @@ def main() -> int:
     parser.add_argument(
         "--biobjective",
         action="store_true",
+        help="Deprecated no-op: 2-objective mode is the default.",
+    )
+    parser.add_argument(
+        "--four-objectives",
+        action="store_true",
         help=(
-            "Run in 2-objective mode (min_cost + cloud_coverage) instead of "
-            "the default 4 objectives. Affects OBJECTIVES globally for this run."
+            "Run with all 4 objectives (adds min_max_incidence_angle and "
+            "min_resolution). The default is 2 (min_cost + cloud_coverage), "
+            "which is what the 2-objective pseudo-solution sets and the paper "
+            "use. Affects OBJECTIVES globally for this run."
         ),
     )
     parser.add_argument(
@@ -8966,6 +9159,15 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--ea-tables-indicator",
+        default="hv",
+        help=(
+            "Quality measure for --ea-tables: 'hv' (default) or one of "
+            "cardinality / spacing / igd_plus / igd_plus_c. Names the output "
+            "`ea_<indicator>_<method>.tex`."
+        ),
+    )
+    parser.add_argument(
         "--ea-tables",
         action="store_true",
         help=(
@@ -9106,9 +9308,9 @@ def main() -> int:
     # Apply biobjective mode globally (affects OBJECTIVES used by every config's
     # .run() and by bounds/HV-curve computation throughout run_instance()).
     global OBJECTIVES
-    if args.biobjective:
-        OBJECTIVES = ["min_cost", "cloud_coverage"]
-        print(f"Biobjective mode: OBJECTIVES = {OBJECTIVES}")
+    if args.four_objectives:
+        OBJECTIVES = list(FOUR_OBJECTIVES)
+    print(f"Objectives ({len(OBJECTIVES)}): {OBJECTIVES}")
 
     # Apply pseudo-solution source globally (affects all _load_pseudo_solutions calls)
     global _PSEUDO_SOLUTIONS_SOURCE, _pseudo_cache
@@ -9163,6 +9365,7 @@ def main() -> int:
             num_points=args.num_points,
             gpbaa_seeds_override=args.pf_seeds_gpbaa,
             an_seeds_override=args.pf_seeds_an,
+            indicator=args.ea_tables_indicator,
         )
         return 0
 
@@ -9308,15 +9511,37 @@ def main() -> int:
     ]
     default_pool = MONISE_CONFIGS if args.pseudo_source in ("monise", "monise_2d", "monise_2d_pub") else CONFIGS
 
+    known_labels = {c.label for c in all_known_configs}
+
+    def _select(requested_labels: list[str], flag: str) -> list[AlgorithmConfig]:
+        """Resolve labels to configs, refusing to run if any label is unknown.
+
+        Selection used to be a bare set intersection, so a label that matched
+        nothing was dropped without a word. That is how a full grid silently
+        ran with one fewer series than asked for, and the gap only surfaced
+        much later as a missing trace. Fail loudly instead.
+        """
+        unknown = [lbl for lbl in requested_labels if lbl not in known_labels]
+        if unknown:
+            import difflib
+
+            lines = [f"{flag}: unknown config label(s): {', '.join(map(repr, unknown))}"]
+            for lbl in unknown:
+                close = difflib.get_close_matches(lbl, sorted(known_labels), n=3)
+                if close:
+                    lines.append(f"  {lbl!r} — did you mean: {', '.join(map(repr, close))}?")
+            lines.append(f"  ({len(known_labels)} labels registered; see CONFIGS/MONISE_CONFIGS)")
+            raise SystemExit("\n".join(lines))
+        requested = set(requested_labels)
+        return [c for c in all_known_configs if c.label in requested]
+
     configs = default_pool
     if args.configs is not None:
-        requested = set(args.configs)
-        configs = [c for c in all_known_configs if c.label in requested]
+        configs = _select(args.configs, "--configs")
 
     large_configs = configs  # default: same set for all sizes
     if args.large_configs is not None:
-        requested_large = set(args.large_configs)
-        large_configs = [c for c in all_known_configs if c.label in requested_large]
+        large_configs = _select(args.large_configs, "--large-configs")
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
