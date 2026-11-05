@@ -54,9 +54,10 @@ runs per configuration and four second-phase algorithms.
 For those, see **`publication-data/biobjective/README.md`**. It
 records the protocol, the machine, which parts are committed, and the exact
 commands for each stage: problem instances → exact-phase seed sets → the
-experiment set → the paper's tables and figures → the manuscript. The raw
-per-run results are committed, so every table and figure can be rebuilt
-without re-solving.
+experiment set → the paper's tables and figures → the manuscript. The problem
+instances, the exact-phase seed sets and the raw per-run results are all
+committed, so every table and figure can be rebuilt without re-solving, and
+the experiments can be re-run without regenerating anything first.
 
 ## Usage
 

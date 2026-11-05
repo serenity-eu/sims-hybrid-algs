@@ -1,0 +1,12 @@
+{
+  "N": 125,
+  "backbone_size": 6,
+  "cloudy_assignments": 58281,
+  "cost_sum": 97426274,
+  "coverage_pct": 100.0,
+  "grid_cells": 6710,
+  "name": "tokyo_bay",
+  "seed": 12434150635375724479,
+  "sel_cloud_mean": 38.35327978816966,
+  "universe": 4426
+}

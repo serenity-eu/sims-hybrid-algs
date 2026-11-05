@@ -27,6 +27,10 @@ an/                   the same, seeded by anytime Aneja & Nair
 scripts/              rebuild.sh and the runners that produced this set
 ```
 
+The 25 problem instances live in `../satellite-data/instances_hard_an/`, which
+is otherwise gitignored: the five sizes this paper uses are committed, the
+larger sizes 225-300 are not.
+
 Only the canonical run's traces are committed. The remaining per-run traces
 are ~200 MB and no generator reads them.
 
@@ -44,11 +48,11 @@ LaTeX lands in `out/`, EPS in `out_eps/`, PNG in `out_png/`.
 
 ## Re-running the experiments
 
-Requires a Gurobi licence. The problem instances are not committed: they are
-51 MB and regenerate byte-for-byte, so step 1 recreates them. The exact-phase
-seed sets are committed and need no action.
+Requires a Gurobi licence. Nothing needs recreating: the 25 problem instances
+and the exact-phase seed sets are both committed.
 
-Run following command to regenerate all 25 instances:
+The instances also regenerate byte-for-byte, so run following command if you
+would rather rebuild them than trust the committed copies:
 
 ```bash
 cd sims-preprocessing

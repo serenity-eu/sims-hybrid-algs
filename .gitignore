@@ -215,6 +215,23 @@ publication-data/satellite-data/*
 !publication-data/satellite-data/instances_random_clouds/
 publication-data/satellite-data/instances_random_clouds/*.dzn
 
+# Exception: the 25 problem instances behind the biobjective SIMS paper
+# (5 cities x {100,125,150,175,200}) are versioned so the published results can
+# be re-solved from a clone alone. Sizes 225-300 exist locally but no published
+# result uses them, so they stay out.
+!publication-data/satellite-data/instances_hard_an/
+publication-data/satellite-data/instances_hard_an/*
+!publication-data/satellite-data/instances_hard_an/*_100.dzn
+!publication-data/satellite-data/instances_hard_an/*_100.meta.json
+!publication-data/satellite-data/instances_hard_an/*_125.dzn
+!publication-data/satellite-data/instances_hard_an/*_125.meta.json
+!publication-data/satellite-data/instances_hard_an/*_150.dzn
+!publication-data/satellite-data/instances_hard_an/*_150.meta.json
+!publication-data/satellite-data/instances_hard_an/*_175.dzn
+!publication-data/satellite-data/instances_hard_an/*_175.meta.json
+!publication-data/satellite-data/instances_hard_an/*_200.dzn
+!publication-data/satellite-data/instances_hard_an/*_200.meta.json
+
 # Local vendored good_lp fork for the native Gurobi backend (large checkout;
 # set up locally with a [patch] on good_lp — see augmecon-rs/Cargo.toml).
 /vendor/
