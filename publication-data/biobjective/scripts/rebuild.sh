@@ -9,6 +9,15 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+
+# Pin the string-hash seed so the output is byte-reproducible. The critical
+# difference diagrams come from scikit-posthocs, whose clique grouping iterates
+# a set keyed on method names; with Python's hash randomisation left on, two
+# runs of identical code over identical data emit the same crossbars traversed
+# in a different order. The geometry is unaffected -- the rendered figures
+# differ in 41 of 769,494 pixels, at stroke caps where bars overlap -- but the
+# EPS is not byte-identical, which makes "regenerated unchanged" unverifiable.
+export PYTHONHASHSEED=0
 OUT="${1:-$PWD/paper-artifacts}"
 
 R="$ROOT/publication-data/biobjective"

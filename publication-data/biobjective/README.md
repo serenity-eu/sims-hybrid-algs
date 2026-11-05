@@ -81,11 +81,54 @@ The script hardcodes the run machine's checkout path and Gurobi locations.
 Adjust them for your setup. Results land in `<out_root>/{gpba,an}_all/`, which
 is what `gpba/` and `an/` here were copied from.
 
+**Re-running does not reproduce these numbers exactly, and cannot.** The
+per-configuration budget is 200 s of wall clock, so how much search fits inside
+it depends on the machine and its load. The heuristics themselves are
+deterministic -- with `is_deterministic=True` and the iteration cap binding
+instead of the clock, repeated PLS runs are bit-identical -- but under a clock
+budget they are not: four 5 s runs on `lagos_nigeria_100` returned fronts of
+156, 151, 151 and 150 points. That is why every configuration is run ten times
+and the tables carry standard deviations, and why the committed per-run results,
+not a re-run, are what the paper's figures are rebuilt from. Expect a re-run to
+agree statistically, not bitwise.
+
 ## Notes
 
+- The committed seed sets are a cache, not the method: the published runs
+  replayed them rather than re-solving, which is why the exact phase reports
+  `wall_seconds: 0.0`. All 50 exact fronts in `gpba/` and `an/` are
+  byte-identical to the files in `sims-core/tests/data/{gpbaa,an}_2d_gurobi_hard/`.
+  Running the hybrid from scratch solves the exact phase instead.
 - To regenerate the exact-phase seed sets, run `generate_pseudo.py --method
   gpba --solver gurobi --instance-set hard` from `sims-problem/`, and again
-  with `--method aneja`. `--instance-set hard` covers sizes 125-350; the
-  size-100 files came from a separate invocation and are committed.
+  with `--method aneja`. This needs the Gurobi backend, so build it first:
+
+      cargo install patch-crate          # once per machine
+      cd augmecon-rs && cargo patch-crate
+
+  `sims-problem` also needs the `moors` and `optirustic` patches, so run
+  `cargo patch-crate` in `sims-heuristics/` too, or the build stops with
+  "patch location ... does not contain packages matching `moors`".
+
+  `cargo install patch-crate` builds `openssl-sys`, so it needs OpenSSL
+  development headers and therefore root. On a machine without them, generate
+  the patched sources on a machine that has the tool and copy the three
+  `target/patch/<crate>-<version>/` directories across -- they are plain files
+  and need no toolchain. Two things that look like shortcuts and are not:
+  `git apply` reports "Skipped patch" for every file inside a checkout,
+  because `target/` is gitignored; and replaying these patches with
+  `patch -p1 -f` deletes `Cargo.toml`, because they are generated against
+  cargo's extracted registry layout and carry deletion hunks for files a
+  plain tarball extraction does not have.
+
+  `patch-crate` applies `augmecon-rs/patches/grb+3.0.1.patch`, without which
+  `grb` segfaults on any model of real size -- it passes the constraint count
+  where `GRBaddconstrs` declares the nonzero count. `good_lp` comes from
+  `hlvlad/good_lp` pinned by revision, so nothing needs vendoring.
+- `--instance-set hard` covers sizes 50-350, so one invocation per method
+  produces every seed set this paper uses.
+- The exact phase is labelled `GPBA-A` in both `gpba/` and `an/` result files.
+  In `an/` it is the anytime Aneja & Nair front; the directory, not the label,
+  says which method produced it.
 - `problem_instances.tex` has no generator; it was written from the `N` and
   `universe` fields of `instances_hard_an/*.meta.json`.
