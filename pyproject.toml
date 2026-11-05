@@ -6,6 +6,8 @@ authors = [
     { name = "Vladyslav Hlushchenko", email = "hl.vladyslav@gmail.com" }
 ]
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "python-dotenv==1.1.1",
