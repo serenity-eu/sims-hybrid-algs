@@ -44,6 +44,20 @@ export PLS_PATH=$PWD/sims-heuristics/pls
 ```
 
 
+## Reproducing the published results
+
+The commands under **Usage** below drive the original single-run pipeline
+(`sims solve` → `publication-data/results/`). They are *not* what produced the
+results in the biobjective paper, which come from a ratio-grid runner with ten
+runs per configuration and four second-phase algorithms.
+
+For those, see **`publication-data/biobjective/README.md`**. It
+records the protocol, the machine, which parts are committed, and the exact
+commands for each stage: problem instances → exact-phase seed sets → the
+experiment set → the paper's tables and figures → the manuscript. The raw
+per-run results are committed, so every table and figure can be rebuilt
+without re-solving.
+
 ## Usage
 
 ### Solving

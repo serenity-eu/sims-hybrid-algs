@@ -32,9 +32,11 @@ from __future__ import annotations
 
 import argparse
 import io
+import itertools
 import json
 import math
 import re
+import statistics
 import struct
 import sys
 import tarfile
@@ -4962,16 +4964,8 @@ def _recompute_result_with_bounds(
             .replace("/", "")
         )
         # Trace filenames use colons for ratios (e.g. 50:50) — try both forms
-        candidates = [
-            trace_dir / f"{instance}__{safe_label}.trace.tar.gz",
-            trace_dir
-            / f"{instance}__{label.lower().replace(' ', '_').replace('+', 'plus').replace('/', '').replace(':', '')}.trace.tar.gz",
-        ]
-        trace_bytes = None
-        for c in candidates:
-            if c.exists():
-                trace_bytes = c.read_bytes()
-                break
+        _p = _resolve_trace(trace_dir, instance, label)
+        trace_bytes = _p.read_bytes() if _p else None
 
         if trace_bytes is None:
             # No trace file on disk — keep existing stored values unchanged.
@@ -5106,6 +5100,28 @@ _PF_SCATTER_RATIOS: list[float] = [1.00, 0.50, 0.00]
 # we asked for (and therefore reintroduces an unknown shrink factor).
 _LNCS_TEXTWIDTH_IN = 122.0 / 25.4  # 4.803 in
 _LNCS_TEXTHEIGHT_IN = 193.0 / 25.4  # 7.598 in
+#: Canvas height for the combined per-instance figure. Six rows of panels
+#: plus their furniture; sized to stay inside \textheight (549 pt) *with a
+#: caption*, so the figure is included at 1:1 and the point sizes hold on
+#: the page. Dropping the per-panel letters freed the room for this.
+_COMBINED_FIG_H = 500.0 / 72.0
+
+#: Canvas for the combined figure, per target document class. The figure is
+#: included at 1:1, so the canvas has to match the text block it lands in:
+#: a tick label set at 7 pt here prints at 7 pt only if nothing rescales it.
+#: Scaling a figure drawn for one class into another's text block magnifies
+#: every font by the width ratio, which is how figures end up with captions
+#: larger than the body text.
+_COMBINED_CANVAS: dict[str, tuple[float, float]] = {
+    # Springer LNCS: \textwidth 347 pt, \textheight 549 pt. The height leaves
+    # 49 pt for a caption.
+    "lncs": (_LNCS_TEXTWIDTH_IN, _COMBINED_FIG_H),
+    # Elsevier CAS two-column (cas-dc): \textwidth 494.5 pt, \textheight
+    # 689.4 pt. A spanning figure* gets the full width; 655 pt of height
+    # leaves ~34 pt for the caption.
+    "cas": (494.5 / 72.0, 655.0 / 72.0),
+}
+
 _PF_FIG_W = _LNCS_TEXTWIDTH_IN
 _PF_FIG_H = 0.40 * _LNCS_TEXTHEIGHT_IN  # both \includegraphics limits bind at 1:1
 
@@ -5188,10 +5204,10 @@ def _pf_panel_title(ax: "plt.Axes", letter: str, text: str) -> None:
     Left alignment is the journal convention and, unlike a centred title, it
     stays put as the panel width changes between the bar and scatter columns.
     """
-    ax.set_title(
-        f"$\\bf{{{letter})}}$  {text}",
-        fontsize=_PF_TITLE_PT, loc="left", pad=5,
-    )
+    if not letter and not text:
+        return
+    label = f"$\\bf{{{letter})}}$  {text}" if letter else text
+    ax.set_title(label, fontsize=_PF_TITLE_PT, loc="left", pad=5)
 
 
 def _pf_tint(hex_color: str, amount: float = 0.80) -> tuple[float, float, float]:
@@ -5276,11 +5292,17 @@ def _pf_exact_hv(
 
 
 def _pf_trace_front(
-    trace_dir: Path, instance: str, slug: str
+    trace_dir: Path, instance: str, label: str
 ) -> list[tuple[float, float]]:
-    """Non-dominated points from a trace file, or [] if the trace is absent."""
-    path = trace_dir / f"{instance}__{slug}.trace.tar.gz"
-    if not path.exists():
+    """Non-dominated points from a config's trace, or [] when it is absent.
+
+    Takes the config *label*, not a filename slug, so the lookup goes through
+    `_resolve_trace` and finds the trace under either filename form and in
+    either location. Passing a slug skipped that and silently produced empty
+    scatter panels on a results directory that carries only `traces/`.
+    """
+    path = _resolve_trace(trace_dir, instance, label)
+    if path is None:
         return []
     try:
         raw = extract_all_objectives(path.read_bytes(), 2)
@@ -5395,10 +5417,10 @@ def _pf_row_data(
         if ratio == 1.00:
             pls_pts: list[tuple[float, float]] = []
         elif ratio == 0.00:
-            pls_pts = _pf_trace_front(pls_dir, instance, "default_pls")
+            pls_pts = _pf_trace_front(pls_dir, instance, "Default PLS")
             exact = []
         else:
-            pls_pts = _pf_trace_front(trace_dir, instance, _PF_RATIO_TO_SLUG[ratio])
+            pls_pts = _pf_trace_front(trace_dir, instance, _PF_RATIO_TO_LABEL[ratio])
         scatter[ratio] = dict(exact=exact, pls=pls_pts)
 
     return dict(bars=bars, scatter=scatter)
@@ -5437,6 +5459,48 @@ _EA_ENGINES: list[tuple[str, str, dict[float, str], str]] = [
 ]
 
 
+def _label_trace_slug(label: str) -> str:
+    """Filename slug for a config label, matching how traces are written."""
+    return (
+        label.lower().replace(" ", "_").replace("+", "plus")
+        .replace("/", "").replace(":", "")
+    )
+
+
+def _merged_run_hvs(
+    instance: str,
+    label: str,
+    trace_dir: Path,
+    merged_bounds: list[list[int]],
+    num_points: int,
+) -> list[float]:
+    """Final HV of *every* run of `label`, recomputed against `merged_bounds`.
+
+    Runs after the first are written beside the canonical trace as
+    `{instance}__{slug}__run{k}.trace.tar.gz`. Recomputing each one against the
+    shared reference bounds is the only way to get a mean and a standard
+    deviation that live on the figure's own scale: `run_hvs` in the JSON was
+    measured against whatever bounds that experiment used, which is not the
+    reference set the figures and tables normalise on.
+
+    Returns [] when no per-run traces are present, so callers can fall back to
+    the stored values.
+    """
+    out: list[float] = []
+    for k in itertools.count():
+        path = _resolve_trace(trace_dir, instance, label, run=k or None)
+        if path is None:
+            break
+        try:
+            curve = sims_problem.compute_hv_curve_from_trace(
+                path.read_bytes(), merged_bounds, num_points
+            )
+        except Exception:
+            break
+        out.append(float(curve[-1][1]) if curve else 0.0)
+    return out
+
+
 def _ea_bar_data(
     result: dict,
     trace_dir: Path,
@@ -5467,18 +5531,31 @@ def _ea_bar_data(
     cold_orig = cold_result.get("configs", {})
 
     def _rescaled(label: str, merged: dict, original: dict) -> tuple[float, float]:
-        """Merged-bounds 10-run mean and std for `label`.
+        """Merged-bounds mean and standard deviation over all runs of `label`.
 
-        Per-run raw points exist only for run 0, so the mean cannot be recomputed
-        against merged bounds directly; rescale the merged run-0 HV by the stored
-        mean/run-0 ratio, exactly as the front figure does. The std is carried
-        across as a *relative* spread, which the same rescale preserves.
+        Every run's trace is recomputed against the merged bounds, so both
+        statistics are exact on the scale the figure and table actually use.
+
+        When only the canonical run's trace is on disk the exact route is not
+        available, and the old approximation is used instead: rescale the merged
+        run-0 HV by the stored mean/run-0 ratio and carry the spread across as a
+        relative one. That approximation tracks the mean to within ~0.02% but
+        understates the standard deviation by 4-5%, because a relative rescale
+        does not preserve the spread of values measured against other bounds.
         """
+        exact = _merged_run_hvs(
+            result["instance"], label, trace_dir, merged_bounds, num_points
+        )
+        if len(exact) > 1:
+            return statistics.mean(exact), statistics.pstdev(exact)
+
         merged_run0 = float(merged.get(label, {}).get("final_hv", 0.0))
         c = original.get(label, {})
         old_mean = float(c.get("final_hv", 0.0))
         rh = c.get("run_hvs", [])
         old_run0 = float(rh[0]) if rh else old_mean
+        if exact:
+            merged_run0 = exact[0]
         mean = (
             merged_run0 * (old_mean / old_run0)
             if (old_run0 > 0 and old_mean > 0)
@@ -5633,13 +5710,20 @@ def _friedman_treatments(have_an: bool) -> list[tuple[str, int, str, float]]:
     and the tests appeared to compare hybrid PLS against cold-start EAs.
     """
     r = _HYBRID_TREATMENT_RATIO
+    # Hybrid labels carry their exact:heuristic split, so the table says which
+    # ratio was compared instead of leaving it to the caption. The endpoints do
+    # not: an exact method named on its own is the whole budget by definition,
+    # and so is a second-phase algorithm named on its own. The split is taken
+    # from _PF_RATIOS rather than written out, so it cannot drift from the grid
+    # the runs actually used.
+    hybrid_at = dict(_PF_RATIOS)[r]
     rows = [(0, "GPBA-A")] + ([(1, "A\\&N")] if have_an else [])
     treatments: list[tuple[str, int, str, float]] = []
     # Seeded treatments, exact phase first for each seeding method.
     for row, exact in rows:
         treatments.append((exact, row, "PLS", 1.00))
         for engine in _TESTED_ENGINES:
-            treatments.append((f"{exact}+{engine}", row, engine, r))
+            treatments.append((f"{exact}+{engine} {hybrid_at}", row, engine, r))
     # Cold starts are seeding-independent, so they appear once.
     treatments += [(engine, 0, engine, 0.00) for engine in _TESTED_ENGINES]
     return treatments
@@ -5777,6 +5861,141 @@ def _treatment_matrix(
     return labels, np.asarray(matrix), used
 
 
+#: Mark colour per second-phase algorithm, reusing the engine colours the bar
+#: figures already use so a method keeps one identity across every figure. The
+#: exact methods take their own two. Validated as a categorical set: the worst
+#: adjacent pair separates at dE 11.6 deutan / 6.8 tritan and two slots sit under
+#: 3:1 against the surface, both of which are legal only with a secondary
+#: encoding -- here every mark is directly labelled with its method name, so
+#: colour never carries identity on its own.
+_CD_FAMILY_COLOURS: list[tuple[str, str]] = [
+    ("+PLS", "#1f77b4"),
+    ("+NSGA-II", "#2ca02c"),
+    ("+NSGA-III", "#9467bd"),
+    ("+MOEA/D", "#17becf"),
+]
+_CD_EXACT_COLOURS: dict[str, str] = {"GPBA-A": "#e07b00", "A&N": "#d62728"}
+_CD_COLD_COLOUR = "#7a7a7a"
+
+
+def _cd_colour(label: str) -> str:
+    """Mark colour for a treatment label.
+
+    Seeded runs take their second-phase algorithm's colour, the two exact
+    methods take their own, and an algorithm run cold is neutral grey -- so the
+    diagram reads as "which family, and was it seeded" at a glance, while the
+    label beside the mark is what actually names it.
+    """
+    plain = label.replace(chr(92), "")
+    for suffix, colour in _CD_FAMILY_COLOURS:
+        if suffix in plain:
+            return colour
+    for exact, colour in _CD_EXACT_COLOURS.items():
+        if plain.startswith(exact):
+            return colour
+    return _CD_COLD_COLOUR
+
+
+def generate_cd_diagram(
+    highs_dir: Path,
+    an_dir: Path,
+    output_dir: Path,
+    filter_regex: str | None = None,
+    num_points: int = 30,
+    alpha: float = 0.05,
+    gpbaa_seeds_override: Path | None = None,
+    an_seeds_override: Path | None = None,
+    indicator: str = "hv",
+) -> None:
+    """Critical-difference diagram over the same matrix as the rank tests.
+
+    Average rank on a horizontal axis, best on the left, with a crossbar
+    joining any run of methods whose pairwise differences all fail to survive
+    the correction.
+
+    No critical-difference ruler is drawn, and none should be: the classic bar
+    is Nemenyi's single CD value, which assumes one omnibus post-hoc at a
+    uniform critical distance. The groupings here come from the Holm-adjusted
+    pairwise Wilcoxon matrix the paper actually reports, where the threshold is
+    not one distance, so a ruler would describe a test that was not run.
+    """
+    import numpy as np
+    import pandas as pd
+    import scikit_posthocs as sp
+
+    labels, data, used = _treatment_matrix(
+        highs_dir, an_dir, filter_regex, num_points,
+        gpbaa_seeds_override, an_seeds_override, indicator,
+    )
+    if data.size == 0:
+        return
+    n, k = data.shape
+
+    higher_is_better = indicator == "hv" or indicator in _HIGHER_IS_BETTER
+    order = ((-data) if higher_is_better else data).argsort(axis=1).argsort(axis=1) + 1.0
+    ranks = np.empty_like(order)
+    for i in range(n):
+        for j in range(k):
+            tied = np.isclose(data[i], data[i][j], rtol=0, atol=5e-7)
+            ranks[i][j] = order[i][tied].mean()
+    avg = ranks.mean(axis=0)
+
+    plain = [lbl.replace(chr(92), "") for lbl in labels]
+    df = pd.DataFrame(data, columns=plain)
+    long = df.melt(var_name="method", value_name="value")
+    pm = sp.posthoc_wilcoxon(
+        long, val_col="value", group_col="method", p_adjust="holm", sort=False,
+    )
+
+    # Height follows the method count, since the labels stack k/2 deep on each
+    # side -- but only just. The labels are spread over whatever height is
+    # given, so a generous canvas does not add air around them, it stretches
+    # the connector elbows into long verticals and leaves the figure mostly
+    # empty. One label row is ~0.15 in at this text size.
+    height = max(1.4, 0.095 * k + 0.45)
+    fig, ax = plt.subplots(figsize=(_PF_FIG_W, height), layout="constrained")
+
+    artists = sp.critical_difference_diagram(
+        ranks=pd.Series(avg, index=plain),
+        sig_matrix=pm,
+        ax=ax,
+        color_palette={lbl: _cd_colour(lbl) for lbl in plain},
+        label_fmt_left="{label}  {rank:.2f}  ",
+        label_fmt_right="  {rank:.2f}  {label}",
+        label_props={"fontsize": _PF_TICK_PT},
+        # These go to a scatter, so size is `s` (points squared), not markersize.
+        marker_props={"s": 26, "zorder": 4, "edgecolors": "none"},
+        elbow_props={"linewidth": 0.9, "alpha": 0.85},
+        crossbar_props={"linewidth": 2.2, "color": "#1a1a1a", "marker": "",
+                        "zorder": 3},
+    )
+    # The library paints each label in its series colour, which would make the
+    # text carry identity and inherit the two slots that fall below 3:1 against
+    # the surface. Repaint in ink: the mark beside the name carries the family,
+    # the name carries the identity. `color` cannot be passed through
+    # label_props -- the call already supplies it -- so it is set afterwards.
+    for _t in artists.get("labels", []):
+        _t.set_color("#1a1a1a")
+
+    # The rank axis sits at the TOP of a CD diagram, so the top spine is the
+    # axis line and the other three are noise. Keep it, recessive; put the
+    # label with it rather than stranding it under the labels at the bottom.
+    ax.set_xlabel("Average rank (1 = best)", fontsize=_PF_TICK_PT)
+    ax.xaxis.set_label_position("top")
+    ax.tick_params(axis="x", labelsize=_PF_TICK_PT - 0.5, length=2, width=0.5,
+                   colors=_PF_AXIS_GREY)
+    for side in ("bottom", "left", "right"):
+        ax.spines[side].set_visible(False)
+    ax.spines["top"].set_visible(True)
+    ax.spines["top"].set_linewidth(0.5)
+    ax.spines["top"].set_color(_PF_AXIS_GREY)
+    ax.xaxis.label.set_color("#1a1a1a")
+
+    base = output_dir / f"cd_{indicator}"
+    out = _pf_save(fig, base.parent, base.name)
+    print(f"  Saved: {out}  ({k} methods, {n} instances, {indicator})", flush=True)
+
+
 def run_wilcoxon_ranking(
     highs_dir: Path,
     an_dir: Path,
@@ -5873,10 +6092,29 @@ def run_wilcoxon_ranking(
     print("\nLaTeX (\\succ = significant at alpha, \\sim = not significant):")
     print(" ", equation)
 
+    # `parts` alternates term, operator, term, ... As one line the chain runs
+    # to several hundred characters at 14 treatments, so break it every few
+    # terms inside a gather*. The leading `{}` keeps the relation spaced as a
+    # binary operator when it starts a line rather than being hugged left.
+    _PER_LINE = 3
+    lines, buf = [], []
+    for idx in range(0, len(parts), 2):
+        buf.append(parts[idx])
+        op = parts[idx + 1] if idx + 1 < len(parts) else None
+        if len(buf) == _PER_LINE and op is not None:
+            lines.append(" ".join(buf) + " " + op)
+            buf = []
+        elif op is not None:
+            buf.append(op)
+    if buf:
+        lines.append(" ".join(buf))
+    body = " \\\\\n{}".join(lines)
+    wrapped = "\\begin{gather*}\n" + body + "\n\\end{gather*}\n"
+
     output_dir.mkdir(parents=True, exist_ok=True)
     out = output_dir / ("wilcoxon_ranking.tex" if indicator == "hv"
                         else f"wilcoxon_ranking_{indicator}.tex")
-    out.write_text(equation + "\n")
+    out.write_text(wrapped)
     print(f"\n  Saved: {out}", flush=True)
 
     _write_wilcoxon_tables(
@@ -5985,7 +6223,25 @@ def _write_wilcoxon_tables(
     rows = []
     for pos, j in enumerate(order):
         won = beats(j)
-        cell = ", ".join(str(x) for x in won) if won else "---"
+        # Contract runs of consecutive ranks: with 14 treatments the top rows
+        # beat almost everything, and "3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14"
+        # on its own pushes the table past \textwidth.
+        def _ranges(xs: list[int]) -> str:
+            if not xs:
+                return "---"
+            out, start, prev = [], xs[0], xs[0]
+            for x in xs[1:] + [None]:
+                if x == prev + 1:
+                    prev = x
+                    continue
+                out.append(str(start) if start == prev
+                           else (f"{start}, {prev}" if prev == start + 1
+                                 else f"{start}--{prev}"))
+                if x is not None:
+                    start = prev = x
+            return ", ".join(out)
+
+        cell = _ranges(won)
         median = float(np.median(data[:, j]))
         # Effect size against the next-ranked method: the comparison a reader
         # makes anyway when scanning a ranking, and the one a "significant but
@@ -6003,10 +6259,15 @@ def _write_wilcoxon_tables(
         )
     summary = (
         "% Generated by run_hv_experiments.py --wilcoxon-ranking. Do not edit.\n"
+        # Method labels carry their exact:heuristic split, which takes the
+        # table past \textwidth at \normalsize. Same wrapper the longtables
+        # use; the group closes after \end{tabular}.
+        "\\begingroup\\scriptsize\\setlength{\\tabcolsep}{2.5pt}\n"
         "\\begin{tabular}{@{}clccccl@{}}\n\\toprule\n"
         "\\# & Method & Avg.\\ rank & Median " + _indicator_short(indicator)
-        + " & $r$ & W/T/L & Significantly better than \\\\\n"
-        "\\midrule\n" + "\n".join(rows) + "\n\\bottomrule\n\\end{tabular}\n"
+        + " & $r$ & W/T/L & Better than \\\\\n"
+        "\\midrule\n" + "\n".join(rows)
+        + "\n\\bottomrule\n\\end{tabular}\n\\endgroup\n"
     )
     out = output_dir / (f"wilcoxon_summary_{indicator}.tex" if indicator != "hv"
                         else "wilcoxon_summary.tex")
@@ -6023,15 +6284,28 @@ def _write_wilcoxon_tables(
         cells = []
         for b, j in enumerate(order[:a]):
             pv = float(pm.loc[labels[i], labels[j]])
-            txt = "<.0001" if pv < 1e-4 else f"{pv:.4f}".lstrip("0")
+            # Two decimals, not four. With 14 treatments this is 13 columns
+            # wide and four decimals put it past \textwidth; the extra digits
+            # carry nothing anyway, since what is read off is whether a value
+            # sits under alpha. Exact p-values are in the run log.
+            if pv < 1e-3:
+                txt = "$<$.001"
+            elif pv >= 0.995:
+                txt = "1"
+            else:
+                txt = f"{pv:.2f}".lstrip("0")
             cells.append(f"\\bfseries {txt}" if pv < alpha else txt)
         cells += [""] * (k - 1 - len(cells))
         mrows.append(f"{a + 1} & " + " & ".join(cells) + " \\\\")
     matrix = (
         "% Generated by run_hv_experiments.py --wilcoxon-ranking. Do not edit.\n"
+        # One column per treatment bar the last: at 14 treatments that is 13
+        # columns of p-values, which needs a smaller face than the summary.
+        "\\begingroup\\scriptsize\\setlength{\\tabcolsep}{2pt}\n"
         "\\begin{tabular}{@{}l" + "c" * (k - 1) + "@{}}\n\\toprule\n"
         " & " + head + " \\\\\n\\midrule\n"
-        + "\n".join(mrows) + "\n\\bottomrule\n\\end{tabular}\n"
+        + "\n".join(mrows)
+        + "\n\\bottomrule\n\\end{tabular}\n\\endgroup\n"
     )
     out = output_dir / (f"wilcoxon_matrix_{indicator}.tex" if indicator != "hv"
                         else "wilcoxon_matrix.tex")
@@ -6164,9 +6438,17 @@ def generate_ea_tables(
     gpbaa_seeds_override: Path | None = None,
     an_seeds_override: Path | None = None,
     indicator: str = "hv",
+    two_column: bool = False,
 ) -> None:
-    """Emit one LaTeX longtable per exact method comparing the second-phase
+    """Emit one LaTeX table per exact method comparing the second-phase
     algorithms, e.g. `ea_hv_gpbaa.tex` and `ea_hv_aneja.tex`.
+
+    `two_column` emits a spanning `table*` holding a plain `tabular` instead of
+    a `longtable`, under an `ex_` filename and a `tab:ex_` label. `longtable`
+    cannot be used in two-column mode, which is why the supplementary is
+    single-column; a main-text table covering only the example instances is
+    short enough not to need one, and the distinct label keeps the two sets
+    from colliding when `xr` merges the documents' label namespaces.
 
     `indicator` selects the quality measure: "hv" (the default) or any key of
     `_INDICATOR_LABEL`, which names the file `ea_<indicator>_<method>.tex`.
@@ -6222,13 +6504,16 @@ def generate_ea_tables(
             f"{sorted(_INDICATOR_LABEL)}"
         )
     _slug = "hv" if indicator == "hv" else indicator
+    # The main-text subset is written under its own name and label so it can
+    # sit beside the supplementary's full set without either colliding.
+    _p = "ex_" if two_column else ""
     targets = [
-        (0, f"ea_{_slug}_gpbaa.tex", "GPBA-A", f"tab:ea_{_slug}_gpbaa"),
+        (0, f"{_p}ea_{_slug}_gpbaa.tex", "GPBA-A", f"tab:{_p}ea_{_slug}_gpbaa"),
     ]
     if _have_an:
         targets.append(
-            (1, f"ea_{_slug}_aneja.tex", "Anytime Aneja \\& Nair",
-             f"tab:ea_{_slug}_aneja")
+            (1, f"{_p}ea_{_slug}_aneja.tex", "Anytime Aneja \\& Nair",
+             f"tab:{_p}ea_{_slug}_aneja")
         )
     collected: list[dict[str, dict[str, dict[float, dict]]]] = []
 
@@ -6329,24 +6614,38 @@ def generate_ea_tables(
                "deviation in parentheses." if _has_sd else "")
             + ("" if _hib else " Lower is better.")
         )
-        lines += [
-            # Six columns of "0.9621 +/- 0.0001" overflow \textwidth by ~42pt at
-            # \normalsize. The group is closed after \end{longtable}; longtable
-            # tolerates being wrapped this way as long as the font and column
-            # separation are set before it starts.
-            "\\begingroup",
-            "\\footnotesize",
-            "\\setlength{\\tabcolsep}{2.5pt}",
-            f"\\begin{{longtable}}[!htb]{{{colspec}}}",
-            f"\\caption{{{cap}}} \\label{{{label}}} \\\\",
-            "\\toprule", header, "\\midrule", "\\endfirsthead",
-            f"\\caption[]{{{cap} (cont.)}} \\\\",
-            "\\toprule", header, "\\midrule", "\\endhead",
-            "\\midrule",
-            f"\\multicolumn{{{ncol + 2}}}{{r}}{{Continued on next page}} \\\\",
-            "\\midrule", "\\endfoot",
-            "\\bottomrule", "\\endlastfoot",
-        ]
+        if two_column:
+            # No continuation machinery: a table* cannot break across pages, so
+            # this mode is only valid for a short instance subset.
+            lines += [
+                "\\begin{table*}[!tb]",
+                "\\centering",
+                "\\footnotesize",
+                "\\setlength{\\tabcolsep}{2.5pt}",
+                f"\\caption{{{cap}}}",
+                f"\\label{{{label}}}",
+                f"\\begin{{tabular}}{{{colspec}}}",
+                "\\toprule", header, "\\midrule",
+            ]
+        else:
+            lines += [
+                # Six columns of "0.9621 +/- 0.0001" overflow \textwidth by ~42pt at
+                # \normalsize. The group is closed after \end{longtable}; longtable
+                # tolerates being wrapped this way as long as the font and column
+                # separation are set before it starts.
+                "\\begingroup",
+                "\\footnotesize",
+                "\\setlength{\\tabcolsep}{2.5pt}",
+                f"\\begin{{longtable}}[!htb]{{{colspec}}}",
+                f"\\caption{{{cap}}} \\label{{{label}}} \\\\",
+                "\\toprule", header, "\\midrule", "\\endfirsthead",
+                f"\\caption[]{{{cap} (cont.)}} \\\\",
+                "\\toprule", header, "\\midrule", "\\endhead",
+                "\\midrule",
+                f"\\multicolumn{{{ncol + 2}}}{{r}}{{Continued on next page}} \\\\",
+                "\\midrule", "\\endfoot",
+                "\\bottomrule", "\\endlastfoot",
+            ]
         for rec in collected:
             bars = rec["rows"][row_idx]
             ratios = [r for r, _n in _PF_RATIOS if r in bars.get(engines[0], {})]
@@ -6393,11 +6692,516 @@ def generate_ea_tables(
                 # every data row starts with an empty first column.
                 lines.append(f" & {name} & {cells} \\\\")
             lines.append(f"\\cline{{1-{ncol + 2}}}")
-        lines += ["\\end{longtable}", "\\endgroup"]
+        if two_column:
+            # \cline from the last instance block would print above \bottomrule.
+            if lines[-1].startswith("\\cline"):
+                lines.pop()
+            lines += ["\\bottomrule", "\\end{tabular}", "\\end{table*}"]
+        else:
+            lines += ["\\end{longtable}", "\\endgroup"]
 
         out = output_dir / fname
         out.write_text("\n".join(lines) + "\n")
         print(f"  Saved: {out}  ({len(collected)} instances)", flush=True)
+
+
+def generate_combined_figures(
+    highs_dir: Path,
+    an_dir: Path,
+    output_dir: Path,
+    filter_regex: str | None = None,
+    num_points: int = 30,
+    gpbaa_seeds_override: Path | None = None,
+    an_seeds_override: Path | None = None,
+    canvas: str = "lncs",
+) -> None:
+    """One figure per instance: fronts, hypervolume and $1-IGD^+$ together.
+
+    Composed rather than concatenated. Three things the separate figures repeat
+    are resolved here:
+
+    * The fronts figure's first column is a phase-decomposed hypervolume bar
+      chart for PLS across the ratios -- which is exactly the PLS column of the
+      hypervolume block. It is dropped; the bar block carries it once.
+    * Each figure carried its own legend. There is one legend for the whole
+      figure, seated in the cell the dropped column frees, so it costs no extra
+      height.
+    * Panel letters restarted per figure. They run a) ... v) continuously, so a
+      caption can name any panel unambiguously.
+
+    The four columns of the bar rows are the second-phase algorithms, titled
+    once at the top of the block rather than on every row.
+    """
+    # PLS blue, matching the fronts figure and the PLS engine colour in
+    # `_EA_ENGINES`; defined locally there, so it is restated rather than
+    # imported across function scopes.
+    _PLS_COLOR = dict((t[0], t[1]) for t in _EA_ENGINES)["PLS"]
+
+    from matplotlib.gridspec import GridSpec
+    from matplotlib.lines import Line2D
+    from matplotlib.ticker import MaxNLocator
+
+    gpbaa_seeds_dir = Path(gpbaa_seeds_override or _PSEUDO_SOURCE_DIRS["gpbaa_2d_highs"])
+    an_seeds_dir = Path(an_seeds_override or _PSEUDO_SOURCE_DIRS["an_2d_highs"])
+    matplotlib.rcParams["hatch.linewidth"] = 0.5
+
+    _have_gpbaa = highs_dir is not None and Path(highs_dir).is_dir()
+    _have_an = an_dir is not None and Path(an_dir).is_dir()
+    _ALL_ROWS = [
+        ("GPBA-A", "GPBA-A", "#e07b00", "X"),
+        ("Anytime Aneja & Nair", "A&N", "#d62728", "X"),
+    ]
+    _ROWS = ([_ALL_ROWS[0]] if _have_gpbaa else []) + ([_ALL_ROWS[1]] if _have_an else [])
+    if not _ROWS:
+        print("  neither results directory exists", flush=True)
+        return
+    engines = [t[0] for t in _EA_ENGINES]
+
+    def _load(d: Path, inst: str) -> dict | None:
+        q = d / f"{inst}.json"
+        return json.loads(q.read_text()) if q.exists() else None
+
+    def _seeds(d: Path, inst: str) -> list[dict]:
+        q = d / f"{inst}.json"
+        return json.loads(q.read_text()).get("solutions", []) if q.exists() else []
+
+    pat = re.compile(filter_regex) if filter_regex else None
+    base = Path(highs_dir) if _have_gpbaa else Path(an_dir)
+    instances = sorted(
+        q.stem for q in base.glob("*.json")
+        if q.stem != "all_experiments"
+        and not (_have_gpbaa and _have_an and not (Path(an_dir) / q.name).exists())
+    )
+    if pat:
+        instances = [i for i in instances if pat.search(i)]
+
+    for inst in instances:
+        highs = _load(highs_dir, inst) if _have_gpbaa else None
+        an = _load(an_dir, inst) if _have_an else None
+        if (_have_gpbaa and highs is None) or (_have_an and an is None):
+            continue
+        gs_seeds = _seeds(gpbaa_seeds_dir, inst) if _have_gpbaa else []
+        an_seeds = _seeds(an_seeds_dir, inst) if _have_an else []
+
+        hb = (highs or an).get("shared_bounds")
+        ab = an.get("shared_bounds") if (_have_an and an) else None
+        merged = _merge_bounds(hb, ab) if (_have_gpbaa and _have_an) else [list(b) for b in hb]
+        refset = _pf_build_reference_set(inst, highs_dir, an_dir, gs_seeds, an_seeds)
+        if refset:
+            merged = [[int(lo), int(hi)] for lo, hi in _pf_reference_bounds(refset)]
+
+        _ref, _ref_dir = (highs, highs_dir) if _have_gpbaa else (an, an_dir)
+        per_row = []
+        if _have_gpbaa:
+            per_row.append((highs, highs_dir, gs_seeds))
+        if _have_an:
+            per_row.append((an, an_dir, an_seeds))
+
+        fronts = [_pf_row_data(r, d, sd, merged, _ref, _ref_dir, num_points)
+                  for r, d, sd in per_row]
+        hv_rows = [_ea_bar_data(r, d, sd, merged, _ref, _ref_dir, num_points)
+                   for r, d, sd in per_row]
+        _rs = refset or None
+        igd_rows = [_ea_bar_data_indicator("igd_plus_c", r, d, sd, merged, _rs)
+                    for r, d, sd in per_row]
+
+        # Shared scatter normalisation, as in the fronts figure: divide by the
+        # max over plotted points so every instance fills the panel alike.
+        sx = [x for rd in fronts for sc in rd["scatter"].values()
+              for x, _ in (sc.get("exact", []) + sc.get("pls", []))]
+        sy = [y for rd in fronts for sc in rd["scatter"].values()
+              for _, y in (sc.get("exact", []) + sc.get("pls", []))]
+        ux, uy = (max(sx) or 1.0), (max(sy) or 1.0)
+        pad = 0.04
+        sc_xlim = (min(x / ux for x in sx) - pad, 1.0 + pad)
+        sc_ylim = (min(y / uy for y in sy) - pad, 1.0 + pad)
+
+        nrow = 2 * len(_ROWS) + len(_ROWS)
+        _cw, _ch = _COMBINED_CANVAS[canvas]
+        fig = plt.figure(figsize=(_cw, _ch), layout="constrained")
+        gs = GridSpec(nrow, 4, figure=fig)
+
+        # ── fronts: three ratios, below the bars, leaving column 4 free for
+        # the legend. Letters run a) b) c) down the figure, so the two bar
+        # blocks take a) and b) and the fronts c).
+        _front_top = 2 * len(_ROWS)
+        for r, rd in enumerate(fronts):
+            mlabel, mshort, mcol, emark = _ROWS[r]
+            for ci, ratio in enumerate(_PF_SCATTER_RATIOS):
+                ax = fig.add_subplot(gs[_front_top + r, ci])
+                sc = rd["scatter"].get(ratio, {})
+                if sc.get("pls"):
+                    _pf_front(ax, [(x / ux, y / uy) for x, y in sc["pls"]],
+                              marker="^", size=7, color=_PLS_COLOR, z=2)
+                if sc.get("exact"):
+                    _pf_front(ax, [(x / ux, y / uy) for x, y in sc["exact"]],
+                              marker=emark, size=9, color=mcol, z=4)
+                # Both front rows plot the same three ratios on the same axes,
+                # so the furniture is drawn once around the block rather than
+                # per panel, as in the bar blocks above: the ratio names title
+                # the top row only, the cost axis is labelled and ticked on the
+                # bottom row only, and the two rows then read as one grid.
+                pct = f"{int(ratio * 100)}:{int((1 - ratio) * 100)}"
+                _first_front_row = (r == 0)
+                _last_front_row = (r == len(fronts) - 1)
+                _pf_panel_title(ax, "c" if (_first_front_row and ci == 0) else "",
+                                pct if _first_front_row else "")
+                ax.set_xlim(*sc_xlim); ax.set_ylim(*sc_ylim)
+                ax.xaxis.set_major_locator(MaxNLocator(nbins=3))
+                ax.yaxis.set_major_locator(MaxNLocator(nbins=4))
+                _pf_style_axes(ax)
+                if _last_front_row:
+                    ax.set_xlabel("Cost", fontsize=_PF_LABEL_PT)
+                else:
+                    ax.tick_params(labelbottom=False)
+                if ci == 0:
+                    ax.set_ylabel(f"{mshort}\nCloudy area", fontsize=_PF_LABEL_PT)
+                else:
+                    ax.tick_params(labelleft=False)
+
+        # ── bar blocks: hypervolume then 1 - IGD+ ──
+        # `final_only` says whether a block's bars decompose into phases.
+        # Hypervolume does: the exact phase's HV is a component of the final
+        # value, so the bar is a solid base plus a hatched gain. 1 - IGD+ does
+        # not -- the indicator of a partial front is not a component of the
+        # indicator of the final one -- so it is one solid bar in the
+        # algorithm's colour, as in the standalone figure. Drawing it hatched
+        # would assert a decomposition that does not exist.
+        for bi, (rows_data, key, ylab, titled, final_only) in enumerate(
+            ((hv_rows, "final_hv", "Final HV", True, False),
+             (igd_rows, "final", "Final $1-\\mathrm{IGD}^{+}$", False, True))
+        ):
+            vals = [b[key] for rd in rows_data for bars in rd.values()
+                    for b in bars.values() if b.get(key, 0) > 0]
+            lo, hi = (min(vals) * 0.985, max(vals) * 1.02) if vals else (0.0, 1.0)
+            for r, rd in enumerate(rows_data):
+                mlabel, mshort, mcol, _ = _ROWS[r]
+                grow = bi * len(_ROWS) + r
+                for ci, eng in enumerate(engines):
+                    bars = rd.get(eng, {})
+                    present = [(ratio, nm) for ratio, nm in _PF_RATIOS if ratio in bars]
+                    if not present:
+                        continue
+                    ax = fig.add_subplot(gs[grow, ci])
+                    ecol = dict((t[0], t[1]) for t in _EA_ENGINES)[eng]
+                    xs = list(range(len(present)))
+                    for xi, (ratio, _nm) in zip(xs, present):
+                        bd = bars[ratio]
+                        fin = bd[key]
+                        if final_only:
+                            # One solid bar per ratio, all in the column's
+                            # algorithm colour -- as in the standalone figure.
+                            ax.bar(xi, fin, width=0.68, linewidth=0, zorder=3,
+                                   color=ecol)
+                        else:
+                            p1 = bd.get("hv_p1", bd.get("p1", 0.0))
+                            if p1:
+                                ax.bar(xi, p1, width=0.68, color=mcol,
+                                       linewidth=0, zorder=3)
+                            d = fin - p1
+                            if d:
+                                ax.bar(xi, d, width=0.68, bottom=p1,
+                                       facecolor="none" if d < 0 else _pf_tint(ecol),
+                                       hatch="////", edgecolor=ecol,
+                                       linewidth=_PF_SPINE_LW, zorder=4)
+                        sd = bd.get("std", 0.0)
+                        if sd > 0:
+                            ax.errorbar(xi, fin, yerr=sd, fmt="none", ecolor="#333333",
+                                        elinewidth=0.6, capsize=1.2, capthick=0.5, zorder=5)
+                    ax.set_xticks(xs)
+                    # All four bar rows plot the same five ratios, so the
+                    # rotated labels are drawn once, on the figure's bottom row.
+                    # Repeating them costs four rows of diagonal text for no
+                    # information.
+                    _last_bar_row = (bi == 1 and r == len(rows_data) - 1)
+                    ax.set_xticklabels(
+                        [nm for _r, nm in present] if _last_bar_row else [],
+                        fontsize=_PF_TICK_PT - 0.5, rotation=45,
+                        ha="right", rotation_mode="anchor",
+                    )
+                    _blk = "ab"[bi] if (r == 0 and ci == 0) else ""
+                    _pf_panel_title(ax, _blk, eng if titled and r == 0 else "")
+                    ax.set_ylim(lo, hi)
+                    ax.yaxis.set_major_locator(MaxNLocator(nbins=4))
+                    _pf_style_axes(ax, grid_axis="y")
+                    ax.tick_params(axis="x", length=0)
+                    if ci == 0:
+                        ax.set_ylabel(f"{mshort}\n{ylab}", fontsize=_PF_LABEL_PT)
+                    else:
+                        ax.tick_params(labelleft=False)
+
+        # ── one legend for the whole figure, in the cell the dropped column frees ──
+        lax = fig.add_subplot(gs[_front_top:_front_top + len(_ROWS), 3])
+        lax.axis("off")
+        handles = []
+        for lbl, short, col, mk in _ROWS:
+            handles.append(Line2D([], [], marker=mk, color=col, linestyle="None",
+                                  markersize=3.2, label=f"{short} front"))
+            handles.append(mpatches.Patch(facecolor=col, linewidth=0,
+                                          label=f"{short} exact phase"))
+        handles.append(Line2D([], [], marker="^", color=_PLS_COLOR, linestyle="None",
+                              markersize=3.0, label="PLS front"))
+        for eng, col, _h, _c in _EA_ENGINES:
+            handles.append(mpatches.Patch(facecolor=_pf_tint(col), hatch="////",
+                                          edgecolor=col, linewidth=_PF_SPINE_LW,
+                                          label=f"{eng} gain"))
+        lax.legend(handles=handles, loc="center", frameon=False,
+                   fontsize=_PF_TICK_PT - 0.5, handlelength=1.4,
+                   handletextpad=0.5, labelspacing=0.45, borderpad=0.0)
+
+        out = _pf_save(fig, output_dir, f"{inst}_combined")
+        print(f"  Saved: {out}", flush=True)
+        plt.close(fig)
+
+
+#: Columns of the per-instance evolutionary-algorithm front figure, the same
+#: three splits as the combined figure's front block. The 100:0 column carries
+#: no second-phase front, so within one exact method's block it repeats that
+#: method's front down all four rows; it is there as the baseline each row is
+#: read against, and it differs between the two blocks.
+_EA_FRONT_RATIOS: list[float] = [1.00, 0.50, 0.00]
+
+
+def generate_ea_front_figures(
+    highs_dir: Path,
+    an_dir: Path,
+    output_dir: Path,
+    filter_regex: str | None = None,
+    num_points: int = 30,
+    gpbaa_seeds_override: Path | None = None,
+    an_seeds_override: Path | None = None,
+    canvas: str = "lncs",
+    seed_method: str = "an",
+    stem: str = "ea_fronts",
+) -> None:
+    """Pareto fronts of every second-phase algorithm, one figure per instance.
+
+    The per-instance combined figure plots PLS fronts only: its bar blocks
+    already carry the evolutionary algorithms, and overlaying four fronts in
+    all 25 figures would obscure the ratio comparison they exist to make. This
+    draws the fronts themselves for a chosen handful of instances instead.
+
+    Each instance gets its own figure, written as `{stem}_{instance}`. Rows are
+    the second-phase algorithms and columns the same three ratios as the
+    combined figure's front block, so a row reads as one algorithm across the
+    budget split and a column as the four algorithms at one split. Overlaying
+    all four in a single panel does not work here: NSGA-II and NSGA-III return
+    fronts of near-identical shape and land on top of one another.
+
+    Pick the instances with `--filter`. Instances whose evolutionary fronts
+    hold only a dozen points do not read as fronts at all, so the choice
+    matters more here than elsewhere.
+    """
+    from matplotlib.gridspec import GridSpec
+    from matplotlib.lines import Line2D
+    from matplotlib.ticker import MaxNLocator
+
+    gpbaa_seeds_dir = Path(gpbaa_seeds_override or _PSEUDO_SOURCE_DIRS["gpbaa_2d_highs"])
+    an_seeds_dir = Path(an_seeds_override or _PSEUDO_SOURCE_DIRS["an_2d_highs"])
+
+    # Both exact methods are drawn, as two blocks of rows: the comparison the
+    # figure exists to make is between second-phase algorithms, and each of
+    # them starts from a different front under each exact method. `seed_method`
+    # now only orders the blocks, putting the requested one first.
+    _blocks = [
+        ("an", "Anytime Aneja & Nair", "A&N", "#d62728", "X",
+         an_dir, an_seeds_dir),
+        ("gpbaa", "GPBA-A", "GPBA-A", "#e07b00", "P",
+         highs_dir, gpbaa_seeds_dir),
+    ]
+    if seed_method != "an":
+        _blocks.reverse()
+    blocks = [b for b in _blocks if b[5] is not None and Path(b[5]).is_dir()]
+    if not blocks:
+        print("  no results directory for either exact method", flush=True)
+        return
+
+    # Distinct markers as well as distinct colours: NSGA-II and NSGA-III return
+    # fronts of near-identical size on every instance, so they land on top of
+    # one another and colour alone would not separate them. Drawn densest
+    # first, so the sparse fronts stay visible above the dense ones.
+    _MARKS = {"PLS": ("^", 5), "NSGA-II": ("s", 5), "NSGA-III": ("D", 4),
+              "MOEA/D": ("o", 5)}
+
+    def _load(d: Path, inst: str) -> dict | None:
+        q = d / f"{inst}.json"
+        return json.loads(q.read_text()) if q.exists() else None
+
+    def _seeds(d: Path, inst: str) -> list[dict]:
+        q = d / f"{inst}.json"
+        return json.loads(q.read_text()).get("solutions", []) if q.exists() else []
+
+    pat = re.compile(filter_regex) if filter_regex else None
+    instances = sorted(
+        {q.stem for _k, _l, _s, _c, _m, d, _sd in blocks
+         for q in Path(d).glob("*.json") if q.stem != "all_experiments"}
+    )
+    if pat:
+        instances = [i for i in instances if pat.search(i)]
+    if not instances:
+        print("  no instances matched", flush=True)
+        return
+
+    rows = []
+    for inst in instances:
+        # Fronts are plotted in raw objective units and normalised at plot
+        # time, so no shared hypervolume box is needed here. Every front is
+        # read straight from its trace, under the cold-start label at 0:100
+        # and the hybrid label in between; the exact front is the seed set
+        # truncated at the time the first phase was given.
+        panels = {}
+        for key, _lbl, _short, _col, _mk, d, sd in blocks:
+            src_dir = Path(d)
+            res = _load(src_dir, inst)
+            if res is None:
+                continue
+            seeds = _seeds(Path(sd), inst)
+            timeout = float(res.get("timeout_s", 0.0))
+            for ratio in _EA_FRONT_RATIOS:
+                series = {}
+                for title, _c, hybrid, cold in _EA_ENGINES:
+                    lb = cold if ratio <= 0.0 else hybrid.get(ratio)
+                    series[title] = _pf_trace_front(src_dir, inst, lb) if lb else []
+                exact = [] if ratio <= 0.0 else _pf_exact_front(seeds, ratio * timeout)
+                panels[(key, ratio)] = {"exact": exact, "series": series}
+        if panels:
+            rows.append((inst, panels))
+
+    if not rows:
+        print("  nothing to draw", flush=True)
+        return
+
+    _cw, _ = _COMBINED_CANVAS[canvas]
+    # Rows are the second-phase algorithms; the exact methods are blocks of
+    # columns, not of rows. Panels are square, both axes being normalised to
+    # the same unit interval, and three square panels across the text width
+    # are tall enough that stacking the two exact methods vertically would run
+    # to roughly half again a full page. Side by side they fit as they are.
+    row_spec = list(_EA_ENGINES)
+    nrow = len(row_spec)
+    _nr = len(_EA_FRONT_RATIOS)
+    _spacer = 0.3
+    # A narrow empty column separates the two exact-method blocks.
+    col_spec: list[tuple | None] = []
+    widths: list[float] = []
+    # Column span of each block, for the header naming the exact method once
+    # over its three columns instead of once over each.
+    spans: list[tuple[str, int, int]] = []
+    for bi, (k, lb, sh, c, mk, _d, _sd) in enumerate(blocks):
+        if bi:
+            col_spec.append(None)
+            widths.append(_spacer)
+        start = len(col_spec)
+        for ratio in _EA_FRONT_RATIOS:
+            col_spec.append((k, sh, c, mk, ratio))
+            widths.append(1.0)
+        spans.append((sh, start, len(col_spec)))
+    ncol = len(col_spec)
+
+    for inst, panels in rows:
+        # One divisor for the whole figure: every panel now shows the same
+        # instance, so a shared scale is what makes the rows comparable -- an
+        # algorithm whose front covers less of the objective space should look
+        # that way against the row above it.
+        pad = 0.04
+        pts = [p for d in panels.values()
+               for p in (d["exact"] + [q for sr in d["series"].values() for q in sr])]
+        if pts:
+            ux = max(x for x, _ in pts) or 1.0
+            uy = max(y for _, y in pts) or 1.0
+            xlim = (min(x / ux for x, _ in pts) - pad, 1.0 + pad)
+            ylim = (min(y / uy for _, y in pts) - pad, 1.0 + pad)
+        else:
+            ux = uy = 1.0
+            xlim = ylim = (-pad, 1.0 + pad)
+
+        # Height follows from the square panels: the usable width divided
+        # between the columns gives the panel side, and the rows then stack to
+        # a known height. Getting it close keeps constrained_layout from
+        # padding the figure out around axes it cannot stretch.
+        _side = (_cw - 0.62) / sum(widths)
+        _hdr = 0.16
+        fig = plt.figure(figsize=(_cw, _side * (nrow + _hdr) + 1.0),
+                         layout="constrained")
+        gs = GridSpec(nrow + 1, ncol, figure=fig, width_ratios=widths,
+                      height_ratios=[_hdr] + [1.0] * nrow)
+
+        # One header per block, spanning its columns. It is an axes rather
+        # than figure text so that it tracks the grid columns it sits over.
+        for sh, c0, c1 in spans:
+            hax = fig.add_subplot(gs[0, c0:c1])
+            hax.set_axis_off()
+            hax.text(0.5, 0.0, sh, transform=hax.transAxes, ha="center",
+                     va="bottom", fontsize=_PF_LABEL_PT + 0.5)
+
+        for r, (title, col, _h, _cs) in enumerate(row_spec):
+            mk, sz = _MARKS[title]
+            for ci, spec in enumerate(col_spec):
+                if spec is None:            # the gap between the two blocks
+                    continue
+                key, short, exact_col, exact_mark, ratio = spec
+                ax = fig.add_subplot(gs[r + 1, ci])
+                d = panels.get((key, ratio))
+                if d is None:
+                    ax.set_axis_off()
+                    continue
+                pl = d["series"].get(title) or []
+                if pl:
+                    _pf_front(ax, [(x / ux, y / uy) for x, y in pl],
+                              marker=mk, size=sz, color=col, z=2)
+                # The exact front is repeated in every panel: it is the common
+                # starting point each algorithm was handed, so the gain over it
+                # is what the column is there to show.
+                if d["exact"]:
+                    _pf_front(ax, [(x / ux, y / uy) for x, y in d["exact"]],
+                              marker=exact_mark, size=7, color=exact_col, z=5)
+                # Exact method over ratio on the top row only; the cost axis is
+                # labelled on the bottom row, so the panels read as one grid.
+                pct = f"{int(ratio * 100)}:{int((1 - ratio) * 100)}"
+                _pf_panel_title(ax, "", pct if r == 0 else "")
+                ax.set_xlim(*xlim); ax.set_ylim(*ylim)
+                # Both objectives are normalised to the same unit interval, so
+                # a square box makes a front's shape comparable across panels
+                # instead of an artefact of the panel's proportions.
+                ax.set_box_aspect(1)
+                ax.xaxis.set_major_locator(MaxNLocator(nbins=3))
+                ax.yaxis.set_major_locator(MaxNLocator(nbins=3))
+                _pf_style_axes(ax)
+                if r == nrow - 1:
+                    ax.set_xlabel("Cost", fontsize=_PF_LABEL_PT)
+                else:
+                    ax.tick_params(labelbottom=False)
+                if ci == 0:
+                    # Row name over axis quantity, the same two-line form the
+                    # combined figures use for their exact-method rows.
+                    ax.set_ylabel(f"{title}\nCloudy area", fontsize=_PF_LABEL_PT,
+                                  labelpad=8.0)
+                else:
+                    ax.tick_params(labelleft=False)
+
+        # Every series is named, the second-phase algorithms included: the row
+        # label places them, but only the legend ties each one to its colour
+        # and marker, which is what lets a single panel be read on its own and
+        # the colours be matched against the combined figures.
+        handles = [
+            Line2D([], [], linestyle="none", marker=_MARKS[t][0], markersize=4,
+                   color=c, label=t)
+            for t, c, _h, _c in _EA_ENGINES
+        ]
+        handles += [
+            Line2D([], [], linestyle="none", marker=mk, markersize=4, color=c,
+                   label=f"{lb} front (first phase)")
+            for _k, lb, _sh, c, mk, _d, _sd in blocks
+        ]
+        fig.legend(
+            handles=handles, loc="outside lower center", frameon=False,
+            ncol=len(handles), columnspacing=1.2,
+            fontsize=_PF_TICK_PT - 0.5, handletextpad=0.3, borderaxespad=0.0,
+        )
+
+        out = _pf_save(fig, output_dir, f"{stem}_{inst}")
+        print(f"  Saved: {out}", flush=True)
+        plt.close(fig)
 
 
 def generate_ea_bar_figures(
@@ -6734,19 +7538,54 @@ _HIGHER_IS_BETTER: frozenset[str] = frozenset(
 )
 
 
-def _pf_trace_path_for_label(trace_dir: Path, instance: str, label: str) -> Path | None:
-    """Trace filename for a config label, matching the derivation in
-    `_recompute_result_with_bounds` (kept in lockstep with it deliberately --
-    both must agree on how a config label maps to a trace filename)."""
-    safe = (
-        label.lower()
-        .replace(" ", "_")
-        .replace("+", "plus")
-        .replace(":", "")
-        .replace("/", "")
+def _trace_search_dirs(trace_dir: Path) -> list[Path]:
+    """Where a trace for `trace_dir` may live, in priority order.
+
+    A run writes its traces into a `traces/` subdirectory and also leaves
+    copies beside the JSON, so looking only at the top level happens to work on
+    a freshly produced results directory. It does not work on a *published*
+    one: the dataset shipped with the paper carries `traces/` only, and every
+    lookup that skipped the subdirectory came back empty -- silently, as blank
+    scatter panels, bar rows holding only their 100:0 entry, and a reference
+    set built from the seed sets alone.
+    """
+    return [trace_dir, trace_dir / "traces"]
+
+
+def _trace_slugs(label: str) -> list[str]:
+    """Both filename forms a config label has been written under.
+
+    Runs emit each trace twice: once beside the JSON under a lower-cased slug
+    with the separators stripped, and once in `traces/` under a slug that keeps
+    the case and maps `/` and `:` to `-`. A results directory that carries only
+    one of the two -- the published dataset carries only `traces/` -- resolves
+    nothing if the lookup knows just the other form, so try both.
+    """
+    lowered = (
+        label.lower().replace(" ", "_").replace("+", "plus")
+        .replace(":", "").replace("/", "")
     )
-    path = trace_dir / f"{instance}__{safe}.trace.tar.gz"
-    return path if path.exists() else None
+    cased = label.replace("/", "-").replace(" ", "_").replace(":", "-")
+    return [lowered, cased]
+
+
+def _resolve_trace(
+    trace_dir: Path, instance: str, label: str, run: int | None = None
+) -> Path | None:
+    """Locate one trace, trying both filename forms in both locations."""
+    for slug in _trace_slugs(label):
+        stem = f"{instance}__{slug}" + (f"__run{run}" if run else "")
+        for d in _trace_search_dirs(trace_dir):
+            cand = d / f"{stem}.trace.tar.gz"
+            if cand.exists():
+                return cand
+    return None
+
+
+def _pf_trace_path_for_label(trace_dir: Path, instance: str, label: str) -> Path | None:
+    """Trace path for a config label, or None when it is not on disk."""
+    return _resolve_trace(trace_dir, instance, label)
+    return None
 
 
 def _pf_indicator_value(
@@ -6812,14 +7651,17 @@ def _pf_build_reference_set(
     points: set[tuple[float, float]] = set()
     for s in gpbaa_seeds + an_seeds:
         points.add((float(s["cost"]), float(s["cloudy_area"])))
-    for trace_dir in (highs_dir, an_dir):
-        for path in trace_dir.glob(f"{instance}__*.trace.tar.gz"):
-            try:
-                front = sims_problem.front_from_trace_at_time(path.read_bytes(), 1e12)
-            except Exception:
+    for root in (highs_dir, an_dir):
+        for trace_dir in _trace_search_dirs(root):
+            if not trace_dir.is_dir():
                 continue
-            for p in front:
-                points.add((float(p[0]), float(p[1])))
+            for path in trace_dir.glob(f"{instance}__*.trace.tar.gz"):
+                try:
+                    front = sims_problem.front_from_trace_at_time(path.read_bytes(), 1e12)
+                except Exception:
+                    continue
+                for pt in front:
+                    points.add((float(pt[0]), float(pt[1])))
     return [list(p) for p in _pf_pareto_filter(sorted(points))]
 
 
@@ -6842,6 +7684,36 @@ def _pf_reference_bounds(reference_set: list[list[float]]) -> list[list[float]]:
         [min(p[i] for p in reference_set), max(p[i] for p in reference_set)]
         for i in range(ndim)
     ]
+
+
+def _per_run_indicator(
+    instance: str,
+    label: str,
+    trace_dir: Path,
+    indicator: str,
+    merged_bounds: list[list[int]],
+    reference_set: list[list[float]] | None,
+    timeout: float,
+) -> list[float]:
+    """`indicator` evaluated on every run's final front, not just the first.
+
+    The HV path has `_merged_run_hvs`; this is its counterpart for the
+    indicators, so their tables and figures can report a spread over the runs
+    on the same footing. Returns [] when only the canonical trace is present.
+    """
+    out: list[float] = []
+    for k in itertools.count():
+        path = _resolve_trace(trace_dir, instance, label, run=k or None)
+        if path is None:
+            break
+        try:
+            front = sims_problem.front_from_trace_at_time(path.read_bytes(), timeout)
+            out.append(
+                _pf_indicator_value(front, merged_bounds, indicator, reference_set)
+            )
+        except Exception:
+            break
+    return out
 
 
 def _ea_bar_data_indicator(
@@ -6873,34 +7745,54 @@ def _ea_bar_data_indicator(
             if ratio == 1.00:
                 front = _pf_exact_front(seeds, timeout)
                 val = _pf_indicator_value(front, merged_bounds, indicator, reference_set)
-                bars[ratio] = dict(p1=val, p2=0.0, final=val)
+                bars[ratio] = dict(p1=val, p2=0.0, final=val, std=0.0)
             elif ratio == 0.00:
                 path = _pf_trace_path_for_label(trace_dir, instance, cold_label)
                 if path is None:
                     continue
-                front = sims_problem.front_from_trace_at_time(path.read_bytes(), timeout)
-                val = _pf_indicator_value(front, merged_bounds, indicator, reference_set)
-                bars[ratio] = dict(p1=0.0, p2=val, final=val)
+                runs = _per_run_indicator(
+                    instance, cold_label, trace_dir, indicator,
+                    merged_bounds, reference_set, timeout,
+                )
+                if len(runs) > 1:
+                    val, sd = statistics.mean(runs), statistics.pstdev(runs)
+                else:
+                    front = sims_problem.front_from_trace_at_time(
+                        path.read_bytes(), timeout
+                    )
+                    val = _pf_indicator_value(
+                        front, merged_bounds, indicator, reference_set
+                    )
+                    sd = 0.0
+                bars[ratio] = dict(p1=0.0, p2=val, final=val, std=sd)
             else:
                 path = _pf_trace_path_for_label(trace_dir, instance, hybrid_labels[ratio])
                 if path is None:
                     continue
-                final_front = sims_problem.front_from_trace_at_time(
-                    path.read_bytes(), timeout
+                runs = _per_run_indicator(
+                    instance, hybrid_labels[ratio], trace_dir, indicator,
+                    merged_bounds, reference_set, timeout,
                 )
-                final = _pf_indicator_value(
-                    final_front, merged_bounds, indicator, reference_set
-                )
+                if len(runs) > 1:
+                    final, sd = statistics.mean(runs), statistics.pstdev(runs)
+                else:
+                    final_front = sims_problem.front_from_trace_at_time(
+                        path.read_bytes(), timeout
+                    )
+                    final = _pf_indicator_value(
+                        final_front, merged_bounds, indicator, reference_set
+                    )
+                    sd = 0.0
                 if _final_only:
                     # One bar spanning [0, final]; the renderer draws the
                     # delta segment when p1 is 0.
-                    bars[ratio] = dict(p1=0.0, p2=final, final=final)
+                    bars[ratio] = dict(p1=0.0, p2=final, final=final, std=sd)
                 else:
                     p1_front = _pf_exact_front(seeds, ratio * timeout)
                     p1 = _pf_indicator_value(
                         p1_front, merged_bounds, indicator, reference_set
                     )
-                    bars[ratio] = dict(p1=p1, p2=final - p1, final=final)
+                    bars[ratio] = dict(p1=p1, p2=final - p1, final=final, std=sd)
         out[title] = bars
     return out
 
@@ -7105,6 +7997,11 @@ def generate_ea_bar_figures_indicator(
                         _is_best = _best > 0 and abs(_v - _best) <= 1e-12 * abs(_best)
                         ax.bar(xi, _v, width=0.68, zorder=3, linewidth=0,
                                color=ecol)
+                        _sd = bars[ratio].get("std", 0.0)
+                        if _sd > 0:
+                            ax.errorbar(xi, _v, yerr=_sd, fmt="none",
+                                        ecolor="#333333", elinewidth=0.6,
+                                        capsize=1.5, capthick=0.5, zorder=5)
                         if _is_best:
                             # Equal gaps in points on both sides of the caret;
                             # see the note in generate_ea_bar_figures.
@@ -7156,6 +8053,14 @@ def generate_ea_bar_figures_indicator(
                             hatch=_HATCH, edgecolor=ecol,
                             linewidth=_PF_SPINE_LW, zorder=4,
                         )
+                    # Spread over the runs, on the total rather than on the
+                    # phase-2 segment: the exact phase is deterministic, so
+                    # all of the variation belongs to the final value.
+                    _sd = bd.get("std", 0.0)
+                    if _sd > 0:
+                        ax.errorbar(xi, final, yerr=_sd, fmt="none",
+                                    ecolor="#333333", elinewidth=0.6,
+                                    capsize=1.5, capthick=0.5, zorder=5)
                 ax.set_xticks(xs)
                 ax.set_xticklabels(
                     [name for _r, name in present], fontsize=_PF_TICK_PT,
@@ -9159,12 +10064,71 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--combined-figures",
+        action="store_true",
+        help=(
+            "One figure per instance combining the Pareto fronts, the "
+            "hypervolume bars and the 1-IGD+ bars, with a single legend and "
+            "continuous panel letters. Uses --highs-dir and --an-dir."
+        ),
+    )
+    parser.add_argument(
+        "--ea-front-figures",
+        action="store_true",
+        help=(
+            "One figure of Pareto fronts for every second-phase algorithm, "
+            "one row per instance selected by --filter. Complements the "
+            "combined figures, whose front block plots PLS only."
+        ),
+    )
+    parser.add_argument(
+        "--ea-front-seed",
+        choices=["an", "gpbaa"],
+        default="an",
+        help="Exact method seeding the fronts in --ea-front-figures.",
+    )
+    parser.add_argument(
+        "--ea-front-stem",
+        default="ea_fronts",
+        help="Output filename stem for --ea-front-figures.",
+    )
+    parser.add_argument(
+        "--combined-canvas",
+        choices=sorted(_COMBINED_CANVAS),
+        default="lncs",
+        help=(
+            "Text block the combined figure is drawn for, so it can be "
+            "included at 1:1: 'lncs' for Springer LNCS, 'cas' for the "
+            "Elsevier CAS two-column class (full-width figure*)."
+        ),
+    )
+    parser.add_argument(
+        "--cd-diagram",
+        action="store_true",
+        help=(
+            "Critical-difference diagram over the same matrix as "
+            "--wilcoxon-ranking: average rank on an axis, best on the left, "
+            "with crossbars joining methods whose differences do not survive "
+            "Holm. Response variable follows --friedman-indicator."
+        ),
+    )
+    parser.add_argument(
         "--ea-tables-indicator",
         default="hv",
         help=(
             "Quality measure for --ea-tables: 'hv' (default) or one of "
             "cardinality / spacing / igd_plus / igd_plus_c. Names the output "
             "`ea_<indicator>_<method>.tex`."
+        ),
+    )
+    parser.add_argument(
+        "--ea-tables-two-column",
+        action="store_true",
+        help=(
+            "Emit a spanning table* holding a plain tabular instead of a "
+            "longtable, named ex_*.tex and labelled tab:ex_*. For the "
+            "two-column main text, which cannot use longtable; only valid "
+            "for a short --filter subset, as a table* cannot break pages."
         ),
     )
     parser.add_argument(
@@ -9330,6 +10294,47 @@ def main() -> int:
         )
         return 0
 
+    if args.combined_figures:
+        generate_combined_figures(
+            args.highs_dir,
+            args.an_dir,
+            args.output_dir,
+            filter_regex=args.filter,
+            num_points=args.num_points,
+            gpbaa_seeds_override=args.pf_seeds_gpbaa,
+            an_seeds_override=args.pf_seeds_an,
+            canvas=args.combined_canvas,
+        )
+        return 0
+
+    if args.ea_front_figures:
+        generate_ea_front_figures(
+            args.highs_dir,
+            args.an_dir,
+            args.output_dir,
+            filter_regex=args.filter,
+            num_points=args.num_points,
+            gpbaa_seeds_override=args.pf_seeds_gpbaa,
+            an_seeds_override=args.pf_seeds_an,
+            canvas=args.combined_canvas,
+            seed_method=args.ea_front_seed,
+            stem=args.ea_front_stem,
+        )
+        return 0
+
+    if args.cd_diagram:
+        generate_cd_diagram(
+            args.highs_dir,
+            args.an_dir,
+            args.output_dir,
+            filter_regex=args.filter,
+            num_points=args.num_points,
+            gpbaa_seeds_override=args.pf_seeds_gpbaa,
+            an_seeds_override=args.pf_seeds_an,
+            indicator=args.friedman_indicator,
+        )
+        return 0
+
     if args.wilcoxon_ranking:
         run_wilcoxon_ranking(
             args.highs_dir,
@@ -9366,6 +10371,7 @@ def main() -> int:
             gpbaa_seeds_override=args.pf_seeds_gpbaa,
             an_seeds_override=args.pf_seeds_an,
             indicator=args.ea_tables_indicator,
+            two_column=args.ea_tables_two_column,
         )
         return 0
 
