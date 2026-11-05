@@ -20,6 +20,10 @@ pub static INFEASIBLE_PROP: AtomicU64 = AtomicU64::new(0);
 /// #7 early exit / dimension cascade count.
 pub static CASCADE_EXITS: AtomicU64 = AtomicU64::new(0);
 
+/// Emitted points the lexicographic post-pass strictly improved -- i.e. points
+/// the epsilon-constraint solve returned only weakly efficient.
+pub static LEX_REFINED: AtomicU64 = AtomicU64::new(0);
+
 // ── Phase timers (nanoseconds accumulated across the solve) ──────────────────
 /// Ideal-bounds / payoff-table solve time (ns).
 pub static PAYOFF_NS: AtomicU64 = AtomicU64::new(0);

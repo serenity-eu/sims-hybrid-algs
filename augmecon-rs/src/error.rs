@@ -154,6 +154,16 @@ pub enum AugmeconError {
     #[error("Unsupported solver: {0}")]
     UnsupportedSolver(String),
 
+    /// The solver proved that nothing exists strictly below the supplied
+    /// objective cutoff.
+    ///
+    /// Not a failure: for Aneja & Nair this is the answer, since the gap test
+    /// only asks whether any point lies below the equalizing line. Proving that
+    /// is far cheaper than proving the optimum over the whole space, because
+    /// every node at or above the line is pruned immediately.
+    #[error("Proved no solution below the objective cutoff")]
+    ProvedNoneBelowCutoff,
+
     /// A subproblem stopped at its time limit with an incumbent rather than a
     /// proven optimum.
     ///

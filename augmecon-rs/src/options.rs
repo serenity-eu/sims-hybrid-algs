@@ -463,6 +463,27 @@ pub(crate) fn apply_gurobi_options(
     {
         log::warn!("Could not tighten Gurobi OptimalityTol: {e}");
     }
+    // What limits these solves is the dual bound, not finding solutions: the
+    // trace on a hard instance shows the incumbent descending while the bound
+    // moves 1.2023e7 -> 1.2031e7. `MIPFocus=3` directs Gurobi at the bound, and
+    // aggressive cuts tighten a set-cover relaxation that is weak by nature
+    // (root 1.1714e7 against an optimum of 1.2677e7 -- a 7.6% gap before
+    // branching starts). Both are env-gated so the trade can be measured rather
+    // than assumed; unset leaves Gurobi's defaults in place.
+    if let Ok(v) = std::env::var("GPBA_MIP_FOCUS") {
+        if let Ok(focus) = v.trim().parse::<i32>() {
+            if let Err(e) = model.as_inner_mut().set_param(grb::param::MIPFocus, focus) {
+                log::warn!("Could not set Gurobi MIPFocus to {focus}: {e}");
+            }
+        }
+    }
+    if let Ok(v) = std::env::var("GPBA_CUTS") {
+        if let Ok(cuts) = v.trim().parse::<i32>() {
+            if let Err(e) = model.as_inner_mut().set_param(grb::param::Cuts, cuts) {
+                log::warn!("Could not set Gurobi Cuts to {cuts}: {e}");
+            }
+        }
+    }
     if options.solution_pool_size > 0 {
         let m = model.as_inner_mut();
         // Mode 1 keeps the solutions the search finds anyway; mode 2 would go

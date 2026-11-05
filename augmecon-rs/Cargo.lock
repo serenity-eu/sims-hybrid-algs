@@ -144,6 +144,7 @@ dependencies = [
  "fixedbitset",
  "flate2",
  "good_lp",
+ "grb",
  "itertools 0.14.0",
  "log",
  "num_cpus",
@@ -749,7 +750,6 @@ checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 [[package]]
 name = "good_lp"
 version = "1.14.0"
-source = "git+https://github.com/hlvlad/good_lp?branch=gurobi#7a3163043b711d3383ee28be804544d85a2f813b"
 dependencies = [
  "coin_cbc",
  "fnv",
@@ -762,8 +762,6 @@ dependencies = [
 [[package]]
 name = "grb"
 version = "3.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9834f67c380d91552cfaa9ac309dde5b53c0d783254992ac37e4bcc12cfa2518"
 dependencies = [
  "anyhow",
  "cfg-if",

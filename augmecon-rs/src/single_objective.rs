@@ -3,6 +3,12 @@
 //! This module provides functionality for solving individual objective functions
 //! from multi-objective problems, used primarily for bounds calculation and payoff tables.
 
+/// A MIP gap at or below this counts as closed: incumbent and dual bound
+/// agree, which proves optimality whatever status the solver reports. Gurobi
+/// returns `TimeLimit` when the gap closes as the limit expires, so testing the
+/// status alone discards proven points.
+pub(crate) const OPTIMALITY_GAP_EPSILON: f64 = 1e-9;
+
 use crate::{
     error::{AugmeconError, Result},
     model::MultiObjectiveProblem,
@@ -75,6 +81,13 @@ pub struct ScalarisationSession<'a> {
     /// Reject an incumbent that stopped at its time limit; see
     /// [`Options::require_optimal`].
     require_optimal: bool,
+    /// Variable values of the most recent solve, proven or not.
+    ///
+    /// Every gap subproblem shares this model's constraints and differs only in
+    /// its objective, so any solution found is feasible for all of them and is
+    /// a valid MIP start. Without this the retry pass re-derives from scratch
+    /// the incumbent the capped attempt already found and threw away.
+    last_values: Option<std::collections::HashMap<String, f64>>,
     /// Each objective's constant term, which its bound rows do not carry.
     ///
     /// good_lp normalises `f <= x` to `linear <= x - c`, moving the constant to
@@ -122,6 +135,7 @@ impl<'a> ScalarisationSession<'a> {
             problem,
             model,
             require_optimal: options.require_optimal,
+            last_values: None,
             upper,
             lower,
             constants,
@@ -203,6 +217,23 @@ impl<'a> ScalarisationSession<'a> {
     /// problem's objectives, or [`AugmeconError::OptimizationError`] if the
     /// solve fails.
     pub fn solve(&mut self, weights: &[f64], timeout: Option<Duration>) -> Result<Solution> {
+        self.solve_with_cutoff(weights, timeout, None)
+    }
+
+    /// As [`Self::solve`], but pruning everything at or above `cutoff`.
+    ///
+    /// Aneja & Nair only needs to know whether a point lies strictly below the
+    /// equalizing line, so handing that line to the solver as a cutoff turns
+    /// "prove the optimum over the whole space" into "prove this half-space is
+    /// empty" -- which Gurobi answers by pruning rather than by search. A
+    /// `Cutoff` return is the proof, and is reported as
+    /// [`AugmeconError::ProvedNoneBelowCutoff`] rather than an error.
+    pub fn solve_with_cutoff(
+        &mut self,
+        weights: &[f64],
+        timeout: Option<Duration>,
+        cutoff: Option<f64>,
+    ) -> Result<Solution> {
         use good_lp::solvers::{
             ModelWithMutableObjective, ObjectiveDirection, ReusableModel, SolverModel as _,
         };
@@ -231,10 +262,66 @@ impl<'a> ScalarisationSession<'a> {
                 .as_inner_mut()
                 .set_param(grb::parameter::DoubleParam::TimeLimit, limit.as_secs_f64());
         }
+        // `Cutoff` is a parameter rather than a row, so it prunes without
+        // changing the model's structure -- which is what keeps the reused
+        // model (and its warm basis) valid across the sweep. Cleared when no
+        // cutoff is supplied, so one gap's bound never leaks into the next.
+        let _ = self.model.as_inner_mut().set_param(
+            grb::parameter::DoubleParam::Cutoff,
+            cutoff.unwrap_or(f64::INFINITY),
+        );
 
-        let solution = self.model.solve_mut().map_err(|e| {
-            AugmeconError::OptimizationError(format!("Weighted-sum optimization failed: {e:?}"))
-        })?;
+        // Hand Gurobi the previous solve's point as a MIP start. Every gap
+        // subproblem shares this model's constraints and differs only in its
+        // objective, so any solution already found is feasible here, and an
+        // incumbent from the start means the search spends its time raising the
+        // bound instead of re-finding a solution it had already found once.
+        if let Some(values) = self.last_values.clone() {
+            let pairs: Vec<(grb::Var, f64)> = self
+                .problem
+                .var_map
+                .iter()
+                .filter_map(|(name, var)| {
+                    let gv = *self.model.var_map().get(var)?;
+                    Some((gv, *values.get(name)?))
+                })
+                .collect();
+            if !pairs.is_empty() {
+                if let Err(e) = self
+                    .model
+                    .as_inner_mut()
+                    .set_obj_attr_batch(grb::attr::Start, pairs)
+                {
+                    log::debug!("Could not apply MIP start: {e}");
+                }
+            }
+        }
+
+        let solution = match self.model.solve_mut() {
+            Ok(solution) => solution,
+            Err(e) => {
+                // good_lp has no mapping for Gurobi's CUTOFF, so read the raw
+                // status: it means the half-space below the cutoff was proven
+                // empty, which is an answer, not a failure.
+                match self.model.as_inner().status() {
+                    // The half-space below the cutoff was proven empty.
+                    Ok(grb::Status::CutOff) if cutoff.is_some() => {
+                        return Err(AugmeconError::ProvedNoneBelowCutoff);
+                    }
+                    // Out of time without an incumbent. Like an unproven
+                    // incumbent, this says nothing about the gap -- it is not a
+                    // failure of the model, and the caller can move on to the
+                    // next gap rather than abandoning the sweep.
+                    Ok(grb::Status::TimeLimit | grb::Status::Interrupted) => {
+                        return Err(AugmeconError::NotProvenOptimal);
+                    }
+                    _ => {}
+                }
+                return Err(AugmeconError::OptimizationError(format!(
+                    "Weighted-sum optimization failed: {e:?}"
+                )));
+            }
+        };
         // A weighted sum stopped at its time limit returns an incumbent, not an
         // optimum. Aneja & Nair's construction assumes the optimum -- a
         // suboptimal answer here does not just cost a point, it misplaces the
@@ -243,14 +330,39 @@ impl<'a> ScalarisationSession<'a> {
             good_lp::solvers::Solution::status(&solution),
             good_lp::solvers::SolutionStatus::Optimal
         ) {
-            log::warn!(
-                "Weighted-sum solve for weights {weights:?} stopped before proving optimality"
-            );
-            if self.require_optimal {
-                return Err(AugmeconError::NotProvenOptimal);
+            // Report where the solve actually stopped. A gap pinned at the
+            // tolerance floor means the objective is too ill-conditioned to
+            // close (the equalizing weights multiply objectives of very
+            // different magnitude); a gap of percent size means the search
+            // simply ran out of time. The two call for different fixes.
+            let m = self.model.as_inner();
+            let obj = m.get_attr(grb::attr::ObjVal).unwrap_or(f64::NAN);
+            let bound = m.get_attr(grb::attr::ObjBound).unwrap_or(f64::NAN);
+            let gap = m.get_attr(grb::attr::MIPGap).unwrap_or(f64::NAN);
+            // A solve that closes the gap just as its limit expires reports
+            // `TimeLimit`, not `Optimal`. The closed gap is itself the proof --
+            // incumbent and dual bound agree -- so keying off the status alone
+            // would discard a point that was in fact proven optimal.
+            if gap <= OPTIMALITY_GAP_EPSILON {
+                log::debug!(
+                    "Weighted-sum solve for weights {weights:?} returned a closed gap \
+                     (incumbent {obj:.6e}, bound {bound:.6e}); accepting as proven optimal"
+                );
+            } else {
+                log::warn!(
+                    "Weighted-sum solve for weights {weights:?} stopped before proving optimality \
+                     (incumbent {obj:.6e}, bound {bound:.6e}, gap {gap:.3e})"
+                );
+                if self.require_optimal {
+                    return Err(AugmeconError::NotProvenOptimal);
+                }
             }
         }
-        Ok(self.extract(&solution))
+        let extracted = self.extract(&solution);
+        // Remember this point for the next solve's MIP start, keyed by variable
+        // name so it survives regardless of column ordering.
+        self.last_values = Some(extracted.decision_variables.clone());
+        Ok(extracted)
     }
 
     /// Read a solved model back into a [`Solution`].

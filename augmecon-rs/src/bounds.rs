@@ -36,12 +36,25 @@ impl<'a> BoundsCalculator<'a> {
     /// # Errors
     /// Returns error if any single-objective optimization fails
     pub fn calculate_bounds(&self, timer: Option<&Timer>) -> Result<(Vec<f64>, Vec<f64>)> {
+        self.calculate_bounds_with_solutions(timer)
+            .map(|(ideal, nadir, _)| (ideal, nadir))
+    }
+
+    /// As [`Self::calculate_bounds`], plus the lexicographic extreme solutions
+    /// from the payoff table (see `calculate_payoff_table_with_solutions`).
+    ///
+    /// # Errors
+    /// Returns error if any single-objective optimization fails or problem is infeasible
+    pub fn calculate_bounds_with_solutions(
+        &self,
+        timer: Option<&Timer>,
+    ) -> Result<(Vec<f64>, Vec<f64>, Vec<Option<crate::solution::Solution>>)> {
         let num_objectives = self.problem.num_objectives();
         let mut ideal = vec![f64::NEG_INFINITY; num_objectives];
         let mut nadir = vec![f64::INFINITY; num_objectives];
 
         // Calculate payoff table by optimizing each objective
-        let payoff_table = self.calculate_payoff_table(timer)?;
+        let (payoff_table, lex_solutions) = self.calculate_payoff_table_with_solutions(timer)?;
 
         // Extract ideal from payoff table
         // Ideal point: best value each objective can achieve (diagonal elements = minimization result)
@@ -70,7 +83,7 @@ impl<'a> BoundsCalculator<'a> {
         log::debug!("Calculated ideal point: {ideal:?}");
         log::debug!("Calculated nadir point: {nadir:?}");
 
-        Ok((ideal, nadir))
+        Ok((ideal, nadir, lex_solutions))
     }
 
     /// Calculate full payoff table using standard algorithm
@@ -84,8 +97,33 @@ impl<'a> BoundsCalculator<'a> {
     /// # Errors
     /// Returns error if any single-objective optimization fails or problem is infeasible
     pub fn calculate_payoff_table(&self, timer: Option<&Timer>) -> Result<Vec<Vec<f64>>> {
+        self.calculate_payoff_table_with_solutions(timer)
+            .map(|(t, _)| t)
+    }
+
+    /// As [`Self::calculate_payoff_table`], but also returns the Phase 2
+    /// solutions themselves.
+    ///
+    /// Phase 2 solves "objective i pinned at its optimum, objective j
+    /// minimised" -- which is precisely the lexicographic optimum for row i,
+    /// i.e. an *efficient* extreme point. The table previously kept only the
+    /// objective values and dropped these solutions, so the extremes GPBA-A
+    /// emitted came from the unaugmented Phase 1 solves instead and could be
+    /// weakly efficient: same value on the pinned objective, worse on the
+    /// other. Returning them costs nothing -- the solves already happen.
+    ///
+    /// Entry `i` is `None` when row `i` had no Phase 2 solve (single-objective
+    /// problems) or when that solve failed.
+    ///
+    /// # Errors
+    /// Returns error if any single-objective optimization fails or problem is infeasible
+    pub fn calculate_payoff_table_with_solutions(
+        &self,
+        timer: Option<&Timer>,
+    ) -> Result<(Vec<Vec<f64>>, Vec<Option<crate::solution::Solution>>)> {
         let num_objectives = self.problem.num_objectives();
         let mut payoff_table = vec![vec![0.0; num_objectives]; num_objectives];
+        let mut lex_solutions: Vec<Option<crate::solution::Solution>> = vec![None; num_objectives];
 
         println!("DEBUG: Starting payoff table calculation for {num_objectives} objectives");
         log::debug!("Starting payoff table calculation for {num_objectives} objectives");
@@ -147,11 +185,17 @@ impl<'a> BoundsCalculator<'a> {
                     let obj_value = solution.objective_values[j];
                     row[j] = obj_value;
                     log::debug!("Payoff[{i}][{j}] = {obj_value}");
+                    // Keep the solution: it is the lexicographic optimum for
+                    // row i and therefore an efficient extreme point.
+                    lex_solutions[i] = Some(crate::solution::Solution::new(
+                        solution.objective_values.clone(),
+                        solution.decision_variables.clone(),
+                    ));
                 }
             }
         }
 
         log::debug!("Final payoff table: {payoff_table:?}");
-        Ok(payoff_table)
+        Ok((payoff_table, lex_solutions))
     }
 }
