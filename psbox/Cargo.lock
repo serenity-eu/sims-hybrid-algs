@@ -183,6 +183,7 @@ checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 [[package]]
 name = "good_lp"
 version = "1.14.0"
+source = "git+https://github.com/hlvlad/good_lp?rev=0b5a4e97b645f390cf80ef3c68b23fd5cf681491#0b5a4e97b645f390cf80ef3c68b23fd5cf681491"
 dependencies = [
  "fnv",
  "grb",

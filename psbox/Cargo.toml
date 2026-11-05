@@ -13,7 +13,7 @@ two can be compared head to head without a common bug flattering both.
 """
 
 [dependencies]
-good_lp = { git = "https://github.com/hlvlad/good_lp", branch = "gurobi", default-features = false, features = ["lp-solvers"] }
+good_lp = { git = "https://github.com/hlvlad/good_lp", rev = "0b5a4e97b645f390cf80ef3c68b23fd5cf681491", default-features = false, features = ["lp-solvers"] }
 grb = { version = "3.0.1", default-features = false, features = ["gurobi12"], optional = true }
 log = "0.4"
 
@@ -21,6 +21,11 @@ log = "0.4"
 default = []
 gurobi = ["good_lp/gurobi", "dep:grb"]
 highs = ["good_lp/highs"]
+
+[patch.crates-io]
+# See augmecon-rs/Cargo.toml for why `grb` 3.0.1 must be patched; the patch
+# lives there and `cargo patch-crate` writes the result to this path.
+grb = { path = "../augmecon-rs/target/patch/grb-3.0.1" }
 
 [[example]]
 name = "model_build_cost"

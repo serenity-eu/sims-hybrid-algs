@@ -1,0 +1,114 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 786fa10..ffbbc72 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -51,6 +51,10 @@ rustdoc-args = [
+ name = "grb"
+ path = "src/lib.rs"
+ 
++[[example]]
++name = "issue27"
++path = "examples/issue27.rs"
++
+ [[example]]
+ name = "callback"
+ path = "examples/callback.rs"
+diff --git a/examples/issue27.rs b/examples/issue27.rs
+new file mode 100644
+index 0000000..a4ac963
+--- /dev/null
++++ b/examples/issue27.rs
+@@ -0,0 +1,57 @@
++//! Reproducer for ykrist/rust-grb#27: `add_constrs` disagreeing with
++//! `add_constr`.
++//!
++//! The issue reports two symptoms from one cause. A small model comes back
++//! infeasible where the same constraints added one at a time solve to 2; a
++//! larger one crashes Gurobi with heap corruption or an access violation.
++//!
++//! Both follow from `numnz`. `GRBaddconstrs` is told how many *nonzeros* the
++//! `cind`/`cval` arrays hold, and the wrapper passed `cbeg.len()`, the number
++//! of *constraints*. Here that is 2 against the 4 nonzeros two `x + y` rows
++//! need, so Gurobi builds only part of the second row and the model it solves
++//! is not the one that was described. On a model whose `cbeg` entries reach far
++//! past an understated `numnz`, the same mistake reads off the end of the
++//! arrays instead, which is where the crashes come from.
++//!
++//! Run: `cargo run --example issue27 --features gurobi12`
++
++use grb::prelude::*;
++
++fn main() -> grb::Result<()> {
++    let optimum = |batched: bool| -> grb::Result<f64> {
++        let mut model = Model::new("issue27")?;
++        model.set_param(param::OutputFlag, 0)?;
++        let x = add_ctsvar!(model, bounds: 0..1)?;
++        let y = add_ctsvar!(model, bounds: 0..1)?;
++        model.set_objective(x + y, ModelSense::Minimize)?;
++
++        if batched {
++            model.add_constrs([
++                (&"c1", c!(x + y >= 0.5)),
++                (&"c2", c!(x + y >= 2.0)),
++            ])?;
++        } else {
++            model.add_constr("c1", c!(x + y >= 0.5))?;
++            model.add_constr("c2", c!(x + y >= 2.0))?;
++        }
++        model.optimize()?;
++        assert_eq!(
++            model.status()?,
++            Status::Optimal,
++            "{} model was not solved to optimality",
++            if batched { "batched" } else { "one-at-a-time" }
++        );
++        model.get_attr(attr::ObjVal)
++    };
++
++    let one_at_a_time = optimum(false)?;
++    let batched = optimum(true)?;
++    println!("add_constr  (one at a time): {one_at_a_time}");
++    println!("add_constrs (batched)      : {batched}");
++    assert!(
++        (one_at_a_time - batched).abs() < 1e-9,
++        "add_constrs built a different model than add_constr"
++    );
++    println!("EQUIVALENT: add_constrs matches add_constr");
++    Ok(())
++}
+diff --git a/src/model.rs b/src/model.rs
+index 1743289..4235d09 100644
+--- a/src/model.rs
++++ b/src/model.rs
+@@ -718,7 +718,12 @@ impl Model {
+             ffi::GRBaddconstrs(
+                 self.ptr,
+                 cnames.len() as ffi::c_int,
+-                cbeg.len() as ffi::c_int,
++                // Number of *nonzeros*, which is what `GRBaddconstrs` declares
++                // this argument to be -- not the number of constraints. Passing
++                // the constraint count understates the length of `cind`/`cval`
++                // while `cbeg` still indexes the whole of them, so Gurobi reads
++                // past their end. On a 27905-row model that segfaults.
++                cind.len() as ffi::c_int,
+                 cbeg.as_ptr(),
+                 cind.as_ptr(),
+                 cval.as_ptr(),
+@@ -728,8 +733,16 @@ impl Model {
+             )
+         })?;
+ 
++        // One handle per constraint, in the order they were supplied. The
++        // previous `vec![self.constrs.add_new(lazy); n]` registered a single
++        // object and cloned its handle, so every constraint in the batch shared
++        // one index: the model's object count fell behind the real row count,
++        // and anything addressing a constraint later -- setting an RHS, reading
++        // a dual -- addressed the wrong row.
+         let lazy = self.update_mode_lazy()?;
+-        Ok(vec![self.constrs.add_new(lazy); cnames.len()])
++        Ok((0..cnames.len())
++            .map(|_| self.constrs.add_new(lazy))
++            .collect())
+     }
+ 
+     /// Add a MIN constraint to the model.
