@@ -230,5 +230,10 @@ publication-data/satellite-data/instances_random_clouds/*.dzn
 # directory, so the directory is un-ignored first and its contents second.
 # The traces are needed, not incidental: every table and figure generator
 # reads them, so the results cannot be rebuilt without them.
-!publication-data/experiments-x10-2obj/
-!publication-data/experiments-x10-2obj/**
+!publication-data/biobjective/
+!publication-data/biobjective/**
+
+# epstopdf writes a converted PDF beside each EPS at compile time. Overleaf
+# will not let it write anywhere else, so the artifacts have to land there;
+# keep them out of the repo rather than out of the directory.
+*-eps-converted-to.pdf
