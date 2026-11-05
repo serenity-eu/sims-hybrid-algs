@@ -80,7 +80,7 @@ INSTANCE_SETS = {
         # The A&N-calibrated set (instance_generation_difficulty.md, Part II).
         # Ladders differ per city, so `sizes` is the union and missing files are
         # skipped by the caller.
-        "sizes": [125, 150, 175, 200, 225, 250, 275, 300, 350],
+        "sizes": [50, 75, 100, 125, 150, 175, 200, 225, 250, 275, 300, 350],
         "dzn_path": lambda inst: HARD_DIR / f"{inst}.dzn",
         "timeout_by_size": {},
         "out_suffix": "_hard",
