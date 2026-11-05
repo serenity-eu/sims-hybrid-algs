@@ -175,7 +175,6 @@ impl<'a> ScalarisationSession<'a> {
     ) -> Result<Solution> {
         use good_lp::solvers::{
             ModelWithMutableObjective, ModelWithMutableRhs, ObjectiveDirection, ReusableModel,
-            SolverModel as _,
         };
 
         self.release_bounds();
@@ -235,7 +234,7 @@ impl<'a> ScalarisationSession<'a> {
         cutoff: Option<f64>,
     ) -> Result<Solution> {
         use good_lp::solvers::{
-            ModelWithMutableObjective, ObjectiveDirection, ReusableModel, SolverModel as _,
+            ModelWithMutableObjective, ObjectiveDirection, ReusableModel,
         };
 
         if weights.len() != self.problem.num_objectives() {

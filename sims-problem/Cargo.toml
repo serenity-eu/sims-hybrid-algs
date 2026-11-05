@@ -53,3 +53,7 @@ rayon = "1.10"
 [patch.crates-io]
 moors = { path = "../sims-heuristics/target/patch/moors-0.2.10" }
 optirustic = { path = "../sims-heuristics/target/patch/optirustic-1.2.2" }
+
+# See augmecon-rs/Cargo.toml for why `grb` 3.0.1 must be patched; the patch
+# lives there and `cargo patch-crate` writes the result to this path.
+grb = { path = "../augmecon-rs/target/patch/grb-3.0.1" }

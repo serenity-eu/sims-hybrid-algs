@@ -346,7 +346,7 @@ impl<'a> EpsilonSession<'a> {
         options: &Options,
         timeout: Option<Duration>,
     ) -> EpsilonSolveOutcome<SolutionWithSlack> {
-        use good_lp::solvers::{ModelWithMutableRhs, ReusableModel, SolverModel as _};
+        use good_lp::solvers::{ModelWithMutableRhs, ReusableModel};
 
         crate::verify::bump(&crate::verify::SLACK_SOLVES);
         for (&obj_idx, &epsilon) in epsilon_values {

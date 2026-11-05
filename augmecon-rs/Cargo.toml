@@ -28,8 +28,11 @@ required-features = []
 name = "augmecon"
 path = "src/lib.rs"
 
+[package.metadata.patch]
+crates = ["grb"]
+
 [dependencies]
-good_lp = { git="https://github.com/hlvlad/good_lp", branch = "gurobi", default-features = false, features = ["lp-solvers"] }
+good_lp = { git="https://github.com/hlvlad/good_lp", rev = "0b5a4e97b645f390cf80ef3c68b23fd5cf681491", default-features = false, features = ["lp-solvers"] }
 # Same version and feature set good_lp's `gurobi` backend links, so both crates
 # resolve to one `grb` and one libgurobi. Needed directly here only to name
 # parameters (e.g. `param::MIPGap`) on the model good_lp hands back through
@@ -97,3 +100,16 @@ multiple_crate_versions = "allow"
 [lints.rust]
 missing_docs = "warn"
 unsafe_code = "forbid"
+
+# `grb` 3.0.1 is unusable as published: `Model::add_constrs` passes the
+# constraint count to `GRBaddconstrs` where the C API declares the *nonzero*
+# count, so Gurobi reads past the end of the coefficient arrays and segfaults
+# on a model of any size; and it returns one constraint handle cloned N times,
+# so every row in a batch shares an index and later addressing (`set_rhs`,
+# reading a dual) hits the wrong row. Both are fixed in
+# patches/grb+3.0.1.patch, applied by `cargo patch-crate` -- the same
+# mechanism sims-heuristics uses for moors and optirustic. Run
+# `cargo patch-crate` from this directory once after a fresh clone or
+# `cargo clean`, before building with the `gurobi` feature.
+[patch.crates-io]
+grb = { path = "./target/patch/grb-3.0.1" }
