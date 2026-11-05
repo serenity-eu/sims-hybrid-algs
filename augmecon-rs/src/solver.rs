@@ -586,12 +586,16 @@ impl Augmecon {
         // interval-based cascade. Still logged distinctly for diagnosability.
         match builder.solve_with_slack(timeout)? {
             EpsilonSolveOutcome::Solved(solution) => Ok(solution),
-            EpsilonSolveOutcome::Infeasible => {
-                Ok(SolutionWithSlack::new(Solution::infeasible(num_objectives), HashMap::new()))
-            }
+            EpsilonSolveOutcome::Infeasible => Ok(SolutionWithSlack::new(
+                Solution::infeasible(num_objectives),
+                HashMap::new(),
+            )),
             EpsilonSolveOutcome::Inconclusive(reason) => {
                 warn!("ε-constraint solve inconclusive (not proven infeasible): {reason}");
-                Ok(SolutionWithSlack::new(Solution::infeasible(num_objectives), HashMap::new()))
+                Ok(SolutionWithSlack::new(
+                    Solution::infeasible(num_objectives),
+                    HashMap::new(),
+                ))
             }
         }
     }
@@ -860,12 +864,16 @@ impl Augmecon {
         // here, so collapsing Inconclusive into "infeasible" is safe.
         match builder.solve_with_slack(self.get_remaining_timeout())? {
             EpsilonSolveOutcome::Solved(solution) => Ok(solution),
-            EpsilonSolveOutcome::Infeasible => {
-                Ok(SolutionWithSlack::new(Solution::infeasible(num_objectives), HashMap::new()))
-            }
+            EpsilonSolveOutcome::Infeasible => Ok(SolutionWithSlack::new(
+                Solution::infeasible(num_objectives),
+                HashMap::new(),
+            )),
             EpsilonSolveOutcome::Inconclusive(reason) => {
                 warn!("ε-constraint solve inconclusive (not proven infeasible): {reason}");
-                Ok(SolutionWithSlack::new(Solution::infeasible(num_objectives), HashMap::new()))
+                Ok(SolutionWithSlack::new(
+                    Solution::infeasible(num_objectives),
+                    HashMap::new(),
+                ))
             }
         }
     }

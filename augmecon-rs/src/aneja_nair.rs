@@ -141,6 +141,16 @@ impl AnejaNair {
         sol
     }
 
+    /// Budget for one gap search: the configured cap normally, the whole of
+    /// the remaining time on the retry pass, where no other gap is waiting.
+    fn gap_budget(&self, uncapped: bool) -> Option<Duration> {
+        if uncapped {
+            self.timer.as_ref().map(Timer::remaining)
+        } else {
+            self.per_solve()
+        }
+    }
+
     /// Per-solve budget = min(configured cap, remaining global time).
     fn per_solve(&self) -> Option<Duration> {
         let remaining = self.timer.as_ref().map(Timer::remaining);
@@ -188,10 +198,32 @@ impl AnejaNair {
             .then(|| crate::single_objective::ScalarisationSession::new(problem, options));
         let directions = problem.objectives.iter().map(|(_, dir)| *dir).collect();
         let mut front = ParetoFront::new(directions);
+        // Gaps whose subproblem could not be proven optimal within the
+        // per-solve cap, retried once the queue drains and the remaining budget
+        // can be given to a single solve.
+        let mut deferred: Vec<Gap> = Vec::new();
+        let mut unproven_gaps = 0usize;
 
         // --- Two lexicographic extreme points ---
-        let a = self.lexicographic_extreme(&solver, problem, 0, 1)?; // min f1, tie-break min f2
-        let b = self.lexicographic_extreme(&solver, problem, 1, 0)?; // min f2, tie-break min f1
+        // Without both extremes there is no initial gap to bisect, so an
+        // unprovable extreme leaves nothing to search. Return the empty front
+        // rather than an error: "no point could be proven in the budget" is a
+        // result the caller can record, where an exception discards the run and
+        // reads like a crash.
+        let (a, b) = match (
+            self.lexicographic_extreme(&solver, problem, 0, 1), // min f1, tie-break min f2
+            self.lexicographic_extreme(&solver, problem, 1, 0), // min f2, tie-break min f1
+        ) {
+            (Ok(a), Ok(b)) => (a, b),
+            (Err(AugmeconError::NotProvenOptimal), _) | (_, Err(AugmeconError::NotProvenOptimal)) => {
+                log::warn!(
+                    "Aneja & Nair: a lexicographic extreme could not be proven optimal within \
+                     the budget; returning an empty front"
+                );
+                return Ok(front);
+            }
+            (Err(e), _) | (_, Err(e)) => return Err(e),
+        };
         front.add_solution(self.stamp(a.sol.clone()));
         if (a.f1, a.f2) == (b.f1, b.f2) {
             log::info!("Aneja & Nair: single Pareto point (extremes coincide)");
@@ -206,7 +238,30 @@ impl AnejaNair {
         let mut gaps = BinaryHeap::new();
         gaps.push(Gap::new(lo, hi));
 
-        while let Some(gap) = gaps.pop() {
+        // Once the queue drains, hand the deferred gaps the rest of the budget
+        // and search them again. The per-solve cap is right while many gaps
+        // compete for time, but when none are left the remainder has nowhere
+        // else to go: a 150-image instance was finishing in 60s of 200s with
+        // its only gap abandoned, and the solve it gave up on is one measured
+        // to close in ~236s.
+        let mut uncapped = false;
+        loop {
+            let Some(gap) = gaps.pop() else {
+                if uncapped || deferred.is_empty() {
+                    break;
+                }
+                let left = self.timer.as_ref().map_or(Duration::MAX, Timer::remaining);
+                if left.is_zero() {
+                    break;
+                }
+                log::debug!(
+                    "Aneja & Nair: retrying {} deferred gap(s) with {left:?} left",
+                    deferred.len()
+                );
+                gaps.extend(deferred.drain(..));
+                uncapped = true;
+                continue;
+            };
             if self.is_timeout_reached() {
                 log::info!(
                     "Aneja & Nair: timeout reached, front size {}",
@@ -229,32 +284,66 @@ impl AnejaNair {
             let sum = (wi1 + wi2) as f64;
             let weights = [wi1 as f64 / sum, wi2 as f64 / sum];
 
+            // The gap test below only asks whether a point lies *strictly* below
+            // the equalizing line, so hand the solver that threshold as a
+            // cutoff: proving the half-space empty prunes, where proving the
+            // optimum over the whole space searches.
+            //
+            // The threshold must be strictly below the line. Equalizing weights
+            // put both endpoints exactly on it (`w.lo == w.hi == wline`), so a
+            // cutoff at `wline` never prunes -- an optimum at the cutoff always
+            // exists. Objectives and weights are integers, so `wz` is an
+            // integer and "strictly below" means `wz <= wline - 1`; the
+            // half-unit offset separates the two cases without depending on
+            // whether Gurobi compares with `>` or `>=`.
+            let wline_i = i128::from(wi1) * i128::from(gap.lo.f1.round() as i64)
+                + i128::from(wi2) * i128::from(gap.lo.f2.round() as i64);
+            let wline_f = (wline_i as f64 - 0.5) / sum;
             let solved = {
                 #[cfg(feature = "gurobi")]
                 {
                     match session.as_mut() {
-                        Some(session) => session.solve(&weights, self.per_solve()),
-                        None => solver.solve_weighted_sum(&weights, self.per_solve()),
+                        Some(session) => session.solve_with_cutoff(
+                            &weights,
+                            self.gap_budget(uncapped),
+                            Some(wline_f),
+                        ),
+                        None => solver.solve_weighted_sum(&weights, self.gap_budget(uncapped)),
                     }
                 }
                 #[cfg(not(feature = "gurobi"))]
                 {
-                    solver.solve_weighted_sum(&weights, self.per_solve())
+                    solver.solve_weighted_sum(&weights, self.gap_budget(uncapped))
                 }
             };
             let sol = match solved {
                 Ok(sol) => sol,
-                // The incumbent is feasible but unproven, and this gap's weight
-                // is what the next weights are derived from. Keep the points
-                // already proven rather than either trusting it or discarding
-                // the run.
+                // Proof that this gap holds no supported point: close it and
+                // move on, exactly as the `wz >= wline` branch below would.
+                Err(AugmeconError::ProvedNoneBelowCutoff) => {
+                    log::warn!("Aneja & Nair: gap proven empty by cutoff");
+                    continue;
+                }
+                // The incumbent is feasible but unproven, so it cannot be added
+                // and this gap cannot be subdivided. Abandon just this gap and
+                // carry on with the rest of the queue: whether a given solve
+                // closes inside its cap is timing-dependent, so stopping the
+                // whole sweep here made the result a coin flip -- the same
+                // instance yielded 13 points in one run and none in the next.
+                // Other gaps are independent and may well be provable.
                 Err(AugmeconError::NotProvenOptimal) => {
-                    log::warn!(
-                        "Aneja & Nair: stopping early -- a weighted-sum subproblem \
-                         did not prove optimality; returning {} proven points",
-                        front.solutions.len()
-                    );
-                    break;
+                    // Defer rather than discard. The per-solve cap exists to
+                    // spread the budget over many gaps, but when the queue
+                    // drains early the remaining time is simply wasted: a
+                    // 150-image instance was finishing in 60s of 200s with its
+                    // only gap abandoned. Retried below with whatever budget is
+                    // left, which is often far more than the cap allowed.
+                    if uncapped {
+                        unproven_gaps += 1;
+                    } else {
+                        deferred.push(gap);
+                    }
+                    continue;
                 }
                 Err(e) => return Err(e),
             };
@@ -280,8 +369,14 @@ impl AnejaNair {
             // else: no supported solution in this gap (exact solver) → gap closed.
         }
 
+        if unproven_gaps > 0 {
+            log::warn!(
+                "Aneja & Nair: {unproven_gaps} gap(s) abandoned without a proven optimum; \
+                 the returned front is proven but may be incomplete"
+            );
+        }
         log::info!(
-            "=== Aneja & Nair: done, {} points ===",
+            "=== Aneja & Nair: done, {} points ({unproven_gaps} gaps abandoned) ===",
             front.solutions.len()
         );
         Ok(front)

@@ -30,6 +30,11 @@ path = "src/lib.rs"
 
 [dependencies]
 good_lp = { git="https://github.com/hlvlad/good_lp", branch = "gurobi", default-features = false, features = ["lp-solvers"] }
+# Same version and feature set good_lp's `gurobi` backend links, so both crates
+# resolve to one `grb` and one libgurobi. Needed directly here only to name
+# parameters (e.g. `param::MIPGap`) on the model good_lp hands back through
+# `as_inner_mut`; good_lp does not re-export grb.
+grb = { version = "3.0.1", default-features = false, features = ["gurobi12"], optional = true }
 calamine = "0.32.0"
 itertools = "0.14.0"
 log = "0.4.29"
@@ -50,7 +55,7 @@ scip = ["good_lp/scip", "good_lp/scip_bundled"]
 # `gurobi` branch). `grb` is optional there, so this only pulls the Gurobi
 # runtime when the feature is enabled; building it needs a licensed Gurobi
 # install (GUROBI_HOME / GUROBI_LIBNAME), so it stays opt-in.
-gurobi = ["good_lp/gurobi"]
+gurobi = ["good_lp/gurobi", "dep:grb"]
 
 [dev-dependencies]
 approx = "0.5.1"

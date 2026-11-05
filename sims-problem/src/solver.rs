@@ -1929,6 +1929,13 @@ pub fn solve_with_milp(
     // Efficiency from an objective priority rather than an augmentation term
     // or a second solve; see `Options::hierarchical_efficiency`.
     options.hierarchical_efficiency = std::env::var("GPBA_HIERARCHY").is_ok();
+    // Points that stopped at a time limit are incumbents, not optima, and both
+    // first-phase methods derive their next step from the points they hold.
+    // Enforced by default; `GPBA_REQUIRE_OPTIMAL=0` restores the old behaviour
+    // so the two can be compared on the same instance.
+    if let Ok(v) = std::env::var("GPBA_REQUIRE_OPTIMAL") {
+        options.require_optimal = !matches!(v.trim(), "0" | "false" | "no");
+    }
 
     info!(
         "GPBA-A Options: solver={}, bypass_coefficient={}, early_exit={}, flag_array={}",

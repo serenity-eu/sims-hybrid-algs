@@ -512,6 +512,63 @@ impl ParetoFront {
 
     // ── Batch dominance filter (legacy / safety-net) ────────────────────
 
+    /// 2D specialisation of [`Self::filter_dominated_solutions`].
+    ///
+    /// Sorts by objective 0 (ties broken by objective 1, both in "better
+    /// first" order) and sweeps once. A point survives only if it strictly
+    /// improves on the best objective-1 value seen so far; equal values are
+    /// dropped, which is what makes this remove *weakly* dominated points and
+    /// not just strictly dominated ones.
+    fn filter_dominated_2d(&mut self) {
+        let dirs = self.objective_directions.clone();
+        let better = |dir: &crate::model::ObjectiveDirection, a: f64, b: f64| match dir {
+            crate::model::ObjectiveDirection::Minimize => a < b,
+            crate::model::ObjectiveDirection::Maximize => a > b,
+        };
+
+        let mut idx: Vec<usize> = (0..self.solutions.len()).collect();
+        idx.sort_by(|&a, &b| {
+            let (oa, ob) = (
+                self.solutions[a].objectives(),
+                self.solutions[b].objectives(),
+            );
+            let primary = if better(&dirs[0], oa[0], ob[0]) {
+                std::cmp::Ordering::Less
+            } else if better(&dirs[0], ob[0], oa[0]) {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Equal
+            };
+            primary.then_with(|| {
+                if better(&dirs[1], oa[1], ob[1]) {
+                    std::cmp::Ordering::Less
+                } else if better(&dirs[1], ob[1], oa[1]) {
+                    std::cmp::Ordering::Greater
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            })
+        });
+
+        let mut keep = vec![false; self.solutions.len()];
+        let mut best: Option<f64> = None;
+        for &i in &idx {
+            let v = self.solutions[i].objectives()[1];
+            if best.is_none_or(|b| better(&dirs[1], v, b)) {
+                keep[i] = true;
+                best = Some(v);
+            }
+        }
+
+        let mut k = 0;
+        self.solutions.retain(|_| {
+            let take = keep[k];
+            k += 1;
+            take
+        });
+        self.sort_solutions();
+    }
+
     /// Filter dominated solutions from the front.
     ///
     /// If you always use [`try_insert`](Self::try_insert), this is a no-op.
@@ -519,6 +576,15 @@ impl ParetoFront {
     pub fn filter_dominated_solutions(&mut self) {
         let n = self.solutions.len();
         if n <= 1 {
+            return;
+        }
+        // Bi-objective fronts get a sort-and-sweep: order by objective 0, then
+        // walk once keeping the running best on objective 1. Anything not
+        // better than that best is dominated by an earlier point. O(n log n)
+        // against the O(n^2) all-pairs scan below, and it is the same
+        // linear-sweep argument the 2D containers in the `pareto` crate use.
+        if self.objective_directions.len() == 2 {
+            self.filter_dominated_2d();
             return;
         }
 
@@ -1402,6 +1468,65 @@ mod tests {
     }
 
     // ── Batch filter (legacy) ───────────────────────────────────────────
+
+    /// The 2D sweep must agree with the all-pairs scan, including on weakly
+    /// dominated points (equal on one objective, worse on the other) and on
+    /// exact duplicates -- those are exactly the cases the fast path could get
+    /// wrong, and exactly the ones that matter here, since a weakly efficient
+    /// extreme is the defect this filter exists to catch.
+    #[test]
+    fn filter_2d_matches_all_pairs() {
+        use crate::model::ObjectiveDirection::Minimize;
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+
+        for trial in 0..200 {
+            let n = 1 + (next() % 24) as usize;
+            // Small coordinate range so ties and weak dominance occur often.
+            let pts: Vec<Vec<f64>> = (0..n)
+                .map(|_| vec![(next() % 6) as f64, (next() % 6) as f64])
+                .collect();
+
+            let build = || {
+                let mut f = ParetoFront::new(vec![Minimize, Minimize]);
+                for p in &pts {
+                    f.solutions
+                        .push(Solution::new(p.clone(), std::collections::HashMap::new()));
+                }
+                f
+            };
+
+            let mut fast = build();
+            fast.filter_dominated_2d();
+
+            // Reference: keep a point only if nothing else weakly dominates it,
+            // with duplicates collapsing to their first occurrence.
+            let mut expected: Vec<Vec<f64>> = Vec::new();
+            for (i, p) in pts.iter().enumerate() {
+                let beaten = pts.iter().enumerate().any(|(j, q)| {
+                    j != i && q[0] <= p[0] && q[1] <= p[1] && (q[0] < p[0] || q[1] < p[1] || j < i)
+                });
+                if !beaten {
+                    expected.push(p.clone());
+                }
+            }
+            expected.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+            let mut got: Vec<Vec<f64>> = fast
+                .solutions
+                .iter()
+                .map(|s| s.objectives().to_vec())
+                .collect();
+            got.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+            assert_eq!(got, expected, "trial {trial}: points {pts:?}");
+        }
+    }
 
     #[test]
     fn test_filter_dominated_solutions_legacy() {

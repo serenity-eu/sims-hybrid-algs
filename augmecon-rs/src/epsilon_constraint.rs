@@ -379,10 +379,22 @@ impl<'a> EpsilonSession<'a> {
                         good_lp::solvers::SolutionStatus::Optimal
                     )
                 {
-                    log::warn!("epsilon-constraint subproblem stopped before proving optimality");
-                    return EpsilonSolveOutcome::Inconclusive(
-                        "stopped before proving optimality".to_string(),
-                    );
+                    // As in the weighted-sum path: a gap closed at the moment
+                    // the limit expires reports `TimeLimit`, yet the agreement
+                    // of incumbent and dual bound is the proof of optimality.
+                    let gap = self
+                        .model
+                        .as_inner()
+                        .get_attr(grb::attr::MIPGap)
+                        .unwrap_or(f64::NAN);
+                    if !(gap <= crate::single_objective::OPTIMALITY_GAP_EPSILON) {
+                        log::warn!(
+                            "epsilon-constraint subproblem stopped before proving optimality (gap {gap:.3e})"
+                        );
+                        return EpsilonSolveOutcome::Inconclusive(
+                            "stopped before proving optimality".to_string(),
+                        );
+                    }
                 }
                 let mut builder =
                     EpsilonConstraintBuilder::new(self.problem, options, self.primary_objective);
