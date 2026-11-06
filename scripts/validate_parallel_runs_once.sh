@@ -4,14 +4,15 @@
 # N-1 sibling workers occupy other cores. Same instance, same seeds, same
 # budget -- so any HV difference is CPU starvation, not stochasticity.
 #
-#   ab_parallel.sh <timeout_s> <workers>
+#   validate_parallel_runs_once.sh <timeout_s> <workers>
 set -u
 T=${1:-200}
 N=${2:-7}
-cd "$HOME/sims-milp-lns/sims-problem" || exit 1
+REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+cd "$REPO/sims-problem" || exit 1
 export LD_LIBRARY_PATH=/opt/gurobi1203/linux64/lib GRB_LICENSE_FILE=/opt/gurobi/gurobi.lic
-PY="$HOME/sims-milp-lns/.venv/bin/python"
-D="$HOME/sims-milp-lns/sims-core/tests/data"
+PY="${PYTHON:-$REPO/.venv/bin/python}"
+D="$REPO/sims-core/tests/data"
 CFG=(--hard-instances --pseudo-source gpbaa_2d_gurobi_hard --timeout "$T" --runs 1
      --configs "GPBA-A" "Hybrid NSGA-II 75:25" "Hybrid NSGA-II 50:50" "Hybrid NSGA-II 25:75" "Baseline NSGA-II")
 PROBE=paris_150

@@ -3,12 +3,13 @@
 # the parallel arm is repeated, since contention is what varies. Several probe
 # instances of different sizes, so a result is not an artifact of one instance.
 #
-#   ab_repeat.sh <timeout_s> <workers> <reps>
+#   validate_parallel_runs.sh <timeout_s> <workers> <reps>
 set -u
 T=${1:-200}; N=${2:-7}; REPS=${3:-3}
-cd "$HOME/sims-milp-lns/sims-problem" || exit 1
+REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+cd "$REPO/sims-problem" || exit 1
 export LD_LIBRARY_PATH=/opt/gurobi1203/linux64/lib GRB_LICENSE_FILE=/opt/gurobi/gurobi.lic
-PY="$HOME/sims-milp-lns/.venv/bin/python"
+PY="${PYTHON:-$REPO/.venv/bin/python}"
 CFG=(--hard-instances --pseudo-source gpbaa_2d_gurobi_hard --timeout "$T" --runs 1
      --configs "GPBA-A" "Hybrid NSGA-II 75:25" "Hybrid NSGA-II 50:50" "Hybrid NSGA-II 25:75" "Baseline NSGA-II")
 PROBES=(paris_150 lagos_nigeria_200 tokyo_bay_125)

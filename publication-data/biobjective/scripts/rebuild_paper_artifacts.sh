@@ -2,10 +2,15 @@
 # Rebuild every figure and table in the biobjective SIMS paper from the
 # committed results. No solving, no Gurobi, no network.
 #
-#   ./rebuild.sh [out_dir]
+#   ./rebuild_paper_artifacts.sh [out_dir]
 #
 # Writes LaTeX to <out_dir>, EPS to <out_dir>_eps and PNG to <out_dir>_png.
-# paper/elsa-paper/README.md lists which file goes where in the manuscript.
+#
+# Reads the stored result set by default. To rebuild from a fresh run instead,
+# set GPBA_DIR and AN_DIR to its consolidated output directories, and
+# SEEDS_GPBAA / SEEDS_AN if the exact phase was re-solved somewhere else:
+#
+#   GPBA_DIR=~/biobjective-run/gpba_all AN_DIR=~/biobjective-run/an_all ./rebuild_paper_artifacts.sh out
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -18,6 +23,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 # differ in 41 of 769,494 pixels, at stroke caps where bars overlap -- but the
 # EPS is not byte-identical, which makes "regenerated unchanged" unverifiable.
 export PYTHONHASHSEED=0
+# matplotlib stamps %%CreationDate into every EPS from the wall clock, which
+# makes otherwise identical output differ by one line. The PS backend honours
+# SOURCE_DATE_EPOCH, so pin it and the figures become byte-reproducible.
+export SOURCE_DATE_EPOCH=0
 OUT="${1:-$PWD/paper-artifacts}"
 
 R="$ROOT/publication-data/biobjective"
@@ -28,9 +37,9 @@ elif [[ -x "$ROOT/.venv/bin/python" ]]; then PY="$ROOT/.venv/bin/python"
 else PY="python"; fi
 
 COMMON=(
-  --highs-dir "$R/gpba" --an-dir "$R/an"
-  --pf-seeds-gpbaa "$D/gpbaa_2d_gurobi_hard"
-  --pf-seeds-an    "$D/an_2d_gurobi_hard"
+  --highs-dir "${GPBA_DIR:-$R/gpba}" --an-dir "${AN_DIR:-$R/an}"
+  --pf-seeds-gpbaa "${SEEDS_GPBAA:-$D/gpbaa_2d_gurobi_hard}"
+  --pf-seeds-an    "${SEEDS_AN:-$D/an_2d_gurobi_hard}"
   --output-dir "$OUT"
 )
 # The two instances the main article discusses; the other 23 go to the
