@@ -102,10 +102,10 @@ RUST_LOG=debug cargo test -- --nocapture
 # sims-heuristics feature-gated tests
 cargo test --features parallel --test test_concurrent_pls
 
-# external_solvers requires the moors patch to be applied first (after a
-# fresh clone or `cargo clean`, target/patch/ won't exist yet):
-cd sims-heuristics && cargo patch-crate && cd ..
-cargo test --features external_solvers --test test_external_solvers
+# external_solvers does NOT currently build: patches/moors+0.2.10.patch is a
+# deletion-only diff, so run_with_deadline is missing (see Feature flags below).
+# cd sims-heuristics && cargo patch-crate && cd ..
+# cargo test --features external_solvers --test test_external_solvers
 
 # nd-tree / pareto (from their directories)
 cargo test
@@ -135,8 +135,15 @@ Python linting uses `ruff` (dev dependency in root `pyproject.toml`).
 - `parallel` — ConcurrentPLS with crossbeam channels
 - `external_solvers` — moors/optirustic integration. Both are patched via
   `cargo patch-crate`:
-  - `moors` (`patches/moors+0.2.10.patch`) adds `GeneticAlgorithm::run_with_deadline`
-    — upstream has no wall-clock stopping condition at all.
+  - `moors` (`patches/moors+0.2.10.patch`) is **broken as committed**: it is a
+    deletion-only diff (108 files removed, zero lines added), so it does not
+    add the `GeneticAlgorithm::run_with_deadline` that
+    `moors_adapter.rs:557` calls. `cargo check --features external_solvers`
+    therefore fails with E0599, and the patched source has not been recovered.
+    This does not affect the published results: the paper's NSGA-II/III and
+    MOEA-D are sims-heuristics' own implementations, and `sims-problem` never
+    enables `external_solvers` (it takes `pls` with `default-features = false`
+    and only `bitmaps`), so `moors` is not in that build graph at all.
   - `optirustic` (`patches/optirustic+1.2.2.patch`) fixes a real upstream bug:
     `is_stopping_condition_met` checked `Instant::now().elapsed()` (always ~0)
     instead of `self.start_time().elapsed()`, so `MaxDurationAsMinutes`/
