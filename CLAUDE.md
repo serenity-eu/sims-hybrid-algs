@@ -54,10 +54,11 @@ maturin develop --release
 # Build with milp feature enabled (requires Gurobi)
 maturin develop --release --features milp
 
-# Standalone PLS binary (for PLS_PATH env var)
+# Standalone PLS binary. Nothing in the repo reads PLS_PATH and no code path
+# spawns this binary -- PLS runs in process via sims_problem.solve_with_pls.
+# Build it only if you want to drive PLS from the shell.
 cd sims-heuristics
 cargo build --release --bin pls
-export PLS_PATH=$PWD/target/release/pls
 ```
 
 Use `maturin develop` for release builds, not `uv pip install --config-settings=build-args=...`.
@@ -189,9 +190,6 @@ solve_with_hybrid(...)                        -> SolvingResult   // milp feature
 ## Environment
 
 ```bash
-# Required for MILP algorithms
-export PLS_PATH=/path/to/sims-heuristics/target/release/pls
-
 # Gurobi must be licensed; verify with:
 python -c "import gurobipy; gurobipy.Model()"
 ```

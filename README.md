@@ -43,27 +43,9 @@ uv sync
 source .venv/bin/activate
 ```
 
-You also need the Pareto Local Search binary from the `sims-heuristics` Rust
-project:
-
-```bash
-cd sims-heuristics
-cargo build --release --bin pls
-cp target/release/pls .
-```
-
-Alternatively, you can build PLS binary with Docker using following script
-
-```bash
-cd sims-heuristics
-./build-docker.sh
-```
-
-After PLS executable is built, store path to it in `PLS_PATH` environment variable
-
-```bash
-export PLS_PATH=$PWD/sims-heuristics/pls
-```
+`uv sync` builds the Rust extension, which is how Pareto Local Search is
+called -- in process, through the Python bindings. There is no separate
+binary to build and no `PLS_PATH` to set.
 
 The Gurobi backend needs a licensed Gurobi install (`scripts/fetch-gurobi.sh`
 sets up `GUROBI_HOME`), one patched dependency, and the Python extension:
