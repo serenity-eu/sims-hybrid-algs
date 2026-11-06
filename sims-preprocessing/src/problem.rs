@@ -1,4 +1,4 @@
-use crate::clouds::generate_clouds;
+use crate::clouds::{CloudModel, generate_clouds_with};
 
 // ── Continuous (float) problem ────────────────────────────────────────────────
 
@@ -25,6 +25,9 @@ pub struct SimsProblem {
     pub incidence_angle: Vec<f64>,
     /// Total area (m²) of all fragments; upper bound for the cloud objective.
     pub max_cloud_area: f64,
+    /// Centroid (lon, lat) of each fragment. Only used by
+    /// [`CloudModel::Blobs`]; may be empty when generating scattered clouds.
+    pub centroids: Vec<(f64, f64)>,
 }
 
 impl SimsProblem {
@@ -38,6 +41,11 @@ impl SimsProblem {
     ///
     /// Cloud masks are generated randomly; pass `seed` for reproducibility.
     pub fn discretize(&self, seed: u64) -> SimsDiscreteProblem {
+        self.discretize_with(seed, CloudModel::Scattered)
+    }
+
+    /// [`Self::discretize`] with an explicit synthetic-cloud spatial model.
+    pub fn discretize_with(&self, seed: u64, model: CloudModel) -> SimsDiscreteProblem {
         let costs: Vec<i64> = self.costs.iter().map(|&c| c as i64).collect();
         let areas: Vec<i64> = self.areas.iter().map(|&a| a as i64).collect();
         let resolution: Vec<i64> = self
@@ -52,7 +60,14 @@ impl SimsProblem {
             .collect();
         let max_cloud_area: i64 = areas.iter().sum();
 
-        let clouds = generate_clouds(&self.images, &self.areas, &self.cloud_coverages, seed);
+        let clouds = generate_clouds_with(
+            &self.images,
+            &self.areas,
+            &self.centroids,
+            &self.cloud_coverages,
+            model,
+            seed,
+        );
 
         SimsDiscreteProblem {
             num_images: self.num_images,
@@ -137,7 +152,27 @@ impl SimsDiscreteProblem {
         let expected: std::collections::BTreeSet<usize> = (0..self.universe).collect();
         if all_fragments != expected {
             let missing: Vec<usize> = expected.difference(&all_fragments).copied().collect();
-            return Err(format!("fragments not covered by any image: {missing:?}"));
+            // Report areas too: a genuine coverage hole in the pool looks quite
+            // different from a boundary sliver that no image `Contains` only
+            // because of floating-point error, and the fix differs (relax the
+            // pool filter vs. tighten the arrangement).
+            let total: i64 = self.areas.iter().sum::<i64>().max(1);
+            let detail: Vec<String> = missing
+                .iter()
+                .take(8)
+                .map(|&f| {
+                    let a = self.areas.get(f).copied().unwrap_or(0);
+                    format!(
+                        "{f} ({a} m², {:.4}% of AOI)",
+                        100.0 * a as f64 / total as f64
+                    )
+                })
+                .collect();
+            return Err(format!(
+                "{} fragment(s) not covered by any image: {}",
+                missing.len(),
+                detail.join(", ")
+            ));
         }
 
         Ok(())
@@ -161,7 +196,20 @@ mod tests {
             resolution: vec![0.5, 1.0, 0.8],
             incidence_angle: vec![15.5, 20.0, 12.3],
             max_cloud_area: 630_000.0,
+            centroids: vec![(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (3.0, 0.0)],
         }
+    }
+
+    #[test]
+    fn blob_clouds_are_contiguous_and_budgeted() {
+        // Fragments laid out on a line; a single blob must take neighbours.
+        let mut p = sample_continuous();
+        p.cloud_coverages = vec![50.0, 0.0, 0.0];
+        let d = p.discretize_with(7, CloudModel::Blobs { count: 1 });
+        // image 0 covers fragments {0,1}; 50% of its 300_000 m² budget is
+        // 150_000, so exactly one of them is taken.
+        assert_eq!(d.clouds[0].len(), 1);
+        assert!(d.clouds[1].is_empty());
     }
 
     #[test]
