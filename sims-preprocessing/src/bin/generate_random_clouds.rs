@@ -15,7 +15,8 @@
 //!       [--sizes 100,150,200,250,300,350,400,450,500] [--seed <u64>] \
 //!       [--grid-long 55] [--keep-frac 0.6]
 
-use geo::{Area, Centroid, LineString, MultiPolygon, Polygon};
+use geo::{Area, Centroid, LineString, MultiPolygon, Point, Polygon};
+use sims_preprocessing::clouds::CloudModel;
 use sims_preprocessing::fragmentize::fragmentize_within_aoi;
 use sims_preprocessing::problem::SimsProblem;
 use sims_preprocessing::sampler::{SampleParams, sample_instance};
@@ -71,6 +72,23 @@ fn provider_props(p: &serde_json::Value) -> serde_json::Value {
     }
 }
 
+/// Uniform scaling of a polygon about `origin` by linear factor `k`.
+fn scale_about(p: &Polygon<f64>, origin: Point<f64>, k: f64) -> Polygon<f64> {
+    let f = |ls: &LineString<f64>| {
+        LineString::from(
+            ls.coords()
+                .map(|c| {
+                    (
+                        origin.x() + (c.x - origin.x()) * k,
+                        origin.y() + (c.y - origin.y()) * k,
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
+    };
+    Polygon::new(f(p.exterior()), p.interiors().iter().map(f).collect())
+}
+
 // ── Per-image pool record ────────────────────────────────────────────────────
 
 struct Pool {
@@ -80,6 +98,119 @@ struct Pool {
     resolution: Vec<f64>,
     cloud: Vec<f64>,
     incidence: Vec<f64>,
+}
+
+/// Pool-composition filters that control how hard the resulting instances are.
+///
+/// The raw pools carry a long tail of very large footprints — 5–20% of images
+/// individually span the whole AOI — so a greedy cover needs only 2 images and
+/// the exact solver enumerates the entire Pareto front in seconds.
+/// `max_img_frac` cuts that tail, raising the minimum mosaic size.
+/// `cloud_band` keeps the cloud objective in tension with cost by dropping
+/// near-clear images (which make cloud coverage trivially zero) and fully
+/// clouded ones (which are never selected).
+#[derive(Clone, Copy)]
+struct PoolFilter {
+    /// Keep images whose footprint area is at most this fraction of the AOI.
+    max_img_frac: f64,
+    /// Keep images whose cloud coverage (%) lies in this inclusive range.
+    cloud_band: (f64, f64),
+    /// Keep only images in the first `k` non-dominated fronts of (cost, cloud).
+    ///
+    /// Cost and cloud coverage are essentially uncorrelated in the real pools
+    /// (r ≈ −0.06 … −0.19), so 99.5% of every pool is dominated on those two
+    /// objectives alone: the cheapest images are also among the cleanest. That
+    /// caps how long a mosaic-level Pareto front can be no matter how the
+    /// geometry is arranged. Peeling to the first few fronts discards imagery a
+    /// buyer would never choose while keeping enough footprints to cover the AOI.
+    pareto_fronts: usize,
+}
+
+impl Default for PoolFilter {
+    fn default() -> Self {
+        Self {
+            max_img_frac: f64::INFINITY,
+            cloud_band: (0.0, 100.0),
+            pareto_fronts: usize::MAX,
+        }
+    }
+}
+
+impl Pool {
+    fn len(&self) -> usize {
+        self.polys.len()
+    }
+
+    /// Non-domination rank of each image on (cost, cloud), 0 = first front.
+    ///
+    /// Sweeping by increasing cost and tracking the running minimum cloud value
+    /// peels one front per pass, which is enough for two objectives.
+    fn pareto_ranks(&self) -> Vec<usize> {
+        let mut rank = vec![usize::MAX; self.len()];
+        let mut remaining: Vec<usize> = (0..self.len()).collect();
+        remaining.sort_by(|&a, &b| {
+            (self.cost[a], self.cloud[a])
+                .partial_cmp(&(self.cost[b], self.cloud[b]))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let mut r = 0;
+        while !remaining.is_empty() {
+            let mut best = f64::INFINITY;
+            let mut next = Vec::new();
+            for &i in &remaining {
+                if self.cloud[i] < best {
+                    best = self.cloud[i];
+                    rank[i] = r;
+                } else {
+                    next.push(i);
+                }
+            }
+            remaining = next;
+            r += 1;
+        }
+        rank
+    }
+
+    /// Drop pool entries failing `filter`; returns the number kept.
+    ///
+    /// Applied in two passes, because the front peeling has to rank only the
+    /// images that survive the geometric filter — the top (cost, cloud) fronts
+    /// are largely made of the very large footprints `max_img_frac` removes, so
+    /// ranking first and cutting second empties the pool.
+    fn retain(&mut self, aoi_area: f64, filter: PoolFilter) -> usize {
+        let (lo, hi) = filter.cloud_band;
+        let geometric: Vec<bool> = (0..self.len())
+            .map(|i| {
+                let frac = self.polys[i].unsigned_area() / aoi_area;
+                let c = self.cloud[i];
+                frac <= filter.max_img_frac && c >= lo && c <= hi
+            })
+            .collect();
+        self.apply(&geometric);
+        if filter.pareto_fronts != usize::MAX {
+            let ranks = self.pareto_ranks();
+            let by_rank: Vec<bool> = ranks.iter().map(|&r| r < filter.pareto_fronts).collect();
+            self.apply(&by_rank);
+        }
+        self.polys.len()
+    }
+
+    /// Retain the entries flagged in `keep` across every parallel vector.
+    fn apply(&mut self, keep: &[bool]) {
+        for v in [
+            &mut self.cost,
+            &mut self.resolution,
+            &mut self.cloud,
+            &mut self.incidence,
+        ] {
+            let mut it = keep.iter();
+            v.retain(|_| *it.next().unwrap());
+        }
+        let mut it = keep.iter();
+        self.mps.retain(|_| *it.next().unwrap());
+        let mut it = keep.iter();
+        self.polys.retain(|_| *it.next().unwrap());
+    }
 }
 
 fn read_pool(path: &str) -> Pool {
@@ -143,7 +274,8 @@ fn main() {
     if args.len() < 4 {
         eprintln!(
             "usage: generate_random_clouds <pool.geojson> <aoi.geojson> <out_dir> <name> \
-             [--sizes 100,150,...] [--seed N] [--grid-long 55] [--keep-frac 0.6]"
+             [--sizes 100,150,...] [--seed N] [--grid-long 55] [--keep-frac 0.6] \
+             [--max-img-frac 0.25] [--cloud-band 10,70] [--aoi-scale 2.0] [--cloud-blobs 4] [--pareto-fronts 20]"
         );
         std::process::exit(2);
     }
@@ -162,13 +294,54 @@ fn main() {
         params.keep_frac = k;
     }
 
-    let aoi = largest_poly(&read_json(aoi_p)["features"][0]["geometry"]).expect("aoi polygon");
+    let mut aoi = largest_poly(&read_json(aoi_p)["features"][0]["geometry"]).expect("aoi polygon");
+    // `--aoi-scale S` multiplies the AOI **area** by S about its centroid. This is
+    // the alternative to `--max-img-frac` for raising the minimum mosaic size: it
+    // leaves the pool intact (and so its cost/cloud distributions) and instead
+    // makes each footprint cover a smaller share of the region to be mosaicked.
+    if let Some(s) = arg_val(&args, "--aoi-scale").and_then(|s| s.parse::<f64>().ok())
+        && (s - 1.0).abs() > f64::EPSILON
+    {
+        let c = aoi.centroid().expect("aoi centroid");
+        let k = s.sqrt();
+        aoi = scale_about(&aoi, c, k);
+    }
     // Area scale deg² → m² at the AOI centroid latitude (cylindrical-equal-area).
     let center_lat = aoi.centroid().map_or(0.0, |c| c.y());
     let k_area = 111_320.0_f64.powi(2) * center_lat.to_radians().cos();
 
-    let pool = read_pool(pool_p);
-    let n_pool = pool.polys.len();
+    let mut filter = PoolFilter::default();
+    if let Some(f) = arg_val(&args, "--max-img-frac").and_then(|s| s.parse().ok()) {
+        filter.max_img_frac = f;
+    }
+    if let Some(k) = arg_val(&args, "--pareto-fronts").and_then(|s| s.parse().ok()) {
+        filter.pareto_fronts = k;
+    }
+    if let Some(b) = arg_val(&args, "--cloud-band") {
+        let v: Vec<f64> = b.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+        assert_eq!(v.len(), 2, "--cloud-band takes LO,HI");
+        filter.cloud_band = (v[0], v[1]);
+    }
+
+    // `--cloud-blobs N` grows N contiguous cloud patches per image instead of
+    // scattering cloudiness uniformly over the footprint; 0 keeps the original
+    // scattered model.
+    let cloud_model = match arg_val(&args, "--cloud-blobs").and_then(|s| s.parse::<usize>().ok()) {
+        Some(0) | None => CloudModel::Scattered,
+        Some(count) => CloudModel::Blobs { count },
+    };
+
+    let mut pool = read_pool(pool_p);
+    let raw_pool = pool.len();
+    let aoi_area = aoi.unsigned_area();
+    let n_pool = pool.retain(aoi_area, filter);
+    if n_pool != raw_pool {
+        println!(
+            "{name}: pool filtered {raw_pool} -> {n_pool} (max_img_frac={}, cloud_band={:?})",
+            filter.max_img_frac, filter.cloud_band
+        );
+    }
+    assert!(n_pool > 0, "pool filter removed every image");
     std::fs::create_dir_all(out_dir).unwrap();
     println!(
         "{name}: pool={n_pool} imgs, cloud mean={:.1}% (>50%: {} imgs), AOI centre lat={center_lat:.3}",
@@ -197,6 +370,11 @@ fn main() {
             .map(|p| p.unsigned_area() * k_area)
             .collect();
         let max_cloud_area = areas_m2.iter().sum();
+        let centroids: Vec<(f64, f64)> = frag
+            .fragments
+            .iter()
+            .map(|p| p.centroid().map_or((0.0, 0.0), |c| (c.x(), c.y())))
+            .collect();
 
         let problem = SimsProblem {
             num_images: idx.len(),
@@ -207,12 +385,40 @@ fn main() {
             areas: areas_m2,
             resolution: idx.iter().map(|&i| pool.resolution[i]).collect(),
             incidence_angle: idx.iter().map(|&i| pool.incidence[i]).collect(),
+            centroids,
             max_cloud_area,
         };
 
-        let disc = problem.discretize(seed ^ 0xC10D_C10D_C10D_C10D);
+        let disc = problem.discretize_with(seed ^ 0xC10D_C10D_C10D_C10D, cloud_model);
         if let Err(e) = disc.validate() {
             println!("{n:>5}  INVALID: {e}");
+            // Dump the uncovered fragments so the gap can be searched against the
+            // image catalogue directly: these polygons are the only places the
+            // filtered pool fails to reach, and knowing WHERE they are is what
+            // makes a targeted catalogue query possible.
+            let covered: std::collections::BTreeSet<usize> =
+                disc.images.iter().flatten().copied().collect();
+            let missing: Vec<usize> = (0..disc.universe).filter(|i| !covered.contains(i)).collect();
+            if !missing.is_empty() {
+                let feats: Vec<serde_json::Value> = missing
+                    .iter()
+                    .filter_map(|&i| frag.fragments.get(i).map(|poly| (i, poly)))
+                    .map(|(i, poly)| {
+                        let ring: Vec<[f64; 2]> =
+                            poly.exterior().coords().map(|c| [c.x, c.y]).collect();
+                        serde_json::json!({
+                            "type": "Feature",
+                            "properties": {"fragment": i, "area_m2": disc.areas[i]},
+                            "geometry": {"type": "Polygon", "coordinates": [ring]},
+                        })
+                    })
+                    .collect();
+                let fc = serde_json::json!({"type": "FeatureCollection", "features": feats});
+                let gap = Path::new(out_dir).join(format!("{name}_{n}.uncovered.geojson"));
+                if std::fs::write(&gap, serde_json::to_string(&fc).unwrap()).is_ok() {
+                    println!("        wrote {} uncovered fragment(s) to {}", missing.len(), gap.display());
+                }
+            }
             continue;
         }
 

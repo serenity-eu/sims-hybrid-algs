@@ -18,7 +18,9 @@
 //!  3. Index the points in an R-tree and, per image, keep the fragments whose
 //!     representative point falls inside the image (inline ray-cast test).
 
-use geo::{BoundingRect, Contains, InteriorPoint, LineString, MultiPolygon, Point, Polygon};
+use geo::{
+    BooleanOps, BoundingRect, Contains, InteriorPoint, LineString, MultiPolygon, Point, Polygon,
+};
 use i_overlay::core::fill_rule::FillRule;
 use i_overlay::float::slice::FloatSlice;
 use rayon::prelude::*;
@@ -253,6 +255,18 @@ pub fn fragmentize_within_aoi(images: &[Polygon<f64>], aoi: &Polygon<f64>) -> Fr
 /// Folding every image's cloud boundary into one arrangement can create many
 /// more fragments than the cloud-free version; use it when the exact per-image
 /// cloud/clear partition is needed.
+///
+/// Each cloud is **clipped to its own image's footprint** before being added as
+/// a cutting layer. This is exact, not an approximation: `clouds[i]` is only
+/// ever consulted for fragments inside `images[i]` (see the SIMS objective —
+/// the cloudy/clear split iterates `images[image_idx]` and tests membership in
+/// `clouds[image_idx]`), so the part of a cloud lying outside its own image can
+/// never change any objective or constraint. Left unclipped it still cuts the
+/// *entire* AOI, producing large numbers of cells that differ geometrically but
+/// are identical in `(covering images, cloudy-in images)` — pure model bloat.
+/// Clipping removes those spurious cuts at the source, so the fragments stay a
+/// exact tiling of the AOI (no area lost, no coverage holes) and each one stays
+/// a single contiguous polygon suitable for mosaic rendering.
 pub fn fragmentize_within_aoi_with_clouds(
     images: &[Polygon<f64>],
     aoi: &Polygon<f64>,
@@ -266,19 +280,37 @@ pub fn fragmentize_within_aoi_with_clouds(
     if images.is_empty() {
         return CloudFragmentation::default();
     }
-    // Arrangement layers: image boundaries + AOI boundary + every cloud boundary.
+    // Clip every cloud to its own image before it becomes a cutting layer (see
+    // the note above for why this is exact). Done in parallel: each clip is an
+    // independent boolean intersection and they dominate the setup cost.
+    let clipped: Vec<MultiPolygon<f64>> = images
+        .par_iter()
+        .zip(clouds.par_iter())
+        .map(|(image, cloud)| {
+            if cloud.0.is_empty() {
+                return MultiPolygon::new(vec![]);
+            }
+            cloud.intersection(&MultiPolygon::new(vec![image.clone()]))
+        })
+        .collect();
+
+    // Arrangement layers: image boundaries + AOI boundary + every clipped cloud.
     let mut paths = rings_of(images);
     paths.extend(rings_of(std::slice::from_ref(aoi)));
-    for mp in clouds {
+    for mp in &clipped {
         paths.extend(rings_of(&mp.0));
     }
     let shapes = paths.slice_by(&paths, FillRule::NonZero);
     let (fragments, rtree) = build_fragment_index(&shapes, Some(aoi));
 
     // Per image: fragments inside it, and (subset) those also inside its cloud.
+    // Tested against the *clipped* cloud, so membership is exactly consistent
+    // with the boundaries that actually cut the arrangement (inside the image
+    // the clipped and original clouds coincide, so this is the same answer,
+    // minus any snapping skew the clip may have introduced).
     let (images_to_fragments, images_to_cloudy_fragments): (Vec<_>, Vec<_>) = images
         .par_iter()
-        .zip(clouds.par_iter())
+        .zip(clipped.par_iter())
         .map(|(image, cloud)| {
             let Some(rect) = image.bounding_rect() else {
                 return (Vec::new(), Vec::new());

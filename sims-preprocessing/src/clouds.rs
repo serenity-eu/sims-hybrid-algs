@@ -99,6 +99,125 @@ fn cloudy_for_image(
     out
 }
 
+/// Spatial structure of the synthetic cloud masks.
+///
+/// [`CloudModel::Scattered`] draws each cloudy fragment independently, so an
+/// image's cloudiness is spread evenly over its whole footprint. That makes the
+/// cloud objective behave almost like a constant times covered area, which is
+/// why instances built this way have a near-degenerate cost/cloud tradeoff.
+///
+/// [`CloudModel::Blobs`] instead grows a few contiguous cloud patches, so an
+/// image is clean over part of the AOI and clouded over another part. Mosaics
+/// then have to be patched together from the clean halves of several images —
+/// the structure the exact solver actually has to search. It costs no extra
+/// fragments: blobs are unions of existing fragments.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloudModel {
+    Scattered,
+    Blobs { count: usize },
+}
+
+/// Grow `count` contiguous cloud patches over an image's fragments.
+///
+/// Contiguity is approximated by centroid proximity: each blob takes a random
+/// seed fragment and absorbs its nearest neighbours until it has consumed its
+/// share of the coverage budget. That needs no fragment adjacency graph and
+/// produces round patches, which is a fair likeness of cumulus cover.
+fn blobs_for_image(
+    image_fragments: &[usize],
+    areas: &[f64],
+    centroids: &[(f64, f64)],
+    coverage_pct: f64,
+    count: usize,
+    rng: &mut SmallRng,
+) -> Vec<usize> {
+    let f = image_fragments.len();
+    if coverage_pct <= 0.0 || f == 0 || count == 0 {
+        return Vec::new();
+    }
+    let image_area: f64 = image_fragments.iter().map(|&fi| areas[fi]).sum();
+    let budget = coverage_pct / 100.0 * image_area;
+    if budget <= 0.0 {
+        return Vec::new();
+    }
+    let share = budget / count as f64;
+    // Same "skip anything that overshoots 110% of the budget" rule the scattered
+    // model uses, so both models realise the image's stated cloud coverage to
+    // the same tolerance and the two are comparable by area.
+    let limit = 1.1 * budget;
+
+    let mut cloudy = vec![false; f];
+    let mut total = 0.0_f64;
+    // Distance buffer reused across blobs.
+    let mut by_dist: Vec<(f64, usize)> = Vec::with_capacity(f);
+
+    for _ in 0..count {
+        if total >= budget {
+            break;
+        }
+        let free: Vec<usize> = (0..f).filter(|&i| !cloudy[i]).collect();
+        if free.is_empty() {
+            break;
+        }
+        let seed_pos = free[rng.random_range(0..free.len())];
+        let (sx, sy) = centroids[image_fragments[seed_pos]];
+
+        by_dist.clear();
+        by_dist.extend(free.iter().map(|&i| {
+            let (x, y) = centroids[image_fragments[i]];
+            ((x - sx).powi(2) + (y - sy).powi(2), i)
+        }));
+        by_dist.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut grown = 0.0_f64;
+        for &(_, i) in &by_dist {
+            if grown >= share || total >= budget {
+                break;
+            }
+            let a = areas[image_fragments[i]];
+            if total + a >= limit {
+                continue; // would overshoot: skip, keep growing outward
+            }
+            cloudy[i] = true;
+            grown += a;
+            total += a;
+        }
+    }
+
+    image_fragments
+        .iter()
+        .enumerate()
+        .filter_map(|(pos, &fi)| cloudy[pos].then_some(fi))
+        .collect()
+}
+
+/// Generate cloudy fragment sets for every image under `model`, in parallel.
+///
+/// `centroids` gives each fragment's centroid and is only consulted by
+/// [`CloudModel::Blobs`]. Determinism matches [`generate_clouds`].
+#[must_use]
+pub fn generate_clouds_with(
+    images: &[Vec<usize>],
+    areas: &[f64],
+    centroids: &[(f64, f64)],
+    cloud_coverages: &[f64],
+    model: CloudModel,
+    seed: u64,
+) -> Vec<Vec<usize>> {
+    match model {
+        CloudModel::Scattered => generate_clouds(images, areas, cloud_coverages, seed),
+        CloudModel::Blobs { count } => images
+            .par_iter()
+            .zip(cloud_coverages.par_iter())
+            .enumerate()
+            .map(|(idx, (frags, &pct))| {
+                let mut rng = SmallRng::seed_from_u64(image_seed(seed, idx as u64));
+                blobs_for_image(frags, areas, centroids, pct, count, &mut rng)
+            })
+            .collect(),
+    }
+}
+
 /// Generate cloudy fragment sets for every image, in parallel.
 ///
 /// `clouds[i]` is the ascending list of fragment indices that are cloudy for

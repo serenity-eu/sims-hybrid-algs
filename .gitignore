@@ -215,6 +215,14 @@ publication-data/satellite-data/*
 !publication-data/satellite-data/instances_random_clouds/
 publication-data/satellite-data/instances_random_clouds/*.dzn
 
+# Exception: the merged image pool the biobjective instances are generated from
+# (5 geojson catalogues, ~18 MB). Without it `generate_hard_an_benchmark.sh`
+# cannot run from a clone. The raw UP42 fetch it was merged from is 1.2 GB and
+# stays out.
+!publication-data/satellite-data/instances_pool_merged/
+publication-data/satellite-data/instances_pool_merged/*
+!publication-data/satellite-data/instances_pool_merged/*_image_set.geojson
+
 # Exception: the 25 problem instances behind the biobjective SIMS paper
 # (5 cities x {100,125,150,175,200}) are versioned so the published results can
 # be re-solved from a clone alone. Sizes 225-300 exist locally but no published
