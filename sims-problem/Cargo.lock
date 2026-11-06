@@ -180,7 +180,7 @@ dependencies = [
  "bitflags 2.13.0",
  "cexpr",
  "clang-sys",
- "itertools 0.12.1",
+ "itertools 0.13.0",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -1643,6 +1643,8 @@ dependencies = [
 [[package]]
 name = "moors"
 version = "0.2.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed50dc027b38e48385973f801a1ed0ccb969296e0a14cea6f1f8368c0027552c"
 dependencies = [
  "derive_builder",
  "faer",
@@ -1917,6 +1919,8 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 [[package]]
 name = "optirustic"
 version = "1.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3da6106e4ec102372f472d7085016ca46969ac16689102cacd3a63930bc2e922"
 dependencies = [
  "chrono",
  "env_logger",

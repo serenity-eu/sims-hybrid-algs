@@ -11,7 +11,15 @@ crate-type = ["cdylib"]
 [features]
 default = ["bounds_check", "parallel"]
 plotting = ["pls/plotting"]
-milp = ["augmecon", "augmecon/coin_cbc", "augmecon/highs"]
+# The exact phase only. The CBC and HiGHS backends are deliberately NOT pulled
+# in: the published results use Gurobi throughout, and those two are the only
+# reason a build would need cmake, a C++ toolchain and the system CBC library
+# (HiGHS is compiled from source; coin_cbc_sys probes for `cbc` via
+# pkg-config). Add them explicitly -- `--features gurobi,highs` -- if you want
+# `generate_pseudo.py --solver highs` or `--solver coin_cbc`.
+milp = ["augmecon"]
+highs = ["milp", "augmecon/highs"]
+coin_cbc = ["milp", "augmecon/coin_cbc"]
 # Native Gurobi backend (grb linked-library, via the good_lp fork's `gurobi`
 # branch). Opt-in on top of milp: building it needs a licensed Gurobi install
 # (set up GUROBI_HOME with scripts/fetch-gurobi.sh) and a valid license to solve.
@@ -45,15 +53,17 @@ indicatif = "0.17"
 rayon = "1.10"
 
 # Cargo only honours [patch] sections declared in the *root* manifest of the
-# crate being built. sims-heuristics declares the same patch for when it is
-# built standalone (e.g. its own test suite); this duplicate is needed for
-# when sims-problem is the build root instead (e.g. building this extension).
-# See sims-heuristics/Cargo.toml and sims-heuristics/patches/moors+0.2.10.patch
-# and optirustic+1.2.2.patch.
-[patch.crates-io]
-moors = { path = "../sims-heuristics/target/patch/moors-0.2.10" }
-optirustic = { path = "../sims-heuristics/target/patch/optirustic-1.2.2" }
-
+# crate being built, so this duplicates what augmecon-rs declares for when it
+# is the build root instead.
+#
+# `moors` and `optirustic` are deliberately NOT patched here. They reach this
+# crate only through sims-heuristics' `external_solvers` feature, which this
+# extension never enables (`pls` is taken with default-features = false and
+# only `bitmaps`), so patching them would force every build of this crate to
+# run `cargo patch-crate` in sims-heuristics for sources it never compiles.
+# Build sims-heuristics standalone if you want that feature.
+#
 # See augmecon-rs/Cargo.toml for why `grb` 3.0.1 must be patched; the patch
 # lives there and `cargo patch-crate` writes the result to this path.
+[patch.crates-io]
 grb = { path = "../augmecon-rs/target/patch/grb-3.0.1" }
