@@ -4591,7 +4591,7 @@ def run_instance(
 # ─── Combined summary figures ─────────────────────────────────────────
 
 
-def generate_combined_figures(
+def generate_per_run_combined_figures(
     all_results: list[dict],
     output_dir: Path,
     configs: list[AlgorithmConfig],
@@ -9026,7 +9026,7 @@ def replot_from_dir(
             result, configs, output_dir, compare_result=compare_result
         )
 
-    generate_combined_figures(all_results, output_dir, configs)
+    generate_per_run_combined_figures(all_results, output_dir, configs)
 
     import shutil
 
@@ -10637,7 +10637,7 @@ def main() -> int:
             print(row, flush=True)
 
     # Combined figures
-    generate_combined_figures(all_results, args.output_dir, configs)
+    generate_per_run_combined_figures(all_results, args.output_dir, configs)
 
     # Save combined results
     combined_path = args.output_dir / "all_experiments.json"
