@@ -27,7 +27,11 @@ export PYTHONHASHSEED=0
 # makes otherwise identical output differ by one line. The PS backend honours
 # SOURCE_DATE_EPOCH, so pin it and the figures become byte-reproducible.
 export SOURCE_DATE_EPOCH=0
-OUT="${1:-$PWD/paper-artifacts}"
+# Resolved against the caller's directory, not against sims-problem/: the
+# generator runs from there, so a relative argument would otherwise land
+# inside the source tree instead of where it was asked for.
+OUT="${1:-paper-artifacts}"
+[[ "$OUT" = /* ]] || OUT="$PWD/$OUT"
 
 R="$ROOT/publication-data/biobjective"
 D="$ROOT/sims-core/tests/data"
