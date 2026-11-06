@@ -1,7 +1,7 @@
 #!/bin/bash
-# 10x biobjective run: hybrid PLS and all three EAs, both seeding sources.
+# Full biobjective experiment run: hybrid PLS and all three EAs, both seeding sources.
 #
-#   x10.sh <timeout_s> <runs> <workers> <out_root> [instance_regex]
+#   run_all_experiments.sh <timeout_s> <runs> <workers> <out_root> [instance_regex]
 #
 # One job per (source, instance), each job doing all 17 configs for <runs>
 # runs. Jobs are dealt round-robin to <workers>, each pinned to its own core
@@ -9,11 +9,15 @@
 # -0.03%), so a worker gets a full core and the wall-clock budget each config
 # is given equals the CPU it actually receives. Core 7 is left for the OS.
 set -u
-T=${1:-200}; RUNS=${2:-10}; W=${3:-7}; ROOT=${4:-$HOME/x10}; FILTER=${5:-}
-cd "$HOME/sims-milp-lns/sims-problem" || exit 1
-export LD_LIBRARY_PATH=/opt/gurobi1203/linux64/lib GRB_LICENSE_FILE=/opt/gurobi/gurobi.lic
-PY="$HOME/sims-milp-lns/.venv/bin/python"
-LOG="$ROOT/x10.log"
+T=${1:-200}; RUNS=${2:-10}; W=${3:-7}; ROOT=${4:-$HOME/biobjective-run}; FILTER=${5:-}
+# Defaults resolve to this checkout; override any of REPO, PYTHON,
+# LD_LIBRARY_PATH or GRB_LICENSE_FILE in the environment instead of editing.
+REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}"
+cd "$REPO/sims-problem" || exit 1
+export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-/opt/gurobi1203/linux64/lib}"
+export GRB_LICENSE_FILE="${GRB_LICENSE_FILE:-/opt/gurobi/gurobi.lic}"
+PY="${PYTHON:-$REPO/.venv/bin/python}"
+LOG="$ROOT/run_all_experiments.log"
 
 CONFIGS=(
   "GPBA-A"
@@ -87,4 +91,4 @@ for tag in gpba an; do
   rm -f "$dst/all_experiments.json"
   say "consolidated $n instances into $dst ($(ls "$dst"/traces 2>/dev/null | wc -l) traces)"
 done
-say X10DONE
+say ALL_EXPERIMENTS_DONE
