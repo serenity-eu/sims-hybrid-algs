@@ -262,3 +262,8 @@ publication-data/satellite-data/benchmark_instances/*
 # will not let it write anywhere else, so the artifacts have to land there;
 # keep them out of the repo rather than out of the directory.
 *-eps-converted-to.pdf
+
+# Manuscript sources. Kept out of the repository and the Zenodo snapshot:
+# fig_pipeline.eps embeds Airbus imagery, which this deposit otherwise does
+# not distribute.
+/paper/
