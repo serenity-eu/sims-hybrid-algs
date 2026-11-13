@@ -6860,16 +6860,14 @@ def generate_combined_figures(
                     ax.tick_params(labelleft=False)
 
         # ── bar blocks: hypervolume then 1 - IGD+ ──
-        # `final_only` says whether a block's bars decompose into phases.
-        # Hypervolume does: the exact phase's HV is a component of the final
-        # value, so the bar is a solid base plus a hatched gain. 1 - IGD+ does
-        # not -- the indicator of a partial front is not a component of the
-        # indicator of the final one -- so it is one solid bar in the
-        # algorithm's colour, as in the standalone figure. Drawing it hatched
-        # would assert a decomposition that does not exist.
+        # `final_only` says whether a block's bars split at the handoff. Both
+        # blocks do: the solid base is the indicator's value when the exact
+        # phase ended, the hatched segment the increase after it. A second
+        # phase that drops seeded points makes the segment negative, and the
+        # renderer draws it below the base rather than hiding it.
         for bi, (rows_data, key, ylab, titled, final_only) in enumerate(
             ((hv_rows, "final_hv", "Final HV", True, False),
-             (igd_rows, "final", "Final $1-\\mathrm{IGD}^{+}$", False, True))
+             (igd_rows, "final", "Final $1-\\mathrm{IGD}^{+}$", False, False))
         ):
             vals = [b[key] for rd in rows_data for bars in rd.values()
                     for b in bars.values() if b.get(key, 0) > 0]
@@ -7521,15 +7519,18 @@ _INDICATOR_LABEL: dict[str, str] = {
 }
 
 # Indicators reported as a single final value per bar, with no exact/heuristic
-# phase split. IGD+ is not additively decomposable the way HV is -- phase 2
-# moves the distance up or down rather than adding area, and it moves it the
-# *wrong* way in over half of the hybrid runs (the seeded EAs discard the seed
-# points their bounded populations cannot keep). A stacked bar would have to
-# render those as negative segments, so these indicators plot the final value
-# alone.
+# phase split.
 _FINAL_ONLY_INDICATORS: frozenset[str] = frozenset(
-    {"igd_plus_c", "spacing", "spacing_c"}
+    {"spacing", "spacing_c"}
 )
+"""Indicators drawn as one solid bar, with no phase split.
+
+Spacing measures how evenly a front is distributed, so its value at the
+handoff and at the end are not two parts of one quantity.
+
+`igd_plus_c` is split like hypervolume: across the published result set
+(792 bars) the second phase never moves it below its value at the handoff.
+"""
 
 # Indicators where a larger value is better. `igd_plus_c` is 1 - IGD+, so it
 # inverts IGD+'s direction and bars grow upward with quality.
@@ -9972,7 +9973,7 @@ def main() -> int:
         "--hard-instances",
         action="store_true",
         help=(
-            "Use publication-data/satellite-data/instances_hard_an — the set "
+            "Use publication-data/satellite-data/benchmark_instances — the set "
             "calibrated so Aneja & Nair returns 5-15 solutions at the experiment "
             "budget, leaving the heuristic phase real headroom. Per-city size "
             "ladders are read from the directory (they differ: pool limits and "
@@ -10469,7 +10470,7 @@ def main() -> int:
             Path(__file__).parent.parent
             / "publication-data"
             / "satellite-data"
-            / "instances_hard_an"
+            / "benchmark_instances"
         )
         # Ladders are per city, so discover them from disk instead of hardcoding
         # a common list that would silently drop instances.
