@@ -30,6 +30,13 @@ seed recorded in that instance's `.meta.json`. Instance generation reads five
 fields per scene: `geometry`, `cost`, `resolution`, `cloudCoverage`,
 `providerProperties.incidenceAngle`.
 
+## Licensing
+
+Three different terms apply: MIT for code, CC BY 4.0 for the instances,
+results and traces, and third-party terms for the satellite catalogue
+metadata in `scene_catalogue/`, which is not the authors' work. See
+[LICENSE.md](LICENSE.md) for the attribution each collection requires.
+
 ## Pipeline
 
 | stage | artifact | produced by | reproducible |
@@ -101,6 +108,7 @@ four-objective work.**
 
 ```
 publication-data/
+  LICENSE.md                   licensing and attribution, by component
   MANIFEST.sha256              SHA-256 of all 1,010 archived artifacts, by stage
   scripts/
     fetch_catalogue.py         fresh catalogue pool (not the archived snapshot)
