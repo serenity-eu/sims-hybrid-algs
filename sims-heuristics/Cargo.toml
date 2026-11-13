@@ -5,16 +5,15 @@ edition = "2024"
 autobenches = false
 
 [package.metadata.patch]
-crates = ["moors", "optirustic"]
+crates = ["optirustic"]
 
-# Patched via `cargo patch-crate` (see patches/moors+0.2.10.patch): adds
-# `GeneticAlgorithm::run_with_deadline`, a real wall-clock stopping condition.
-# Upstream moors has no time-control API at all (the per-generation step
-# method is private to the crate), so `moors_adapter::run_moors_nsga2`
-# previously ignored its `max_duration` parameter entirely.
+# `moors` is not patched: it resolves from crates.io. `--features
+# external_solvers` does not build, because `moors_adapter.rs` calls
+# `GeneticAlgorithm::run_with_deadline`, which upstream 0.2.11 does not
+# provide. `sims-problem` never enables that feature, so the paper's build
+# graph is unaffected.
 [patch.crates-io]
-moors = { path = "./target/patch/moors-0.2.10" }
-optirustic = { path = "./target/patch/optirustic-1.2.2" }
+optirustic = { path = "./target/patch/optirustic-1.2.3" }
 
 [[bin]]
 name = "lns_milp"
@@ -127,8 +126,8 @@ arrayvec = "0.7.6"
 crossbeam-channel = { version = "0.5", optional = true }
 arc-swap = { version = "1.7", optional = true }
 num_cpus = { version = "1.16", optional = true }
-moors = { version = "0.2.9", optional = true }
-optirustic = { version = "1.2.2", default-features = false, optional = true }
+moors = { version = "0.2.11", optional = true }
+optirustic = { version = "1.2.3", default-features = false, optional = true }
 ndarray = { version = "0.16.1", optional = true }
 
 [features]
@@ -161,6 +160,9 @@ nursery = { level = "warn", priority = -1 }
 # Keep existing overrides with higher priority
 needless_return = "allow"
 
+[[bin]]
+name = "dedup_ab"
+required-features = ["parallel"]
 
 [dependencies.highs]
 version = "1.12"

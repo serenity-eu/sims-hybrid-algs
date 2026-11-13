@@ -15,7 +15,7 @@ index 94da28f..135a8d5 100644
 +                // `Any([MaxGeneration, MaxDurationAsMinutes])` condition
 +                // silently fell through to MaxGeneration every time. Use
 +                // `self.start_time()` instead, exactly like the correct
-+                // `elapsed()` method above. See patches/optirustic+1.2.2.patch.
++                // `elapsed()` method above. See patches/optirustic+1.2.3.patch.
 +                *duration <= ((self.start_time().elapsed().as_secs() / 60) as u32)
              }
              StoppingCondition::MaxDurationAsHours(duration) => {
