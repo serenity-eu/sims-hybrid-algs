@@ -1,0 +1,25 @@
+{
+  "upload_type": "software",
+  "title": "Hybrid Exact and Metaheuristic Method for the Multiobjective Satellite Image Mosaic Selection Problem - code and reproduction data",
+  "creators": [
+    { "name": "Hlushchenko, Vladyslav", "affiliation": "Poznan University of Technology" },
+    { "name": "Combarro Simón, Manuel", "affiliation": "University of Luxembourg" },
+    { "name": "Antczak, Maciej", "affiliation": "Poznan University of Technology" },
+    { "name": "Jaszkiewicz, Andrzej", "affiliation": "Poznan University of Technology" },
+    { "name": "Musiał, Jędrzej", "affiliation": "Poznan University of Technology" }
+  ],
+  "description": "<p>Solvers, experiment data and rebuild scripts for the paper <em>Hybrid Exact and Metaheuristic Method for the Multiobjective Satellite Image Mosaic Selection Problem</em>.</p><p>The deposit reproduces the paper's tables and figures end to end from a clean checkout:</p><pre>publication-data/scene_catalogue/   (2,491 catalogue records, no imagery)\n  -&gt; generate_benchmark_instances.sh   -&gt; 25 benchmark instances\n  -&gt; stored results and 850 anytime traces\n  -&gt; rebuild_paper_artifacts.sh        -&gt; 16 tables and 29 figures</pre><p>Verified on a clean checkout of this release: manifest 1,010 of 1,010 files match, instances 50 of 50 byte-identical, tables 16 of 16 and figures 29 of 29 byte-identical. Check any stage with <code>python publication-data/scripts/make_manifest.py --check</code>.</p><p><strong>Licensing.</strong> Source code is MIT. Derived experimental outputs are CC BY 4.0. <code>publication-data/scene_catalogue/</code> holds third-party satellite catalogue metadata and no imagery, redistributed with the attributions set out in <code>publication-data/LICENSE.md</code>: &quot;© CNES (year of acquisition), Distribution Airbus DS&quot; for Pléiades and SPOT records, and &quot;© Airbus DS (year of acquisition)&quot; for Pléiades Neo records.</p><p>Re-running the experiments needs a licensed Gurobi installation. Rebuilding the tables and figures from the stored results does not solve anything, but still compiles the Python extension and so needs Gurobi present at build time.</p>",
+  "license": "mit",
+  "access_right": "open",
+  "keywords": [
+    "multiobjective optimization",
+    "satellite image mosaic selection",
+    "Pareto local search",
+    "epsilon-constraint method",
+    "mixed-integer linear programming",
+    "hybrid metaheuristic",
+    "hypervolume",
+    "reproducibility"
+  ],
+  "language": "eng"
+}
