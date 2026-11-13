@@ -17,13 +17,14 @@ This repository provides solvers and heuristics for the Satellite Image Mosaic S
 - **Gurobi**, licensed, with `GUROBI_HOME` set -- see `scripts/fetch-gurobi.sh`.
   Required to re-run the experiments. *Not* required to rebuild the paper's
   tables and figures from the stored results.
+- **`libssl-dev`** -- needed to `cargo install patch-crate`, which
+  `scripts/bootstrap.sh` runs for you if it is missing
 
 That is the whole list: the Gurobi bindings ship pregenerated, so the build
 pulls no system library other than libgurobi itself.
 
-Two extras, each needed only outside the path above:
+One extra, needed only outside the path above:
 
-- `libssl-dev`, for `cargo install patch-crate`
 - `cmake`, `pkg-config` and `coinor-libcbc-dev`, only if you opt into the other
   MILP backends with `--features gurobi,highs` or `--features gurobi,coin_cbc`.
   HiGHS is compiled from source and CBC is linked from the system, which is why
@@ -39,21 +40,35 @@ Set up the workspace:
 ```bash
 git clone https://github.com/serenity-eu/sims-hybrid-algs.git
 cd sims-hybrid-algs
-uv sync
+./scripts/bootstrap.sh
 source .venv/bin/activate
 ```
 
-`uv sync` builds the Rust extension, which is how Pareto Local Search is
-called -- in process, through the Python bindings. There is no separate
-binary to build and no `PLS_PATH` to set.
+`scripts/bootstrap.sh` installs `patch-crate` if it is missing, runs
+`cargo patch-crate` in `augmecon-rs` and `sims-heuristics`, fetches the Gurobi
+runtime unless `GUROBI_HOME` is already set, and then runs `uv sync`. Pass
+`--no-gurobi` or `--no-sync` to stop short of either.
 
-The Gurobi backend needs a licensed Gurobi install (`scripts/fetch-gurobi.sh`
-sets up `GUROBI_HOME`), one patched dependency, and the Python extension:
+`uv sync` is the step that builds the Rust extension, which is how Pareto
+Local Search is called -- in process, through the Python bindings. There is no
+separate binary to build and no `PLS_PATH` to set. For a release build of the
+extension with the Gurobi backend:
 
 ```bash
-cargo install patch-crate
-(cd augmecon-rs  && cargo patch-crate)
 (cd sims-problem && maturin develop --release --features gurobi)
+```
+
+Running `uv sync` by hand instead of `bootstrap.sh` fails in a fresh clone.
+`augmecon-rs`, `sims-problem`, `sims-heuristics` and `psbox` each declare a
+`[patch.crates-io]` entry pointing into `target/patch/`, which
+`cargo patch-crate` materialises from `patches/`. Cargo resolves `[patch]`
+while reading the manifest, so until those directories exist no `cargo` or
+`maturin` command in the workspace runs at all -- the failure comes before
+anything is compiled:
+
+```
+error: failed to load source for dependency `grb`
+  failed to read .../augmecon-rs/target/patch/grb-3.0.1/Cargo.toml
 ```
 
 
@@ -72,10 +87,17 @@ extension with the `gurobi` feature, so a rebuild still needs `uv` and a
 licensed Gurobi installation to compile it -- the licence is spent on building,
 not on solving.
 
+From a fresh clone:
+
 ```bash
+./scripts/bootstrap.sh
+source .venv/bin/activate
 cd publication-data/biobjective
 ./scripts/rebuild_paper_artifacts.sh out
 ```
+
+`bootstrap.sh` is not optional here. `uv sync` on its own fails in a fresh
+clone, before compiling anything; see **Installation** above for why.
 
 LaTeX in `out/`, EPS in `out_eps/`, PNG in `out_png/`.
 
