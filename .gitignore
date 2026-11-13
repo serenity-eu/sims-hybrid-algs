@@ -281,3 +281,23 @@ publication-data/satellite-data/benchmark_instances/*
 # LaTeX by-products of a draft that no longer lives here.
 /enhanced_pls.aux
 /enhanced_pls.out
+
+# Profiling and benchmark fixtures. Local development inputs, outside the
+# reproduction path and large enough to dominate a source archive.
+/sims-heuristics/flamegraph_opt*.folded
+/sims-heuristics/results/*.json
+/sims-heuristics/results/*.jsonl
+/sims-heuristics/docs/benchmark_data/
+/nd-tree/benches/data/
+/hv_experiment_results/
+
+# Recorded tracker traces. debug_lagos_30 is tracked: tests/proven_safe_
+# correctness.rs replays it. The 100-image trace is read by nothing.
+/sims-heuristics/benches/data/*
+!/sims-heuristics/benches/data/debug_lagos_30_tracker_calls.u16
+
+# Legacy instance set, superseded by publication-data/satellite-data. Only
+# lagos_nigeria_30.dzn is read, by proven_safe_correctness and the tracker
+# benchmark.
+/sims-heuristics/data/*.dzn
+!/sims-heuristics/data/lagos_nigeria_30.dzn
