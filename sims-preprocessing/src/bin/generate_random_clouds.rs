@@ -92,6 +92,11 @@ fn scale_about(p: &Polygon<f64>, origin: Point<f64>, k: f64) -> Polygon<f64> {
 // ── Per-image pool record ────────────────────────────────────────────────────
 
 struct Pool {
+    /// Catalogue scene id (UP42 `id`/`sceneId`), parallel to the other vectors.
+    ///
+    /// Carried only so the generated instance can name the scenes it selected;
+    /// nothing in the selection or discretisation reads it.
+    ids: Vec<String>,
     polys: Vec<Polygon<f64>>,
     mps: Vec<MultiPolygon<f64>>,
     cost: Vec<f64>,
@@ -207,6 +212,8 @@ impl Pool {
             v.retain(|_| *it.next().unwrap());
         }
         let mut it = keep.iter();
+        self.ids.retain(|_| *it.next().unwrap());
+        let mut it = keep.iter();
         self.mps.retain(|_| *it.next().unwrap());
         let mut it = keep.iter();
         self.polys.retain(|_| *it.next().unwrap());
@@ -217,6 +224,7 @@ fn read_pool(path: &str) -> Pool {
     let fc = read_json(path);
     let feats = fc["features"].as_array().expect("pool: no features");
     let mut pool = Pool {
+        ids: Vec::new(),
         polys: Vec::new(),
         mps: Vec::new(),
         cost: Vec::new(),
@@ -230,6 +238,15 @@ fn read_pool(path: &str) -> Pool {
         };
         let p = &f["properties"];
         let pp = provider_props(p);
+        // Pushed inside this loop, after the `largest_poly` guard above, so the
+        // id stays aligned with the parallel vectors when a feature is skipped.
+        pool.ids.push(
+            p["id"]
+                .as_str()
+                .or_else(|| p["sceneId"].as_str())
+                .unwrap_or("")
+                .to_owned(),
+        );
         pool.cost.push(p["cost"].as_f64().unwrap_or(0.0));
         pool.resolution
             .push(p["resolution"].as_f64().unwrap_or(0.0));
@@ -439,6 +456,9 @@ fn main() {
             "grid_cells": sel.num_cells, "cloudy_assignments": cloudy,
             "sel_cloud_mean": sel_cloud_mean,
             "cost_sum": disc.costs.iter().sum::<i64>(),
+            // Catalogue scene id per image, in the same order as the .dzn's
+            // image arrays, so image j of the instance is scene_ids[j].
+            "scene_ids": idx.iter().map(|&i| pool.ids[i].clone()).collect::<Vec<_>>(),
         });
         std::fs::write(
             Path::new(out_dir).join(format!("{name}_{n}.meta.json")),

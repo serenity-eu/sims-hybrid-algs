@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Rebuild every figure and table in the biobjective SIMS paper from the
-# committed results. No solving, no Gurobi, no network.
+# committed results. Nothing is solved and nothing is fetched -- but this is
+# not Gurobi-free: the script imports `sims_problem` for
+# `compute_hv_curve_from_trace`, and sims-problem/pyproject.toml builds that
+# extension with the `gurobi` feature, so `uv` and a licensed Gurobi are
+# needed to compile it. The licence is spent on building, not on solving.
 #
 #   ./rebuild_paper_artifacts.sh [out_dir]
 #

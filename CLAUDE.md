@@ -103,8 +103,8 @@ RUST_LOG=debug cargo test -- --nocapture
 # sims-heuristics feature-gated tests
 cargo test --features parallel --test test_concurrent_pls
 
-# external_solvers does NOT currently build: patches/moors+0.2.10.patch is a
-# deletion-only diff, so run_with_deadline is missing (see Feature flags below).
+# external_solvers does NOT build: moors lacks run_with_deadline (see Feature
+# flags below).
 # cd sims-heuristics && cargo patch-crate && cd ..
 # cargo test --features external_solvers --test test_external_solvers
 
@@ -134,26 +134,24 @@ Python linting uses `ruff` (dev dependency in root `pyproject.toml`).
 **Feature flags** (sims-heuristics):
 - `bitmaps` — BitSet-based solution encoding (in default)
 - `parallel` — ConcurrentPLS with crossbeam channels
-- `external_solvers` — moors/optirustic integration. Both are patched via
-  `cargo patch-crate`:
-  - `moors` (`patches/moors+0.2.10.patch`) is **broken as committed**: it is a
-    deletion-only diff (108 files removed, zero lines added), so it does not
-    add the `GeneticAlgorithm::run_with_deadline` that
-    `moors_adapter.rs:557` calls. `cargo check --features external_solvers`
-    therefore fails with E0599, and the patched source has not been recovered.
-    This does not affect the published results: the paper's NSGA-II/III and
-    MOEA-D are sims-heuristics' own implementations, and `sims-problem` never
-    enables `external_solvers` (it takes `pls` with `default-features = false`
-    and only `bitmaps`), so `moors` is not in that build graph at all.
-  - `optirustic` (`patches/optirustic+1.2.2.patch`) fixes a real upstream bug:
-    `is_stopping_condition_met` checked `Instant::now().elapsed()` (always ~0)
-    instead of `self.start_time().elapsed()`, so `MaxDurationAsMinutes`/
-    `MaxDurationAsHours` never actually fired — any `StoppingCondition::Any`
-    combining a duration with `MaxGeneration` silently ran to the generation
-    cap regardless of elapsed time. **Always wrap optirustic/moors test runs in
-    a shell-level `timeout` as a safety net even after this fix.**
-  Run `cargo patch-crate` from `sims-heuristics/` once after a fresh clone or
-  `cargo clean` before building with this feature.
+- `external_solvers` — moors/optirustic integration. Does **not** build:
+  `moors_adapter.rs:557` calls `GeneticAlgorithm::run_with_deadline`, which
+  upstream `moors` 0.2.11 does not provide, so `cargo check --features
+  external_solvers` fails with E0599. This does not affect the published
+  results: the paper's NSGA-II/III and MOEA-D are sims-heuristics' own
+  implementations, and `sims-problem` does not enable `external_solvers`, so
+  `moors` is not in that build graph.
+  - `optirustic` (`patches/optirustic+1.2.3.patch`) fixes an upstream bug:
+    `is_stopping_condition_met` checks `Instant::now().elapsed()` (always ~0)
+    instead of `self.start_time().elapsed()`, so `MaxDurationAsMinutes` and
+    `MaxDurationAsHours` never fire and any `StoppingCondition::Any` combining
+    a duration with `MaxGeneration` runs to the generation cap. **Wrap
+    optirustic/moors test runs in a shell-level `timeout` as a safety net even
+    with the patch applied.**
+  Run `cargo patch-crate` from `sims-heuristics/` after a fresh clone or
+  `cargo clean`. This is needed for **any** build of the crate, not just
+  `external_solvers`: `[patch.crates-io]` is resolved at manifest level, so
+  the `optirustic` path must exist before `cargo check` will run at all.
 - `probabilistic_probing` — experimental probing
 - `scalarized_selection` — Chebycheff-based archive queries
 
@@ -170,7 +168,7 @@ GPBA-A works internally in **maximization form** (objectives negated). Solutions
 
 ### Python MILP (reference implementation)
 
-`sims-solvers/sims_solvers/` contains the Python GPBA-A reference implementation used for cross-validation. When debugging MILP behavior, cross-reference `augmecon-rs/src/gpba.rs` against it. Known divergences are documented in `augmecon-rs_GPBA_Inconsistencies_Analysis.md`.
+`sims-solvers/sims_solvers/` contains the Python GPBA-A reference implementation used for cross-validation. When debugging MILP behavior, cross-reference `augmecon-rs/src/gpba.rs` against it.
 
 ## PyO3 Entry Points (`sims-problem/src/solver.rs`)
 
@@ -185,7 +183,8 @@ solve_with_hybrid(...)                        -> SolvingResult   // milp feature
 - Format: MiniZinc `.dzn` files
 - Test instances: `sims-problem/tests/data/{city}_{size}.dzn`
   - Examples: `lagos_nigeria_30`, `rio_de_janeiro_150`, `tokyo_bay_50`
-- Publication experiments: `publication-data/experiments/`
+- Publication instances: `publication-data/satellite-data/benchmark_instances/` (the
+  paper's 25; each `.meta.json` records the `scene_ids` it was built from)
 
 ## Environment
 

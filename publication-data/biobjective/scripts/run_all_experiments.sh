@@ -5,9 +5,9 @@
 #
 # One job per (source, instance), each job doing all 17 configs for <runs>
 # runs. Jobs are dealt round-robin to <workers>, each pinned to its own core
-# with taskset -- validated at 7 workers (45 observations, worst deviation
-# -0.03%), so a worker gets a full core and the wall-clock budget each config
-# is given equals the CPU it actually receives. Core 7 is left for the OS.
+# with taskset, so the wall-clock budget a config is given equals the CPU it
+# receives. The published results used 7 workers on 8 cores, leaving core 7
+# for the OS.
 set -u
 T=${1:-200}; RUNS=${2:-10}; W=${3:-7}; ROOT=${4:-$HOME/biobjective-run}; FILTER=${5:-}
 # Defaults resolve to this checkout; override any of REPO, PYTHON,

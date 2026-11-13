@@ -175,7 +175,6 @@ python -c "import gurobipy; gurobipy.Model()"
 - `sims-heuristics` has `plotting` feature for visualization
 
 ### AUGMECON vs GPBA Inconsistencies
-See `augmecon-rs_GPBA_Inconsistencies_Analysis.md`:
 - `augmecon-rs` implementation differs from `sims-solvers` Python GPBA-A
 - Interval management, solution deduplication, augmentation parameters vary
 - Cross-reference both implementations when debugging MILP behavior
@@ -198,6 +197,5 @@ See `augmecon-rs_GPBA_Inconsistencies_Analysis.md`:
 
 ## Documentation References
 
-- Algorithm analysis: `SIMS_MILP_Algorithm_Analysis.md`
 - Trace format: `TRACE_SPECIFICATION.md`, `TRACE_ARCHIVE_SPECIFICATION.md`
 - AUGMECON: `augmecon-rs/docs/` (getting-started, solver-configuration, sims-cp/milp)

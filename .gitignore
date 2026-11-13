@@ -216,29 +216,29 @@ publication-data/satellite-data/*
 publication-data/satellite-data/instances_random_clouds/*.dzn
 
 # Exception: the merged image pool the biobjective instances are generated from
-# (5 geojson catalogues, ~18 MB). Without it `generate_hard_an_benchmark.sh`
+# (5 geojson catalogues, ~18 MB). Without it `generate_benchmark_instances.sh`
 # cannot run from a clone. The raw UP42 fetch it was merged from is 1.2 GB and
 # stays out.
-!publication-data/satellite-data/instances_pool_merged/
-publication-data/satellite-data/instances_pool_merged/*
-!publication-data/satellite-data/instances_pool_merged/*_image_set.geojson
+!publication-data/satellite-data/scene_catalogue/
+publication-data/satellite-data/scene_catalogue/*
+!publication-data/satellite-data/scene_catalogue/*_image_set.geojson
 
 # Exception: the 25 problem instances behind the biobjective SIMS paper
 # (5 cities x {100,125,150,175,200}) are versioned so the published results can
-# be re-solved from a clone alone. Sizes 225-300 exist locally but no published
-# result uses them, so they stay out.
-!publication-data/satellite-data/instances_hard_an/
-publication-data/satellite-data/instances_hard_an/*
-!publication-data/satellite-data/instances_hard_an/*_100.dzn
-!publication-data/satellite-data/instances_hard_an/*_100.meta.json
-!publication-data/satellite-data/instances_hard_an/*_125.dzn
-!publication-data/satellite-data/instances_hard_an/*_125.meta.json
-!publication-data/satellite-data/instances_hard_an/*_150.dzn
-!publication-data/satellite-data/instances_hard_an/*_150.meta.json
-!publication-data/satellite-data/instances_hard_an/*_175.dzn
-!publication-data/satellite-data/instances_hard_an/*_175.meta.json
-!publication-data/satellite-data/instances_hard_an/*_200.dzn
-!publication-data/satellite-data/instances_hard_an/*_200.meta.json
+# be re-solved from a clone alone. The allow-list is per size, so a larger
+# ladder regenerated locally stays out.
+!publication-data/satellite-data/benchmark_instances/
+publication-data/satellite-data/benchmark_instances/*
+!publication-data/satellite-data/benchmark_instances/*_100.dzn
+!publication-data/satellite-data/benchmark_instances/*_100.meta.json
+!publication-data/satellite-data/benchmark_instances/*_125.dzn
+!publication-data/satellite-data/benchmark_instances/*_125.meta.json
+!publication-data/satellite-data/benchmark_instances/*_150.dzn
+!publication-data/satellite-data/benchmark_instances/*_150.meta.json
+!publication-data/satellite-data/benchmark_instances/*_175.dzn
+!publication-data/satellite-data/benchmark_instances/*_175.meta.json
+!publication-data/satellite-data/benchmark_instances/*_200.dzn
+!publication-data/satellite-data/benchmark_instances/*_200.meta.json
 
 # Local vendored good_lp fork for the native Gurobi backend (large checkout;
 # set up locally with a [patch] on good_lp — see augmecon-rs/Cargo.toml).

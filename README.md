@@ -65,7 +65,12 @@ cargo install patch-crate
 
 ### Rebuild the tables and figures
 
-Reads the stored results. No solver, no licence, no network.
+Reads the stored results: nothing is solved and nothing is fetched. It is not
+dependency-free, though. The scripts import `sims_problem` for
+`compute_hv_curve_from_trace`, and `sims-problem/pyproject.toml` builds that
+extension with the `gurobi` feature, so a rebuild still needs `uv` and a
+licensed Gurobi installation to compile it -- the licence is spent on building,
+not on solving.
 
 ```bash
 cd publication-data/biobjective
@@ -80,8 +85,8 @@ Needs a licensed Gurobi. Run from the repository root, in order.
 
 ```bash
 # 1. Problem instances
-(cd sims-preprocessing && ./generate_hard_an_benchmark.sh \
-    ../publication-data/satellite-data/instances_hard_an 100,125,150,175,200)
+(cd sims-preprocessing && ./generate_benchmark_instances.sh \
+    ../publication-data/satellite-data/benchmark_instances)
 
 # 2. Exact phase
 (cd sims-problem && python generate_pseudo.py --method gpba  --solver gurobi --instance-set hard)
@@ -99,13 +104,18 @@ Step 3 resolves this checkout and `.venv` by itself; set `LD_LIBRARY_PATH`
 and `GRB_LICENSE_FILE` if your Gurobi is not in `/opt`.
 
 Step 1 is optional: its 25 instances are already in the repository, and it
-rewrites them byte for byte. Step 2 writes their exact fronts to
+rewrites them byte for byte from the archived catalogue snapshot. Step 2 writes their exact fronts to
 `sims-core/tests/data/{gpbaa,an}_2d_gurobi_hard/`, which step 3 reads. Step 3
 takes about 20 h on 8 cores.
 
 Steps 1 and 2 are deterministic. Step 3 is not: its budget is 200 s of wall
 clock per configuration, so a re-run agrees statistically, not bitwise.
 Rebuild from the stored results to reproduce the published figures exactly.
+
+`publication-data/README.md` documents the whole chain, what each stage can and
+cannot reproduce, and how to recover the satellite imagery (none is stored: the
+deposit records catalogue metadata and the scene id of every image). Verify any
+stage with `python publication-data/scripts/make_manifest.py --check`.
 
 ### Protocol
 
@@ -136,13 +146,15 @@ standard deviation.
 After installation, you can run the hybrid solver with Anytime Aneja Nair method as follows:
 
 ```bash
-sims solve --experiments-dir ./publication-data/experiments --timeout-s 120 --front-strategy aneja-nair --results-dir ./publication-data/new-results/aneja-nair
+sims solve --experiments-dir ./publication-data/satellite-data/benchmark_instances \
+    --timeout-s 120 --front-strategy aneja-nair --results-dir ./out/aneja-nair
 ```
 
 You can run the hybrid solver with GPBA-A method as follows:
 
 ```bash
-sims solve --experiments-dir ./publication-data/experiments  --timeout-s 120 --front-strategy gpba-a  --results-dir ./publication-data/new-results/gpba-a
+sims solve --experiments-dir ./publication-data/satellite-data/benchmark_instances \
+    --timeout-s 120 --front-strategy gpba-a --results-dir ./out/gpba-a
 ```
 
 For more options and help:
@@ -156,7 +168,7 @@ sims solve --help
 To regenerate SIMS problem instances from original satellite data, run following command
 
 ```bash
-sims prepare --satellite-data-dir ./publication-data/satellite-data --experiments-dir ./publication-data/new-experiments
+sims prepare --satellite-data-dir ./publication-data/satellite-data --experiments-dir ./out/instances
 ```
 
 ### Generating plots from experiment results
@@ -164,5 +176,6 @@ sims prepare --satellite-data-dir ./publication-data/satellite-data --experiment
 To generate plots for experiments results, run following command
 
 ```bash
-sims plots --experiments-dir ./publication-data/experiments/ --results-dir ./publication-data/results/gpba-a ./publication-data/results/aneja-nair/ --output-dir ./publication-data/new-plots/
+sims plots --experiments-dir ./publication-data/satellite-data/benchmark_instances \
+    --results-dir ./out/gpba-a ./out/aneja-nair --output-dir ./out/plots
 ```
