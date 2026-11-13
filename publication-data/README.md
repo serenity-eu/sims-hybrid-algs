@@ -1,5 +1,24 @@
 # Publication data
 
+Research data for:
+
+> **Hybrid Exact and Metaheuristic Method for the Multiobjective Satellite
+> Image Mosaic Selection Problem**
+>
+> Vladyslav Hlushchenko<sup>1</sup>, Manuel Combarro Simón<sup>2</sup>,
+> Maciej Antczak<sup>1</sup>, Andrzej Jaszkiewicz<sup>1</sup>,
+> Jędrzej Musiał<sup>1</sup>
+>
+> <sup>1</sup> Institute of Computing Science, Poznan University of
+> Technology, Piotrowo 3A, 60-965 Poznan, Poland
+>
+> <sup>2</sup> Interdisciplinary Centre for Security, Reliability and Trust,
+> University of Luxembourg, 2 place de l'Université, L-4365
+> Esch-sur-Alzette, Luxembourg
+>
+> Corresponding author: Vladyslav Hlushchenko
+> <vladyslav.hlushchenko@cs.put.poznan.pl>
+
 The catalogue snapshot the problem instances were built from, the instances,
 the exact fronts that seed the hybrid, and the experiment results the paper's
 tables and figures are generated from.
