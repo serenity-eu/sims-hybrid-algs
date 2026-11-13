@@ -267,3 +267,17 @@ publication-data/satellite-data/benchmark_instances/*
 # fig_pipeline.eps embeds Airbus imagery, which this deposit otherwise does
 # not distribute.
 /paper/
+
+# Third-party published papers and their extracted text. Reference material
+# only; cited in the manuscript rather than redistributed here.
+/Many-Objective Pareto Local Search.pdf
+/Speeding Up PLS.pdf
+/Space-Partitioned_ND-Trees_for_the_Dynamic_Nondominance_Problem.pdf
+/augmecon-rs/GPBA-A.pdf
+/many_objective_pls.txt
+/speeding_up_pls.txt
+/nd_trees.txt
+
+# LaTeX by-products of a draft that no longer lives here.
+/enhanced_pls.aux
+/enhanced_pls.out
