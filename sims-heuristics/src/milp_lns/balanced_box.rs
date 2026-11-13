@@ -62,7 +62,11 @@ impl SearchBox {
     fn new(left: (u64, u64), right: (u64, u64)) -> Self {
         let dc = u128::from(right.0.saturating_sub(left.0));
         let dl = u128::from(left.1.saturating_sub(right.1));
-        Self { left, right, priority: dc * dl }
+        Self {
+            left,
+            right,
+            priority: dc * dl,
+        }
     }
 
     /// A box can only contain a further point if both objectives have room.
@@ -113,7 +117,13 @@ impl<'a, S: SubproblemSolver + ?Sized> BalancedBox<'a, S> {
     pub fn new(model: &'a mut S, total_area: u64, mip_time: Duration) -> Self {
         let mut all_free = FixedBitSet::with_capacity(model.num_images());
         all_free.insert_range(..);
-        Self { model, total_area, all_free, mip_time, stats: BoxSearchStats::default() }
+        Self {
+            model,
+            total_area,
+            all_free,
+            mip_time,
+            stats: BoxSearchStats::default(),
+        }
     }
 
     fn budget(&self, deadline: Instant) -> f64 {
@@ -121,7 +131,9 @@ impl<'a, S: SubproblemSolver + ?Sized> BalancedBox<'a, S> {
         if now >= deadline {
             return 0.0;
         }
-        self.mip_time.as_secs_f64().min((deadline - now).as_secs_f64())
+        self.mip_time
+            .as_secs_f64()
+            .min((deadline - now).as_secs_f64())
     }
 
     fn evaluate(&mut self, images: &FixedBitSet, clear: u64) -> BoxPoint {
@@ -148,8 +160,9 @@ impl<'a, S: SubproblemSolver + ?Sized> BalancedBox<'a, S> {
         if secs <= 0.0 {
             return None;
         }
-        let (outcome, stage1) =
-            self.model.solve(warm, &self.all_free, floor, ceiling, first, secs);
+        let (outcome, stage1) = self
+            .model
+            .solve(warm, &self.all_free, floor, ceiling, first, secs);
         self.stats.solves += 1;
         match outcome {
             SolveOutcome::Optimal => self.stats.optimal += 1,
@@ -169,10 +182,15 @@ impl<'a, S: SubproblemSolver + ?Sized> BalancedBox<'a, S> {
         }
         let (floor2, ceil2, second) = match first {
             Objective::Cost => (floor, p1.cost as f64, Objective::Cloud),
-            Objective::Cloud => ((self.total_area - p1.cloud) as f64, ceiling, Objective::Cost),
+            Objective::Cloud => (
+                (self.total_area - p1.cloud) as f64,
+                ceiling,
+                Objective::Cost,
+            ),
         };
         let (outcome2, stage2) =
-            self.model.solve(&stage1, &self.all_free, floor2, ceil2, second, secs);
+            self.model
+                .solve(&stage1, &self.all_free, floor2, ceil2, second, secs);
         self.stats.solves += 1;
         match outcome2 {
             SolveOutcome::Optimal => self.stats.optimal += 1,
@@ -186,16 +204,23 @@ impl<'a, S: SubproblemSolver + ?Sized> BalancedBox<'a, S> {
         let p2 = self.evaluate(&stage2, clear2);
         // Keep whichever is genuinely non-dominated; stage two can only match or
         // improve the second objective, but a truncated solve may not.
-        if p2.cost <= p1.cost && p2.cloud <= p1.cloud { Some(p2) } else { Some(p1) }
+        if p2.cost <= p1.cost && p2.cloud <= p1.cloud {
+            Some(p2)
+        } else {
+            Some(p1)
+        }
     }
 
     /// Run the search until the queue drains or `deadline` passes.
-    pub fn run(&mut self, warm: &FixedBitSet, deadline: Instant) -> (Vec<BoxPoint>, BoxSearchStats) {
+    pub fn run(
+        &mut self,
+        warm: &FixedBitSet,
+        deadline: Instant,
+    ) -> (Vec<BoxPoint>, BoxSearchStats) {
         let mut points: Vec<BoxPoint> = Vec::new();
 
         // The two lexicographic extremes bound the whole front.
-        let Some(left) =
-            self.lexicographic(warm, 0.0, f64::INFINITY, Objective::Cost, deadline)
+        let Some(left) = self.lexicographic(warm, 0.0, f64::INFINITY, Objective::Cost, deadline)
         else {
             self.stats.boxes_left = 0;
             return (points, self.stats);
@@ -232,7 +257,10 @@ impl<'a, S: SubproblemSolver + ?Sized> BalancedBox<'a, S> {
                 .iter()
                 .filter(|p| p.cost <= mid)
                 .min_by_key(|p| p.cloud)
-                .map_or_else(|| FixedBitSet::with_capacity(self.model.num_images()), |p| p.images.clone());
+                .map_or_else(
+                    || FixedBitSet::with_capacity(self.model.num_images()),
+                    |p| p.images.clone(),
+                );
 
             let found = self.lexicographic(
                 &warm_pt,
@@ -281,11 +309,11 @@ impl<'a, S: SubproblemSolver + ?Sized> BalancedBox<'a, S> {
 }
 
 /// Keep only the mutually non-dominated points.
-    ///
-    /// A solve that hits its time limit returns the best incumbent it found,
-    /// which need not be optimal for its box; such a point can be dominated by
-    /// one discovered in another box. Emitting it would misreport the front, so
-    /// the sweep runs once at the end rather than trusting every solve.
+///
+/// A solve that hits its time limit returns the best incumbent it found,
+/// which need not be optimal for its box; such a point can be dominated by
+/// one discovered in another box. Emitting it would misreport the front, so
+/// the sweep runs once at the end rather than trusting every solve.
 fn non_dominated(mut points: Vec<BoxPoint>) -> Vec<BoxPoint> {
     points.sort_unstable_by_key(|p| (p.cost, p.cloud));
     points.dedup_by_key(|p| (p.cost, p.cloud));
@@ -304,7 +332,7 @@ fn non_dominated(mut points: Vec<BoxPoint>) -> Vec<BoxPoint> {
 mod tests {
     use super::*;
     use crate::{
-        milp_lns::model::{clear_coverage, PersistentModel},
+        milp_lns::model::{PersistentModel, clear_coverage},
         objectives::ObjectiveType,
         problem_bitset::ProblemBitset,
     };
@@ -345,15 +373,23 @@ mod tests {
         let warm = FixedBitSet::with_capacity(p.images.len());
         let (pts, stats) = bb.run(&warm, Instant::now() + Duration::from_secs(60));
 
-        assert!(!pts.is_empty(), "the search must return at least the extremes");
+        assert!(
+            !pts.is_empty(),
+            "the search must return at least the extremes"
+        );
         for a in &pts {
             for b in &pts {
                 if std::ptr::eq(a, b) {
                     continue;
                 }
-                let dominates = a.cost <= b.cost && a.cloud <= b.cloud
+                let dominates = a.cost <= b.cost
+                    && a.cloud <= b.cloud
                     && (a.cost < b.cost || a.cloud < b.cloud);
-                assert!(!dominates, "({},{}) dominates ({},{})", a.cost, a.cloud, b.cost, b.cloud);
+                assert!(
+                    !dominates,
+                    "({},{}) dominates ({},{})",
+                    a.cost, a.cloud, b.cost, b.cloud
+                );
             }
         }
         // Every returned selection must be a genuine cover of the universe.
@@ -362,7 +398,11 @@ mod tests {
             for i in pt.images.ones() {
                 covered.union_with(&p.images[i]);
             }
-            assert_eq!(covered.count_ones(..), p.universe_size, "returned a non-cover");
+            assert_eq!(
+                covered.count_ones(..),
+                p.universe_size,
+                "returned a non-cover"
+            );
         }
         assert!(stats.solves >= 2, "at least the two lexicographic extremes");
     }
@@ -380,7 +420,7 @@ mod tests {
             mk(10, 100),
             mk(20, 200), // dominated by (10,100)
             mk(30, 50),
-            mk(40, 60),  // dominated by (30,50)
+            mk(40, 60), // dominated by (30,50)
             mk(50, 10),
         ]);
         let got: Vec<(u64, u64)> = out.iter().map(|p| (p.cost, p.cloud)).collect();

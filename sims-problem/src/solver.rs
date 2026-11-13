@@ -2002,6 +2002,23 @@ pub fn solve_with_milp(
         // 3.6% excess cloud at the min-cost extreme, and 0.8% excess cost at
         // the zero-cloud extreme), so it never serves as an extreme point --
         // only as the ideal value.
+        // `solve_lexicographic` sets a Gurobi objective priority, which no other
+        // good_lp backend exposes, so augmecon compiles it only under
+        // `--features gurobi`. Without it this call does not resolve and the
+        // crate fails to build at all for `--features highs` / `coin_cbc`.
+        // Those backends take the fallback the comment above already describes:
+        // `lex` stays None and the plain solve below defines `ideal_bounds`.
+        #[cfg(not(feature = "gurobi"))]
+        let lex: Option<augmecon::solution::Solution> = {
+            if objectives.len() == 2 {
+                log::info!(
+                    "Lexicographic extremes need the Gurobi backend; objective {i} \
+                     takes its ideal from a plain solve"
+                );
+            }
+            None
+        };
+        #[cfg(feature = "gurobi")]
         let lex = if objectives.len() == 2 && !prework_remaining.is_zero() {
             let other = 1 - i;
             match augmecon::single_objective::SingleObjectiveSolver::new(&problem, &options)

@@ -6,11 +6,14 @@ use tracing::{debug_span, info_span};
 
 const WORKER_LOG_INTERVAL: Duration = Duration::from_secs(30);
 
+use std::sync::Arc;
+
 use crate::{
     concurrent_pls::{
         config::{ConcurrentPLSConfig, RegionSearchMode},
         decomposition::{Region, belongs_to_region},
         snapshot::{GlobalFrontSlot, ObjectiveSnapshot, SnapshotSlot, fingerprint},
+        visited::SharedVisited,
     },
     pareto_local_search::{ParetoLocalSearch, SAPlsStatus, StepStatus},
     pls_config::PlsOptimizations,
@@ -110,6 +113,7 @@ where
         global_front_slot: GlobalFrontSlot<T, D>,
         done_guard: crossbeam_channel::Sender<()>,
         config: ConcurrentPLSConfig,
+        shared_visited: Option<Arc<SharedVisited>>,
     ) -> Self {
         // Compute local ideal from initial population (section 16.8)
         let mut local_ideal = [u64::MAX; D];
@@ -127,13 +131,17 @@ where
             }
         }
 
-        let pls = ParetoLocalSearch::new(
+        let mut pls = ParetoLocalSearch::new(
             problem,
             &initial_pop,
             config.neighborhood_size_range.clone(),
             config.is_deterministic,
             PlsOptimizations::default(),
         );
+        // Shared across every worker: the first to reach a solution explores it.
+        if let Some(shared) = shared_visited {
+            pls = pls.with_shared_visited(shared);
+        }
         Self {
             region,
             all_regions,

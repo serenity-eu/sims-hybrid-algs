@@ -1334,6 +1334,144 @@ def compute_hypervolume(
     ...
 
 
+def compute_igd(
+    approximation: list[Solution] | list[list[float]],
+    reference_set: list[Solution] | list[list[float]],
+    objective_bounds: list[list[float]] | None = None,
+    normalized: bool = False,
+    plus: bool = False,
+    gd: bool = False,
+) -> float:
+    """
+    Compute an IGD-family performance indicator between an approximation set
+    and a reference set (both in minimisation form).
+
+    IGD (Inverted Generational Distance) is the mean, over every point in
+    `reference_set`, of the distance to the nearest point in `approximation`
+    — it punishes gaps: a sparse approximation front that omits regions of
+    the reference front scores worse, even if it occupies the same
+    hypervolume as a denser one. This makes it the natural complement to
+    hypervolume when comparing fronts of very different cardinality/density.
+
+    Args:
+        approximation: Solver front — Solution objects or raw points.
+        reference_set: Target/true front — same accepted formats. Often the
+            union of non-dominated points across multiple algorithms/runs,
+            or a much longer generous-timeout exact-solver front.
+        objective_bounds: Optional [[min, max], ...] per objective; required
+            when normalized=True.
+        normalized: Normalise both sets to [0, 1] per objective before
+            measuring distances. Strongly recommended when objectives have
+            very different scales (e.g. cost ~10^6 vs cloud area ~10^9),
+            since otherwise the larger-magnitude objective dominates.
+        plus: Use IGD+ (Ishibuchi et al., 2015) instead of plain IGD — a
+            weakly Pareto-compliant variant that never ranks a dominating
+            front as worse than a dominated one, unlike plain IGD.
+        gd: Compute GD(+) (Generational Distance, the "forward" counterpart:
+            mean distance from each approximation point to its nearest
+            reference point — convergence only, not coverage) instead of
+            IGD(+).
+
+    Returns:
+        The indicator value (float, lower is better). 0.0 when
+        reference_set is empty (or approximation is empty when gd=True);
+        +inf when approximation is empty (or reference_set is empty when
+        gd=True).
+
+    Raises:
+        ValueError: If the objective dimension can't be inferred, is
+            outside 2-4, if any point has too few coordinates, or if
+            normalized=True without objective_bounds.
+
+    Example:
+        exact_front = [[cost, cloud] for cost, cloud in exact_solutions]
+        hybrid_front = [[cost, cloud] for cost, cloud in hybrid_solutions]
+        reference = exact_front + hybrid_front  # or a denser known front
+        bounds = [[0, max_cost], [0, max_cloud]]
+
+        igd_exact = compute_igd(exact_front, reference, bounds, normalized=True, plus=True)
+        igd_hybrid = compute_igd(hybrid_front, reference, bounds, normalized=True, plus=True)
+        # igd_hybrid < igd_exact even when hypervolume is nearly identical
+        # is exactly the "denser front, same coverage" signal.
+    """
+    ...
+
+
+def compute_spacing(
+    front: list[Solution] | list[list[float]],
+    objective_bounds: list[list[float]] | None = None,
+    normalized: bool = False,
+) -> float:
+    """
+    Compute the Spacing indicator of a front — a reference-free
+    density/uniformity metric complementing hypervolume and IGD.
+
+    Hypervolume rewards area/volume coverage, not how evenly a front is
+    resolved: adding many interior points to an already-covered envelope
+    barely moves HV. Spacing measures only how uniformly a front's own
+    points are distributed (the population standard deviation of each
+    point's nearest-neighbour Manhattan distance), independent of any
+    reference front. Lower = more uniform; 0.0 means every point is equally
+    spaced from its nearest neighbour.
+
+    Matches pymoo's `pymoo.indicators.spacing.SpacingIndicator` exactly
+    (Manhattan distance, population standard deviation, same `[0,1]`
+    normalisation), so values are directly comparable between the two
+    implementations.
+
+    Args:
+        front: Solver front — Solution objects or raw points.
+        objective_bounds: Optional [[min, max], ...] per objective; required
+            when normalized=True.
+        normalized: Normalise the front to [0, 1] per objective before
+            measuring distances — recommended whenever objectives differ in
+            scale, exactly as with compute_igd.
+
+    Returns:
+        The indicator value (float, lower = more uniform). 0.0 for fronts
+        with fewer than 2 points (pymoo itself errors on exactly 1 point;
+        this is a deliberate, documented deviation for that edge case).
+
+    Raises:
+        ValueError: If the objective dimension can't be inferred, is
+            outside 2-4, if any point has too few coordinates, or if
+            normalized=True without objective_bounds.
+
+    Example:
+        sparse_front = [[cost, cloud] for cost, cloud in exact_solutions]
+        dense_front = [[cost, cloud] for cost, cloud in hybrid_solutions]
+        bounds = [[0, max_cost], [0, max_cloud]]
+
+        spacing_exact = compute_spacing(sparse_front, bounds, normalized=True)
+        spacing_hybrid = compute_spacing(dense_front, bounds, normalized=True)
+        # spacing_hybrid << spacing_exact is the "front got much denser and
+        # more evenly resolved" signal that hypervolume alone can't show.
+    """
+    ...
+
+
+def front_cardinality(front: list[Solution] | list[list[float]]) -> int:
+    """
+    Return the number of points in a front — the simplest, most legible
+    density indicator of all.
+
+    Exposed alongside compute_hypervolume/compute_igd/compute_spacing so a
+    "density/spread" report can pull every relevant metric from one
+    consistent API instead of reaching for Python's own len() for just this
+    one number.
+
+    Args:
+        front: Solution objects or raw points.
+
+    Returns:
+        The number of points/solutions in `front`.
+
+    Raises:
+        TypeError: If front is neither list[list[float]] nor list[Solution].
+    """
+    ...
+
+
 def generate_trace(
     solutions: list[Solution],
     objectives: list[str],
@@ -1450,6 +1588,9 @@ __all__ = [
     "solve_with_milp",
     "solve_with_hybrid",
     "compute_hypervolume",
+    "compute_igd",
+    "compute_spacing",
+    "front_cardinality",
     "generate_trace",
     "merge_traces",
 ]

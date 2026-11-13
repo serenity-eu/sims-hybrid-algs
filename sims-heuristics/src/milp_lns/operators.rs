@@ -6,7 +6,10 @@
 //! produces an improvement and decayed otherwise, so the mix adapts to the
 //! instance instead of being fixed by a flag.
 use fixedbitset::FixedBitSet;
-use rand::{Rng, seq::{IndexedRandom, SliceRandom}};
+use rand::{
+    Rng,
+    seq::{IndexedRandom, SliceRandom},
+};
 
 use crate::problem_bitset::ProblemBitset;
 
@@ -65,7 +68,11 @@ pub struct AdaptiveWeights {
 impl AdaptiveWeights {
     #[must_use]
     pub const fn new(decay: f64, reward: f64) -> Self {
-        Self { weights: [1.0; 3], decay, reward }
+        Self {
+            weights: [1.0; 3],
+            decay,
+            reward,
+        }
     }
 
     pub fn pick<R: Rng>(&self, rng: &mut R) -> (usize, DestroyOperator) {

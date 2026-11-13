@@ -566,6 +566,7 @@ class Experiment:
         solver_config: SolverConfig,
         dry_run: bool = False,
         iter_count: int = 1,
+        enable_trace: bool = False,
     ):
         solver_results_dir.mkdir(parents=True, exist_ok=True)
         solver_config.to_json(solver_results_dir / "solver_config.json")
@@ -608,6 +609,7 @@ class Experiment:
                         two_phase_solver_config,
                         objectives=["min_cost", "cloud_coverage", "min_max_incidence_angle"],
                         dry_run=dry_run,
+                        enable_pls_trace=enable_trace,
                         exact_solver_fn=pseudo_solver.solve_exact if pseudo_solver is not None else None,
                     )
                 except Exception as e:
@@ -897,7 +899,7 @@ def prepare(
     )
 
 
-def solve(experiment_dir: Path, solver_config: SolverConfig, result_dir: Path | None = None, dry_run: bool = False, iter_count: int = 1, skip_solved: bool = False):
+def solve(experiment_dir: Path, solver_config: SolverConfig, result_dir: Path | None = None, dry_run: bool = False, iter_count: int = 1, skip_solved: bool = False, enable_trace: bool = False):
     if result_dir is None:
         result_dir = experiment_dir / _get_solver_results_dir_name(solver_config)
 
@@ -909,7 +911,7 @@ def solve(experiment_dir: Path, solver_config: SolverConfig, result_dir: Path | 
     if skip_solved and experiment.is_solved(result_dir, solver_config):
         log.info(f"Experiment {experiment_dir.name} is already solved, skipping.")
         return
-    experiment.solve(result_dir, solver_config, dry_run=dry_run, iter_count=iter_count)
+    experiment.solve(result_dir, solver_config, dry_run=dry_run, iter_count=iter_count, enable_trace=enable_trace)
 
 
 def parse_results(experiment_dir: Path, result_dir: Path) -> ExperimentResults:

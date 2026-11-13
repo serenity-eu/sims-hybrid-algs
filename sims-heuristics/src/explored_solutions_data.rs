@@ -94,6 +94,16 @@ impl<const D: usize> ExploredSolutionsData<D> {
         self.solutions.get(&hash)
     }
 
+    /// Fingerprint used to identify a solution.
+    ///
+    /// Public so the cross-worker claim check fingerprints solutions exactly as
+    /// the per-worker registry does; two filters that disagreed would let a
+    /// solution be claimed under one identity and re-explored under another.
+    #[must_use]
+    pub fn hash_of<T: Hash>(solution: &T) -> u64 {
+        Self::hash(solution)
+    }
+
     fn hash<T: Hash>(solution: &T) -> u64 {
         let mut hasher = DefaultHasher::new();
         solution.hash(&mut hasher);

@@ -104,6 +104,13 @@ where
     /// Spare tracker for neighborhood exploration (reused to avoid allocations)
     spare_tracker: T::Trackers,
     pub optimizations: PlsOptimizations,
+    /// Shared claim-check across concurrent workers, when there are any.
+    ///
+    /// `None` for a sequential run, where `explored_solutions` alone is
+    /// sufficient and an atomic per neighbour would be pure overhead. Only
+    /// exists with `parallel`, which is where `concurrent_pls` lives.
+    #[cfg(feature = "parallel")]
+    shared_visited: Option<std::sync::Arc<crate::concurrent_pls::visited::SharedVisited>>,
     _phantom: std::marker::PhantomData<T>,
 }
 
@@ -256,6 +263,20 @@ where
         false
     }
 
+    /// Attach a cross-worker claim check.
+    ///
+    /// Only concurrent callers need this; a sequential search is already
+    /// deduplicated by `explored_solutions`.
+    #[cfg(feature = "parallel")]
+    #[must_use]
+    pub fn with_shared_visited(
+        mut self,
+        shared: std::sync::Arc<crate::concurrent_pls::visited::SharedVisited>,
+    ) -> Self {
+        self.shared_visited = Some(shared);
+        self
+    }
+
     pub fn new(
         problem: &'a P,
         initial_population: &S,
@@ -319,6 +340,8 @@ where
             is_deterministic,
             spare_tracker,
             optimizations,
+            #[cfg(feature = "parallel")]
+            shared_visited: None,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -396,6 +419,8 @@ where
         let neighborhood_structure = self.neigborhood_structure;
         let is_deterministic = self.is_deterministic;
         let optimizations = &self.optimizations;
+        #[cfg(feature = "parallel")]
+        let shared_visited = self.shared_visited.as_deref();
 
         // Configure probabilistic probing if requested
         #[cfg(feature = "probabilistic_probing")]
@@ -451,6 +476,20 @@ where
             );
 
             for (neighbor_index, neighbor) in neighborhood_iter.by_ref().enumerate() {
+                #[cfg(feature = "parallel")]
+                // Cross-worker claim check, before the neighbour is evaluated.
+                // `explored_solutions` already stops this worker repeating
+                // itself; this stops it repeating a *sibling*, which a
+                // decomposed search does constantly because a region is not
+                // closed under the move operator. Placed here rather than
+                // inside `process_neighbor_streaming` so a refused claim costs
+                // one atomic load and no coverage evaluation.
+                if let Some(shared) = shared_visited
+                    && !shared.claim(ExploredSolutionsData::<D>::hash_of(&neighbor))
+                {
+                    step_stats.duplicated_neighbor_count += 1;
+                    continue;
+                }
                 if Self::process_neighbor_streaming(
                     problem,
                     explored_solutions,
@@ -1050,8 +1089,25 @@ where
                 );
 
                 // 9. Only inject if non-dominated by the current archive.
-                if self.approximated_pareto_set.try_insert(&perturbed) {
-                    self.population.insert_unchecked(&perturbed);
+                //
+                // The population must go through `try_insert` too, not
+                // `insert_unchecked`. Being non-dominated w.r.t. the ARCHIVE at
+                // this moment says nothing about the population, and
+                // `insert_unchecked` skips the domination prune — so two
+                // perturbations injected in the same pass, where the second
+                // dominates the first, would both sit in the population. The
+                // `self.population.validate()` at the top of every step then
+                // panics with "Solution set contains dominated solution!".
+                // (`insert_unchecked` is documented as being for collecting
+                // from an already Pareto-filtered set.)
+                // Count progress on the POPULATION insert, not the archive one:
+                // the caller treats `injected_count > 0` as "there is new work,
+                // restart at the smallest neighborhood", so counting an archive
+                // insert that the population rejected would report progress
+                // without any new candidate to explore.
+                if self.approximated_pareto_set.try_insert(&perturbed)
+                    && self.population.try_insert(&perturbed)
+                {
                     injected_count += 1;
                 }
             }
@@ -1199,6 +1255,8 @@ where
         let neighborhood_structure = self.neigborhood_structure;
         let is_deterministic = self.is_deterministic;
         let optimizations = &self.optimizations;
+        #[cfg(feature = "parallel")]
+        let shared_visited = self.shared_visited.as_deref();
 
         'population: for (_index, solution) in population_vec.iter().enumerate() {
             let parent_score = coeffs.score(solution.objectives(), local_ideal);
@@ -1217,6 +1275,16 @@ where
 
                 // Dedup check (unchanged)
                 if explored_solutions.is_registered(&neighbor) {
+                    step_stats.duplicated_neighbor_count += 1;
+                    continue;
+                }
+
+                #[cfg(feature = "parallel")]
+                // The same claim check as the standard path: this worker has
+                // not seen the neighbour, but a sibling may have.
+                if let Some(shared) = shared_visited
+                    && !shared.claim(ExploredSolutionsData::<D>::hash_of(&neighbor))
+                {
                     step_stats.duplicated_neighbor_count += 1;
                     continue;
                 }

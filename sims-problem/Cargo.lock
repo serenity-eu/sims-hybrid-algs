@@ -1642,9 +1642,9 @@ dependencies = [
 
 [[package]]
 name = "moors"
-version = "0.2.10"
+version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed50dc027b38e48385973f801a1ed0ccb969296e0a14cea6f1f8368c0027552c"
+checksum = "2223de7ed469593d4b31dc970bafbe884c97f408c312dfa7c09a727796604d01"
 dependencies = [
  "derive_builder",
  "faer",
@@ -1918,9 +1918,9 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "optirustic"
-version = "1.2.2"
+version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3da6106e4ec102372f472d7085016ca46969ac16689102cacd3a63930bc2e922"
+checksum = "90260a27c9f6a2ff1354444311dbb2b9711dcff5e073c8759718da3cd6c1d619"
 dependencies = [
  "chrono",
  "env_logger",

@@ -14,9 +14,27 @@ from typing import Optional
 
 from ..problem import ProblemInstance
 from ..solver_result import Solution, SolverResult
+from ._utils import build_trace_from_solutions
 from ..solver_config import SolverType
 
 logger = logging.getLogger(__name__)
+
+
+_EXACT_PHASE_LABELS = frozenset(
+    {
+        "exact",
+        "gpba-a",
+        "gpba_a",
+        "gpba",
+        "aneja-nair",
+        "aneja_nair",
+        "aneja",
+        "an",
+        "psbox",
+        "quadtree",
+    }
+)
+"""Phase labels that denote a first-phase (exact) solution in a seed file."""
 
 
 class PseudoSolver:
@@ -88,12 +106,26 @@ class PseudoSolver:
 
         data = self._load_solutions(instance_name)
 
+        # The `phase` field carries the method that produced the point, not the
+        # literal word "exact": the committed seed sets label every solution
+        # "gpba-a" or "aneja-nair". Matching "exact" alone silently replayed
+        # nothing for all of them, so the exact phase came back empty with no
+        # error anywhere.
+        all_solutions = data.get("solutions", [])
         exact_solutions = [
             sol_data
-            for sol_data in data.get("solutions", [])
-            if sol_data.get("phase", "exact") == "exact"
+            for sol_data in all_solutions
+            if sol_data.get("phase", "exact") in _EXACT_PHASE_LABELS
             and sol_data.get("timestamp_s", 0) <= timeout_s
         ]
+
+        if all_solutions and not exact_solutions:
+            labels = sorted({str(s.get("phase", "exact")) for s in all_solutions})
+            logger.warning(
+                f"[PseudoSolver] {len(all_solutions)} solutions loaded but none replayed: "
+                f"phase labels {labels} are not recognised as an exact phase, or every "
+                f"timestamp exceeds the {timeout_s}s budget"
+            )
 
         logger.info(f"[PseudoSolver] Found {len(exact_solutions)} exact solutions from replay")
 
@@ -109,6 +141,13 @@ class PseudoSolver:
 
         pareto_front = [_convert(s) for s in exact_solutions]
 
+        # Replayed solutions carry the timestamp at which the original solve
+        # found them, which is exactly what a trace archive records -- so the
+        # replay can reproduce the exact phase's anytime behaviour, not just
+        # its final front. Without this the hybrid's handoff cannot be drawn
+        # when the exact phase is replayed rather than re-solved.
+        trace_data = build_trace_from_solutions(pareto_front, objectives)
+
         return SolverResult(
             pareto_front=pareto_front,
             timeout_sec=timeout_s,
@@ -116,6 +155,7 @@ class PseudoSolver:
             hypervolume=0.0,
             solver_type=SolverType.OR_TOOLS,
             problem_instance=problem_instance,
+            trace_data=trace_data,
         )
 
 

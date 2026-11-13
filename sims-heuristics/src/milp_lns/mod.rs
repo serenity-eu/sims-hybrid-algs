@@ -280,7 +280,11 @@ impl<'a, const D: usize> MilpLns<'a, D> {
             if Instant::now() >= deadline {
                 break;
             }
-            let frac = if levels == 1 { 0.0 } else { level as f64 / (levels - 1) as f64 };
+            let frac = if levels == 1 {
+                0.0
+            } else {
+                level as f64 / (levels - 1) as f64
+            };
             let target = (lo as f64).mul_add(1.0 - frac, hi as f64 * frac);
             // Cheapest seed that already meets this floor, else the one with the
             // most clear area, which the descent can then trade down from.
@@ -314,11 +318,7 @@ impl<'a, const D: usize> MilpLns<'a, D> {
     ///
     /// `warm` seeds the first solve; passing a heuristic front gives the solver
     /// an incumbent instead of making it find one.
-    pub fn enumerate_front(
-        &mut self,
-        warm: &[FixedBitSet],
-        deadline: Instant,
-    ) -> Vec<FixedBitSet> {
+    pub fn enumerate_front(&mut self, warm: &[FixedBitSet], deadline: Instant) -> Vec<FixedBitSet> {
         let all_free = {
             let mut f = FixedBitSet::with_capacity(self.problem.images.len());
             f.insert_range(..);
@@ -439,13 +439,22 @@ mod tests {
         let free = FixedBitSet::with_capacity(p.images.len());
         let (outcome, out) = lns.model.solve_move(&start, &free, target, 10.0);
         assert_ne!(outcome, SolveOutcome::NoSolution);
-        assert_eq!(out, start, "with no freed columns the model must return the incumbent");
+        assert_eq!(
+            out, start,
+            "with no freed columns the model must return the incumbent"
+        );
     }
 
     #[test]
     fn improve_never_loses_cloud_coverage_and_never_raises_cost() {
         let p = instance();
-        let mut lns = MilpLns::new(&p, LnsConfig { total_time: Duration::from_secs(5), ..Default::default() });
+        let mut lns = MilpLns::new(
+            &p,
+            LnsConfig {
+                total_time: Duration::from_secs(5),
+                ..Default::default()
+            },
+        );
         let start = greedy_cover(&p);
         let c0 = lns.cost_of(&start);
         let a0 = lns.clear_area_of(&start);
@@ -454,9 +463,16 @@ mod tests {
         for i in out.ones() {
             covered.union_with(&p.images[i]);
         }
-        assert_eq!(covered.count_ones(..), p.universe_size, "result must remain a set cover");
+        assert_eq!(
+            covered.count_ones(..),
+            p.universe_size,
+            "result must remain a set cover"
+        );
         assert!(lns.cost_of(&out) <= c0, "cost must not increase");
-        assert!(lns.clear_area_of(&out) >= a0, "clear area must not decrease");
+        assert!(
+            lns.clear_area_of(&out) >= a0,
+            "clear area must not decrease"
+        );
     }
 
     #[test]
@@ -470,7 +486,10 @@ mod tests {
             w.update(0, false);
         }
         assert!(w.weights()[0] < peak);
-        assert!(w.weights()[0] >= 0.05, "weights are floored so operators stay reachable");
+        assert!(
+            w.weights()[0] >= 0.05,
+            "weights are floored so operators stay reachable"
+        );
     }
 
     #[test]
@@ -511,7 +530,11 @@ mod epsilon_tests {
         let c1 = lns.cost_of(&s1);
 
         let (o2, s2) = lns.model.solve_move(&s1, &all, a1 as f64 + 1.0, 20.0);
-        assert_ne!(o2, SolveOutcome::NoSolution, "a higher floor should stay feasible here");
+        assert_ne!(
+            o2,
+            SolveOutcome::NoSolution,
+            "a higher floor should stay feasible here"
+        );
         let a2 = lns.clear_area_of(&s2);
         assert!(
             a2 > a1,

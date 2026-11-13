@@ -156,8 +156,10 @@ impl GurobiModel {
             self.model.set_obj_attr(attr::LB, &self.x[i], lo)?;
             self.model.set_obj_attr(attr::UB, &self.x[i], hi)?;
         }
-        self.model.set_obj_attr(attr::RHS, &self.epsilon, min_clear_area)?;
-        self.model.set_obj_attr(attr::RHS, &self.cost_cap, max_cost)?;
+        self.model
+            .set_obj_attr(attr::RHS, &self.epsilon, min_clear_area)?;
+        self.model
+            .set_obj_attr(attr::RHS, &self.cost_cap, max_cost)?;
 
         // Warm start, so a time-limited solve does not spend its budget looking
         // for any feasible cover.
@@ -174,8 +176,12 @@ impl GurobiModel {
         let status = self.model.status()?;
         let outcome = match status {
             Status::Optimal => SolveOutcome::Optimal,
-            Status::SubOptimal | Status::TimeLimit | Status::IterationLimit
-            | Status::NodeLimit | Status::SolutionLimit | Status::Interrupted => {
+            Status::SubOptimal
+            | Status::TimeLimit
+            | Status::IterationLimit
+            | Status::NodeLimit
+            | Status::SolutionLimit
+            | Status::Interrupted => {
                 // These carry a solution only if one was found.
                 if self.model.get_attr(attr::SolCount)? > 0 {
                     SolveOutcome::Feasible
@@ -212,13 +218,23 @@ impl SubproblemSolver for GurobiModel {
         objective: Objective,
         seconds: f64,
     ) -> (SolveOutcome, FixedBitSet) {
-        match self.solve_impl(incumbent, free, min_clear_area, max_cost, objective, seconds) {
+        match self.solve_impl(
+            incumbent,
+            free,
+            min_clear_area,
+            max_cost,
+            objective,
+            seconds,
+        ) {
             Ok(r) => r,
             Err(e) => {
                 // A solver error is not a proof that the box is empty, but the
                 // search has no better move than to treat it as unsolved.
                 tracing::warn!("gurobi solve failed: {e}");
-                (SolveOutcome::NoSolution, FixedBitSet::with_capacity(self.num_images))
+                (
+                    SolveOutcome::NoSolution,
+                    FixedBitSet::with_capacity(self.num_images),
+                )
             }
         }
     }

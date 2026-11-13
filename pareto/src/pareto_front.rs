@@ -141,12 +141,19 @@ pub trait HasObjectives<const D: usize> {
     fn objectives(&self) -> &Objectives<D>;
 
     fn squared_distance_to(&self, point: &Objectives<D>) -> u64 {
+        // Saturating, not wrapping/checked: this feeds a tree-balancing
+        // heuristic (nd-tree node splitting), not Pareto-front correctness,
+        // and objective magnitudes on some instances (e.g. cloud-coverage
+        // area in raw pixel units, ~10^8-10^9) make the squared distance
+        // genuinely exceed u64 for far-apart points — saturating at u64::MAX
+        // still correctly signals "very far apart" without panicking.
         let diff = self
             .objectives()
             .iter()
             .zip(point.iter())
             .map(|(a, b)| a.abs_diff(*b));
-        diff.map(|d| d * d).sum()
+        diff.map(|d| d.saturating_mul(d))
+            .fold(0u64, u64::saturating_add)
     }
 }
 

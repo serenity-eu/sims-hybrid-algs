@@ -31,6 +31,7 @@ pub mod config;
 pub mod decomposition;
 pub mod orchestrator;
 pub mod snapshot;
+pub mod visited;
 pub mod worker;
 
 pub use config::{ConcurrentPLSConfig, RegionSearchMode};

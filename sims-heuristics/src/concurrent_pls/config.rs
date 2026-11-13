@@ -41,6 +41,15 @@ pub struct ConcurrentPLSConfig {
     pub is_deterministic: bool,
     /// How region workers steer their auxiliary population.
     pub region_search_mode: RegionSearchMode,
+    /// Expected number of solutions the whole run will explore, used to size
+    /// the cross-worker claim table.
+    ///
+    /// `None` disables cross-worker deduplication, leaving each worker to
+    /// deduplicate only against itself. Sizing matters: the table never grows,
+    /// and once it saturates it stops filtering rather than degrading the
+    /// search, so an underestimate quietly turns the feature off part way
+    /// through a run.
+    pub shared_visited_capacity: Option<usize>,
     /// Augmentation coefficient for Tchebycheff scalarization in SA-PLS.
     /// Controls tie-breaking strength. Default: 1e-3.
     pub scalarized_rho: f64,
@@ -60,6 +69,10 @@ impl ConcurrentPLSConfig {
             max_duration,
             neighborhood_size_range: 1..=6,
             is_deterministic: false,
+            // Sized for a long multi-objective run: the walks measured on
+            // lagos_nigeria_50 reach ~10^6 explored solutions in 25s, and an
+            // oversized table costs one u64 per slot.
+            shared_visited_capacity: Some(4_000_000),
             region_search_mode: RegionSearchMode::default(),
             scalarized_rho: 1e-3,
         }

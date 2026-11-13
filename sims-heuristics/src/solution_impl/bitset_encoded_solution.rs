@@ -1358,16 +1358,19 @@ where
                 // Ranked iteration for k=1: use worst_selected_images-style scoring
                 // to prioritise the most promising removal candidates and limit their
                 // count, avoiding exhaustive exploration on large instances.
-                let ranked = self.worst_selected_images_n(
-                    problem,
-                    is_deterministic,
-                    trackers,
-                    optimizations.max_k1_candidates,
-                );
+                // The cap counts *usable* candidates: rank the whole selection,
+                // drop the images that cannot be replaced, and only then take
+                // `max_k1_candidates`. Truncating before the replaceability
+                // filter would let unreplaceable images consume the budget, so
+                // the neighbourhood width would swing with how many of the
+                // worst-scoring images happen to be replaceable.
+                let ranked =
+                    self.worst_selected_images_n(problem, is_deterministic, trackers, usize::MAX);
                 Box::new(
                     ranked
                         .into_iter()
                         .filter(|&img| self.is_replaceable(img, problem))
+                        .take(optimizations.max_k1_candidates)
                         .map(|img| vec![img]),
                 )
             } else {

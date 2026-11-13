@@ -1,3 +1,4 @@
+use pls::pls_config::PlsFlags;
 use std::{fs, path::Path, time::Duration};
 
 use pareto::ParetoFront;
@@ -513,4 +514,52 @@ fn test_two_phase_4d_large_instances() {
             }
         }
     }
+}
+
+/// Smoke test for the perturbation-restart path.
+///
+/// `inject_perturbed_archive_solutions` used to push perturbed solutions into
+/// the population with `insert_unchecked`, which skips the domination prune, so
+/// two perturbations injected in one pass could both remain in the population
+/// with one dominating the other. The `population.validate()` at the top of
+/// every step then panicked with "Solution set contains dominated solution!" —
+/// which is why the experiment harness disables perturbation restart, and hence
+/// why PLS stops at its first local-optimum set.
+///
+/// NOTE: this test exercises the restart path but does NOT reproduce that panic
+/// — it still passes against the unfixed code. The panic was only observed on
+/// the large biobjective instances (~16k fragments, 200 images); the bundled
+/// test instances are too small to build an archive where injected
+/// perturbations dominate one another. Kept as a guard against outright
+/// breakage of the path, not as proof of the fix.
+#[test]
+fn perturbation_restart_keeps_population_non_dominated() {
+    let instance_path = Path::new(INSTANCES_PATH).join("lagos_nigeria_100.dzn");
+    // Biobjective on purpose: with 4 objectives mutual domination between two
+    // perturbations of the same archive solution is rare, and the bug does not
+    // surface. The experiments that hit it are all 2-D (cost, cloud).
+    let problem = ProblemBitset::<2>::from_minizinc_datafile(
+        &instance_path,
+        [ObjectiveType::TotalCost, ObjectiveType::CloudyArea],
+    )
+    .expect("the instance file to be present");
+
+    let mut initial_population: NdTreeSolutionSet<BitsetEncodedSolution<ProblemBitset<2>, 2>, 2> =
+        NdTreeSolutionSet::new("restart_regression");
+    for _ in 0..8 {
+        initial_population.try_insert(&BitsetEncodedSolution::random(&problem));
+    }
+
+    // Exactly the flag set run_hv_experiments.py uses, plus perturbation restart
+    // (which it disables precisely because of this bug).
+    let opts = PlsOptimizations {
+        flags: PlsFlags::USE_GREEDY_INITIAL_POPULATION | PlsFlags::USE_PERTURBATION_RESTART,
+        ..PlsOptimizations::default()
+    };
+
+    let mut pls = ParetoLocalSearch::new(&problem, &initial_population, 1..=3, true, opts);
+    // Long enough to reach a local optimum and trigger restarts; the assertion
+    // is simply that this does not panic.
+    let solutions = pls.run(2_000, Duration::from_secs(30));
+    assert!(!solutions.is_empty(), "expected at least one solution");
 }

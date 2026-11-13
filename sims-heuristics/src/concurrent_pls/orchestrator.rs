@@ -12,6 +12,7 @@ use crate::{
         snapshot::{
             GlobalFrontSlot, GlobalFrontSnapshot, ObjectiveSnapshot, SnapshotSlot, fingerprint,
         },
+        visited::SharedVisited,
         worker::{
             RegionResult, RegionStats, RegionWorker, bounds_from_ideal_nadir, compute_ideal,
             compute_ideal_from_front, compute_nadir, compute_nadir_from_front,
@@ -200,6 +201,14 @@ where
                 num_threads = actual_num_threads,
             )
             .entered();
+            // One claim table for the whole run. Workers hold `Arc` clones and
+            // race on individual slots; the first to reach a solution explores
+            // it and the rest skip it, which is the point of decomposing at all.
+            let shared_visited = self
+                .config
+                .shared_visited_capacity
+                .map(|cap| std::sync::Arc::new(SharedVisited::with_capacity_for(cap)));
+
             std::thread::scope(|scope| {
                 // Spawn merger thread
                 let merger_handle = scope.spawn(move || {
@@ -221,6 +230,7 @@ where
                     config.max_duration = remaining;
                     let worker_pop = region_pops[i].clone();
                     let problem = self.problem;
+                    let worker_visited = shared_visited.clone();
 
                     let handle = scope.spawn(move || {
                         let worker_pop_size = worker_pop.len();
@@ -234,6 +244,7 @@ where
                             global_slot,
                             done_guard,
                             config,
+                            worker_visited,
                         );
                         worker.run()
                     });

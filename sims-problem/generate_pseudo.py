@@ -53,7 +53,7 @@ def resolve_dzn(path: Path) -> Path:
 #   random-clouds  : ROOT/publication-data/satellite-data/instances_random_clouds/{inst}.dzn (flat), sizes 100-500
 PUB_DIR = ROOT / "publication-data" / "experiments"
 RC_DIR = ROOT / "publication-data" / "satellite-data" / "instances_random_clouds"
-HARD_DIR = ROOT / "publication-data" / "satellite-data" / "instances_hard_an"
+HARD_DIR = ROOT / "publication-data" / "satellite-data" / "benchmark_instances"
 
 CITIES = ["lagos_nigeria", "mexico_city", "paris", "rio_de_janeiro", "tokyo_bay"]
 

@@ -1041,6 +1041,7 @@ fn run_concurrent(
     scalarized_rho: f64,
 ) -> ConcurrentPLSResult<Solution, NUM_OBJECTIVES> {
     let config = ConcurrentPLSConfig {
+        shared_visited_capacity: Some(4_000_000),
         num_threads,
         sync_interval_steps: 5,
         merge_interval: Duration::from_millis(100),

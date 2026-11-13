@@ -147,12 +147,19 @@ def solve_experiments(
     instance_regex: str | None = None,
     skip_solved: bool | None = False,
     results_dir: Path | None = None,
+    enable_trace: bool = False,
 ):
+    # Every field the caller set has to be carried over, not just the four with
+    # defaults: phase2_solver_type selects the second-phase algorithm and
+    # pseudo_solver_dir replays cached exact fronts. Rebuilding the config
+    # without them silently ignored --phase2-solver and --pseudo-solver.
     solver_config = SolverConfig(
         solver_type=modified_solver_config.solver_type or SolverType.GUROBI,
         front_strategy=modified_solver_config.front_strategy or FrontStrategy.GPBA_A,
         timeout_s=modified_solver_config.timeout_s or 600,
         ratio_step=modified_solver_config.ratio_step or 20,
+        phase2_solver_type=modified_solver_config.phase2_solver_type or SolverType.PLS,
+        pseudo_solver_dir=modified_solver_config.pseudo_solver_dir,
     )
 
     experiment_dirs = None
@@ -201,6 +208,7 @@ def solve_experiments(
                 dry_run=dry_run,
                 iter_count=iter_count,
                 skip_solved=skip_solved,
+                enable_trace=enable_trace,
             )
         except Exception as e:
             log.error(f"Failed to solve experiment {experiment_dir.name}. Reason: {e}")
@@ -1047,6 +1055,7 @@ def solve_command(args):
         iter_count=args.iter_count,
         instance_regex=args.instance_regex,
         skip_solved=True,
+        enable_trace=args.enable_trace,
         results_dir=Path(args.results_dir).resolve() if args.results_dir is not None else None,
     )
 
@@ -1182,6 +1191,19 @@ def main():
     solve_parser.add_argument("--iter-count", type=int, help="Number of iterations for the solver", default=1)
     solve_parser.add_argument(
         "--instance-regex", type=str, help="Regex to filter instances to solve"
+    )
+    solve_parser.add_argument(
+        "--pseudo-solver",
+        type=str,
+        help="Directory of cached exact-phase fronts (one JSON per instance). When given, "
+             "the exact phase replays them instead of re-solving, which needs no MILP licence.",
+    )
+    solve_parser.add_argument(
+        "--enable-trace",
+        action="store_true",
+        help="Write each phase's binary trace archive next to the run's summary CSV. "
+             "Required to reproduce the paper's figures: the generators rebuild a front "
+             "at an arbitrary time from the trace, which the summary CSV cannot supply.",
     )
 
     solve_parser.set_defaults(func=solve_command)

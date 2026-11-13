@@ -196,8 +196,7 @@ where
         // Store the solution with its index
         self.index_to_solution
             .insert(assigned_index, solution.clone());
-        self.solution_to_index
-            .insert(*objectives, assigned_index);
+        self.solution_to_index.insert(*objectives, assigned_index);
 
         // Insert into the underlying tree (this handles domination removal)
         self.tree.update(solution);

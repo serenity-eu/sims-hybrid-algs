@@ -81,7 +81,15 @@ impl SubproblemSolver for PersistentModel {
         objective: Objective,
         seconds: f64,
     ) -> (SolveOutcome, FixedBitSet) {
-        Self::solve(self, incumbent, free, min_clear_area, max_cost, objective, seconds)
+        Self::solve(
+            self,
+            incumbent,
+            free,
+            min_clear_area,
+            max_cost,
+            objective,
+            seconds,
+        )
     }
     fn num_images(&self) -> usize {
         Self::num_images(self)
@@ -119,7 +127,11 @@ impl PersistentModel {
     /// Panics if the instance has an element that no image covers, which makes
     /// the set-cover infeasible regardless of the neighbourhood.
     #[must_use]
-    pub fn new<const D: usize>(problem: &ProblemBitset<D>, clear: &[FixedBitSet], areas: &[u64]) -> Self {
+    pub fn new<const D: usize>(
+        problem: &ProblemBitset<D>,
+        clear: &[FixedBitSet],
+        areas: &[u64],
+    ) -> Self {
         let n = problem.images.len();
         let m = problem.universe_size;
         let mut pb = RowProblem::default();
@@ -165,7 +177,9 @@ impl PersistentModel {
         let epsilon_row = 2 * m;
         // Cost ceiling, needed to pin stage one of a lexicographic solve while
         // stage two optimises the other objective. Open by default.
-        let cost_cols: Vec<_> = (0..n).map(|i| (x[i], problem.image_cost(i) as f64)).collect();
+        let cost_cols: Vec<_> = (0..n)
+            .map(|i| (x[i], problem.image_cost(i) as f64))
+            .collect();
         pb.add_row(..=f64::INFINITY, &cost_cols);
         let cost_row = 2 * m + 1;
 
@@ -252,7 +266,14 @@ impl PersistentModel {
         min_clear_area: f64,
         seconds: f64,
     ) -> (SolveOutcome, FixedBitSet) {
-        self.solve(incumbent, free, min_clear_area, f64::INFINITY, Objective::Cost, seconds)
+        self.solve(
+            incumbent,
+            free,
+            min_clear_area,
+            f64::INFINITY,
+            Objective::Cost,
+            seconds,
+        )
     }
 
     fn solve_inner(
@@ -391,7 +412,12 @@ impl PersistentModel {
 #[must_use]
 pub fn clear_coverage<const D: usize>(problem: &ProblemBitset<D>) -> (Vec<FixedBitSet>, Vec<u64>) {
     for obj in &problem.objectives {
-        if let ObjectiveState::CloudyArea { clear_images, areas, .. } = obj {
+        if let ObjectiveState::CloudyArea {
+            clear_images,
+            areas,
+            ..
+        } = obj
+        {
             return (clear_images.clone(), areas.clone());
         }
     }

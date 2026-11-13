@@ -3,7 +3,10 @@
 //! Reads a front produced by `pls_front2d` (`cost,cloud,|S|,"i j k"`), improves
 //! each solution with [`pls::milp_lns`], and writes the improved front in the
 //! same format so the two are directly comparable.
-use std::{path::PathBuf, time::{Duration, Instant}};
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 use clap::Parser;
 use fixedbitset::FixedBitSet;
@@ -18,30 +21,40 @@ const OBJECTIVE_TYPES: [ObjectiveType; D] = [ObjectiveType::TotalCost, Objective
 
 #[derive(Parser)]
 struct Cli {
-    #[arg(short, long)] instance: PathBuf,
+    #[arg(short, long)]
+    instance: PathBuf,
     /// Front CSV from `pls_front2d`.
-    #[arg(short, long)] front: PathBuf,
-    #[arg(long, default_value = "10")] destroy: usize,
-    #[arg(long, default_value = "40")] candidates: usize,
+    #[arg(short, long)]
+    front: PathBuf,
+    #[arg(long, default_value = "10")]
+    destroy: usize,
+    #[arg(long, default_value = "40")]
+    candidates: usize,
     #[arg(short, long, value_parser = humantime::parse_duration, default_value = "60s")]
     timeout: Duration,
     #[arg(long, value_parser = humantime::parse_duration, default_value = "3s")]
     mip_time: Duration,
-    #[arg(long, default_value = "42")] seed: u64,
+    #[arg(long, default_value = "42")]
+    seed: u64,
     /// Run a heuristic epsilon-constraint sweep with this many levels instead
     /// of improving each input solution under its own clear-area floor.
-    #[arg(long)] sweep: Option<usize>,
+    #[arg(long)]
+    sweep: Option<usize>,
     /// Adaptive epsilon-constraint enumeration: walk the whole front by raising
     /// the clear-area floor past each point found.
-    #[arg(long)] enumerate: bool,
+    #[arg(long)]
+    enumerate: bool,
     /// Balanced Box Method: recursive criterion-space split with lexicographic
     /// solves. Spreads its solves over the whole front, so a partial budget
     /// still covers both ends.
-    #[arg(long)] balanced_box: bool,
+    #[arg(long)]
+    balanced_box: bool,
     /// Subproblem solver. Gurobi needs the `gurobi_lns` feature and a licence.
-    #[arg(long, default_value = "highs")] solver: String,
+    #[arg(long, default_value = "highs")]
+    solver: String,
     /// Solver threads (Gurobi only). Defaults to Gurobi's own choice.
-    #[arg(long)] threads: Option<i32>,
+    #[arg(long)]
+    threads: Option<i32>,
 }
 
 fn main() {
@@ -50,7 +63,10 @@ fn main() {
         ProblemBitset::from_minizinc_datafile(&a.instance, OBJECTIVE_TYPES).expect("load instance");
 
     let mut starts: Vec<FixedBitSet> = Vec::new();
-    for line in std::fs::read_to_string(&a.front).expect("read front").lines() {
+    for line in std::fs::read_to_string(&a.front)
+        .expect("read front")
+        .lines()
+    {
         let fields: Vec<&str> = line.split(',').collect();
         if fields.len() < 4 {
             continue;
@@ -73,13 +89,17 @@ fn main() {
         ..LnsConfig::default()
     };
     let mut lns = MilpLns::new(&problem, config);
-    eprintln!("{} starting solutions, budget {:?}", starts.len(), a.timeout);
+    eprintln!(
+        "{} starting solutions, budget {:?}",
+        starts.len(),
+        a.timeout
+    );
 
     let deadline = Instant::now() + a.timeout;
     if a.balanced_box {
         use pls::milp_lns::{
             balanced_box::BalancedBox,
-            model::{clear_coverage, PersistentModel, SubproblemSolver},
+            model::{PersistentModel, SubproblemSolver, clear_coverage},
         };
         let (clear, areas) = clear_coverage(&problem);
         let total: u64 = areas.iter().sum();
@@ -115,8 +135,15 @@ fn main() {
         }
         eprintln!(
             "balanced box [{}]: {} points | solves {} (optimal {}, timed out {}, infeasible {}) | boxes closed {} left {} | exact {}",
-            a.solver, pts.len(), stats.solves, stats.optimal, stats.timed_out, stats.infeasible,
-            stats.boxes_closed, stats.boxes_left, stats.exact
+            a.solver,
+            pts.len(),
+            stats.solves,
+            stats.optimal,
+            stats.timed_out,
+            stats.infeasible,
+            stats.boxes_closed,
+            stats.boxes_left,
+            stats.exact
         );
         return;
     }
@@ -155,6 +182,9 @@ fn main() {
     let names = operator_names();
     eprintln!(
         "operator weights: {}",
-        (0..3).map(|i| format!("{}={:.2}", names[i], w[i])).collect::<Vec<_>>().join(" ")
+        (0..3)
+            .map(|i| format!("{}={:.2}", names[i], w[i]))
+            .collect::<Vec<_>>()
+            .join(" ")
     );
 }

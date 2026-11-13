@@ -173,6 +173,39 @@ def _split_time_by_ratio(total_time: int, ratio: tuple[int, int]) -> tuple[int, 
     return int(total_time * ratio[0] / 100), int(total_time * ratio[1] / 100)
 
 
+def _persist_traces(
+    experiment_path: Path,
+    instance_name: str,
+    result: TwoPhaseSolverResult,
+) -> None:
+    """Write each phase's binary trace archive beside the run's summary CSV.
+
+    The generators reconstruct a front at an arbitrary time with
+    ``sims_problem.front_from_trace_at_time(bytes, t)``, so the archive is the
+    only record of a run's anytime behaviour -- the summary CSV keeps the final
+    front alone.
+
+    The two phases are written as separate archives on purpose. ``sims solve``
+    runs them as two solver calls, so each trace timestamps from its own start;
+    combining them requires adding the phase-1 budget to every phase-2
+    timestamp, which is cross-phase aggregation and belongs in
+    ``sims process``, not here.
+    """
+    for phase, phase_result in (
+        ("exact", result.exact_solver_result),
+        ("phase2", result.pls_result),
+    ):
+        trace_data = getattr(phase_result, "trace_data", None) if phase_result else None
+        if not trace_data:
+            continue
+        trace_path = experiment_path / f"{instance_name}.{phase}.trace.tar.gz"
+        trace_path.write_bytes(trace_data)
+        log.info(
+            f"[{instance_name}] - wrote {phase} trace ({len(trace_data)} bytes)"
+            f" to {trace_path.name}"
+        )
+
+
 def solve_with_two_phases(
     problem_instance: ProblemInstance,
     problem_path: Path,
@@ -305,5 +338,8 @@ def solve_with_two_phases(
             two_phase_result.pls_result.hypervolume = _compute_hypervolume_for_result(
                 two_phase_result.pls_result, objectives, objective_bounds
             )
+
+    if enable_pls_trace and not dry_run:
+        _persist_traces(experiment_path, problem_instance.name, two_phase_result)
 
     return two_phase_result

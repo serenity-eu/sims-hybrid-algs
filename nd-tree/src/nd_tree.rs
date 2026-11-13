@@ -557,7 +557,6 @@ where
         };
     }
 
-    #[must_use]
     /// Is `sol` dominated by any solution currently in the tree?
     ///
     /// Read-only twin of the domination test `update_node` performs while
@@ -678,6 +677,8 @@ where
         }
     }
 
+    /// Iterate every solution held in the tree.
+    #[must_use]
     pub fn iter(&self) -> NDTreeSolutionIterator<'_, T, N, D, C> {
         NDTreeSolutionIterator::new(self)
     }
@@ -1484,7 +1485,8 @@ mod tests {
                     .collect();
                 want.sort_unstable();
                 assert_eq!(
-                    got, want,
+                    got,
+                    want,
                     "trial {trial}: for_each_dominated_by disagreed for {:?}",
                     probe.objectives()
                 );
