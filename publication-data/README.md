@@ -43,7 +43,14 @@ fields per scene: `geometry`, `cost`, `resolution`, `cloudCoverage`,
 
 Stage 0 is a frozen snapshot: the UP42 catalogue is live and `cost` is a live
 order estimate, so a search run today returns a different scene set at
-different prices. Stage 4 has a 200 s wall-clock budget per run, so a re-run
+different prices. Scenes also leave the catalogue over time, so a refetch by
+scene id does not return the full set either.
+
+The snapshot holds the 2,491 scenes the generator uses, not the 7,684 the
+original searches returned. The pool filter is per-image -- cloud cover in
+10-90%, footprint at most `max-img-frac` of the AOI -- so it is idempotent and
+the instances regenerate byte-identical from the filtered set. The snapshot is
+therefore specific to this filter configuration rather than a general pool. Stage 4 has a 200 s wall-clock budget per run, so a re-run
 agrees statistically, not bitwise. Rebuild from the stored results to
 reproduce the published figures exactly.
 
@@ -101,8 +108,8 @@ publication-data/
     make_manifest.py           write / --check the manifest
   satellite-data/
     aois/                      5 areas of interest
-    scene_catalogue/     catalogue snapshot, 7,684 scenes
-    benchmark_instances/         25 instances + .meta.json sidecars
+    scene_catalogue/           catalogue snapshot, 2,491 scenes
+    benchmark_instances/       25 instances + .meta.json sidecars
   biobjective/
     gpba/, an/                 25 instances x 17 configurations, + 850 traces
     scripts/                   run_all_experiments.sh, rebuild_paper_artifacts.sh
