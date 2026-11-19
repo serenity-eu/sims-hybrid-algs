@@ -164,7 +164,7 @@ Python linting uses `ruff` (dev dependency in root `pyproject.toml`).
 
 GPBA-A works internally in **maximization form** (objectives negated). Solutions in the Pareto front are stored in minimization form. See the sign convention note in `augmecon-rs/src/gpba.rs`.
 
-**Solver backends** (feature flags): `highs`, `coin_cbc`, `scip`. The `good_lp` dependency points to a forked repo at `github.com/hlvlad/good_lp`.
+**Solver backends** (feature flags): `highs`, `coin_cbc`, `scip`. The `good_lp` dependency is vendored at `third-party/good_lp` (a fork adding the `grb`-linked `gurobi` backend); see `third-party/good_lp/VENDORED.md`.
 
 ### Python MILP (reference implementation)
 

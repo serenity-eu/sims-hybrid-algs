@@ -13,7 +13,7 @@ two can be compared head to head without a common bug flattering both.
 """
 
 [dependencies]
-good_lp = { git = "https://github.com/hlvlad/good_lp", rev = "0b5a4e97b645f390cf80ef3c68b23fd5cf681491", default-features = false, features = ["lp-solvers"] }
+good_lp = { path = "../third-party/good_lp", default-features = false, features = ["lp-solvers"] }
 grb = { version = "3.0.1", default-features = false, features = ["gurobi12"], optional = true }
 log = "0.4"
 

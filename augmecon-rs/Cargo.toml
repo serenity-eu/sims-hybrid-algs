@@ -32,7 +32,7 @@ path = "src/lib.rs"
 crates = ["grb"]
 
 [dependencies]
-good_lp = { git="https://github.com/hlvlad/good_lp", rev = "0b5a4e97b645f390cf80ef3c68b23fd5cf681491", default-features = false, features = ["lp-solvers"] }
+good_lp = { path = "../third-party/good_lp", default-features = false, features = ["lp-solvers"] }
 # Same version and feature set good_lp's `gurobi` backend links, so both crates
 # resolve to one `grb` and one libgurobi. Needed directly here only to name
 # parameters (e.g. `param::MIPGap`) on the model good_lp hands back through

@@ -301,3 +301,11 @@ publication-data/satellite-data/benchmark_instances/*
 # benchmark.
 /sims-heuristics/data/*.dzn
 !/sims-heuristics/data/lagos_nigeria_30.dzn
+
+# third-party/good_lp is a verbatim copy of an upstream revision. The `build/`
+# and `.vscode/` rules above would otherwise thin it out, leaving a vendored
+# tree that no longer matches the revision VENDORED.md names.
+!/third-party/good_lp/build/
+!/third-party/good_lp/build/**
+!/third-party/good_lp/.vscode/
+!/third-party/good_lp/.vscode/**

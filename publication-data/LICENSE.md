@@ -8,6 +8,17 @@ separately because one licence cannot cover all of it.
 Everything under `scripts/` and `biobjective/scripts/`, and the repository's
 source code, are covered by the MIT licence in the repository root.
 
+One third-party crate is vendored into the repository so that a build fetches
+nothing from a personal repository. It is also MIT, under its own copyright:
+
+| path | crate | copyright |
+|---|---|---|
+| `third-party/good_lp/` | `good_lp` 1.14.0 (forked) | © 2021 Ophir LOJKINE |
+
+Its licence text travels with it, at `third-party/good_lp/LICENSE`, and
+`third-party/good_lp/VENDORED.md` records the upstream URL and the exact
+revision vendored.
+
 ## 2. Derived research outputs — CC BY 4.0
 
 Creative Commons Attribution 4.0 International
